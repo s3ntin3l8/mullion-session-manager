@@ -414,8 +414,15 @@ describe("GitPanel", () => {
       };
       let createSessionCalls = 0;
       let resolveCreateSession: (() => void) | undefined;
-      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      // U6 — "Open session here" now goes through the STORE's createSession
+      // action rather than calling api.createSession directly, so it also
+      // fires a GET /api/sessions (refreshSessions) once the POST resolves.
+      // Both share the same "/api/sessions" URL substring, so the POST/GET
+      // branches have to be told apart by method (the create-in-flight
+      // guard below only cares about POST calls).
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        const method = init?.method ?? "GET";
         if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
         if (url.includes("/git-branches"))
           return Promise.resolve(jsonResponse(200, branchesResult));
@@ -426,11 +433,16 @@ describe("GitPanel", () => {
             ]),
           );
         }
-        if (url.includes("/api/sessions")) {
+        if (url.includes("/api/sessions") && method === "POST") {
           createSessionCalls += 1;
           return new Promise((resolve) => {
             resolveCreateSession = () => resolve(jsonResponse(201, { id: 1 }));
           });
+        }
+        if (url.includes("/api/sessions")) {
+          // The post-create refreshSessions() GET — resolve immediately so
+          // it doesn't itself become a second in-flight request.
+          return Promise.resolve(jsonResponse(200, []));
         }
         return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
       });
@@ -451,6 +463,117 @@ describe("GitPanel", () => {
 
       resolveCreateSession?.();
       await vi.waitFor(() => expect(openButtons[0]).not.toBeDisabled());
+    });
+
+    // U6 — "Open session here" used to call api.createSession directly,
+    // discarding the created session and never firing refreshSessions(), so
+    // no panel ever opened and the new row only appeared up to
+    // LIVE_REFRESH_INTERVAL_MS later via the next poll tick. This proves
+    // both halves of the fix: (1) the store action is used, not the raw api
+    // client — observable as a GET /api/sessions (refreshSessions) firing
+    // right after the POST, which api.createSession alone would never
+    // trigger — and (2) the resulting session reaches onOpenSession, which
+    // is what actually opens a pane for it.
+    it("U6 — opens a session via the store action (not the raw api client) and hands it to onOpenSession", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [],
+        worktrees: [
+          { path: "/home/x/project", branch: "main", isMain: true },
+          { path: "/home/x/.mullion-worktrees/foo", branch: "foo", isMain: false },
+        ],
+        remoteBranches: [],
+      };
+      const NEW_SESSION = {
+        id: 42,
+        projectId: 20,
+        parentSessionId: null,
+        name: null,
+        nameLocked: false,
+        command: "claude",
+        cwd: "/home/x/.mullion-worktrees/foo",
+        liveCwd: null,
+        previewBranch: null,
+        kind: "terminal",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastAttachedAt: null,
+        alive: true,
+        subscriberCount: 0,
+        activity: "idle",
+        lastActivityAt: null,
+        attention: false,
+        attentionAt: null,
+        lastTitle: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        endedReason: null,
+        liveBranch: null,
+        exitCode: null,
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        subagents: [],
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        stateRestored: true,
+        staleHooks: false,
+        restoredVersion: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        hookEmits: [],
+        pendingDevServerPort: null,
+        outstandingBackgroundTasks: [],
+        sessionStatusAttentionRequired: false,
+      };
+      let listSessionsCalls = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-branches"))
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        if (url.includes("/actions")) {
+          return Promise.resolve(
+            jsonResponse(200, [
+              { id: "agent:claude", title: "Claude", command: "claude", kind: "agent" },
+            ]),
+          );
+        }
+        if (url.includes("/api/sessions") && method === "POST") {
+          return Promise.resolve(jsonResponse(201, NEW_SESSION));
+        }
+        if (url.includes("/api/sessions")) {
+          listSessionsCalls += 1;
+          return Promise.resolve(jsonResponse(200, [NEW_SESSION]));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const onOpenSession = vi.fn();
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 20 }} onOpenSession={onOpenSession} />);
+
+      await screen.findByText("Worktrees (2)");
+      await user.click(screen.getByText("Open session here"));
+
+      await vi.waitFor(() =>
+        expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 42 })),
+      );
+      // Only the store's createSession action also calls refreshSessions()
+      // — api.createSession alone never would. This is what makes the new
+      // row show up in the sidebar/tab strip immediately instead of
+      // waiting out the next live-refresh poll tick.
+      expect(listSessionsCalls).toBeGreaterThan(0);
     });
 
     it("Prune stale calls the prune endpoint and refreshes branches", async () => {

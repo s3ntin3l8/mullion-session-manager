@@ -167,17 +167,38 @@ export function CommandPalette({
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBranches, setWorktreeBranches] = useState<string[]>([]);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
+  // P9 — the fetch below used to have no `.catch` at all: a failure left the
+  // base-ref dropdown permanently empty with nothing but an unhandled
+  // rejection in the console, no different from the toggle silently doing
+  // nothing. Own local error state (UnifiedBoard.tsx's TasksToolbar is this
+  // codebase's own model for "an inline error near the control that
+  // triggered the request," not a global toast).
+  const [worktreeBranchesError, setWorktreeBranchesError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!worktreeEnabled || effectiveProjectId === null) return;
     let cancelled = false;
-    void api.getProjectGitBranches(effectiveProjectId).then((result) => {
-      if (cancelled || !result) return;
-      const local = result.branches.map((b) => b.name);
-      setWorktreeBranches([...local, ...result.remoteBranches]);
-      const current = result.branches.find((b) => b.isCurrent)?.name ?? null;
-      setWorktreeBaseRef((prev) => prev || current || local[0] || "");
-    });
+    api
+      .getProjectGitBranches(effectiveProjectId)
+      .then((result) => {
+        if (cancelled || !result) return;
+        setWorktreeBranchesError(null);
+        const local = result.branches.map((b) => b.name);
+        setWorktreeBranches([...local, ...result.remoteBranches]);
+        const current = result.branches.find((b) => b.isCurrent)?.name ?? null;
+        setWorktreeBaseRef((prev) => prev || current || local[0] || "");
+      })
+      .catch((err: unknown) => {
+        // Same `cancelled` guard as the success path — a stale rejection
+        // from a toggle-off/project-switch that already tore this effect
+        // down must not paint an error for a request nobody's waiting on
+        // anymore.
+        if (cancelled) return;
+        console.debug("[CommandPalette] getProjectGitBranches failed", err);
+        setWorktreeBranchesError(
+          err instanceof Error ? err.message : "Failed to load branches — try again.",
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -352,8 +373,22 @@ export function CommandPalette({
 
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
 
+  // P9 — this used to be `void createSession(...).then(...)` with no
+  // `.catch` at all: a failed launch (a 4xx from a bad worktree base ref, a
+  // 503 from a dead remote host, ...) left the palette open showing nothing
+  // but a search box, with the only evidence anything went wrong being an
+  // unhandled rejection in the console. `launching`/`launchError` are new
+  // local state (same "an inline error near the control that triggered the
+  // request" shape as worktreeBranchesError above and UnifiedBoard.tsx's
+  // TasksToolbar) — critically, the failure path must NOT call onClose():
+  // closing on failure would unmount the very component about to render the
+  // error, hiding it from the user just as reliably as never catching the
+  // rejection did.
+  const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+
   const launch = (launcher: Launcher) => {
-    if (effectiveProjectId === null) return;
+    if (effectiveProjectId === null || launching) return;
     localStorage.setItem(LAST_PROJECT_KEY, String(effectiveProjectId));
     const name = expandSessionNamePattern(settings.sessions.namePattern, {
       agent: launcher.title,
@@ -361,7 +396,9 @@ export function CommandPalette({
       n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
     });
     const trimmedBaseRef = worktreeBaseRef.trim();
-    void useDashboardStore
+    setLaunching(true);
+    setLaunchError(null);
+    useDashboardStore
       .getState()
       .createSession(effectiveProjectId, launcher.command, {
         cwd: launcher.cwd,
@@ -383,6 +420,11 @@ export function CommandPalette({
       .then((session) => {
         onLaunched(session);
         onClose();
+      })
+      .catch((err: unknown) => {
+        console.debug("[CommandPalette] launch failed", err);
+        setLaunching(false);
+        setLaunchError(err instanceof Error ? err.message : "Failed to launch — try again.");
       });
   };
 
@@ -425,6 +467,12 @@ export function CommandPalette({
           />
           <span className="kbd">esc</span>
         </div>
+
+        {launchError && (
+          <div className="cmd-palette-launch-error" title={launchError}>
+            {launchError}
+          </div>
+        )}
 
         <div className={`cmd-palette-target-strip${scope === "global" ? " global" : ""}`}>
           {scope === "project" ? (
@@ -484,6 +532,11 @@ export function CommandPalette({
                     onChange={setWorktreeBaseRef}
                     options={worktreeBranches.map((name) => ({ value: name, label: name }))}
                   />
+                  {worktreeBranchesError && (
+                    <span className="cmd-palette-inline-error" title={worktreeBranchesError}>
+                      {worktreeBranchesError}
+                    </span>
+                  )}
                 </div>
               )}
             </div>

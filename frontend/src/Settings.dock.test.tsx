@@ -15,6 +15,22 @@ describe("Settings -> Dock", () => {
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
+      // store.ts's updateSettings debounces a fire-and-forget PATCH
+      // /api/settings SETTINGS_PATCH_DEBOUNCE_MS (400ms real time — this
+      // suite doesn't use fake timers) after ANY toggle click below. That's
+      // a legitimate, intentional side effect this file's tests don't
+      // assert against, not something to flag as unexpected — and under
+      // load (the full suite running many files/tests concurrently) the
+      // real 400ms timer can fire AFTER the click's own test has already
+      // returned, landing during a LATER test in this same file. Accepting
+      // it here rather than recording it means that stale flush can never
+      // fail an unrelated test's `unexpectedCalls` assertion, regardless of
+      // how the two tests' timing happens to interleave.
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+        );
+      }
       unexpectedCalls.push(`${method} ${url}`);
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });

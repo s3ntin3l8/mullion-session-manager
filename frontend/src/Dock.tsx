@@ -459,6 +459,10 @@ function DockColumn({
         dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
       })),
     );
+  // U8 — Settings -> Session management's "Confirm before kill" toggle,
+  // same setting Sidebar.tsx's ConfirmButton and PaneTab.tsx's own kill gate
+  // both read; the dock monitor header had no such gate at all before this.
+  const confirmBeforeKill = settings.sessions.confirmBeforeKill;
   const [controls, setControls] = useState<DockControl[]>([]);
   // Issue #73 — a "Pull & restart stack" session's synthesized control
   // (POST .../docker/update's response), never returned by GET .../dock —
@@ -503,6 +507,69 @@ function DockColumn({
     },
     [],
   );
+  // U8 — arm-then-confirm before a running monitor's header click actually
+  // kills it, gated on the same settings.sessions.confirmBeforeKill toggle
+  // Sidebar.tsx's ConfirmButton and PaneTab.tsx's own kill gate both read.
+  // Not literally the shared <ConfirmButton> component: that renders a
+  // <button>, and this header already hosts other real interactive elements
+  // (the worktree <select>, the docker kebab menu) that would become an
+  // illegal button-inside-button nest. So this mirrors the file's own
+  // `checkStatusById`/`checkStatusTimersRef` idiom just above instead — a
+  // per-control-id armed set plus a per-control-id disarm timer — rather
+  // than either inventing a third shape or forcing every control in a
+  // column to share one armed slot (which would silently disarm a SECOND
+  // monitor's confirm step the instant a first one gets armed).
+  const KILL_ARM_DISARM_MS = 6000; // matches ConfirmButton.tsx's own window
+  const [killArmedIds, setKillArmedIds] = useState<Set<string>>(new Set());
+  const killArmTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  useEffect(
+    () => () => {
+      for (const timer of Object.values(killArmTimersRef.current)) clearTimeout(timer);
+    },
+    [],
+  );
+  const armKill = (controlId: string) => {
+    setKillArmedIds((prev) => new Set(prev).add(controlId));
+    const existing = killArmTimersRef.current[controlId];
+    if (existing) clearTimeout(existing);
+    killArmTimersRef.current[controlId] = setTimeout(() => {
+      setKillArmedIds((prev) => {
+        if (!prev.has(controlId)) return prev;
+        const next = new Set(prev);
+        next.delete(controlId);
+        return next;
+      });
+      delete killArmTimersRef.current[controlId];
+    }, KILL_ARM_DISARM_MS);
+  };
+  const disarmKill = (controlId: string) => {
+    const existing = killArmTimersRef.current[controlId];
+    if (existing) {
+      clearTimeout(existing);
+      delete killArmTimersRef.current[controlId];
+    }
+    setKillArmedIds((prev) => {
+      if (!prev.has(controlId)) return prev;
+      const next = new Set(prev);
+      next.delete(controlId);
+      return next;
+    });
+  };
+  // U5 — per-control "has the header been explicitly toggled since an
+  // in-flight worktree-switch started" generation counter. The switch
+  // handler below needs to know whether ITS OWN pending relaunch is still
+  // wanted once its `deleteSession` await resolves — the original code
+  // re-read live session status for that, but `store.deleteSession` itself
+  // awaits `refreshSessions()` before returning, so by the time the check
+  // ran the just-deleted row already read "killed" and the relaunch branch
+  // was permanently dead (the bug this fixes). A plain counter bumped only
+  // by an explicit header click (start OR kill — either supersedes a
+  // pending automatic relaunch) survives that, because the switch's own
+  // internal `deleteSession` call is never routed through this counter.
+  const toggleGenRef = useRef<Map<string, number>>(new Map());
+  const bumpToggleGen = (controlId: string) => {
+    toggleGenRef.current.set(controlId, (toggleGenRef.current.get(controlId) ?? 0) + 1);
+  };
   // Per-monitor selected worktree path (by monitor config id) — kept in
   // component state so a user's choice survives re-renders within the
   // current dock session; not persisted to localStorage since the worktree
@@ -733,22 +800,26 @@ function DockColumn({
           });
 
           // Helper: create or restart a session for a given option value.
-          // Falls back to control.cwd when value is empty or unset.
+          // Falls back to control.cwd when value is empty or unset. Returns
+          // the create promise (rather than voiding it internally) so the
+          // worktree-switch handler below can actually observe a failed
+          // relaunch instead of it disappearing into an unhandled rejection
+          // — the exact P9 class of bug, previously sitting inside the very
+          // restart path U5 fixes.
           const launchForValue = (value: string) => {
             const effectiveCwd = value.length > 0 ? value : control.cwd;
             if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
               const branchName = effectiveCwd.slice("branch:".length);
-              void useDashboardStore.getState().createSession(projectId, control.command, {
+              return useDashboardStore.getState().createSession(projectId, control.command, {
                 kind: "dock",
                 worktree: { branch: branchName },
                 worktreeRefresh: effectiveWorktreeRefresh,
               });
-            } else {
-              void useDashboardStore.getState().createSession(projectId, control.command, {
-                ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-                kind: "dock",
-              });
             }
+            return useDashboardStore.getState().createSession(projectId, control.command, {
+              ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+              kind: "dock",
+            });
           };
 
           // Issue #73 — a small "Docker" group label ahead of the first
@@ -777,11 +848,33 @@ function DockColumn({
                 <div
                   className="dock-monitor-header"
                   style={{ cursor: "pointer" }}
+                  title={
+                    running
+                      ? killArmedIds.has(control.id)
+                        ? "Click again to confirm — ends the running program"
+                        : confirmBeforeKill
+                          ? "Click to end this monitor"
+                          : undefined
+                      : undefined
+                  }
                   onClick={() => {
                     if (running) {
-                      void useDashboardStore.getState().deleteSession(running.id);
+                      // U8 — only the KILL half of this header needs
+                      // arm-then-confirm; the header doubles as the START
+                      // affordance when nothing is running (the `else`
+                      // branch below), and starting a session is never
+                      // destructive, so it always fires on the first click
+                      // regardless of confirmBeforeKill.
+                      if (!confirmBeforeKill || killArmedIds.has(control.id)) {
+                        disarmKill(control.id);
+                        bumpToggleGen(control.id);
+                        void useDashboardStore.getState().deleteSession(running.id);
+                      } else {
+                        armKill(control.id);
+                      }
                     } else {
-                      launchForValue(selectedValue);
+                      bumpToggleGen(control.id);
+                      void launchForValue(selectedValue);
                     }
                   }}
                 >
@@ -819,24 +912,47 @@ function DockColumn({
                         setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
                         // If a monitor is running and the user switches,
                         // kill and restart in the new location.
-                        // Check the live store after delete resolves to
-                        // avoid restarting if the user manually toggled
-                        // the monitor off during the async window.
                         if (running) {
+                          // A stale armed kill from before the switch (the
+                          // user armed the header, then picked a different
+                          // worktree instead of confirming) must not go on
+                          // reading "confirm?" for up to
+                          // KILL_ARM_DISARM_MS after this delete+relaunch —
+                          // this delete is a restart, not the armed kill.
+                          disarmKill(control.id);
+                          // U5 — capture the restart intent BEFORE the
+                          // delete, not by re-deriving it from post-delete
+                          // session state. `store.deleteSession` itself
+                          // awaits `refreshSessions()` before resolving, so
+                          // by the time an `await` on it here returns, this
+                          // exact row already reads "killed" in the store —
+                          // re-checking "is a matching session still active"
+                          // at that point would always read false, making
+                          // the relaunch below permanently unreachable
+                          // (verified live; the original bug). `shouldRestart`
+                          // is just `Boolean(running)`, read from this
+                          // render's own closure, so it can't be corrupted
+                          // by the delete it's about to trigger.
+                          //
+                          // The one case that still has to suppress the
+                          // relaunch — the user manually toggling THIS
+                          // monitor (start or kill) from the header while
+                          // this switch is in flight — is now tracked via
+                          // toggleGenRef instead of session status: the
+                          // header's own onClick bumps that counter on an
+                          // actual toggle, so comparing it before/after the
+                          // await detects an intervening manual action
+                          // without depending on state this delete call
+                          // itself mutates.
+                          const shouldRestart = Boolean(running);
+                          const genAtStart = toggleGenRef.current.get(control.id) ?? 0;
                           void (async () => {
                             try {
                               await useDashboardStore.getState().deleteSession(running.id);
-                              const stillRunning = useDashboardStore
-                                .getState()
-                                .sessions.some(
-                                  (s) =>
-                                    s.kind === "dock" &&
-                                    s.projectId === projectId &&
-                                    s.status === "active" &&
-                                    s.command === control.command,
-                                );
-                              if (stillRunning) {
-                                launchForValue(newValue);
+                              const genUnchanged =
+                                (toggleGenRef.current.get(control.id) ?? 0) === genAtStart;
+                              if (shouldRestart && genUnchanged) {
+                                await launchForValue(newValue);
                               }
                             } catch {
                               console.warn(
@@ -913,7 +1029,11 @@ function DockColumn({
                       {checkStatusById[control.id]!.message}
                     </span>
                   )}
-                  <span className="dock-monitor-tag">{running ? "on" : "off"}</span>
+                  <span
+                    className={`dock-monitor-tag${killArmedIds.has(control.id) ? " armed" : ""}`}
+                  >
+                    {killArmedIds.has(control.id) ? "confirm?" : running ? "on" : "off"}
+                  </span>
                 </div>
                 {running && (
                   <div className="dock-monitor-body">

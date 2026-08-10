@@ -600,3 +600,41 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     expect(screen.getByText("No sessions yet")).toBeTruthy();
   });
 });
+
+// P9 — Sidebar.tsx's "Delete project" (ProjectHeader) and "End this
+// session" (SessionRow) handlers used to be `void deleteX(...).then(...)`
+// with no `.catch` at all: a failure left the row sitting there with no
+// explanation, indistinguishable from the click never registering, plus an
+// unhandled rejection in the console. `deleteProject`/`deleteSession` are
+// the module-level stable mocks this whole file's `storeState()` serves
+// (defaulted to `mockResolvedValue(undefined)` at the top) —
+// `mockRejectedValueOnce` here only affects this one call, so it doesn't
+// leak into any other test's default resolved behavior.
+describe("Sidebar P9 — inline error on a failed delete", () => {
+  it("a failed 'Delete project' surfaces an inline error instead of doing nothing", async () => {
+    deleteProject.mockRejectedValueOnce(new Error("Host is unreachable"));
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Delete project"));
+    // KebabMenu's own arm-then-confirm: first click arms (swaps the label
+    // to armLabel), second click actually fires item.onClick().
+    await user.click(await screen.findByText("Click again to delete"));
+
+    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+  });
+
+  it("a failed 'End this session' surfaces an inline error instead of doing nothing", async () => {
+    sessions = [makeSession({ id: 501, projectId: PROJECT.id, name: "doomed" })];
+    deleteSession.mockRejectedValueOnce(new Error("Host is unreachable"));
+    const user = userEvent.setup();
+    renderSidebar();
+
+    // confirmBeforeKill is false in this file's storeState() (see the top
+    // of the file), so ConfirmButton fires onConfirm on the first click.
+    await user.click(screen.getByTitle("End this session (the program will be terminated)"));
+
+    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+  });
+});

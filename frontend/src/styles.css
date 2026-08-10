@@ -992,6 +992,17 @@ body {
 .project-row-header:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
+/* P9 — a failed "Delete project" (see ProjectHeader's kebab menu handler in
+   Sidebar.tsx), rendered as a second line under the header, same slot
+   .session-event-line/.session-end-error occupy for a session row. */
+.project-row-error {
+  font-size: 11px;
+  color: var(--r);
+  padding: 0 8px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .project-row-name {
   font-size: 12.5px;
   font-weight: 600;
@@ -1355,6 +1366,17 @@ body {
 .session-event-line.attention {
   font-style: normal;
   color: var(--ring);
+}
+/* P9 — a failed "End this session" (SessionRow's handleEnd), same slot as
+   .session-event-line just above but tinted like .task-detail-error/
+   .project-row-error (var(--r)) rather than --dim/--ring. */
+.session-end-error {
+  font-size: 11px;
+  color: var(--r);
+  padding-left: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Row 3 toggle (issue #202) — reuses .ws-group-chevron's own rotate
    transition for the collapsed/expanded caret, same visual language as
@@ -3664,6 +3686,14 @@ body {
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
 }
+/* U8 — armed (arm-then-confirm before killing a running monitor from its
+   header) reuses button.danger.armed's own tone/animation language (--r +
+   cmuxAttn) rather than inventing a new one. */
+.dock-monitor-tag.armed {
+  color: var(--r);
+  font-weight: 600;
+  animation: cmuxAttn 1.4s ease-out infinite;
+}
 .dock-monitor-worktree-select {
   max-width: 120px;
   min-width: 0;
@@ -4858,6 +4888,20 @@ body {
 }
 .cmd-palette-worktree-picker .settings-dropdown select {
   width: 100%;
+}
+/* P9 — same shape as .task-detail-error (UnifiedBoard.tsx's own model for
+   an inline, near-the-control error): 10.5px, --r. */
+.cmd-palette-inline-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--r);
+}
+.cmd-palette-launch-error {
+  padding: 8px 15px;
+  font-size: 11px;
+  color: var(--r);
+  border-bottom: 1px solid var(--border-soft);
 }
 .cmd-palette-worktree-toggle {
   display: inline-flex;
