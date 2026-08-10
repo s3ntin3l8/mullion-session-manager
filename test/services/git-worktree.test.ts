@@ -583,6 +583,97 @@ describe("cleanupPreviewWorktree (pendingRemoval retry)", () => {
   });
 });
 
+describe("preview worktree host-routed remove/sync closures (issue #345)", () => {
+  let tmpDir: string;
+  let sessionId: number;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-closures-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    sessionId = Math.floor(Math.random() * 1_000_000) + 900_000;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("cleanupPreviewWorktree calls the tracked entry's remove closure instead of local git when present", async () => {
+    const remove = vi.fn().mockResolvedValue(true);
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/some/remote/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/some/remote",
+      projectId: 1,
+      hostId: "remote-1",
+      remove,
+    });
+
+    expect(await cleanupPreviewWorktree(sessionId)).toBe(true);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(getPreviewWorktree(sessionId)).toBeUndefined();
+    // Never touched the local filesystem — the path doesn't even exist.
+  });
+
+  it("cleanupPreviewWorktree marks pendingRemoval when the remove closure resolves false, without local git", async () => {
+    const remove = vi.fn().mockResolvedValue(false);
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/some/remote/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/some/remote",
+      projectId: 1,
+      hostId: "remote-1",
+      remove,
+    });
+
+    const warn = vi.fn();
+    expect(await cleanupPreviewWorktree(sessionId, { warn })).toBe(false);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
+    // hostId is diagnostic-only (never consulted for routing — see
+    // PreviewWorktreeInfo's own doc comment) but must actually reach the
+    // log, or the field earns nothing for carrying it around.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "remote-1" }),
+      expect.any(String),
+    );
+  });
+
+  it("a remove closure that rejects (violating its own never-reject contract) is treated as a failed attempt, not an escaping error", async () => {
+    const remove = vi.fn().mockRejectedValue(new Error("boom"));
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/some/remote/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/some/remote",
+      projectId: 1,
+      hostId: "remote-1",
+      remove,
+    });
+
+    await expect(cleanupPreviewWorktree(sessionId)).resolves.toBe(false);
+    expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
+  });
+
+  it("omitting the closures preserves today's local-only behavior (falls back to real git)", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+    trackPreviewWorktree(sessionId, {
+      worktreePath: created!.path,
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: tmpDir,
+      projectId: 1,
+    });
+
+    expect(await cleanupPreviewWorktree(sessionId)).toBe(true);
+    expect(fs.existsSync(created!.path)).toBe(false);
+  });
+});
+
 describe("isDockPreviewWorktree", () => {
   it("returns true for paths under the dock-preview prefix", () => {
     expect(isDockPreviewWorktree("/tmp/.mullion-worktrees/dock-preview-feature-foo-a1b2c3")).toBe(
