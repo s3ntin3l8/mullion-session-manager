@@ -15,12 +15,14 @@ import type {
 } from "./api.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
-// UnifiedBoard destructures the whole store (no selector, same call shape
-// Sidebar.tsx/KanbanBoard.tsx used) while the SessionRows it mounts in the
-// ad-hoc lane use individual selectors, and TaskDetail (stubbed below) would
-// otherwise need its own claim/approve/reject/retry/give-up surface. The
-// mock below handles both call shapes the way the real zustand hook does: no
-// selector -> whole state, a selector -> selector(state).
+// UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
+// perf fix that replaced its old whole-store destructure) and calls its
+// actions via useDashboardStore.getState() at each call site, while the
+// SessionRows it mounts in the ad-hoc lane use individual selectors, and
+// TaskDetail (stubbed below) would otherwise need its own
+// claim/approve/reject/retry/give-up surface. The mock below serves all
+// three call shapes the way the real zustand hook does: no selector ->
+// whole state, a selector -> selector(state), .getState() -> whole state.
 let sessions: Session[];
 let projects: Project[];
 let tasks: Task[];
@@ -66,12 +68,17 @@ function storeState() {
   };
 }
 
-vi.mock("./store.js", () => ({
-  useDashboardStore: (selector?: (s: unknown) => unknown) => {
+vi.mock("./store.js", () => {
+  const useDashboardStore = (selector?: (s: unknown) => unknown) => {
     const state = storeState();
     return selector ? selector(state) : state;
-  },
-}));
+  };
+  // P1 perf fix moved UnifiedBoard's action call sites off this whole-store
+  // subscription and onto useDashboardStore.getState() — the mock needs to
+  // serve that call shape too, same as ProjectSection.test.tsx's own fix.
+  useDashboardStore.getState = storeState;
+  return { useDashboardStore };
+});
 
 // TaskDetail.test.tsx (546 lines) already covers TaskDetail comprehensively;
 // stubbing it here keeps this file's mock from also having to grow

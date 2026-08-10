@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, normalizeAgentId } from "./api.js";
 import type { Launcher, Session } from "./api.js";
 import { useDashboardStore } from "./store.js";
+import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDownIcon,
   FileTextIcon,
@@ -110,8 +111,20 @@ export function CommandPalette({
   onOpenBlankBrowser,
   onOpenBrowserUrl,
 }: CommandPaletteProps) {
-  const { projects, sessions, createSession, theme, settings, projectUrls, refreshProjectUrls } =
-    useDashboardStore();
+  // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
+  // subscription). `createSession`/`refreshProjectUrls` are pure
+  // action-callers (used inside a handler and an effect below, never read
+  // as a value) — see the useDashboardStore.getState() calls at their own
+  // call sites instead of subscribing to them here.
+  const { projects, sessions, theme, settings, projectUrls } = useDashboardStore(
+    useShallow((s) => ({
+      projects: s.projects,
+      sessions: s.sessions,
+      theme: s.theme,
+      settings: s.settings,
+      projectUrls: s.projectUrls,
+    })),
+  );
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
     const stored = Number(localStorage.getItem(LAST_PROJECT_KEY));
@@ -177,8 +190,8 @@ export function CommandPalette({
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
-    void refreshProjectUrls(effectiveProjectId);
-  }, [effectiveProjectId, refreshProjectUrls]);
+    void useDashboardStore.getState().refreshProjectUrls(effectiveProjectId);
+  }, [effectiveProjectId]);
 
   // Hidden-agent filtering: strip the "agent:" prefix from launcher IDs
   // (detected agents have ids like "agent:claude") and compare against the
@@ -236,26 +249,29 @@ export function CommandPalette({
       n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
     });
     const trimmedBaseRef = worktreeBaseRef.trim();
-    void createSession(effectiveProjectId, launcher.command, {
-      cwd: launcher.cwd,
-      name,
-      worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
-      skipPermissions:
-        launcher.kind === "agent"
-          ? skipPermissionsOverride !== null
-            ? skipPermissionsOverride
-            : launcher.skipPermissions === true
-              ? true
-              : launcher.skipPermissions === false
-                ? false
-                : (settings.launchers.skipPermissionsAgents?.includes(
-                    normalizeAgentId(launcher.id),
-                  ) ?? false)
-          : undefined,
-    }).then((session) => {
-      onLaunched(session);
-      onClose();
-    });
+    void useDashboardStore
+      .getState()
+      .createSession(effectiveProjectId, launcher.command, {
+        cwd: launcher.cwd,
+        name,
+        worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
+        skipPermissions:
+          launcher.kind === "agent"
+            ? skipPermissionsOverride !== null
+              ? skipPermissionsOverride
+              : launcher.skipPermissions === true
+                ? true
+                : launcher.skipPermissions === false
+                  ? false
+                  : (settings.launchers.skipPermissionsAgents?.includes(
+                      normalizeAgentId(launcher.id),
+                    ) ?? false)
+            : undefined,
+      })
+      .then((session) => {
+        onLaunched(session);
+        onClose();
+      });
   };
 
   return (

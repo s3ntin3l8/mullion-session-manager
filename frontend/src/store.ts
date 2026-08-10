@@ -670,6 +670,74 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     return { ...events, [event.sessionId]: next };
   }
 
+  // P6 perf/correctness fix — `events`, `lastSeenSeq`, and
+  // `dismissedEventKeys` are keyed by session id and, unlike `gitStatuses`
+  // (which refreshGitStatuses rebuilds fresh from the live session id list
+  // every cycle), nothing ever removed a key from any of them: a long-lived
+  // dashboard accumulates one entry per session id it has EVER seen,
+  // unbounded. Pruned here (alongside every successful refreshSessions()
+  // call) rather than at kill/delete time directly: per this repo's own
+  // CLAUDE.md ("the sessions DB row records intent... live process state
+  // lives only in PtyManager's in-memory map"), a killed session's DB row
+  // survives and GET /api/sessions keeps returning it — Sidebar's
+  // hideEndedSessions toggle can still show a killed/exited row — so pruning
+  // on kill would delete event history a still-visible row needs. The one
+  // case that's genuinely safe (and the only one this prunes): a session id
+  // that no longer appears in the live list AT ALL, which — verified against
+  // routes/sessions.ts's GET /api/sessions (no status filter; killed/exited
+  // rows are returned same as active ones) — only happens when the DB row
+  // itself is gone (its project, or the project's host, was deleted; FK
+  // cascade removes the row outright). That is the remediation plan's own
+  // conservative boundary: "prune only ids that no longer appear in the
+  // sessions API response at all, not ids that are merely killed."
+  function pruneSessionKeyedRecord<T>(
+    record: Record<number, T>,
+    liveIds: ReadonlySet<number>,
+  ): Record<number, T> {
+    const keys = Object.keys(record);
+    // Fast path returns the SAME reference (not a fresh shallow copy) when
+    // there's nothing to prune — a no-op prune must not itself manufacture a
+    // new identity every tick for whatever's selecting this slice, which
+    // would undo this same PR's P1 fine-grained-selector work for any
+    // events/lastSeenSeq subscriber.
+    if (keys.every((k) => liveIds.has(Number(k)))) return record;
+    const next: Record<number, T> = {};
+    for (const key of keys) {
+      const id = Number(key);
+      if (liveIds.has(id)) next[id] = record[id];
+    }
+    return next;
+  }
+
+  // Same shape as pruneSessionKeyedRecord above, but `dismissedEventKeys` is
+  // keyed by the composite `eventKey(sessionId, seq)` string (`seq` alone
+  // isn't unique across sessions — see that function's own doc comment), so
+  // the session id has to be parsed out of the key's prefix rather than used
+  // directly.
+  function pruneDismissedEventKeys(
+    record: Record<string, true>,
+    liveIds: ReadonlySet<number>,
+  ): Record<string, true> {
+    const keys = Object.keys(record);
+    const isLive = (key: string): boolean => {
+      // Every key in this map is written by dismissEvent() via eventKey()
+      // below, so this should always parse — but a key this prune pass
+      // can't confidently attribute to a session id is kept, not dropped:
+      // this pass only removes keys it can PROVE belong to a gone session.
+      const sep = key.indexOf(":");
+      if (sep <= 0) return true;
+      const sessionId = Number(key.slice(0, sep));
+      if (!Number.isFinite(sessionId)) return true;
+      return liveIds.has(sessionId);
+    };
+    if (keys.every(isLive)) return record;
+    const next: Record<string, true> = {};
+    for (const key of keys) {
+      if (isLive(key)) next[key] = record[key];
+    }
+    return next;
+  }
+
   function flushPendingPatch() {
     if (!pendingPatch) return;
     const patch = pendingPatch;
@@ -902,7 +970,20 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     refreshSessions: async () => {
       try {
         const sessions = await api.listSessions();
-        set({ sessions, sessionsLoaded: true });
+        // Prune the three per-session-id maps down to only currently-live
+        // session ids — see pruneSessionKeyedRecord's own doc comment above
+        // for the exact boundary (gone-from-the-API-entirely, not merely
+        // killed) and why this runs only on the success path: a transient
+        // fetch failure must never be read as "every session is gone" and
+        // wipe event history that's still valid.
+        const liveIds = new Set(sessions.map((s) => s.id));
+        set((state) => ({
+          sessions,
+          sessionsLoaded: true,
+          events: pruneSessionKeyedRecord(state.events, liveIds),
+          lastSeenSeq: pruneSessionKeyedRecord(state.lastSeenSeq, liveIds),
+          dismissedEventKeys: pruneDismissedEventKeys(state.dismissedEventKeys, liveIds),
+        }));
         if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
           consecutiveSessionFetchFailures = 0;
           set({ backendReachable: true });
