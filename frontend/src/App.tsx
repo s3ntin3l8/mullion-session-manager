@@ -2348,17 +2348,22 @@ export function App() {
         />
       )}
       {settingsOpen && (
-        // position: fixed + inset: 0 here (not just relying on .app's own
-        // fixed/inset:0) gives ErrorBoundary's fallback (.crashed-pane,
-        // height: 100%) a definite size to fill if the Settings chunk fails
-        // to load — without it, that div's parent has no explicit height,
-        // so height: 100% collapses to 0 and the crash state would render
-        // as an unstyled, invisible sliver instead of a proper full-screen
-        // state. Also the containing block LazySettings' and
-        // SettingsLoadingFallback's own `.settings-backdrop` (position:
-        // absolute; inset: 0) resolve against — same full-viewport coverage
-        // either way, so this is purely a safety net for the crash path,
-        // not a visual change for the normal load/success path.
+        // ErrorBoundary's fallback (.crashed-pane, styles.css) has no
+        // positioning of its own — it depends entirely on its parent. .app
+        // is a column flex container (styles.css), so without this wrapper
+        // .crashed-pane would render as a squeezed item in that flex flow
+        // (alongside the toolbar/.app-body) on a Settings chunk-load
+        // failure, not a centered full-screen crash state — unlike the
+        // other three lazy boundaries, which each already sit inside a
+        // sized/positioned container (dockview's own panel content div for
+        // BrowserPanel/BrowserPane, KanbanBoardOverlay's own position:
+        // absolute; inset: 0 div). This position: fixed; inset: 0 wrapper
+        // gives .crashed-pane the same kind of dedicated full-viewport box.
+        // Not a visual change for the normal load/success path: LazySettings'
+        // and SettingsLoadingFallback's own `.settings-backdrop` (position:
+        // absolute; inset: 0) already resolved against `.app` (also fixed;
+        // inset: 0) before this wrapper existed, and resolve against this
+        // wrapper the same way now — same full-viewport coverage either way.
         <div style={{ position: "fixed", inset: 0 }}>
           <ErrorBoundary onReset={() => setSettingsOpen(false)}>
             <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
