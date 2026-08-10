@@ -1,3 +1,5 @@
+import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -15,10 +17,19 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
-import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
+import {
+  syncTaskTransition,
+  computeTaskDiffStat,
+  postReviewFindingsComment,
+} from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
-import { buildReviewPrompt } from "./task-prompt.js";
+import {
+  buildReviewPrompt,
+  buildReviewFeedbackPrompt,
+  taskReviewFindingsPath,
+} from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
+import { reseedTaskIfSessionExited } from "./task-reseed.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -64,7 +75,16 @@ async function maybeSpawnReviewAgent(
     // an unattended review agent idling exactly like an unattended worker
     // did before this fix.
     const seedCapable = commandSupportsSeed(reviewCommand);
-    const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath });
+    // task.reviewRounds is the round THIS review belongs to: 0 for the
+    // first review, 1 for the one spawned after an auto-returned round —
+    // see taskReviewFindingsPath's own doc comment for why round-suffixing
+    // matters here.
+    const findingsPath = taskReviewFindingsPath(
+      path.dirname(app.pty.hookSocketPath),
+      task.id,
+      task.reviewRounds,
+    );
+    const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
@@ -146,6 +166,191 @@ async function maybeOpenDraftPR(
 }
 
 /**
+ * The review-findings loop — a SEPARATE poll from the claimed/in_progress
+ * one below (see reconcileTasks's own doc comment for why a "reviewing"
+ * task otherwise has no liveness/budget dependency here at all: this is the
+ * one narrow exception, scoped to reading a finished review session's
+ * output, never to session death or the time budget).
+ *
+ * For every "reviewing" task with a review session whose derived status is
+ * "finished" AND whose output hasn't already been processed
+ * (`reviewFindingsIngestedSessionId !== reviewSessionId` — see that
+ * column's own doc comment in schema.ts for why this check exists: a task
+ * can sit "reviewing" with zero findings for a long time, polled every
+ * tick, and without this marker it would be re-ingested and re-commented
+ * forever):
+ *
+ *  - reads the round-suffixed findings file the review prompt told the
+ *    agent to write to (`taskReviewFindingsPath`, task-prompt.ts) — a
+ *    missing file means no findings, not an error; the prompt tells the
+ *    agent not to create one when it has none.
+ *  - posts what it found (or a "no findings" note either way — this is
+ *    exactly the visibility gap the review-findings loop exists to close:
+ *    previously a finished review was invisible outside the session's own
+ *    terminal) as one comment on the task's PR, falling back to its linked
+ *    issue (`postReviewFindingsComment`, task-github-sync.ts).
+ *  - appends it to `tasks.reviewFindings` under a "## Round N" header —
+ *    never replaces, so an earlier round survives a later one.
+ *  - if the findings are non-empty AND this task hasn't already used its
+ *    one auto-return (`reviewRounds < 1`) AND Task Master is enabled: flips
+ *    the task back to "in_progress", increments `reviewRounds` (a
+ *    compare-and-swap write, same as every other transition in this file —
+ *    a concurrent approve/reject/give-up simply wins the race and this
+ *    loop no-ops), and re-seeds the worker
+ *    (`reseedTaskIfSessionExited`, task-reseed.ts, shared with reject's own
+ *    re-seed but called with `force: true` here — see that function's own
+ *    doc comment on why: nobody is watching to type into a still-alive
+ *    worker session the way a human reviewing a reject is) with the
+ *    findings as its prompt.
+ *
+ * Gated on `resolveTaskMasterConfig(app).enabled` for the auto-return step
+ * only (same reasoning as the claimed/in_progress loop's own "enabled"
+ * gates below) — reading and posting the findings themselves is pure
+ * visibility, ungated, so a disabled install still surfaces "review
+ * finished" instead of going silent.
+ */
+async function processReviewingTasks(app: FastifyInstance): Promise<void> {
+  const rows = app.db
+    .select({ task: tasks, session: sessions, project: projects })
+    .from(tasks)
+    .innerJoin(sessions, eq(tasks.reviewSessionId, sessions.id))
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(eq(tasks.status, "reviewing"))
+    .all();
+  if (rows.length === 0) return;
+
+  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  const sessionsDir = path.dirname(app.pty.hookSocketPath);
+
+  const byHost = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const group = byHost.get(row.project.hostId) ?? [];
+    group.push(row);
+    byHost.set(row.project.hostId, group);
+  }
+
+  await Promise.all(
+    [...byHost.entries()].map(async ([hostId, hostRows]) => {
+      const backend = resolveBackend(app, hostId);
+      let liveMap: Record<string, SessionInfo | null>;
+      try {
+        liveMap = await backend.liveStatus(
+          hostRows.map((r) => String(r.session.id)),
+          idleThresholdMs,
+        );
+      } catch (err) {
+        app.log.warn(
+          { hostId, err },
+          "task reconcile: host unreachable, skipping its review sessions",
+        );
+        return;
+      }
+
+      for (const row of hostRows) {
+        const { task, session, project } = row;
+
+        if (task.reviewFindingsIngestedSessionId === task.reviewSessionId) continue;
+
+        const info = liveMap[String(session.id)];
+        if (info === undefined) continue;
+        const derived = deriveSessionStatus({
+          dbStatus: session.status,
+          info: defaultDeriveStatusInfo(info),
+        });
+        if (derived.status !== "finished") continue;
+
+        const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.reviewRounds);
+        let findings: string | null = null;
+        try {
+          if (existsSync(findingsPath)) {
+            const content = readFileSync(findingsPath, "utf8").trim();
+            if (content.length > 0) findings = content;
+          }
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, findingsPath },
+            "task reconcile: failed to read review findings file",
+          );
+        }
+
+        const roundLabel = `## Round ${task.reviewRounds + 1}`;
+        const commentBody = findings
+          ? `${roundLabel}\n\n${findings}`
+          : `${roundLabel}\n\nReview complete — no findings.`;
+        await postReviewFindingsComment(app, task, project, commentBody);
+
+        const appendedFindings = task.reviewFindings
+          ? `${task.reviewFindings}\n\n${commentBody}`
+          : commentBody;
+
+        // Narrows `findings` to `string` for the rest of this iteration —
+        // deliberately one combined check (not `if (findings === null)
+        // continue` on its own) so every reason to skip auto-return shares
+        // the identical "just record what was found" fallback below.
+        if (
+          findings === null ||
+          task.reviewRounds >= 1 ||
+          !resolvedTaskMaster.enabled ||
+          task.worktreePath === null
+        ) {
+          app.db
+            .update(tasks)
+            .set({
+              reviewFindings: appendedFindings,
+              reviewFindingsIngestedSessionId: task.reviewSessionId,
+            })
+            .where(eq(tasks.id, task.id))
+            .run();
+          continue;
+        }
+
+        const updated = app.db
+          .update(tasks)
+          .set({
+            status: "in_progress",
+            reviewFindings: appendedFindings,
+            reviewFindingsIngestedSessionId: task.reviewSessionId,
+            reviewRounds: task.reviewRounds + 1,
+          })
+          .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+          .run();
+        // Lost a race with a concurrent approve/reject/give-up — leave it
+        // exactly where that resolver put it rather than re-seeding a
+        // worker for a task no longer in review.
+        if (updated.changes === 0) continue;
+
+        recordTaskTransition(app, {
+          taskId: task.id,
+          projectId: project.id,
+          from: "reviewing",
+          to: "in_progress",
+          via: "review-feedback",
+        });
+
+        const prompt = buildReviewFeedbackPrompt({
+          task,
+          branchName: task.branchName ?? `mullion/task-${task.id}`,
+          worktreePath: task.worktreePath!,
+          budgetMinutes: resolvedTaskMaster.budgetMinutes,
+          // Nobody is watching an automated review-feedback round.
+          auto: true,
+          findings,
+        });
+        // force: true — unlike reject's own re-seed, nobody is watching to
+        // type into a still-alive worker (the worker's own instructions
+        // tell it to stay running after finishing its turn, so "still
+        // alive but idle" is the COMMON case here, not an edge case). See
+        // reseedTaskIfSessionExited's own doc comment.
+        await reseedTaskIfSessionExited(app, task, project, prompt, "task review-feedback", {
+          force: true,
+        });
+      }
+    }),
+  );
+}
+
+/**
  * Phase 6 Task Master (6.2/#215) — the automatic-transition half of the
  * state machine (task-state.ts owns the legal-transition table; this is
  * what actually walks it). Polls every task in "claimed"/"in_progress" and:
@@ -177,12 +382,15 @@ async function maybeOpenDraftPR(
  *    maybeSpawnReviewAgent above) — advisory only, in the worker's own
  *    worktree.
  *
- * Deliberately does NOT touch "reviewing" tasks — the roadmap's own
+ * Does NOT otherwise touch "reviewing" tasks — the roadmap's own
  * distinction: a reviewing task's session exiting doesn't fail it (the turn
  * is over, the work is committed on its branch, still promotable), so
- * reviewing tasks have no liveness dependency at all here. That's #282's
+ * reviewing tasks have no liveness/budget dependency here. That's #282's
  * job for claimed/in_progress specifically (session-reconciler.ts), and
- * approve/reject's job for reviewing.
+ * approve/reject/give-up's job for reviewing. `processReviewingTasks` above
+ * is the one narrow exception — it reads a finished REVIEW session's
+ * output, never the worker session's, and never fails or terminates
+ * anything.
  *
  * Grouped one liveStatus call per host, same shape as
  * session-reconciler.ts's reconcileExitedSessions — a host that's merely
@@ -190,6 +398,12 @@ async function maybeOpenDraftPR(
  * "every task on it should fail."
  */
 export async function reconcileTasks(app: FastifyInstance): Promise<void> {
+  // Independent of the claimed/in_progress pass below — must not sit behind
+  // its own `rows.length === 0` early return, or a reviewing task's
+  // findings would never be processed on a tick with no claimed/in_progress
+  // work at all.
+  await processReviewingTasks(app);
+
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })
     .from(tasks)

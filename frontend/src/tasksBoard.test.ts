@@ -23,6 +23,8 @@ function makeTask(overrides: Partial<Task>): Task {
     seedDelivered: null,
     reviewSessionId: null,
     reviewSeedDelivered: null,
+    reviewFindings: null,
+    reviewRounds: 0,
     worktreePath: null,
     branchName: null,
     agentCommand: null,

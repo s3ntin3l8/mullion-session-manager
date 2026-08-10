@@ -141,16 +141,25 @@ export function TaskDetail({
 
       {task.reviewSessionId !== null && (
         <div className="task-detail-section task-detail-review-section">
-          <div className="task-detail-section-title">Review (advisory)</div>
+          <div className="task-detail-section-title">Review</div>
           <div className="task-detail-review-hint">
-            An advisory review agent's own findings — it cannot approve, reject, or otherwise
-            transition this task; that's still your call above.
+            {task.reviewRounds > 0
+              ? "Its findings were sent back to the worker once, automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
+              : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically, once, before this task is ready for another look."}
           </div>
+          {task.reviewRounds > 0 && (
+            <div className="task-detail-review-round">
+              Round {task.reviewRounds} sent back to the worker automatically
+            </div>
+          )}
           {task.reviewSeedDelivered === false && (
             <div className="task-detail-review-noseed">
               <WarningTriangleIcon size={12} />
               This agent started with no initial instructions.
             </div>
+          )}
+          {task.reviewFindings && (
+            <div className="task-detail-review-findings">{task.reviewFindings}</div>
           )}
           <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
         </div>

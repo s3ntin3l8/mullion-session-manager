@@ -57,6 +57,8 @@ function makeTask(overrides: Partial<Task>): Task {
     seedDelivered: null,
     reviewSessionId: null,
     reviewSeedDelivered: null,
+    reviewFindings: null,
+    reviewRounds: 0,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
@@ -209,11 +211,13 @@ describe("TaskDetail", () => {
     expect(screen.queryByText(/GitHub sync:/)).toBeNull();
   });
 
-  it("shows the review (advisory) section only when reviewSessionId is set", () => {
+  it("shows the review section only when reviewSessionId is set", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5 })];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText("Review (advisory)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Review", { selector: ".task-detail-section-title" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/cannot approve, reject, or otherwise transition this task/),
     ).toBeInTheDocument();
@@ -222,7 +226,42 @@ describe("TaskDetail", () => {
   it("does not show the review section for a task with no review agent configured", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByText("Review (advisory)")).toBeNull();
+    expect(screen.queryByText("Review", { selector: ".task-detail-section-title" })).toBeNull();
+  });
+
+  it("renders the review agent's captured findings when present", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindings: "## Round 1\n\nThe retry loop never backs off.",
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/The retry loop never backs off\./)).toBeInTheDocument();
+  });
+
+  it("does not render a findings block when nothing has been captured yet", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewFindings: null })];
+    sessions = [makeSession({ id: 5 })];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(container.querySelector(".task-detail-review-findings")).toBeNull();
+  });
+
+  it("shows a round indicator once the review has auto-returned to the worker", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", reviewSessionId: 5, reviewRounds: 1 })];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/Round 1 sent back to the worker automatically/)).toBeInTheDocument();
+  });
+
+  it("shows no round indicator before any auto-return has happened", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewRounds: 0 })];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/Round \d+ sent back to the worker automatically/)).toBeNull();
   });
 
   // #487 — the review agent used to spawn silently with no prompt when its

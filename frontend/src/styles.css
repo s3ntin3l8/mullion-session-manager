@@ -3253,6 +3253,20 @@ body {
   font-size: 10.5px;
   color: var(--y);
 }
+.task-detail-review-round {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--y);
+}
+.task-detail-review-findings {
+  font-size: 11.5px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 8px;
+}
 .task-detail-footer {
   font-size: 10.5px;
   color: var(--dim);
