@@ -4009,6 +4009,33 @@ export class PtyManager {
     return seed;
   }
 
+  /**
+   * B9 — the terminal-lifecycle counterpart to stashSeed()/consumeSeed():
+   * discards a stashed-but-never-consumed seed so it can't leak in this map
+   * for the process's entire lifetime (see stashSeed's own doc comment for
+   * the leak scenario). Deliberately NOT called from kill() itself — kill()
+   * is also reached via killAll() on a graceful shutdown/redeploy, which is
+   * explicitly NOT terminal for `id`: the dtach master and the program
+   * inside it survive (see kill()'s and killAll()'s own doc comments, and
+   * hookTokens' identical non-clearing treatment right below in kill()), so
+   * a SessionStart hook that hasn't fired yet by the time a redeploy's
+   * killAll() runs can still fire once the process reattaches afterward —
+   * clearing pendingSeeds unconditionally in kill() would silently and
+   * permanently lose that seed even though the promoted session itself
+   * survives the redeploy (independent review, PR #587).
+   *
+   * Callers are exactly the genuinely-terminal moments for `id`: this
+   * class's own terminate() (below), the exited-session reconciler
+   * (session-reconciler.ts, once isMasterAlive confirms the process is
+   * actually gone), and the local-spawn-failure rollback
+   * (routes/sessions.ts, where the session row itself is deleted right
+   * after). None of those has any live process left that could ever fire a
+   * SessionStart hook again.
+   */
+  discardPendingSeed(id: string): void {
+    this.pendingSeeds.delete(id);
+  }
+
   /** Kill our tracked attach-client only (detach); the dtach master + program survive. */
   kill(id: string): void {
     const session = this.sessions.get(id);
@@ -4020,19 +4047,15 @@ export class PtyManager {
       console.error(`[pty-manager] error killing session ${id}:`, err);
     }
     this.sessions.delete(id);
-    // B9 — a seed stashed for this id (promote flow, see stashSeed's doc
-    // comment) is only ever cleared by consumeSeed(), which only runs if a
-    // SessionStart hook actually fires. A promote into a session whose agent
-    // has no hook adapter (or whose forwarder dies before ever connecting)
-    // would otherwise leak the seed string in this map for the process's
-    // entire lifetime. Every caller of this method (spawn-failure rollback
-    // in routes/sessions.ts, the exited-session reconciler, terminate()
-    // below, and killAll() on shutdown) is exactly the set of moments a
-    // stashed-but-never-consumed seed can no longer ever be picked up, so
-    // clearing it here — alongside the existing hookTokens cleanup right
-    // below, not duplicating any of that teardown logic — is safe
-    // regardless of which caller reached this.
-    this.pendingSeeds.delete(id);
+    // B9 — deliberately NOT clearing pendingSeeds here (unlike an earlier
+    // version of this fix — see discardPendingSeed's own doc comment for
+    // why): this method is also reached via killAll() on a graceful
+    // shutdown/redeploy, which is NOT terminal for `id` — the dtach master
+    // and the program inside it survive that, same reasoning as hookTokens'
+    // own non-clearing treatment just below. Callers that DO know `id` is
+    // genuinely done (terminate(), the exited-session reconciler,
+    // routes/sessions.ts's spawn-failure rollback) call
+    // discardPendingSeed(id) themselves alongside this method.
     // A killed session's in-memory Session object is discarded here, but —
     // unlike before hook-token persistence — its hookToken is NOT: this
     // path (via killAll()) runs on every graceful shutdown/redeploy, and
@@ -4062,10 +4085,14 @@ export class PtyManager {
    * This IS the right place to delete the persisted hook-token file (unlike
    * kill() above): stopScope() actually ends the dtach master and program,
    * so nothing will ever again present this token, and no future
-   * getOrCreate() for this id should silently resurrect it either.
+   * getOrCreate() for this id should silently resurrect it either. Same
+   * reasoning makes this the right place for discardPendingSeed(id) (B9) —
+   * stopScope() below actually ends the process, so no SessionStart hook
+   * for `id` will ever fire again.
    */
   async terminate(id: string): Promise<void> {
     this.kill(id);
+    this.discardPendingSeed(id);
     await stopScope(id);
     try {
       unlinkSync(hookTokenPath(this.sessionsDir, id));

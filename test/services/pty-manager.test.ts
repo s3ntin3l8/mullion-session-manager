@@ -1443,9 +1443,15 @@ describe("PtyManager", () => {
   });
 
   // B9 — a seed stashed for the promote flow (stashSeed) must not leak
-  // forever when the session it was stashed for is killed before its
-  // SessionStart hook ever fires and consumes it (consumeSeed).
-  it("kill() clears a stashed-but-never-consumed seed (B9)", async () => {
+  // forever when `id` is genuinely done (terminate(), the exited-session
+  // reconciler, a spawn-failure rollback) before its SessionStart hook ever
+  // fires and consumes it (consumeSeed) — but a plain kill()/killAll() must
+  // NOT discard it, since killAll() is reached on a graceful shutdown/
+  // redeploy, where the dtach master and program (and so a still-pending
+  // SessionStart hook) survive. Independent review on PR #587 caught an
+  // earlier version of this fix clearing it unconditionally inside kill()
+  // itself, which would have silently lost a seed on every redeploy.
+  it("kill() alone (the killAll()-reachable path) does NOT clear a stashed seed", async () => {
     const session = manager.getOrCreate({
       id: "1",
       cwd: "/tmp",
@@ -1458,14 +1464,45 @@ describe("PtyManager", () => {
     manager.stashSeed("1", "some initial prompt");
     manager.kill("1");
 
+    expect(manager.consumeSeed("1")).toBe("some initial prompt");
+  });
+
+  it("killAll() (the redeploy/shutdown path) does NOT clear a stashed seed", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    manager.stashSeed("1", "some initial prompt");
+    manager.killAll();
+
+    expect(manager.consumeSeed("1")).toBe("some initial prompt");
+  });
+
+  it("discardPendingSeed() explicitly clears a stashed-but-never-consumed seed", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    manager.stashSeed("1", "some initial prompt");
+    manager.kill("1");
+    manager.discardPendingSeed("1");
+
     // consumeSeed is single-use and destructive, so calling it once already
-    // proves whether anything was left — before the fix this would still
-    // return the stashed string even though the session was killed with no
-    // hook ever firing.
+    // proves whether anything was left.
     expect(manager.consumeSeed("1")).toBeNull();
   });
 
-  it("terminate() (which routes through kill()) also clears a stashed seed", async () => {
+  it("terminate() discards a stashed seed (it's a genuinely terminal call, unlike kill() alone)", async () => {
     const session = manager.getOrCreate({
       id: "1",
       cwd: "/tmp",
@@ -1481,7 +1518,7 @@ describe("PtyManager", () => {
     expect(manager.consumeSeed("1")).toBeNull();
   });
 
-  it("does not clear an unrelated session's stashed seed", async () => {
+  it("discardPendingSeed() does not clear an unrelated session's stashed seed", async () => {
     const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
     const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
     await waitForSpawn(a);
@@ -1490,6 +1527,7 @@ describe("PtyManager", () => {
     manager.stashSeed("1", "seed for session 1");
     manager.stashSeed("2", "seed for session 2");
     manager.kill("1");
+    manager.discardPendingSeed("1");
 
     expect(manager.consumeSeed("1")).toBeNull();
     expect(manager.consumeSeed("2")).toBe("seed for session 2");
