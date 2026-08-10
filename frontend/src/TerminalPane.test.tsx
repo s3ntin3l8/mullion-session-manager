@@ -1464,6 +1464,25 @@ describe("TerminalPane scrollback search (U1)", () => {
     expect(getLatestTermInstance().focus).not.toHaveBeenCalled();
   });
 
+  it("refocuses the find input on a repeat Ctrl+Shift+F while the bar is already open (Hermes review, PR #578)", () => {
+    stubFakeWebSocket(true);
+    const { getByPlaceholderText } = renderPane();
+
+    triggerFindChord();
+    const input = getByPlaceholderText("Find in scrollback…") as HTMLInputElement;
+    const focusSpy = vi.spyOn(input, "focus");
+
+    // Second chord while the bar is already open — setFindOpen(true) alone
+    // is a no-op here (same value), so without openFind's explicit
+    // focus()/select() call this would be a dead keypress (jsdom doesn't
+    // auto-move focus off the input just because the assertion above didn't
+    // call .focus() on it, so this specifically exercises the "already
+    // open" branch, not the initial-open one).
+    triggerFindChord();
+
+    expect(focusSpy).toHaveBeenCalled();
+  });
+
   it("calls findNext on the addon when Next is clicked or Enter is pressed", () => {
     stubFakeWebSocket(true);
     const { getByPlaceholderText, getByTitle } = renderPane();
@@ -1539,6 +1558,43 @@ describe("TerminalPane scrollback search (U1)", () => {
     });
 
     expect(getByText("3/5")).toBeTruthy();
+  });
+
+  it("appends '+' to the count once the addon's highlightLimit is reached (Hermes review, PR #578)", () => {
+    stubFakeWebSocket(true);
+    const { getByPlaceholderText, getByText } = renderPane();
+    triggerFindChord();
+    const input = getByPlaceholderText("Find in scrollback…");
+    const searchAddon = getLatestSearchAddonInstance();
+
+    fireEvent.change(input, { target: { value: "x" } });
+
+    // resultCount is the *decorated* count (capped at SEARCH_HIGHLIGHT_LIMIT,
+    // 1000) — at the cap it may not be the true total, so the UI marks it as
+    // a lower bound rather than an exact count.
+    act(() => {
+      searchAddon.__fireResults({ resultIndex: 4, resultCount: 1000 });
+    });
+
+    expect(getByText("5/1000+")).toBeTruthy();
+  });
+
+  it("shows just the count (no index) when resultIndex is -1 — the addon's own highlight-limit-exceeded case", () => {
+    stubFakeWebSocket(true);
+    const { getByPlaceholderText, getByText } = renderPane();
+    triggerFindChord();
+    const input = getByPlaceholderText("Find in scrollback…");
+    const searchAddon = getLatestSearchAddonInstance();
+
+    fireEvent.change(input, { target: { value: "x" } });
+
+    act(() => {
+      searchAddon.__fireResults({ resultIndex: -1, resultCount: 1000 });
+    });
+
+    // Not "0/1000+" — resultIndex -1 means the selected match is beyond the
+    // decorated set, not that it's the first match.
+    expect(getByText("1000+")).toBeTruthy();
   });
 
   it("disposes the search addon (and its result subscription) on unmount", () => {

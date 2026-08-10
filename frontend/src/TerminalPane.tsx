@@ -38,6 +38,17 @@ interface ResizeMessage {
 
 type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed";
 
+// Ceiling on how many scrollback matches @xterm/addon-search decorates
+// (terminal scrollback search, U1) — matches the addon's own default
+// (`Constants.DEFAULT_HIGHLIGHT_LIMIT` in its source), passed explicitly
+// here rather than left implicit so this same value can also gate the
+// match-count display below ("1000+" instead of a bare "1000", since
+// `resultCount` is the *decorated* count — `SearchResultTracker.
+// updateResults` slices to this limit — not necessarily the true total).
+// findNext/findPrevious themselves keep working past this limit regardless;
+// it only bounds how many get a paint-time decoration.
+const SEARCH_HIGHLIGHT_LIMIT = 1000;
+
 // Ctrl+R (readline reverse-search, extremely common) collides with page
 // refresh, Ctrl+L (clear screen) and Ctrl+K (kill-line) collide with
 // address-bar-focus in some browsers — Settings -> Terminal behavior's
@@ -52,6 +63,25 @@ function reservedKeysFromSettings(keyCapture: AppSettings["terminal"]["keyCaptur
   if (keyCapture.ctrlL) keys.add("l");
   if (keyCapture.ctrlK) keys.add("k");
   return keys;
+}
+
+// Terminal scrollback search (U1) match-counter text. A pure function of
+// the addon's own onDidChangeResults payload — no component state needed —
+// so it's declared at module scope rather than inside TerminalPane.
+function formatMatchCount(matchState: { index: number; count: number } | null): string {
+  if (!matchState) return "";
+  if (matchState.count === 0) return "No results";
+  // `resultCount` is the *decorated* count (SearchResultTracker.
+  // updateResults slices to SEARCH_HIGHLIGHT_LIMIT), not necessarily the
+  // true total — append "+" so a truncated count at the ceiling isn't
+  // misread as exact (Hermes review, PR #578).
+  const countText =
+    matchState.count >= SEARCH_HIGHLIGHT_LIMIT ? `${matchState.count}+` : `${matchState.count}`;
+  // resultIndex is -1 when the selected match sits beyond highlightLimit
+  // (per the addon's own typings) — show just the count rather than a
+  // misleading "0/N" in that edge case.
+  if (matchState.index < 0) return countText;
+  return `${matchState.index + 1}/${countText}`;
 }
 
 // Shared by every clipboard entry point below — e.g. absent on a plain-http
@@ -349,6 +379,26 @@ export function TerminalPane(props: {
   useEffect(() => {
     onTitleChangeRef.current = props.onTitleChange;
   });
+
+  // Opens the find bar on Ctrl+Shift+F — and also handles the "already
+  // open" case (Hermes review, PR #578): `setFindOpen(true)` alone is a
+  // no-op when findOpen is already true (same value, React bails without a
+  // re-render), so the findOpen-transition effect below — which is what
+  // normally focuses the input — never re-fires, leaving a second
+  // Ctrl+Shift+F while the *terminal* has focus (bar open, input not
+  // focused) a dead keypress. Calling focus()/select() directly here covers
+  // both cases without extra state: on a fresh open, findInputRef.current
+  // is still null (the bar hasn't rendered yet), so this is a harmless
+  // no-op and the transition effect does the real focus once it mounts; on
+  // a repeat press with the bar already open, the ref is already populated,
+  // so this refocuses/reselects immediately — Ctrl+Shift+F now behaves like
+  // "open or refocus" rather than only ever opening.
+  function openFind(): void {
+    setFindOpen(true);
+    findInputRef.current?.focus();
+    findInputRef.current?.select();
+  }
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -383,12 +433,9 @@ export function TerminalPane(props: {
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.loadAddon(new WebLinksAddon());
-    // Terminal scrollback search (U1). highlightLimit is left at the addon's
-    // own default (1000) — the ceiling on how many matches get a decoration
-    // before the addon stops highlighting them, which only bites on a
-    // pathological single-character query against a full scrollback buffer;
-    // findNext/findPrevious keep working past it regardless.
-    const searchAddon = new SearchAddon();
+    // Terminal scrollback search (U1). See SEARCH_HIGHLIGHT_LIMIT above for
+    // why this is passed explicitly rather than left at the addon's default.
+    const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
     searchAddonRef.current = searchAddon;
     term.loadAddon(searchAddon);
     // Only fires once decorations are enabled (see runSearch below, which
@@ -405,7 +452,7 @@ export function TerminalPane(props: {
       onCopy: () => copyHandlerRef.current(),
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
-      onToggleFind: () => setFindOpen(true),
+      onToggleFind: openFind,
     });
     // Note: no separate "wait for the web font to load, then re-fit" step
     // here — the settings-sync effect below runs immediately after this
@@ -881,7 +928,7 @@ export function TerminalPane(props: {
       onCopy: () => copyHandlerRef.current(),
       captureCtrlC: props.captureCtrlC,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
-      onToggleFind: () => setFindOpen(true),
+      onToggleFind: openFind,
     });
   }, [props.captureCtrlC]);
 
@@ -941,7 +988,7 @@ export function TerminalPane(props: {
       onCopy: () => copyHandlerRef.current(),
       captureCtrlC: captureCtrlCRef.current,
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
-      onToggleFind: () => setFindOpen(true),
+      onToggleFind: openFind,
     });
 
     // The WebGL renderer caches glyphs (size and color both) in a texture
@@ -1153,13 +1200,14 @@ export function TerminalPane(props: {
         // never collide.
       }
       {findOpen && (
-        <div className="terminal-find-bar">
+        <div className="terminal-find-bar" role="search">
           <SearchIcon size={13} className="terminal-find-icon" />
           <input
             ref={findInputRef}
             type="text"
             className="terminal-find-input"
             placeholder="Find in scrollback…"
+            aria-label="Find in scrollback"
             value={findQuery}
             onChange={(event) => setFindQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -1176,17 +1224,13 @@ export function TerminalPane(props: {
               }
             }}
           />
-          <span className="terminal-find-count">
-            {matchState
-              ? matchState.count === 0
-                ? "No results"
-                : // resultIndex is -1 when the addon's highlightLimit is
-                  // exceeded (per its own typings) — show just the count
-                  // rather than a misleading "0/N" in that edge case.
-                  matchState.index < 0
-                  ? `${matchState.count}`
-                  : `${matchState.index + 1}/${matchState.count}`
-              : ""}
+          {
+            // aria-live so screen-reader users hear result updates as they
+            // type/navigate, not just sighted users watching the counter
+            // (Hermes review, PR #578).
+          }
+          <span className="terminal-find-count" aria-live="polite">
+            {formatMatchCount(matchState)}
           </span>
           <button
             className="pane-tab-btn terminal-find-btn"
