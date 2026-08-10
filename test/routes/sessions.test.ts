@@ -1334,6 +1334,62 @@ describe("sessions route", () => {
           await app.close();
         }
       });
+
+      // Fresh-review finding (Hermes, this PR): the DB-row rollback above
+      // (B6) isn't the only thing this catch block needs to undo —
+      // PtyManager.getOrCreate() (called internally by LocalBackend.spawn()
+      // before the spawn it awaits) already inserted a Session into its own
+      // in-memory `sessions`/`hookTokens` maps by the time spawn() rejects.
+      // Without an explicit eviction, that Session object (and its
+      // hookToken -> id entry, which resolveToken() could still match
+      // against) leaks for the lifetime of the process — the DB row is gone
+      // but PtyManager still half-believes this session exists.
+      it("evicts the failed session from PtyManager's in-memory map, not just the DB row", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        // A throwaway successful session first, purely to learn what id
+        // SQLite will assign the NEXT inserted row — autoincrement rowids
+        // only ever go up within this DB connection, and nothing else
+        // writes to the `sessions` table between these two requests.
+        const control = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(control.statusCode).toBe(201);
+        const nextId = (control.json().id as number) + 1;
+
+        const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
+        vi.mocked(spawnChildProcess).mockImplementation(
+          (command: string, args?: readonly string[], options?: object) => {
+            if (command === "systemd-run") {
+              const ee = new EventEmitter();
+              setImmediate(() => ee.emit("exit", 1));
+              return ee;
+            }
+            return originalSpawnImpl!(command, args, options);
+          },
+        );
+
+        try {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash" },
+          });
+          expect(created.statusCode).toBe(502);
+
+          // Not just "no DB row" (already covered above) — no leaked
+          // in-memory Session either.
+          expect(app.pty.get(String(nextId))).toBeUndefined();
+        } finally {
+          vi.mocked(spawnChildProcess).mockImplementation(originalSpawnImpl!);
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        }
+      });
     });
 
     describe("option 2 — POST /:id/promote", () => {

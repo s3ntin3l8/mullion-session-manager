@@ -635,6 +635,17 @@ export async function createSessionRecord(
     if (worktree && cwd && cwd !== params.cwd) {
       await removeWorktree(cwd).catch(() => {});
     }
+    // Fresh-review finding (Hermes, this PR): a LOCAL spawn failure means
+    // PtyManager.getOrCreate() already inserted a Session into its own
+    // `sessions`/`hookTokens` maps before spawn() was awaited — that Session
+    // never attached anything (bootstrapMaster/attachClient never
+    // succeeded), so app.pty.kill() here is a safe, side-effect-free map
+    // eviction, not a real "detach a live client" call. Without this, a
+    // failed local spawn permanently leaks that Session object plus its
+    // hookToken -> id entry (which resolveToken() could still match against)
+    // until the whole process restarts. A no-op for the remote case (no
+    // local Session was ever created for a remote host's session id).
+    app.pty.kill(String(created.id));
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return { ok: false, reason: "spawn-failed" };
