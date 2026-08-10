@@ -1795,7 +1795,11 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
     stubFakeWebSocket(false);
     renderPane();
     enableReconnect();
-    useDashboardStore.setState({ sessions: [] });
+    // `sessionsLoaded: true` is what makes an absent session trustworthy as
+    // "confirmed gone" rather than "store hasn't fetched yet" — see the
+    // next test for the initial-load-race case this guards against
+    // (Hermes review, PR #592).
+    useDashboardStore.setState({ sessions: [], sessionsLoaded: true });
 
     act(() => {
       for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
@@ -1804,6 +1808,35 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
     expect(screen.getByText("Session ended")).toBeInTheDocument();
     expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
     expect(screen.queryByText("Retry now")).not.toBeInTheDocument();
+  });
+
+  // Hermes review (PR #592): `!stored` alone isn't trustworthy as "gone" —
+  // a pane can hit its very first close before refreshSessions()'s first
+  // response ever lands (e.g. restored by dockview racing a backend
+  // restart), where `sessions` is `[]` for every live session, not just
+  // dead ones. `sessionsLoaded` distinguishes "confirmed empty" from
+  // "haven't checked yet", so this must fall through to the ordinary
+  // retry-with-backoff path instead of getting stuck on "Session ended".
+  it('does NOT show "Session ended" for a close before the store has ever loaded (sessionsLoaded still false), even with an empty sessions list', () => {
+    vi.useFakeTimers();
+    try {
+      stubFakeWebSocket(false);
+      renderPane();
+      enableReconnect();
+      useDashboardStore.setState({ sessions: [], sessionsLoaded: false });
+
+      act(() => {
+        for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
+      });
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+
+      expect(screen.getByText(/Reconnecting/)).toBeInTheDocument();
+      expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows "Session ended" when store.sessions reports this session as killed', () => {

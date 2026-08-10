@@ -367,6 +367,40 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       setOverflowOpen(false);
       return;
     }
+    // APG menu pattern (Hermes review, PR #592) — `role="menu"` carries an
+    // AT expectation of ArrowUp/ArrowDown (and Home/End) moving focus among
+    // `role="menuitem"` children, which the shared hook's Tab-trap alone
+    // doesn't provide (Tab/Shift+Tab still work as the fallback a
+    // non-menu-savvy keyboard user relies on — this is additive, not a
+    // replacement). Scoped to this menu's own `[role="menuitem"]` children
+    // rather than reusing useFocusTrap's general "any focusable" query,
+    // since a real menu's roving focus is items-only, not links/inputs.
+    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+      const items = overflowMenuRef.current
+        ? Array.from(
+            overflowMenuRef.current.querySelectorAll<HTMLElement>(
+              '[role="menuitem"]:not([disabled])',
+            ),
+          )
+        : [];
+      if (items.length === 0) return;
+      e.preventDefault();
+      const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+      const nextIndex =
+        e.key === "Home"
+          ? 0
+          : e.key === "End"
+            ? items.length - 1
+            : e.key === "ArrowDown"
+              ? currentIndex < 0
+                ? 0
+                : (currentIndex + 1) % items.length
+              : currentIndex < 0
+                ? items.length - 1
+                : (currentIndex - 1 + items.length) % items.length;
+      items[nextIndex]?.focus();
+      return;
+    }
     onTrapKeyDown(e);
   };
   // Every menu item action below already closes the menu by ALSO doing

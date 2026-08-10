@@ -921,11 +921,23 @@ export function TerminalPane(props: {
         // reached the store (an explicit kill's own store.deleteSession
         // awaits refreshSessions() before resolving; a session killed from
         // elsewhere reaches this store within one 4s live-refresh tick).
-        const stored = useDashboardStore
-          .getState()
-          .sessions.find((s) => s.id === props.params.sessionId);
+        //
+        // `!stored` is only trustworthy as "gone" once the store has loaded
+        // at least once (`sessionsLoaded`) — the "prior attempt" premise
+        // above assumes this is a RECONNECT, but a pane can also hit its
+        // very first close before `refreshSessions()`'s first response ever
+        // lands (e.g. restored by dockview racing a backend restart), where
+        // `sessions` is still `[]` for every live session, not just dead
+        // ones. Gating on `sessionsLoaded` keeps that initial-load race from
+        // being misread as "ended" for a session that's actually still
+        // live (Hermes review, PR #592).
+        const { sessions: liveSessions, sessionsLoaded } = useDashboardStore.getState();
+        const stored = liveSessions.find((s) => s.id === props.params.sessionId);
         const sessionGone =
-          sessionExited || !stored || stored.status === "killed" || stored.status === "exited";
+          sessionExited ||
+          (sessionsLoaded && !stored) ||
+          stored?.status === "killed" ||
+          stored?.status === "exited";
         if (sessionGone) {
           setStatus("ended");
           return;

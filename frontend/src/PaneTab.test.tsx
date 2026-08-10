@@ -725,6 +725,55 @@ describe("PaneTab overflow menu — focus management (P11)", () => {
     expect(last).toHaveFocus();
   });
 
+  // Hermes review (PR #592): role="menu" implies APG arrow-key navigation
+  // among role="menuitem" children, on top of (not instead of) the Tab
+  // trap above. The disabled "Move (drag tab)" item must be skipped, same
+  // as it already is from the Tab order.
+  it("moves focus among menu items with ArrowDown/ArrowUp, skipping the disabled item, and wraps at both ends", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+
+    const menu = screen.getByRole("menu");
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])'),
+    );
+    const rename = screen.getByText("Rename").closest("button")!;
+    const killItem = items[items.length - 1]!;
+    expect(rename).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByText("View timeline").closest("button")).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowUp}");
+    expect(rename).toHaveFocus();
+
+    // Wraps backward past the first item to the last (non-disabled) one.
+    await userEvent.keyboard("{ArrowUp}");
+    expect(killItem).toHaveFocus();
+
+    // Wraps forward past the last item back to the first.
+    await userEvent.keyboard("{ArrowDown}");
+    expect(rename).toHaveFocus();
+  });
+
+  it("moves focus to the first/last menu item with Home/End", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+
+    const menu = screen.getByRole("menu");
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])'),
+    );
+    const rename = items[0]!;
+    const killItem = items[items.length - 1]!;
+
+    await userEvent.keyboard("{End}");
+    expect(killItem).toHaveFocus();
+
+    await userEvent.keyboard("{Home}");
+    expect(rename).toHaveFocus();
+  });
+
   it("does not restore focus to the toggle button when closing by opening the timeline panel", async () => {
     const { toggle } = openMenu();
     await userEvent.click(toggle);
