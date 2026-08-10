@@ -118,6 +118,60 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
+  // A9 — kill/attach TOCTOU: the row must read non-"active" BEFORE this
+  // function awaits cleanupPreviewWorktree, not only after it resolves.
+  // Before the fix, a `/ws/terminal` upgrade landing in that window would
+  // still see "active" (preValidation/attach re-check both just read that
+  // column) and spawn a brand-new systemd-run scope for a program this
+  // function had already confirmed (via isMasterAlive) was dead — orphaning
+  // it the moment this function then flips the row underneath it.
+  it("flips the row to exited BEFORE cleanupPreviewWorktree resolves, not after (A9)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+    const gitWorktreeModule = await import("../../src/services/git-worktree.js");
+    let resolveCleanup!: (value: boolean) => void;
+    const cleanupPromise = new Promise<boolean>((resolve) => {
+      resolveCleanup = resolve;
+    });
+    const cleanupSpy = vi
+      .spyOn(gitWorktreeModule, "cleanupPreviewWorktree")
+      .mockReturnValue(cleanupPromise);
+
+    const { sessions } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+
+    const reconcilePromise = reconcileExitedSessions(app);
+
+    // Poll for the flip rather than assuming a fixed number of microtask
+    // ticks — isMasterAlive resolves through a couple of its own layers
+    // (LocalBackend.isMasterAlive -> app.pty.isMasterAlive) before the
+    // reconciler reaches the DB write, and hard-coding that depth would be
+    // an implementation detail this test shouldn't need to know.
+    let row: { status: string } | undefined;
+    for (let i = 0; i < 50; i++) {
+      [row] = app.db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .all();
+      if (row?.status === "exited") break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    // The cleanup call is still pending (we haven't resolved it) — proving
+    // this observation genuinely happened DURING the await, not after.
+    expect(cleanupSpy).toHaveBeenCalled();
+    expect(row?.status).toBe("exited");
+
+    resolveCleanup(true);
+    await reconcilePromise;
+    cleanupSpy.mockRestore();
+
+    await app.close();
+  });
+
   it("closes a bound project browser once its session flips to exited (#182)", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);
@@ -270,6 +324,48 @@ describe("reconcileExitedSessions", () => {
       const row = (res.json() as { id: number; status: string }[]).find((t) => t.id === taskId);
       expect(row?.status).toBe("failed");
 
+      await app.close();
+    });
+
+    // A9 — the session/task flips used to be gated on `cleanupPreviewWorktree`
+    // succeeding (PR #341), specifically because a failed cleanup left the
+    // session row "active" for a future reconcile pass to retry, and the
+    // task transition was kept in lockstep with that same retry. Now that
+    // the session row always flips to "exited" up front (closing A9's
+    // reattach race), there IS no future retry pass over this row —
+    // `cleanupPreviewWorktree`'s own `pendingRemoval` + sync tick (see
+    // git-worktree.ts) is what retries the directory removal instead. If
+    // the task transition were still gated on `cleaned`, a session whose
+    // worktree happened to fail removal would leave its task stuck at
+    // "claimed"/"in_progress" forever, since nothing would ever revisit it
+    // again. This is the regression guard for that.
+    it("still flips the task to failed even when cleanupPreviewWorktree fails (A9 — no longer gated on cleanup success)", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      const gitWorktreeModule = await import("../../src/services/git-worktree.js");
+      const cleanupSpy = vi
+        .spyOn(gitWorktreeModule, "cleanupPreviewWorktree")
+        .mockResolvedValue(false);
+
+      await reconcileExitedSessions(app);
+
+      const sessionRes = await app.inject({ method: "GET", url: "/api/sessions" });
+      const sessionRow = (sessionRes.json() as Array<{ id: number; status: string }>).find(
+        (s) => s.id === sessionId,
+      );
+      expect(sessionRow?.status).toBe("exited");
+
+      const taskRes = await app.inject({ method: "GET", url: "/api/tasks" });
+      const taskRow = (taskRes.json() as { id: number; status: string }[]).find(
+        (t) => t.id === taskId,
+      );
+      expect(taskRow?.status).toBe("failed");
+
+      cleanupSpy.mockRestore();
       await app.close();
     });
 

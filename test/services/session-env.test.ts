@@ -125,6 +125,41 @@ describe("session-env", () => {
       expect(result.PATH).toBe("/usr/bin");
     });
 
+    it("strips leaked GIT_* vars from the server process (A7)", () => {
+      // git-env.ts's gitEnv() protects every backend git subprocess from a
+      // leaked GIT_DIR/GIT_INDEX_FILE (the real incident that motivated
+      // git-env.ts existing at all). But a session's shell is spawned via
+      // buildSessionEnv(), not gitEnv() — if the *server* process itself was
+      // started with one of these leaked, every git command an agent runs
+      // inside a session would silently target the wrong repo unless
+      // buildSessionEnv() also strips them.
+      const base: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin",
+        GIT_DIR: "/tmp/decoy.git",
+        GIT_WORK_TREE: "/tmp/decoy",
+        GIT_INDEX_FILE: "/tmp/decoy.git/index",
+        GIT_CEILING_DIRECTORIES: "/tmp",
+        GIT_OBJECT_DIRECTORY: "/tmp/decoy.git/objects",
+        GIT_COMMON_DIR: "/tmp/decoy.git",
+        GIT_PREFIX: "sub/",
+        GIT_CONFIG_GLOBAL: "/tmp/decoy.gitconfig",
+        GIT_CONFIG_SYSTEM: "/tmp/decoy-system.gitconfig",
+      };
+
+      const result = buildSessionEnv(base);
+
+      expect(result).not.toHaveProperty("GIT_DIR");
+      expect(result).not.toHaveProperty("GIT_WORK_TREE");
+      expect(result).not.toHaveProperty("GIT_INDEX_FILE");
+      expect(result).not.toHaveProperty("GIT_CEILING_DIRECTORIES");
+      expect(result).not.toHaveProperty("GIT_OBJECT_DIRECTORY");
+      expect(result).not.toHaveProperty("GIT_COMMON_DIR");
+      expect(result).not.toHaveProperty("GIT_PREFIX");
+      expect(result).not.toHaveProperty("GIT_CONFIG_GLOBAL");
+      expect(result).not.toHaveProperty("GIT_CONFIG_SYSTEM");
+      expect(result.PATH).toBe("/usr/bin");
+    });
+
     it("realistic case: a production-inherited env is fully scrubbed of Mullion config", () => {
       const inherited: NodeJS.ProcessEnv = {
         PATH: "/usr/bin:/bin",
