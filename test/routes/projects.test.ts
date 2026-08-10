@@ -50,13 +50,24 @@ describe("projects route", () => {
   it("creates and lists projects", async () => {
     const app = await buildApp();
 
+    // A plain temp dir, not a hardcoded personal home path — the original
+    // "/home/bjoern" only ever worked on the one machine it was authored on;
+    // real CI runners (a different user, no such path, no write access to
+    // create it) hit EACCES on the best-effort mkdir in POST /api/projects,
+    // which doesn't fail this request itself but corrupts later assertions
+    // in this file that batch git-status/dev-server-detect across every
+    // project row still in the DB. Matches this file's own dominant
+    // `fs.mkdtempSync(path.join(os.tmpdir(), ...))` pattern used everywhere
+    // else here.
+    const homeCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-home-"));
+
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "home", cwd: "/home/bjoern" },
+      payload: { name: "home", cwd: homeCwd },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ name: "home", cwd: "/home/bjoern" });
+    expect(created.json()).toMatchObject({ name: "home", cwd: homeCwd });
 
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
     expect(listed.statusCode).toBe(200);
@@ -64,8 +75,8 @@ describe("projects route", () => {
     // Always present, even with no dock session to detect from — see the
     // "detectedDevServerPort" describe block below for the detection cases.
     expect(listed.json()[0].detectedDevServerPort).toBeNull();
-    // /home/bjoern isn't a git repo in the test sandbox — see the
-    // "currentBranch" describe block below for the git-repo case.
+    // Not a git repo — see the "currentBranch" describe block below for the
+    // git-repo case.
     expect(listed.json()[0].currentBranch).toBeNull();
 
     await app.close();
