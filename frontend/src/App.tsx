@@ -96,26 +96,22 @@ const LazyBrowserPane = lazy(() =>
   import("./BrowserPane.js").then((m) => ({ default: m.BrowserPane })),
 );
 
-// Shared Suspense fallback for the lazy panels/modal above — reuses the
-// existing terminal-connecting spinner vocabulary (SpinnerIcon +
-// .terminal-status-spinner's cmuxSpin keyframe, styles.css) instead of
-// inventing a second loading affordance. `full` fills its container (used
-// for panel/modal-shell placeholders); non-full is a small inline spinner.
-function LazyPanelFallback({ full = true }: { full?: boolean }) {
+// Shared Suspense fallback for the lazy dockview panels above (the Browser
+// panel/pane and the Kanban board overlay, all absolutely-positioned within
+// their container) — reuses the existing terminal-connecting spinner
+// vocabulary (SpinnerIcon + .terminal-status-spinner's cmuxSpin keyframe,
+// styles.css) instead of inventing a second loading affordance.
+function LazyPanelFallback() {
   return (
     <div
       className="lazy-panel-fallback"
-      style={
-        full
-          ? {
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }
-          : { display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 24 }
-      }
+      style={{
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
     >
       <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
     </div>
@@ -2353,9 +2349,11 @@ export function App() {
         />
       )}
       {settingsOpen && (
-        <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
-          <LazySettings onClose={() => setSettingsOpen(false)} initialSection={settingsSection} />
-        </Suspense>
+        <ErrorBoundary onReset={() => setSettingsOpen(false)}>
+          <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
+            <LazySettings onClose={() => setSettingsOpen(false)} initialSection={settingsSection} />
+          </Suspense>
+        </ErrorBoundary>
       )}
     </div>
   );

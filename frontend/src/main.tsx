@@ -4,28 +4,35 @@ import { AuthGate } from "./AuthGate.js";
 // B1 — self-hosted via @fontsource instead of a fonts.googleapis.com/
 // fonts.gstatic.com <link> in index.html: this is a self-hosted, typically
 // LAN/VPN-only dashboard, so a third-party font CDN is a render-blocking
-// dependency on every load, a hard failure mode on an air-gapped host (the
-// Workbox precache in vite.config.ts never covered the CDN origin), and a
-// per-load ping to Google. Each import below pulls in exactly the weights
+// dependency on every load, a hard failure mode on an air-gapped host, and
+// a per-load ping to Google. Each import below pulls in exactly the weights
 // the removed Google Fonts URL requested
 // (`family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&
 // family=JetBrains+Mono:wght@400;500&family=IBM+Plex+Mono:wght@400;500`) —
-// importing the package's index.css instead would silently pull in every
-// weight (100-900) and bloat the precache. The .woff2 files land
-// content-hashed under dist/assets/ via Vite's normal asset pipeline, so
-// they're covered by the Workbox precache manifest like any other build
-// asset (see vite.config.ts's VitePWA globPatterns) — that's this fix's
-// actual success criterion, not just "same-origin".
-import "@fontsource/geist/400.css";
-import "@fontsource/geist/500.css";
-import "@fontsource/geist/600.css";
-import "@fontsource/geist/700.css";
-import "@fontsource/geist-mono/400.css";
-import "@fontsource/geist-mono/500.css";
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/500.css";
-import "@fontsource/ibm-plex-mono/400.css";
-import "@fontsource/ibm-plex-mono/500.css";
+// importing the package's bare `400.css` (rather than `latin-400.css`)
+// would pull in @font-face rules for every subset the package ships
+// (cyrillic, cyrillic-ext, vietnamese, latin-ext, symbols2, ...), each with
+// its own unicode-range-scoped .woff2/.woff. Vite's default
+// assetsInlineLimit (4096 bytes) then base64-inlines the small subset files
+// straight into the built CSS — nobody using this English-only UI ever
+// needs those subsets, but every one of them still ends up on the
+// render-blocking stylesheet. `latin-<weight>.css` imports only the single
+// subset this app actually uses. The .woff2 files land content-hashed
+// under dist/assets/ via Vite's normal asset pipeline (same-origin, so they
+// work on an air-gapped host either way) — NOT covered by the Workbox
+// precache today (vite-plugin-pwa's generateSW globPatterns default
+// excludes woff2/woff), so there's no "works fully offline on first visit"
+// claim being made here, only "no third-party CDN dependency or ping".
+import "@fontsource/geist/latin-400.css";
+import "@fontsource/geist/latin-500.css";
+import "@fontsource/geist/latin-600.css";
+import "@fontsource/geist/latin-700.css";
+import "@fontsource/geist-mono/latin-400.css";
+import "@fontsource/geist-mono/latin-500.css";
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-500.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./styles.css";
 
 // Issue #87 — registerType: "autoUpdate" (vite.config.ts) only makes the
