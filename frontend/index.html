@@ -22,30 +22,21 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Mullion" />
-    <!-- Issue #87 — iOS reads apple-mobile-web-app-status-bar-style ONCE at
-         standalone launch and never re-reads it, so a React effect can't
-         correct it: it always runs after iOS has already applied the
-         static value above, which forces white status-bar glyphs
-         unconditionally — unreadable against the light theme's near-white
-         toolbar. This has to run synchronously during initial parse,
-         before iOS's read, hence a plain inline script rather than app
-         code. "crs.themeHint" must match store.ts's THEME_HINT_KEY — this
-         script can't import it (index.html's inline scripts aren't part of
-         Vite's module graph). Defaults to the black-translucent/dark-theme
-         value on any error (missing localStorage, disabled storage, etc.)
-         rather than guessing light. -->
-    <script>
-      (function () {
-        try {
-          if (localStorage.getItem("crs.themeHint") === "light") {
-            var meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
-            if (meta) meta.setAttribute("content", "default");
-          }
-        } catch {
-          /* localStorage unavailable — keep the static black-translucent default */
-        }
-      })();
-    </script>
+    <!-- Issue #87 / A5 — corrects the iOS standalone status-bar style for
+         the light theme, synchronously, before iOS's own separate read of
+         the apple-mobile-web-app-status-bar-style meta tag above at
+         standalone launch. Used to be an inline <script> block here, but
+         the production CSP (src/plugins/security.ts) sends
+         `script-src 'self'` with no 'unsafe-inline'/nonce/hash, which
+         silently blocked it outright — see frontend/public/theme-hint.js
+         for the full rationale and why this must stay a plain
+         `<script src>` (no defer/async/module) in this exact position:
+         AFTER the meta tag in document order (so document.querySelector
+         can find it — the script executes synchronously during parsing,
+         before the meta tag exists if placed any earlier), but still
+         parser-blocking so it finishes correcting the attribute well
+         before iOS's own later read of it. -->
+    <script src="/theme-hint.js"></script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -256,16 +247,16 @@
          prompt silently never appears. Harmless same-origin without a
          proxy in front. -->
     <link rel="manifest" href="/site.webmanifest" crossorigin="use-credentials" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Geist(+Mono) power the app chrome; JetBrains Mono/IBM Plex Mono are
-         additional terminal-font choices offered in Settings -> Appearance
-         (see frontend/src/TerminalPane.tsx). SF Mono/Menlo aren't web fonts
-         — they resolve to the OS's own system monospace stack instead. -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- B1 — Geist(+Mono), JetBrains Mono, and IBM Plex Mono used to load
+         from fonts.googleapis.com/fonts.gstatic.com here. Self-hosted now
+         (see src/main.tsx's @fontsource imports) — this is a self-hosted,
+         typically LAN/VPN-only dashboard, so a third-party font CDN was a
+         render-blocking dependency on every load, a hard failure mode on
+         an air-gapped host, and a per-load ping to Google. Geist(+Mono)
+         power the app chrome; JetBrains Mono/IBM Plex Mono are additional
+         terminal-font choices offered in Settings -> Appearance (see
+         frontend/src/TerminalPane.tsx). SF Mono/Menlo aren't web fonts —
+         they resolve to the OS's own system monospace stack instead. -->
   </head>
   <body>
     <div id="root"></div>
