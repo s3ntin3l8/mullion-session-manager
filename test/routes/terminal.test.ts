@@ -209,6 +209,57 @@ describe("terminal route (/ws/terminal)", () => {
     await app.close();
   });
 
+  // B9 — resolveAndAttach's `if (!project)` guard. Currently unreachable in
+  // production given the DB's notNull FK + `foreign_keys = ON` (a session
+  // row always has a real project — see terminal.ts's own doc comment on
+  // this guard), so force the edge case directly: delete the project row
+  // out from under a still-"active" session with FK enforcement temporarily
+  // suspended, matching exactly what a stale/corrupted DB would look like.
+  // preValidation only checks the session row's own status, not project
+  // existence, so the WS upgrade itself still completes; the assertion is
+  // that resolveAndAttach then closes the socket cleanly (a real error
+  // response, not a possible uncaught TypeError inside a WS handler after
+  // the upgrade has already completed).
+  it("closes the socket cleanly instead of crashing when the session's project row is missing", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const rawDb = (
+      app.db as unknown as {
+        $client: {
+          pragma: (s: string) => unknown;
+          prepare: (s: string) => { run: (...args: unknown[]) => unknown };
+        };
+      }
+    ).$client;
+    rawDb.pragma("foreign_keys = OFF");
+    try {
+      rawDb.prepare("DELETE FROM projects WHERE id = ?").run(row.projectId);
+    } finally {
+      rawDb.pragma("foreign_keys = ON");
+    }
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("socket never closed")), 2000);
+      ws.addEventListener("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+    // The server process itself must still be alive and serving other
+    // requests — the real regression this guards against is an uncaught
+    // TypeError crashing the WS handler (or worse, the process).
+    const health = await app.inject({ method: "GET", url: "/health" });
+    expect(health.statusCode).toBe(200);
+
+    await app.close();
+  });
+
   it("streams pty output to the client and client input to the pty", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId, pty } = await createProjectAndSession(app);

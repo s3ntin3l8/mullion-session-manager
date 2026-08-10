@@ -50,6 +50,9 @@ import { listWorktrees } from "./git-refs.js";
 // preview's reset touch only its own HEAD, never a ref anything else reads.
 
 const GIT_TIMEOUT_MS = 15_000;
+// B9 — see git-status.ts's identical constant for the full rationale
+// (shared across every runGit-shaped helper in this sibling group).
+const KILL_ESCALATION_MS = 2_000;
 
 interface GitResult {
   code: number | null;
@@ -70,26 +73,52 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
       env: gitEnv(),
     });
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    const onStderrData = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+    child.stderr?.on("data", onStderrData);
+
+    // B9 — see git-status.ts's runGitStatus for the full rationale on both
+    // the escalation and the listener-detach-in-finish shape below.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
     const finish = (result: GitResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
+      child.stderr?.off("data", onStderrData);
       resolve(result);
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill(); // SIGTERM
       finish({ code: null, stdout, stderr });
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", (err) => {
+      clearKillTimer();
+      finish({ code: null, stdout, stderr: String(err) });
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+    child.on("close", (code) => {
+      clearKillTimer();
+      finish({ code, stdout, stderr });
     });
-    child.on("error", (err) => finish({ code: null, stdout, stderr: String(err) }));
-    child.on("close", (code) => finish({ code, stdout, stderr }));
   });
 }
 
@@ -1018,6 +1047,14 @@ function startSyncTick() {
         });
     }
   }, SYNC_INTERVAL_MS);
+  // B9 — the one interval in this codebase that wasn't `.unref()`'d (every
+  // other timer here is — see plugins/pty.ts and pty-manager.ts's
+  // attention-eval timer for the same treatment with the same rationale):
+  // without this, an unclean teardown (a test that forgets
+  // stopPreviewSyncTick, or a process shutdown path that skips onClose)
+  // leaves the process alive with this 5s tick still running `git reset
+  // --hard` against tracked worktrees indefinitely.
+  syncTimer.unref();
 }
 
 function stopSyncTick() {
@@ -1080,4 +1117,14 @@ export function stopPreviewSyncTick(): void {
   previewWorktrees.clear();
   inflightSyncPaths.clear();
   inflightRemovalPaths.clear();
+}
+
+/** Exported for tests only — whether the sync timer is currently ref'd
+ * (i.e. would keep the process alive on its own). Production code never
+ * needs this; it exists solely to assert the `.unref()` call in
+ * startSyncTick above actually took effect, since `NodeJS.Timeout.hasRef()`
+ * is the only way to observe that from outside the timer itself. Returns
+ * `null` when no tick is currently running. */
+export function syncTimerHasRefForTests(): boolean | null {
+  return syncTimer?.hasRef() ?? null;
 }

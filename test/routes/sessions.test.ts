@@ -1390,6 +1390,56 @@ describe("sessions route", () => {
           await app.close();
         }
       });
+
+      // B9 — this catch block's app.pty.kill() eviction (above) deliberately
+      // does NOT clear a stashed promote seed on its own (kill() is also
+      // reached via killAll() on a redeploy, where that would be wrong — see
+      // PtyManager.discardPendingSeed's own doc comment); this rollback path
+      // is one of the genuinely-terminal callers that explicitly discards
+      // it, alongside deleting the row. A real seed wouldn't normally exist
+      // yet for a session that never spawned successfully, but the map key
+      // is independent of whether a Session object exists — stash directly
+      // against the predicted next id to exercise the same cleanup call.
+      it("also discards any (defensively) stashed seed for the failed session's id", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const control = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(control.statusCode).toBe(201);
+        const nextId = (control.json().id as number) + 1;
+        app.pty.stashSeed(String(nextId), "some initial prompt");
+
+        const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
+        vi.mocked(spawnChildProcess).mockImplementation(
+          (command: string, args?: readonly string[], options?: object) => {
+            if (command === "systemd-run") {
+              const ee = new EventEmitter();
+              setImmediate(() => ee.emit("exit", 1));
+              return ee;
+            }
+            return originalSpawnImpl!(command, args, options);
+          },
+        );
+
+        try {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash" },
+          });
+          expect(created.statusCode).toBe(502);
+          expect(app.pty.consumeSeed(String(nextId))).toBeNull();
+        } finally {
+          vi.mocked(spawnChildProcess).mockImplementation(originalSpawnImpl!);
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        }
+      });
     });
 
     describe("option 2 — POST /:id/promote", () => {

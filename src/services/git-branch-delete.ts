@@ -17,6 +17,9 @@ import { listWorktrees } from "./git-refs.js";
 // standalone). It's enforced one layer up, in routes/projects.ts.
 
 const GIT_TIMEOUT_MS = 10_000;
+// B9 — see git-status.ts's identical constant for the full rationale
+// (shared across every runGit-shaped helper in this sibling group).
+const KILL_ESCALATION_MS = 2_000;
 
 function isSafeAbsolutePath(cwd: string): boolean {
   return path.isAbsolute(cwd) && !path.normalize(cwd).split(path.sep).includes("..");
@@ -41,26 +44,52 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
       env: gitEnv(),
     });
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    const onStderrData = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+    child.stderr?.on("data", onStderrData);
+
+    // B9 — see git-status.ts's runGitStatus for the full rationale on both
+    // the escalation and the listener-detach-in-finish shape below.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
     const finish = (result: GitResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
+      child.stderr?.off("data", onStderrData);
       resolve(result);
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill(); // SIGTERM
       finish({ code: null, stdout, stderr });
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", (err) => {
+      clearKillTimer();
+      finish({ code: null, stdout, stderr: String(err) });
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+    child.on("close", (code) => {
+      clearKillTimer();
+      finish({ code, stdout, stderr });
     });
-    child.on("error", (err) => finish({ code: null, stdout, stderr: String(err) }));
-    child.on("close", (code) => finish({ code, stdout, stderr }));
   });
 }
 
