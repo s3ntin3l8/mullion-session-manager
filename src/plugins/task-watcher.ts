@@ -32,13 +32,16 @@ const ACTIVE_WORKTREE_STATUSES = ["claimed", "in_progress", "reviewing"] as cons
  * than reading the primary's own filesystem directly — mirrors
  * task-reconciler.ts's own byHost grouping shape exactly, including
  * fail-fast per host, but ONLY on a transport-level failure
- * (`HostUnreachableError`/`HostRequestError`) — the rest of that host's
- * projects are skipped rather than paying N serial request timeouts inside
- * the `onReady` hook, since a host that's down for one project is down for
- * all of them. Host-unreachable is expected and fine here — claim-time
- * `clearOrphanedTaskWorktree` (already remote-capable since #283) remains
- * the correctness backstop, so a host that's down at boot just gets its
- * orphan cleanup deferred, never lost.
+ * (`HostUnreachableError`, or a `HostRequestError` whose `statusCode` is
+ * specifically `404` — a missing route, confirming this host's agent build
+ * predates #484's proxy routes; any OTHER 4xx is a per-project problem, see
+ * the catch block's own comment) — the rest of that host's projects are
+ * skipped rather than paying N serial request timeouts inside the
+ * `onReady` hook, since a host that's down (or genuinely too old) for one
+ * project is down/too-old for all of them. Host-unreachable is expected
+ * and fine here — claim-time `clearOrphanedTaskWorktree` (already
+ * remote-capable since #283) remains the correctness backstop, so a host
+ * that's down at boot just gets its orphan cleanup deferred, never lost.
  *
  * Any OTHER error (Hermes review, PR #590 — e.g. a local DB read glitch
  * inside this loop) is per-project, exactly like the pre-#484 local-only
@@ -119,12 +122,22 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
           }
         } catch (err) {
           // #484, Hermes review PR #590 — only a transport-level failure
-          // (the host itself is unreachable, or its agent build predates
-          // the proxy routes) aborts the rest of THIS host's projects; see
-          // this function's own doc comment for why. Any other error is
-          // this project's own problem alone — logged and skipped, the
-          // loop continues to the next project on the same host.
-          if (err instanceof HostUnreachableError || err instanceof HostRequestError) {
+          // (the host itself is unreachable, or a 404 confirming its agent
+          // build predates the proxy routes — a host-wide fact, not a
+          // per-project one) aborts the rest of THIS host's projects; see
+          // this function's own doc comment for why. Independent review,
+          // same PR — HostRequestError covers ANY 4xx, not just a missing
+          // route (e.g. a genuine resolveWithinRoots 400 for THIS
+          // project's own cwd), so only `statusCode === 404` actually
+          // means "this host's build is too old," never a bare
+          // `instanceof` check. Any other error — including a
+          // non-404 HostRequestError — is this project's own problem
+          // alone: logged and skipped, the loop continues to the next
+          // project on the same host.
+          if (
+            err instanceof HostUnreachableError ||
+            (err instanceof HostRequestError && err.statusCode === 404)
+          ) {
             app.log.warn(
               { err, projectId: project.id, hostId },
               "task-watcher: boot-time orphan worktree sweep failed — skipping the rest of this host's projects",

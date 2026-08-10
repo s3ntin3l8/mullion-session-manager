@@ -41,7 +41,38 @@ export type HostGitResult<T> =
 
 /** Runs `fn` against the remote client for `hostId`, mapping its two error
  * types onto HostGitResult's discriminated failure shape — every one of the
- * three exported functions below shares this exact dispatch. */
+ * three exported functions below shares this exact dispatch.
+ *
+ * Independent review, PR #590 — `HostRequestError` is raised for ANY 4xx
+ * `request()` gets back (a genuine `resolveWithinRoots` 400, a schema
+ * validation 400, a 401 surviving the one credential-refresh retry — not
+ * just a 404 from a route an old agent build doesn't have), so only a
+ * `statusCode === 404` is actually the "this host's agent build predates
+ * #484's proxy routes" version-skew signal `"unsupported"` claims to be.
+ * Any other 4xx is a real request-level failure this host CAN service in
+ * principle, so it's treated the same as `"unreachable"` — not the durable-
+ * sounding "unsupported, update your agent build" a caller like
+ * task-promote.ts would otherwise surface for what might be a `cwd`
+ * misconfiguration, and not silently conflated with a genuine transport
+ * failure either (the original `err.message` carries the real reason).
+ *
+ * `getRemoteHostClient(app, hostId)` itself (called inside the try, not
+ * before it) can throw a plain `Error` synchronously — a project row
+ * pointing at a `hostId` with no matching `hosts` row, or one with a null
+ * `baseUrl` (defense in depth: `DELETE /api/hosts/:id` without `cascade`
+ * 409s on a referencing project, so this shouldn't occur via normal use,
+ * but nothing enforces it at the DB layer). Independent review, PR #590 —
+ * this module's every caller (task-promote.ts's preparePromotion/
+ * resolveBaseBranch/pushForPromotion) has no try/catch of its own around
+ * these calls, unlike task-claim.ts's claimTask/retryTask, which each wrap
+ * an equivalent `resolveBackend`-can-throw-synchronously risk in their own
+ * outer try/catch specifically for this. Rather than require every current
+ * and future caller of this module to duplicate that defense, any
+ * non-Host*Error thrown here is treated the same as a genuine
+ * `HostUnreachableError` — this host cannot be reached in any sense that
+ * matters to the caller — instead of propagating as an uncaught throw that
+ * would otherwise surface as a raw 500, contradicting this module's own
+ * "never a 500" contract. */
 async function viaRemote<T>(
   app: FastifyInstance,
   hostId: string,
@@ -51,11 +82,17 @@ async function viaRemote<T>(
     const value = await fn(getRemoteHostClient(app, hostId));
     return { ok: true, value };
   } catch (err) {
-    if (err instanceof HostRequestError) return { ok: false, reason: "unsupported" };
-    if (err instanceof HostUnreachableError) {
+    if (err instanceof HostRequestError) {
+      if (err.statusCode === 404) return { ok: false, reason: "unsupported" };
       return { ok: false, reason: "unreachable", detail: err.message };
     }
-    throw err;
+    const detail =
+      err instanceof HostUnreachableError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, reason: "unreachable", detail };
   }
 }
 

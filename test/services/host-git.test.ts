@@ -125,12 +125,38 @@ describe("host-git.ts", () => {
       }
     });
 
-    it("remote: an unrelated thrown error is not swallowed", async () => {
+    // Independent review, PR #590 — an unrelated thrown error (e.g.
+    // getRemoteHostClient itself throwing a plain Error for a dangling
+    // hostId with no matching hosts row) is treated as "unreachable" too,
+    // not re-thrown — see viaRemote's own doc comment for why: every
+    // caller of this module gets the same "never propagates an uncaught
+    // throw" guarantee task-claim.ts's claimTask/retryTask already give
+    // themselves individually, without each one needing its own try/catch.
+    it("remote: an unrelated thrown error resolves ok:false, reason:unreachable — never re-thrown", async () => {
       mockGetRemoteHostClient.mockReturnValue({
         resolveGitStatus: vi.fn().mockRejectedValue(new Error("boom")),
       });
 
-      await expect(resolveHostGitStatus(fakeApp, "remote-host-1", "/x")).rejects.toThrow("boom");
+      await expect(resolveHostGitStatus(fakeApp, "remote-host-1", "/x")).resolves.toEqual({
+        ok: false,
+        reason: "unreachable",
+        detail: "boom",
+      });
+    });
+
+    it("remote: a non-404 HostRequestError (e.g. a genuine 400) is 'unreachable', not the durable-sounding 'unsupported'", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitStatus: vi
+          .fn()
+          .mockRejectedValue(
+            new HostRequestError("h1", 400, "cwd must be within this agent's PROJECTS_ROOTS"),
+          ),
+      });
+
+      const result = await resolveHostGitStatus(fakeApp, "remote-host-1", "/x");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("unreachable");
     });
   });
 

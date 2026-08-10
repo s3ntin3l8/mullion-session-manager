@@ -593,14 +593,18 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
     // 404 HostRequestError, distinguished here from every other resume
     // failure (branch missing/checked out elsewhere, or the host being
     // unreachable) so a version-skew gap reads as "not supported yet, ok
-    // to retry once upgraded," not a generic worktree-failed.
+    // to retry once upgraded," not a generic worktree-failed. Independent
+    // review, PR #590 — HostRequestError covers ANY 4xx (a genuine
+    // resolveWithinRoots 400, not just a missing route), so this checks
+    // `statusCode === 404` specifically rather than the class alone; any
+    // other HostRequestError falls through to the generic catch below.
     try {
       worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
         project.cwd,
         branchName,
       );
     } catch (err) {
-      if (err instanceof HostRequestError) {
+      if (err instanceof HostRequestError && err.statusCode === 404) {
         await release("this host's agent build doesn't support retrying a remote-hosted task yet");
         return {
           ok: false,

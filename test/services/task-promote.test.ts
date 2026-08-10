@@ -245,6 +245,84 @@ describe("promoteTaskToPR", () => {
     expect(result).toMatchObject({ ok: false, reason: "no-worktree" });
   });
 
+  // Independent review, PR #590 — every prior remote-hosted push test in
+  // this file mocks resolvePushBranch as a success (or fails earlier, at
+  // resolveGitStatus/resolveHostBaseRef); pushForPromotion's own transport-
+  // failure branches (host-git.ts's pushHostBranch returning ok:false, as
+  // opposed to a git-level push failure) had no coverage until now.
+  it("#484 — surfaces push-failed when the push itself hits an unreachable host, after status/base-ref both succeeded", async () => {
+    mockGetRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn().mockResolvedValue({
+        isRepo: true,
+        status: {
+          branch: "mullion/task-1",
+          hash: "abc123",
+          ahead: 0,
+          behind: 0,
+          files: [],
+          isClean: true,
+          hasConflicts: false,
+        },
+      }),
+      resolveHostBaseRef: vi.fn().mockResolvedValue({ baseRef: "main", sha: null }),
+      resolvePushBranch: vi
+        .fn()
+        .mockRejectedValue(new HostUnreachableError("remote-host-1", new Error("ECONNREFUSED"))),
+    });
+
+    const result = await promoteTaskToPR(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: "push-failed" });
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      expect.stringContaining("Could not reach the task's host"),
+    );
+  });
+
+  it("#484 — surfaces push-failed (not remote-not-supported) when the push route itself is version-skewed", async () => {
+    mockGetRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn().mockResolvedValue({
+        isRepo: true,
+        status: {
+          branch: "mullion/task-1",
+          hash: "abc123",
+          ahead: 0,
+          behind: 0,
+          files: [],
+          isClean: true,
+          hasConflicts: false,
+        },
+      }),
+      resolveHostBaseRef: vi.fn().mockResolvedValue({ baseRef: "main", sha: null }),
+      resolvePushBranch: vi.fn().mockRejectedValue(new HostRequestError("remote-host-1", 404, "")),
+    });
+
+    const result = await promoteTaskToPR(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+
+    // The version-skew reason is only meaningful for the FIRST call
+    // (preparePromotion's own status check) — by the time push runs, the
+    // status/base-ref calls already succeeded against this same host, so a
+    // 404 here is surfaced as push-failed, not a re-diagnosed
+    // remote-not-supported.
+    expect(result).toMatchObject({ ok: false, reason: "push-failed" });
+  });
+
   it("refuses when the worktree has uncommitted changes", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);
