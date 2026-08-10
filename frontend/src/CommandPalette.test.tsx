@@ -1014,6 +1014,101 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     expect(useDashboardStore.getState().activeWorkspaceId).not.toBe(3);
   });
 
+  it("Enter at the default (index 0) selection opens the session, not a launcher", async () => {
+    // Same three-way match as the flattened-nav test above, but exercises
+    // the "session" branch of the Enter switch directly (no arrow keys) —
+    // that switch is the one place a wrong index/offset would silently pick
+    // the wrong branch, and the flattened-nav test above only ever exercises
+    // the "launcher" branch.
+    const session = makeSession({ id: 5, name: "bashful session" });
+    const workspace = makeWorkspace({ id: 3, name: "bashful workspace" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [session],
+      workspaces: [workspace],
+    });
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={onOpenSession}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await screen.findByText("bashful session");
+    await screen.findByText("bashful workspace");
+
+    await user.keyboard("{Enter}");
+
+    expect(onOpenSession).toHaveBeenCalledWith(session);
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(useDashboardStore.getState().activeWorkspaceId).not.toBe(3);
+  });
+
+  it("one ArrowDown then Enter switches to the workspace, not the session or a launcher", async () => {
+    // Exercises the "workspace" branch of the same Enter switch — the
+    // middle of the three flattened groups, so the one most likely to have
+    // an off-by-one offset if matchingSessions.length were computed wrong.
+    const session = makeSession({ id: 5, name: "bashful session" });
+    const workspace = makeWorkspace({ id: 3, name: "bashful workspace" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [session],
+      workspaces: [workspace],
+      activeWorkspaceId: null,
+    });
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={onOpenSession}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await screen.findByText("bashful session");
+    await screen.findByText("bashful workspace");
+
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(useDashboardStore.getState().activeWorkspaceId).toBe(3);
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
   it("does not show a Sessions or Workspaces group on an empty query", async () => {
     const session = makeSession({ id: 8, name: "idle session" });
     const workspace = makeWorkspace({ id: 6, name: "idle workspace" });
