@@ -431,3 +431,44 @@ export async function syncUnlabeledIssueToLocal(
     "failed",
   );
 }
+
+/**
+ * Posts the review agent's findings as a single comment — on the task's
+ * PR (`task.prNumber`) when one exists, falling back to the linked issue
+ * otherwise. Deliberately NOT folded into `syncTaskTransition`/`runSync`
+ * above: those are issue-only and gated on `task.issueNumber !== null`, so
+ * a local-only task (no linked issue, but very much has a PR once
+ * `task-promote.ts` opens one) would silently lose this comment if it rode
+ * that path instead. No-ops when the task has neither a PR nor an issue —
+ * genuinely nothing to comment on (an unclaimed remote-hosted task, or one
+ * whose draft-PR-open attempt hasn't succeeded yet).
+ *
+ * Same best-effort posture as every other write in this file: never
+ * throws, logs and records `githubSyncError` on failure, clears it on
+ * success.
+ */
+export async function postReviewFindingsComment(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+  body: string,
+): Promise<void> {
+  const commentTarget = task.prNumber ?? task.issueNumber;
+  if (commentTarget === null) return;
+
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return;
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return;
+
+  try {
+    await createComment(token, repoRef.owner, repoRef.repo, commentTarget, body);
+    clearGithubSyncError(app, task.id);
+  } catch (err) {
+    app.log.warn(
+      { taskId: task.id, commentTarget, err },
+      "[task-github-sync] failed to post review findings comment",
+    );
+    recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
+  }
+}

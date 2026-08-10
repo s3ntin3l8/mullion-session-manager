@@ -927,6 +927,15 @@ export interface Task {
   // (some agents, e.g. OpenCode, can't — the session still spawns, just
   // with no instructions). See TaskDetail.tsx's review card.
   reviewSeedDelivered: boolean | null;
+  // The review agent's own findings, captured once its session finishes —
+  // appended across rounds under a "## Round N" header, never replaced.
+  // Null until the first round is ingested (no review agent configured,
+  // still running, or genuinely found nothing).
+  reviewFindings: string | null;
+  // How many times review findings have already driven an automatic
+  // "reviewing -> in_progress" round back to the worker. Bounded at 1 and
+  // never reset — see TaskDetail.tsx's review card.
+  reviewRounds: number;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned

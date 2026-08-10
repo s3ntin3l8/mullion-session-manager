@@ -40,6 +40,7 @@ const {
   recordGithubSyncError,
   clearGithubSyncError,
   computeTaskDiffStat,
+  postReviewFindingsComment,
   LABEL_CLAIMED,
   LABEL_REVIEWING,
   LABEL_DONE,
@@ -70,6 +71,7 @@ function baseTask(overrides: Partial<typeof tasks.$inferSelect> = {}) {
     baseSha: null,
     agentCommand: null,
     prUrl: null,
+    prNumber: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
@@ -598,6 +600,93 @@ describe("task-github-sync", () => {
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.status).toBe("claimed");
       expect(mockCreateComment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("postReviewFindingsComment", () => {
+    it("comments on the PR when one exists, not the issue", async () => {
+      mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "https://github.com/o/r/issues/5#c1" });
+      const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        9,
+        "## Round 1\n\nfindings",
+      );
+    });
+
+    it("falls back to the issue when the task has no PR yet", async () => {
+      mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "https://github.com/o/r/issues/5#c1" });
+      const task = baseTask({ issueNumber: 5, prNumber: null });
+
+      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        5,
+        "## Round 1\n\nfindings",
+      );
+    });
+
+    it("is a no-op when the task has neither a PR nor a linked issue", async () => {
+      const task = baseTask({ issueNumber: null, prNumber: null });
+
+      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+
+      expect(mockResolveRepoRef).not.toHaveBeenCalled();
+      expect(mockCreateComment).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when no GitHub token is connected", async () => {
+      mockGetToken.mockReturnValue(null);
+      const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+
+      expect(mockCreateComment).not.toHaveBeenCalled();
+    });
+
+    it("records a sync error, never throws, when the comment write fails", async () => {
+      mockCreateComment.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      const [row0] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber: 910, prNumber: 9, title: "t", status: "reviewing" })
+        .returning()
+        .all();
+
+      await expect(
+        postReviewFindingsComment(app, row0, project, "## Round 1\n\nfindings"),
+      ).resolves.toBeUndefined();
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
+      expect(row.githubSyncError).toContain("insufficient scope");
+    });
+
+    it("clears a previously-recorded sync error on a successful post", async () => {
+      mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "https://github.com/o/r/issues/5#c1" });
+      const [row0] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 911,
+          prNumber: 9,
+          title: "t",
+          status: "reviewing",
+          githubSyncError: "stale error",
+        })
+        .returning()
+        .all();
+
+      await postReviewFindingsComment(app, row0, project, "## Round 1\n\nfindings");
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
+      expect(row.githubSyncError).toBeNull();
     });
   });
 
