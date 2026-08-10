@@ -2517,6 +2517,53 @@ describe("PtyManager", () => {
           vi.useRealTimers();
         }
       });
+
+      it("also flushes a still-pending debounced title_change event when the pty process exits on its own (crash/natural exit, not Session.kill()) — Hermes review, PR #593", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "claude",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+
+          fakePtyChildren[0].emitData("\x1b]2;Done\x07");
+          expect(session.getEvents().filter((e) => e.kind === "title_change")).toHaveLength(0);
+
+          // The pty process dying on its own (a crash, or — very commonly —
+          // an agent program exiting cleanly right after a final title
+          // rewrite) — NOT session.kill()/manager.kill(). This fires the
+          // exit listener spawn() registered via ptyProcess.onExit()
+          // directly, the same path a real crash takes, bypassing kill()'s
+          // own flushTitleChangeEvent() call entirely.
+          fakePtyChildren[0].kill();
+
+          const events = session.getEvents();
+          const titleEvents = events.filter((e) => e.kind === "title_change");
+          // The pending title_change must still be flushed here -- not
+          // silently dropped for another 3-15s (or forever, if this Session
+          // instance never spawns again) -- exactly the "session ended with
+          // unflushed state" class of bug the state file's own A8 fix
+          // already covers, now closed for this debounce too.
+          expect(titleEvents).toHaveLength(1);
+          expect(titleEvents[0].payload).toEqual({ title: "Done" });
+
+          // Chronological order preserved: the flush happens BEFORE the
+          // exit handler's own status_change("exited") emission, matching
+          // what actually happened (the title changed, then the process
+          // exited) — not after, which would invert it.
+          const exitedEvent = events.find(
+            (e) => e.kind === "status_change" && e.payload.reason === "exited",
+          );
+          expect(exitedEvent).toBeDefined();
+          expect(titleEvents[0].seq).toBeLessThan(exitedEvent!.seq);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
   });
 

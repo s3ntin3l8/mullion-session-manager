@@ -2105,6 +2105,22 @@ export class Session {
       // `this`, not the pty instance), mis-resizing an unrelated process
       // incarnation. See cancelPendingNudge()'s own doc comment.
       this.cancelPendingNudge();
+      // A1 (Hermes review, PR #593): kill()'s own flushTitleChangeEvent()
+      // call only covers the EXPLICIT-detach path. A pty process can also
+      // die on its own — a crash, or (very commonly) an agent program
+      // exiting cleanly right after a final title rewrite, e.g. "Done" or
+      // an error summary — and that path reaches this onExit handler
+      // WITHOUT ever going through kill(). Without this call, a pending
+      // debounced title_change would fire 3-15s later than it should:
+      // landing after the "exited" status_change emitted just below
+      // (inverting chronological order), and — if this same session is
+      // reattached (getOrCreate -> spawn()) before that stale timer fires —
+      // racing a brand-new incarnation's own fresh title_change events on
+      // the same numeric session id. Same flush, same rationale as kill()'s
+      // own call (see its doc comment); calling it again from kill()'s own
+      // ptyProcess?.kill() -> onExit chain is a harmless no-op here, since
+      // flushTitleChangeEvent() already cleared `pendingTitleChangeTitle`.
+      this.flushTitleChangeEvent();
       // Same reasoning as detectCarry's clear in kill() below — a client can
       // also die on its own (crash, not an explicit kill()), and this exit
       // handler is the only place that path passes through before a later
