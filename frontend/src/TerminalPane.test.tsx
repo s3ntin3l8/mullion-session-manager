@@ -1457,6 +1457,30 @@ describe("TerminalPane scrollback search (U1)", () => {
     expect(getLatestTermInstance().focus).toHaveBeenCalledTimes(1);
   });
 
+  it("does not open the find bar on plain Ctrl+F (left to the browser's own find)", () => {
+    stubFakeWebSocket(true);
+    const { queryByPlaceholderText } = renderPane();
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    const preventDefault = vi.fn();
+
+    act(() => {
+      handler({
+        type: "keydown",
+        key: "f",
+        ctrlKey: true,
+        shiftKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault,
+      });
+    });
+
+    expect(queryByPlaceholderText("Find in scrollback…")).toBeNull();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
   it("does not steal focus into the terminal on a plain mount (find bar never opened)", () => {
     stubFakeWebSocket(true);
     renderPane();
