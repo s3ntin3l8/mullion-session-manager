@@ -317,6 +317,156 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  // #484 — opts.fresh appends &fresh=1 and requests the same cache-bypassing
+  // read task-promote.ts's dirty-tree gate needs; every other caller omits
+  // it and keeps the cached read (unchanged from the test right above).
+  it("resolveGitStatus({fresh:true}) appends &fresh=1", async () => {
+    const status = {
+      branch: "main",
+      hash: "abc1234",
+      ahead: 0,
+      behind: 0,
+      files: [],
+      isClean: false,
+      hasConflicts: false,
+    };
+    fetchMock.mockResolvedValue(jsonResponse(200, { isRepo: true, status }));
+    await expect(client().resolveGitStatus("/x/y", { fresh: true })).resolves.toEqual({
+      isRepo: true,
+      status,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-status?cwd=%2Fx%2Fy&fresh=1",
+      expect.anything(),
+    );
+  });
+
+  describe("#484 — task-git proxy methods (host-git.ts's remote branch)", () => {
+    it("resolveHostBaseRef hits /internal/git-base-ref and returns { baseRef, sha } verbatim", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { baseRef: "origin/main", sha: "deadbeef" }));
+      await expect(client().resolveHostBaseRef("/x/y")).resolves.toEqual({
+        baseRef: "origin/main",
+        sha: "deadbeef",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/git-base-ref?cwd=%2Fx%2Fy",
+        expect.anything(),
+      );
+    });
+
+    it("resolvePushBranch POSTs {cwd, branch, token} to /internal/git-push and returns the PushResult", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { ok: true }));
+      await expect(
+        client().resolvePushBranch("/x/y", "mullion/task-1", "ghp_token"),
+      ).resolves.toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/git-push",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ cwd: "/x/y", branch: "mullion/task-1", token: "ghp_token" }),
+        }),
+      );
+    });
+
+    it("resolveTaskWorktreeDirs unwraps /internal/git-worktree/task-dirs's { dirs } envelope to a bare string[]", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, { dirs: ["/x/y/.mullion-worktrees/mullion-task-1"] }),
+      );
+      await expect(client().resolveTaskWorktreeDirs("/x/y")).resolves.toEqual([
+        "/x/y/.mullion-worktrees/mullion-task-1",
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/git-worktree/task-dirs?cwd=%2Fx%2Fy",
+        expect.anything(),
+      );
+    });
+
+    it("resolveResumeTaskWorktree POSTs {cwd, branchName} to /internal/git-worktree/resume", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          path: "/x/y/.mullion-worktrees/mullion-task-1",
+          branch: "mullion/task-1",
+        }),
+      );
+      await expect(client().resolveResumeTaskWorktree("/x/y", "mullion/task-1")).resolves.toEqual({
+        path: "/x/y/.mullion-worktrees/mullion-task-1",
+        branch: "mullion/task-1",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/git-worktree/resume",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ cwd: "/x/y", branchName: "mullion/task-1" }),
+        }),
+      );
+    });
+
+    it("resolveResumeTaskWorktree resolves null (not an error) for a git-level resume failure", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, null));
+      await expect(
+        client().resolveResumeTaskWorktree("/x/y", "mullion/task-1"),
+      ).resolves.toBeNull();
+    });
+
+    // These four calls each wrap an agent-side git shell-out well above
+    // REQUEST_TIMEOUT_MS's 5s default (git-push.ts 30s, git-refs.ts up to
+    // ~50s across its chained calls, git-worktree.ts 15s) — without an
+    // override, this client would raise HostUnreachableError while the
+    // agent's own git call is still running, e.g. reporting push-failed on
+    // a branch that actually landed. See the constants' own comments.
+    it("gives each task-git proxy call a longer timeout than an ordinary request", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, { ok: true })));
+
+      await client().discover();
+      const defaultTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      timeoutSpy.mockClear();
+      await client().resolvePushBranch("/x", "mullion/task-1", "tok");
+      const pushTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      timeoutSpy.mockClear();
+      await client().resolveHostBaseRef("/x");
+      const baseRefTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      timeoutSpy.mockClear();
+      await client().resolveResumeTaskWorktree("/x", "mullion/task-1");
+      const resumeTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      timeoutSpy.mockClear();
+      await client().resolveGitStatus("/x", { fresh: true });
+      const freshStatusTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      expect(pushTimeout).toBeGreaterThan(defaultTimeout);
+      expect(baseRefTimeout).toBeGreaterThan(defaultTimeout);
+      expect(resumeTimeout).toBeGreaterThan(defaultTimeout);
+      expect(freshStatusTimeout).toBeGreaterThan(defaultTimeout);
+      // git-refs.ts's resolveDefaultBaseRef chains up to 5 sequential git
+      // calls (fetch, symbolic-ref, 2x rev-parse candidates, plus this
+      // route's own resolveCommitSha) — the longest budget of the four.
+      expect(baseRefTimeout).toBeGreaterThan(pushTimeout);
+
+      timeoutSpy.mockRestore();
+    });
+
+    it("a plain (non-fresh) resolveGitStatus call keeps the default timeout, unlike its fresh:true sibling", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { isRepo: false, status: null })),
+      );
+
+      await client().resolveGitStatus("/x");
+      const plainTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      timeoutSpy.mockClear();
+      await client().resolveGitStatus("/x", { fresh: true });
+      const freshTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+      expect(freshTimeout).toBeGreaterThan(plainTimeout);
+      timeoutSpy.mockRestore();
+    });
+  });
+
   it("resolves a remote project's branches and worktrees via /internal/git-branches (issue #162)", async () => {
     const result = {
       branches: [{ name: "main", isCurrent: true }],

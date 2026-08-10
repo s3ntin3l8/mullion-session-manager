@@ -1578,6 +1578,25 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     unsubscribeFromGitHubProject: (projectId: number) => {
       gitHubWSSubscriptions.delete(projectId);
+      // P12 — this used to be local-cleanup-only: the server kept pushing
+      // events for a project whose UI section had already unmounted,
+      // because nothing ever told it to stop. Mirrors subscribeToGitHubProject
+      // above (same guard, same frame shape, same send mechanism).
+      //
+      // NOTE for reviewers: as of this PR, `src/routes/ws-github.ts` only
+      // recognizes `{type: "subscribe", projectId}` — there is no server-side
+      // handler for `"unsubscribe"` at all, and
+      // `src/services/github-ws-broadcast.ts`'s `subscribeToProject` only
+      // ever removes a socket from a project's subscriber set on the
+      // socket's own `close`/`error` (i.e. the whole shared `/ws/github`
+      // connection closing), not on a per-project unsubscribe. So this frame
+      // is inert until the backend grows a handler for it — a separate,
+      // backend-side, out-of-scope change for this frontend-only PR (see the
+      // plan's P12 finding). Sending it now means the fix is a pure backend
+      // addition later, with nothing left to do frontend-side.
+      if (gitHubWS?.readyState === WebSocket.OPEN) {
+        gitHubWS.send(JSON.stringify({ type: "unsubscribe", projectId }));
+      }
     },
 
     markEventSeen: (sessionId, seq) => {

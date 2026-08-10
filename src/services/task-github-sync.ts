@@ -38,6 +38,8 @@ import {
 import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
+import { getRemoteHostClient } from "./remote-host-client.js";
 
 export const LABEL_CLAIMED = "mullion-claimed";
 export const LABEL_REVIEWING = "mullion-reviewing";
@@ -50,7 +52,7 @@ export type TaskSyncEvent =
 type TaskRow = typeof tasks.$inferSelect;
 // Narrowed to exactly what resolveRepoRef needs, not the full projects row
 // — lets task-watcher.ts's read-back sweep (which only has a project's
-// id/cwd from its own lightweight localProjectRows() query, not a full
+// id/cwd from its own lightweight pollableProjectRows() query, not a full
 // row) call into this module without an extra full-row fetch.
 type ProjectRef = { cwd: string; hostId: string };
 
@@ -229,16 +231,44 @@ async function runSync(
  * pinned `baseSha`, for the `reviewing` transition's issue comment. Kept
  * separate from `syncTaskTransition`/`runSync` (which stay filesystem-free
  * by design — see this file's header comment) — callers that already have
- * a worktree/SHA to hand (task-reconciler.ts's `reviewing` transitions)
- * compute this and pass it through `extra.diffStat`. Returns `undefined`
- * (not stored, not shown) when the task has no worktree path or no pinned
- * SHA — a remote-hosted task, or one claimed before this column existed —
- * or when `getDiffStats` itself can't produce a result; never throws.
+ * a worktree/SHA/project to hand (task-reconciler.ts's `reviewing`
+ * transitions) compute this and pass it through `extra.diffStat`. Returns
+ * `undefined` (not stored, not shown) when the task has no worktree path or
+ * no pinned SHA — a task claimed before the `baseSha` column existed, or a
+ * remote-hosted task whose host was unreachable at claim time (#484 —
+ * `resolveHostBaseRef`'s own unreachable/unsupported fallback) — or when
+ * the diff itself can't be produced; never throws.
+ *
+ * #484 — dispatches to `getDiffStats` locally or
+ * `/internal/git-diff` (already existing, `resolveGitDiffStats`) remotely,
+ * since `task.worktreePath` only exists on whichever host actually owns
+ * it. `resolveGitDiffStats` returns `{ isRepo, stats }`; both `isRepo:
+ * false` and `stats: null` collapse to `undefined` here, the same value
+ * the local branch already produces for a failed/absent diff — the value
+ * `syncTaskTransition`'s callers already treat as "post the comment with
+ * no number rather than a guessed one."
  */
-export async function computeTaskDiffStat(task: TaskRow): Promise<GitDiffStats | undefined> {
+export async function computeTaskDiffStat(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+): Promise<GitDiffStats | undefined> {
   if (!task.worktreePath || !task.baseSha) return undefined;
-  const stats = await getDiffStats(task.worktreePath, task.baseSha);
-  return stats ?? undefined;
+  if (project.hostId === LOCAL_HOST_ID) {
+    const stats = await getDiffStats(task.worktreePath, task.baseSha);
+    return stats ?? undefined;
+  }
+  try {
+    const { stats } = await getRemoteHostClient(app, project.hostId).resolveGitDiffStats(
+      task.worktreePath,
+      task.baseSha,
+    );
+    return stats ?? undefined;
+  } catch {
+    // Host unreachable, or an old agent build with no /internal/git-diff —
+    // same "nothing to show" posture as every other failure mode above.
+    return undefined;
+  }
 }
 
 export async function syncTaskTransition(

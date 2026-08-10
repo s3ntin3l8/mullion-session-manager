@@ -593,6 +593,145 @@ describe("CommandPalette -> P9 silent failures", () => {
   });
 });
 
+// P11 — the palette previously had no dialog semantics, no focus-in on
+// open, and no Tab trap, all of which UnifiedBoard.tsx's task-detail drawer
+// already had. Uses the shared useFocusTrap.ts hook.
+describe("CommandPalette -> focus management (P11)", () => {
+  const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
+
+  function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
+    return render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        {...overrides}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("has dialog semantics and focuses the search input on open", async () => {
+    renderPalette();
+    const dialog = await screen.findByRole("dialog", { name: "Command palette" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByPlaceholderText("Launch a session or run a command…")).toHaveFocus();
+  });
+
+  it("restores focus to the trigger element on a plain close (Escape)", async () => {
+    render(<button>open palette</button>);
+    const trigger = screen.getByText("open palette");
+    trigger.focus();
+
+    const { unmount } = renderPalette();
+    await screen.findByPlaceholderText("Launch a session or run a command…");
+    expect(document.activeElement).not.toBe(trigger);
+
+    // Mirrors App.tsx's conditional mount — closing is a full unmount.
+    unmount();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("does NOT restore focus to the trigger when closing by launching a session (focus belongs to the new pane instead)", async () => {
+    render(<button>open palette</button>);
+    const trigger = screen.getByText("open palette");
+    trigger.focus();
+
+    let resolveCreate: (session: Session) => void = () => {};
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        return new Promise((resolve) => {
+          resolveCreate = (session) => resolve(jsonResponse(201, session));
+        });
+      }
+      // store.createSession refreshes the session list right after — not
+      // under test here, so an empty list is fine.
+      if (url.startsWith("/api/sessions") && (init?.method ?? "GET") === "GET") {
+        return Promise.resolve(jsonResponse(200, []));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = renderPalette({ onClose, onLaunched });
+
+    await user.click((await screen.findAllByText("bash"))[0]);
+    resolveCreate({
+      id: 1,
+      projectId: PROJECT.id,
+      command: "bash",
+      cwd: null,
+    } as Session);
+    await vi.waitFor(() => expect(onLaunched).toHaveBeenCalled());
+
+    // App.tsx's real close path is a conditional-mount flip, not a method
+    // call on this component — mirror that here so the trap's own
+    // restore-on-close cleanup effect actually runs. Without
+    // `suppressRestore()` (called by `closeAfterAction` before `onClose`
+    // above), this unmount would snap focus back onto `trigger`; with it,
+    // focus is left wherever the real app's onOpenSession/onLaunched just
+    // put it (a new pane's terminal, per PR13/U7) instead.
+    unmount();
+
+    expect(trigger).not.toHaveFocus();
+  });
+
+  it("traps Tab within the palette", async () => {
+    const user = userEvent.setup();
+    const { container } = renderPalette();
+    await screen.findAllByText("bash");
+
+    const dialog = container.querySelector(".cmd-palette") as HTMLElement;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+
+    last.focus();
+    await user.tab();
+    expect(first).toHaveFocus();
+
+    first.focus();
+    await user.tab({ shift: true });
+    expect(last).toHaveFocus();
+  });
+});
+
 describe("CommandPalette -> skip-permissions badge and launch precedence", () => {
   const CLAUDE: Launcher = {
     id: "agent:claude",

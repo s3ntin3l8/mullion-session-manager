@@ -292,6 +292,63 @@ describe("SessionRow", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  // P10 — the session row is the single most-used control in the app;
+  // before this fix it was a bare <div onClick draggable> with no keyboard
+  // support at all. Same role="button"/tabIndex/Enter-Space pattern as
+  // UnifiedBoard.tsx's TaskCard and NotificationBell.tsx's EventRow.
+  describe("keyboard accessibility (P10)", () => {
+    it("is a focusable role=button", () => {
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+      const row = screen.getByRole("button", { name: /claude code/i });
+      expect(row).toHaveAttribute("tabIndex", "0");
+    });
+
+    it("fires onOpen on Enter when the row itself is focused", async () => {
+      const onOpen = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
+
+      const row = screen.getByRole("button", { name: /claude code/i });
+      row.focus();
+      await user.keyboard("{Enter}");
+
+      expect(onOpen).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires onOpen on Space when the row itself is focused", async () => {
+      const onOpen = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
+
+      const row = screen.getByRole("button", { name: /claude code/i });
+      row.focus();
+      await user.keyboard(" ");
+
+      expect(onOpen).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not double-fire onOpen when a nested kebab-menu button is clicked", async () => {
+      const onOpen = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
+
+      await user.click(screen.getByTitle("More…"));
+
+      expect(onOpen).not.toHaveBeenCalled();
+    });
+
+    it("does not fire onOpen when Enter is pressed while a nested button has focus", async () => {
+      const onOpen = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
+
+      screen.getByTitle("More…").focus();
+      await user.keyboard("{Enter}");
+
+      expect(onOpen).not.toHaveBeenCalled();
+    });
+  });
+
   // Phase 5 (Track B, issue #195 5.5b) — the CSS custom property styles.css
   // reads for hierarchical indent; SessionRow itself doesn't compute a
   // margin, just forwards `depth` as `--session-depth`.

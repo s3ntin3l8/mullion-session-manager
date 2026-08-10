@@ -163,6 +163,18 @@ different kind of secret — bootstrap-only, never an inbound credential — but
 still worth the same handling (real entropy, restrict who can read the env
 file, rotate like you would an SSH key with shell access to the fleet).
 
+Task Master's promotion path (`#484`) sends a **GitHub credential** (the
+shared PAT/OAuth token, or a short-lived App installation token when one is
+configured) to a task's own host, once per push, over this same signed,
+IP-pinned channel — `POST /internal/git-push`, never logged. This is not a
+new trust boundary: an agent host already runs the task's own CLI/coding
+agent inside that checkout with full filesystem access, so it already has
+the means to read `.git/config` or exfiltrate any credential it's handed by
+other means. It is, however, a widening of _what_ actually crosses the
+wire to that host on a routine push, not just at claim/worktree time —
+worth knowing if you're reasoning about what a compromised agent host could
+observe.
+
 ## What this does and doesn't protect against
 
 Registering a host (`POST`/`PATCH /api/hosts`) is an admin-only, authenticated
@@ -302,3 +314,8 @@ to "pending" until the next sweep, same as a fresh boot.
   anything else with shell access.
 - Connection-time IP pinning (full DNS-rebinding protection) is not yet
   implemented — see "What this does and doesn't protect against" above.
+- Task Master now works end-to-end against a remote-hosted project (`#484`)
+  — issue ingest, claim, work, review with a real diff-stat, promotion to a
+  PR, and Retry — given an agent build new enough to serve the routes it
+  needs; an older build degrades per-path rather than breaking (see
+  [`tasks.md`](tasks.md)'s Known limitations).

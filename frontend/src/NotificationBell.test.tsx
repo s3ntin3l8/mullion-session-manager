@@ -591,3 +591,77 @@ describe("NotificationBell virtualization smoke test", () => {
     expect(within(panel as HTMLElement).getByText("Bell")).toBeInTheDocument();
   });
 });
+
+// P11 — the popover previously had no focus management: no role, no
+// focus-in on open, no Tab trap, no focus-restore on close, and (unlike
+// Settings/CommandPalette, which both close on Escape via App.tsx's global
+// handler) no Escape support at all — only mousedown outside-click could
+// close it. Uses the shared useFocusTrap.ts hook.
+describe("NotificationBell popover — focus management (P11)", () => {
+  it("has dialog semantics, no aria-modal (no backdrop — same rule as PaneTab's menu/UnifiedBoard's drawer)", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+
+    const dialog = screen.getByRole("dialog", { name: "Notifications" });
+    expect(dialog).not.toHaveAttribute("aria-modal");
+  });
+
+  it("moves focus into the panel (onto the first focusable item) when it opens", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+
+    // "Mark all read" is the first focusable descendant while there's an
+    // unread event.
+    expect(screen.getByTitle("Mark all as read")).toHaveFocus();
+  });
+
+  it("restores focus to the bell button on close", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    await userEvent.click(document.body);
+
+    expect(bell).toHaveFocus();
+  });
+
+  it("closes on Escape, unlike before this fix (previously only mousedown outside-click worked)", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    await openPanel();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /notifications/i })).toHaveFocus();
+  });
+
+  it("traps Tab within the panel", async () => {
+    events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
+    await openPanel();
+
+    const dialog = screen.getByRole("dialog", { name: "Notifications" });
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("button:not([disabled])"));
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+
+    last.focus();
+    await userEvent.tab();
+    expect(first).toHaveFocus();
+
+    first.focus();
+    await userEvent.tab({ shift: true });
+    expect(last).toHaveFocus();
+  });
+
+  it("does not restore focus to the bell button when closing by opening a session", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const onOpenSession = await openPanel();
+    const bell = screen.getByRole("button", { name: /notifications/i });
+
+    await userEvent.click(screen.getByText("Bell"));
+
+    expect(onOpenSession).toHaveBeenCalled();
+    expect(bell).not.toHaveFocus();
+  });
+});

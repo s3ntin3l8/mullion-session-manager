@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { eventKey, useDashboardStore } from "./store.js";
@@ -8,6 +8,7 @@ import { api } from "./api.js";
 import type { NotificationEvent, Project, Session } from "./api.js";
 import { BellIcon, CheckIcon, CloseIcon } from "./icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import { useFocusTrap } from "./useFocusTrap.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
 // currently ringing" list into an actual event feed: one row per buffered
@@ -230,11 +231,40 @@ export function NotificationBell({
       const target = e.target as Node;
       if (btnRef.current?.contains(target)) return;
       if (panelRef.current?.contains(target)) return;
+      // P11 — see PaneTab.tsx's identical outside-click handler for why
+      // this suppresses the mousedown's own default focus shift: without
+      // it, that default action (focus whatever was clicked, or
+      // document.body) wins the race against useFocusTrap's restore-on-close
+      // cleanup below.
+      e.preventDefault();
       setOpen(false);
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
   }, [open]);
+
+  // P11 — this popover previously had no focus management: no role="dialog",
+  // no focus-in on open, no Tab trap, no focus-restore on close. Same shared
+  // hook as Settings/CommandPalette/PaneTab's menu. No `aria-modal` — same
+  // "no backdrop, background stays interactive" rule as PaneTab's menu and
+  // UnifiedBoard.tsx's drawer.
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
+    active: open,
+    containerRef: panelRef,
+  });
+  // Escape scoped to the popover's own onKeyDown (bubbling), not a
+  // window-level listener — same reasoning as PaneTab's menu/UnifiedBoard's
+  // drawer: a global listener would also catch an Escape meant for some
+  // other overlay (the command palette, Settings) sitting above the
+  // toolbar.
+  const onPanelKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    onTrapKeyDown(e);
+  };
 
   // The toolbar's mobile breakpoint (styles.css's max-width:699px block)
   // changes .toolbar-lead's width, so the bell can move under the panel on a
@@ -318,6 +348,9 @@ export function NotificationBell({
             className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu notif-panel`}
             style={{ position: "fixed", top: pos.top, left: pos.left }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={onPanelKeyDown}
+            role="dialog"
+            aria-label="Notifications"
           >
             <div className="notif-panel-header">
               <span className="notif-panel-title">Notifications</span>
@@ -368,6 +401,12 @@ export function NotificationBell({
                             item={item}
                             session={sessions.find((s) => s.id === item.sessionId)}
                             onOpen={(session) => {
+                              // P11 — opening a session/timeline moves focus
+                              // to whatever it opened (a terminal pane, per
+                              // PR13/U7); suppress the trap's restore so it
+                              // doesn't fight that by snapping focus back to
+                              // the bell button right after.
+                              suppressRestore();
                               setOpen(false);
                               (onOpenTimeline ?? onOpenSession)(session);
                             }}

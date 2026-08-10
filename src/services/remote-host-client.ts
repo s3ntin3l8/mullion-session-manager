@@ -35,8 +35,10 @@ import type {
   PruneWorktreesResult,
   RemoveIfCleanResult,
   RemoveListedWorktreeResult,
+  WorktreeResult,
 } from "./git-worktree.js";
 import type { DeleteBranchResult } from "./git-branch-delete.js";
+import type { PushResult } from "./git-push.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -114,6 +116,26 @@ const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
 // enough for.
 const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
+
+// #484 — the four new task-git proxy calls each wrap an agent-side git
+// shell-out with its own timeout (git-push.ts/git-refs.ts/git-status.ts/
+// git-worktree.ts), every one of which is already well above
+// REQUEST_TIMEOUT_MS's 5s. Without an override here, this client would
+// raise HostUnreachableError while the agent's own git call is still
+// running — e.g. reporting push-failed on a branch that actually landed.
+// Each constant below is the agent-side budget plus headroom, following the
+// same "real, non-error delay this proxy must not preempt" reasoning as
+// PREVIEW_REQUEST_TIMEOUT_MS/UPLOAD_REQUEST_TIMEOUT_MS above.
+/** git-push.ts's GIT_TIMEOUT_MS is 30s (one `git push`). */
+const GIT_PUSH_REQUEST_TIMEOUT_MS = 35_000;
+/** git-refs.ts's GIT_TIMEOUT_MS is 10s, and resolveDefaultBaseRef can run up
+ * to 4 sequential git calls (fetch, symbolic-ref, 2x rev-parse candidates)
+ * before this route's own resolveCommitSha adds a 5th. */
+const GIT_BASE_REF_REQUEST_TIMEOUT_MS = 60_000;
+/** git-worktree.ts's GIT_TIMEOUT_MS is 15s (one `git worktree add`). */
+const GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS = 20_000;
+/** git-status.ts's GIT_TIMEOUT_MS is 5s (one `git status`). */
+const GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS = 10_000;
 
 // Issue #345 — a dock-preview worktree's checkout/force-remove/sync
 // (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
@@ -486,9 +508,19 @@ export class RemoteHostClient {
    * `isRepo: true, status: null` is a transient `git status` failure on the
    * agent side. Callers must not collapse these back into a single
    * `GitStatus | null` — that's the exact ambiguity this shape exists to
-   * avoid. */
-  resolveGitStatus(cwd: string): Promise<{ isRepo: boolean; status: GitStatus | null }> {
-    return this.request(`/internal/git-status?cwd=${encodeURIComponent(cwd)}`);
+   * avoid. `opts.fresh` (#484) requests the same cache-bypassing read
+   * task-promote.ts's local dirty-tree gate already uses — a stale "clean"
+   * result could let a push silently exclude work committed moments ago
+   * (see the route's own comment). Every existing caller (sidebar/GitPanel
+   * polls) omits it and keeps the cached read, at the default timeout. */
+  resolveGitStatus(
+    cwd: string,
+    opts?: { fresh?: boolean },
+  ): Promise<{ isRepo: boolean; status: GitStatus | null }> {
+    const url = `/internal/git-status?cwd=${encodeURIComponent(cwd)}${opts?.fresh ? "&fresh=1" : ""}`;
+    return opts?.fresh
+      ? this.request(url, undefined, GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS)
+      : this.request(url);
   }
 
   /** Local branches + worktrees (issue #162), plus remote-tracking branches
@@ -702,6 +734,67 @@ export class RemoteHostClient {
    * from a host-reachability 5xx. */
   resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
     return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Resolves this agent's default base ref (and its pinned commit SHA) on
+   * its own filesystem (#484) — mirrors /internal/git-base-ref's
+   * `{ baseRef, sha }` shape. `resolveDefaultBaseRef` runs `git fetch
+   * origin` first, hence the raised timeout — see the constant's own
+   * comment. Never throws for a git-level failure: a non-repo cwd resolves
+   * `{ baseRef: "HEAD", sha: null }`, the same last-resort fallback the
+   * local path produces. */
+  resolveHostBaseRef(cwd: string): Promise<{ baseRef: string; sha: string | null }> {
+    return this.request(
+      `/internal/git-base-ref?cwd=${encodeURIComponent(cwd)}`,
+      undefined,
+      GIT_BASE_REF_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** Pushes a task's branch to `origin` on this agent's own filesystem
+   * (#484) — mirrors /internal/git-push's `PushResult` shape. `cwd` must be
+   * the task's worktree path, not the bare project root — see that route's
+   * own comment. The token crosses once, over this already-signed,
+   * IP-pinned channel; never logged by this method or the route it calls. */
+  resolvePushBranch(cwd: string, branch: string, token: string): Promise<PushResult> {
+    return this.request(
+      "/internal/git-push",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, branch, token }),
+      },
+      GIT_PUSH_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** Lists this agent's own on-disk task-worktree directories (#484) — for
+   * the primary's boot-time orphan sweep (plugins/task-watcher.ts). Mirrors
+   * /internal/git-worktree/task-dirs's `{ dirs }` shape; a pure filesystem
+   * read, so the default timeout is fine. */
+  async resolveTaskWorktreeDirs(cwd: string): Promise<string[]> {
+    const result = await this.request<{ dirs: string[] }>(
+      `/internal/git-worktree/task-dirs?cwd=${encodeURIComponent(cwd)}`,
+    );
+    return result.dirs;
+  }
+
+  /** Checks out an existing `mullion/task-<id>` branch into a fresh
+   * worktree on this agent's own filesystem (#484) — for Retry (#483) on a
+   * remote-hosted task. Mirrors /internal/git-worktree/resume's
+   * `WorktreeResult | null` shape; `null` (not thrown) means the resume
+   * failed for a git-level reason, same "not applicable, not unreachable"
+   * posture as resolveCreateWorktree above. */
+  resolveResumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+    return this.request(
+      "/internal/git-worktree/resume",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, branchName }),
+      },
+      GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS,
+    );
   }
 
   async spawn(opts: SpawnSessionOptions): Promise<SpawnResult> {
