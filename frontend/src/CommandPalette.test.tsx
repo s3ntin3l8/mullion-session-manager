@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store.js";
 import { DEFAULT_SETTINGS } from "./api.js";
-import type { Launcher, Project } from "./api.js";
+import type { Launcher, Project, Session, Workspace } from "./api.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
 // for the current project plus a link into Settings -> Integrations.
@@ -54,6 +54,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={onOpenGitHub}
         onOpenGit={vi.fn()}
@@ -79,6 +80,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={onOpenGit}
@@ -104,6 +106,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -129,6 +132,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -154,6 +158,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -179,6 +184,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={null}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -204,6 +210,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -228,6 +235,7 @@ describe("CommandPalette -> Integrations section", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -298,6 +306,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -339,6 +348,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -381,6 +391,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -412,6 +423,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -497,6 +509,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -522,6 +535,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -551,6 +565,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -580,6 +595,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -624,6 +640,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -656,6 +673,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -689,6 +707,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         projectId={PROJECT.id}
         onClose={vi.fn()}
         onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
@@ -719,5 +738,315 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
     expect(onCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ skipPermissions: true }),
     );
+  });
+});
+
+// U2 (audit finding: "⌘K is a launcher, not a switcher") — the Sessions and
+// Workspaces result groups, plus the flattened keyboard nav across all three
+// groups (Sessions -> Workspaces -> Matching commands).
+describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
+  const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
+
+  // Same full-shape fixture convention as SessionRow.test.tsx's own
+  // makeSession — Session has no optional fields, so every test that wants a
+  // session in the store needs the complete object, not just the few fields
+  // the assertion cares about.
+  function makeSession(overrides: Partial<Session> = {}): Session {
+    return {
+      id: 1,
+      projectId: PROJECT.id,
+      parentSessionId: null,
+      name: null,
+      nameLocked: false,
+      command: "claude code",
+      cwd: null,
+      kind: "terminal",
+      status: "active",
+      createdAt: "",
+      lastAttachedAt: null,
+      alive: true,
+      subscriberCount: 0,
+      activity: "idle",
+      lastActivityAt: null,
+      liveCwd: null,
+      previewBranch: null,
+      attention: false,
+      attentionAt: null,
+      lastTitle: null,
+      gateState: "idle",
+      gatePrompt: null,
+      promoteState: "idle",
+      promoteSummary: null,
+      promoteSuggestedBaseRef: null,
+      permissionState: "idle",
+      planState: "idle",
+      errorState: "idle",
+      endedReason: null,
+      liveBranch: null,
+      exitCode: null,
+      attentionKind: null,
+      errorDetail: null,
+      lastAssistantMessage: null,
+      compactState: "idle",
+      subagentCount: 0,
+      subagents: [],
+      elicitationState: "idle",
+      elicitationServer: null,
+      lastTurnEndedAt: null,
+      stateRestored: true,
+      staleHooks: false,
+      restoredVersion: null,
+      sessionStatus: "idle",
+      sessionStatusSeverity: "dormant",
+      sessionStatusDetail: null,
+      sessionStatusAttentionRequired: false,
+      hookEmits: [],
+      pendingDevServerPort: null,
+      outstandingBackgroundTasks: [],
+      ...overrides,
+    };
+  }
+
+  function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
+    return {
+      id: 1,
+      name: "Default",
+      groupId: null,
+      position: 0,
+      layout: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function mockFetch(opts: { onCreateSession?: (body: unknown) => void } = {}) {
+    return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        opts.onCreateSession?.(JSON.parse(String(init.body)));
+        return Promise.resolve(
+          jsonResponse(201, {
+            id: 999,
+            projectId: PROJECT.id,
+            command: "bash",
+            cwd: null,
+            status: "active",
+          }),
+        );
+      }
+      // createSession refreshes the session list afterward (store.ts).
+      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("surfaces a matching session and opens the existing pane on click, not a new one", async () => {
+    const session = makeSession({ id: 42, name: "hotfix runner", liveBranch: "fix/thing" });
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [session], workspaces: [] });
+    vi.stubGlobal("fetch", mockFetch());
+    const onOpenSession = vi.fn();
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={onLaunched}
+        onOpenSession={onOpenSession}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "hotfix");
+
+    expect(await screen.findByText("Sessions")).toBeInTheDocument();
+    // Matched on the session's own name plus its project and branch — same
+    // precedence the CommandPalette.tsx matchingSessions comment documents.
+    await user.click(screen.getByText("hotfix runner"));
+
+    expect(onOpenSession).toHaveBeenCalledWith(session);
+    // The whole point of this group: it opens the EXISTING pane, it never
+    // goes through the create-a-new-session path.
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
+
+  it("does not surface a killed or dock session", async () => {
+    const killed = makeSession({ id: 2, name: "killed one", status: "killed" });
+    const dock = makeSession({ id: 3, name: "dock monitor", kind: "dock" });
+    const live = makeSession({ id: 4, name: "matchme live" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [killed, dock, live],
+      workspaces: [],
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
+
+    await screen.findByText("matchme live");
+    expect(screen.queryByText("killed one")).not.toBeInTheDocument();
+    expect(screen.queryByText("dock monitor")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a matching workspace and switches to it on click", async () => {
+    const workspace = makeWorkspace({ id: 9, name: "Release train" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      workspaces: [workspace],
+      activeWorkspaceId: null,
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={onClose}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+
+    expect(await screen.findByText("Workspaces")).toBeInTheDocument();
+    await user.click(screen.getByText("Release train"));
+
+    expect(useDashboardStore.getState().activeWorkspaceId).toBe(9);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("arrow-keys and Enter navigate Sessions -> Workspaces -> Matching commands as one flattened list", async () => {
+    const session = makeSession({ id: 5, name: "bashful session" });
+    const workspace = makeWorkspace({ id: 3, name: "bashful workspace" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [session],
+      workspaces: [workspace],
+    });
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={onOpenSession}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    // Matches all three groups: the session/workspace names both contain
+    // "bash", and "bash" is also the shell launcher's own title.
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await screen.findByText("bashful session");
+    await screen.findByText("bashful workspace");
+
+    // Typing resets selection to index 0 -> the first Sessions row is
+    // highlighted by default. Two ArrowDowns walk Sessions -> Workspaces ->
+    // Matching commands (one flattened index across all three groups), then
+    // Enter should launch the bash command, not reopen the session or
+    // switch the workspace.
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "bash" }));
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(useDashboardStore.getState().activeWorkspaceId).not.toBe(3);
+  });
+
+  it("does not show a Sessions or Workspaces group on an empty query", async () => {
+    const session = makeSession({ id: 8, name: "idle session" });
+    const workspace = makeWorkspace({ id: 6, name: "idle workspace" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [session],
+      workspaces: [workspace],
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+
+    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
+    expect(screen.queryByText("idle session")).not.toBeInTheDocument();
+    expect(screen.queryByText("idle workspace")).not.toBeInTheDocument();
   });
 });

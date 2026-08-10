@@ -2164,6 +2164,7 @@ export function App() {
             useDashboardStore.getState().clearSplitRequest();
           }}
           onLaunched={handleLaunched}
+          onOpenSession={onOpenSession}
           onOpenTasks={onOpenTasks}
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
