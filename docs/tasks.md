@@ -2,9 +2,11 @@
 
 Task Master turns a GitHub issue — or a task created directly in the
 dashboard — into an autonomously-worked, reviewed, and promoted pull
-request: an agent claims the task into an isolated worktree, works it,
-and a human (or, for the review step, an optional advisory agent)
-decides whether to approve or send it back.
+request: an agent claims the task into an isolated worktree, works it, an
+optional review agent looks at the diff, and a human decides whether to
+approve or send it back — the review agent itself can only trigger one
+bounded round of automatic rework before that human decision, never
+approve/reject on its own.
 
 **Gate:** whether Task Master is enabled — deploy-time default
 `MULLION_TASK_MASTER_ENABLED` (`false`), overridable at runtime from
@@ -100,6 +102,14 @@ failed      → backlog, ready
   `in_progress`) is a real, reachable edge: the reconciler polls on an
   interval, and a task whose agent finishes its very first turn between two
   polls is legitimately never observed `in_progress` in between.
+- **`reviewing → in_progress`** has two triggers, one human and one
+  automatic. The human one is Reject (see below). The automatic one is the
+  review-findings loop's own auto-return (`#569`'s follow-up — see Agent
+  selection's review-agent paragraph): once, per task, when the review
+  agent's findings are non-empty and `taskMaster.enabled`. Both land on the
+  same target status; `recordTaskTransition`'s `via` tag (`"reject"` vs.
+  `"review-feedback"`) is what tells them apart in the transition log and
+  the `/ws/tasks` stream.
 - **`* → failed`** fires automatically on session exit (a `claimed`/
   `in_progress` task whose session dies is failed, not left pointing at a
   dead session forever) or on exceeding the per-task time budget (see
@@ -165,8 +175,9 @@ the original session board used.
 - Clicking a card opens its detail as an inline drawer on the board's own
   right side (not a separate panel) with Claim/Approve/Reject/Retry/Give
   up, the worker session's embedded timeline, and — when a review agent is
-  configured — a distinct "Review (advisory)" card with the review agent's
-  own timeline. Claim, Approve, and Retry (`#483`) are disabled (with an
+  configured — a distinct "Review" card with the review agent's own
+  timeline, its captured findings text, and (once the task has auto-returned)
+  a round indicator. Claim, Approve, and Retry (`#483`) are disabled (with an
   explanatory hint) whenever Task Master is off, since all three spawn or
   promote autonomous work; Reject and Give up stay enabled — see the
   Safety envelope table below for why. The board and local CRUD are not
@@ -200,7 +211,7 @@ Two independent choices are resolved per task, most-specific tier wins:
    Agent dropdown, or `projects.defaultAgent` directly).
 3. The install-wide `settings.launchers.defaultAgent`.
 
-**Review agent** (the optional advisory reviewer — see below):
+**Review agent** (the optional reviewer — see below):
 
 1. The issue body's own `ReviewAgent: <name>` line.
 2. The owning project's `defaultReviewAgent` setting.
@@ -220,13 +231,48 @@ own `agentCommand` field — so the task board can show which agent actually
 ran a task without re-deriving precedence after the fact (the issue body,
 project setting, or global default could all have changed since).
 
-**The review agent is advisory only.** It runs once, in the worker's own
-worktree (the worker's turn is already over by the time `reviewing` is
-entered, so there's no concurrent-write race), seeded with the task's
-title/body and pointed at the diff ("Review this task's diff. You are not
-expected to make changes."), and posts findings — it has **no** path to
-approve, reject, or otherwise transition the task. That decision is always
-a human's, via the Claim/Approve/Reject buttons in the task detail panel.
+**The review agent is not purely advisory — it can drive one bounded round
+back to the worker.** It runs once per `reviewing` entry, in the worker's own
+worktree (the worker's turn is already over, so there's no concurrent-write
+race), seeded with the task's title/body and pointed at the diff ("Review
+this task's diff. You are not expected to make changes."). It has **no**
+path to approve, reject, or send a task to `done`/`failed` — approve and
+reject stay a human's call, via the buttons in the task detail panel. What
+it CAN do:
+
+- **Write findings** to a round-suffixed file outside the worktree
+  (`task-prompt.ts`'s `taskReviewFindingsPath` — writing inside the worktree
+  would dirty it and block approve's own clean-tree check). The reconciler
+  (`task-reconciler.ts`'s `processReviewingTasks`) reads this back once the
+  review session's turn ends, posts it as a comment on the task's PR
+  (falling back to the linked issue), and appends it to `tasks.reviewFindings`
+  — durable across the worktree's own eventual removal, and rendered in the
+  task detail drawer's Review card.
+- **Trigger one automatic `reviewing → in_progress` round.** If those
+  findings are non-empty and this task hasn't already used its one round
+  (`tasks.reviewRounds < 1`, a counter that's incremented but **never
+  reset** — not by Retry, not by a human Reject, so a task auto-returns at
+  most once across its whole lifecycle) and `taskMaster.enabled`: the task
+  flips back to `in_progress` and the worker is re-seeded with the findings
+  as its prompt (`task-reseed.ts`'s `reseedTaskIfSessionExited`, called with
+  `force: true`). That force flag matters: unlike Reject's own re-seed
+  (which leaves a still-alive session alone, since a human is expected to
+  type into it themselves), the worker's own prompt tells it to "End your
+  turn and stay running" — so the common case here is a still-`active` but
+  genuinely idle session with nobody watching to feed it anything. `force`
+  terminates that survivor first, then always spawns fresh via the same
+  argv-prompt mechanism every other Task Master spawn uses — it never
+  injects keystrokes into a live, possibly mid-tool-call TUI.
+- A task with **zero findings** (or a review agent whose adapter can't
+  receive a seed at all — see `reviewSeedDelivered` below) simply stays in
+  `reviewing`; the findings comment still posts ("Review complete — no
+  findings."), so a finished review is never silently invisible, but nothing
+  auto-transitions.
+
+`processReviewingTasks` is a genuinely separate poll from the
+claimed/in_progress reconcile loop (see the Lifecycle section's own note):
+it never touches session liveness or the time budget, and it must run even
+on a tick with zero claimed/in_progress tasks.
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
 initial-turn argv** (e.g. `claude -- '<prompt>'`, `agy -i='<prompt>'`),

@@ -53,6 +53,7 @@ const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
+const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
 
@@ -845,6 +846,212 @@ describe("reconcileTasks", () => {
       expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
       expect(row.prUrl).toBeNull();
       expect(row.prNumber).toBeNull();
+
+      await app.close();
+    });
+  });
+
+  describe("review-findings loop (processReviewingTasks)", () => {
+    // Only the given session ids report "finished" — every other id (in
+    // particular a worker session freshly re-spawned by THIS SAME
+    // reconcileTasks() call's own processReviewingTasks pass, before the
+    // claimed/in_progress loop's own SELECT runs) reports plain idle
+    // silence. A blanket "everyone is finished" mock would make that
+    // brand-new session look already-finished too, and the claimed/
+    // in_progress loop — which reads its rows AFTER processReviewingTasks
+    // runs, in the same call — would immediately flip it straight back to
+    // "reviewing" a second time, a false cascade this mock exists to avoid
+    // (a real freshly-spawned session has no Stop hook fired yet).
+    function mockFinishedSessionIds(app: Awaited<ReturnType<typeof buildApp>>, ...ids: number[]) {
+      const finished = new Set(ids.map(String));
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              finished.has(String(id)) ? fakeInfo({ lastTurnEndedAt: Date.now() }) : fakeInfo(),
+          }) as never,
+      );
+    }
+
+    async function claimIntoReviewing(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      reviewAgent: string,
+    ) {
+      const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
+        app,
+        "claimed",
+        reviewAgent,
+      );
+      // createSessionAndTaskWithReviewAgent (shared with the review-agent
+      // describe block above) never sets agentCommand — a real claim always
+      // does (task-claim.ts). reseedTaskIfSessionExited's own guard
+      // silently no-ops without it, so it must be set here for the
+      // auto-return path this describe block actually exercises.
+      app.db.update(tasks).set({ agentCommand: "bash" }).where(eq(tasks.id, taskId)).run();
+      mockFinishedSessionIds(app, workerSessionId);
+      await reconcileTasks(app);
+      const row = await getTask(app, taskId);
+      const reviewSessionId = row.reviewSessionId as number;
+      // From here on, only the REVIEW session (not any later re-spawned
+      // worker session) reports finished — see this function's own doc
+      // comment above.
+      mockFinishedSessionIds(app, reviewSessionId);
+      return { taskId, workerSessionId, reviewSessionId };
+    }
+
+    function writeFindings(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      taskId: number,
+      round: number,
+      content: string,
+    ) {
+      const findingsPath = taskReviewFindingsPath(
+        path.dirname(app.pty.hookSocketPath),
+        taskId,
+        round,
+      );
+      fs.writeFileSync(findingsPath, content);
+    }
+
+    it("ingests non-empty findings, appends them, and auto-returns to in_progress exactly once", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "Fix the null check on line 42.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(row.reviewRounds).toBe(1);
+      expect(row.reviewFindings).toContain("Fix the null check on line 42.");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      // The worker session was force-terminated and replaced — nobody was
+      // watching the idle survivor to type the findings in themselves.
+      expect(row.sessionId).not.toBe(workerSessionId);
+      expect(row.sessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("records a 'no findings' entry and stays in reviewing when the review agent wrote nothing", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // Deliberately no writeFindings call — the prompt tells the agent not
+      // to create the file at all when it has nothing to report.
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("no findings");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    it("does not re-ingest (or re-comment) an already-processed review session's output on a later tick", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+
+      await reconcileTasks(app);
+      const afterFirst = await getTask(app, taskId);
+
+      await reconcileTasks(app);
+      const afterSecond = await getTask(app, taskId);
+
+      expect(afterSecond.reviewFindings).toBe(afterFirst.reviewFindings);
+      expect(afterSecond.status).toBe(afterFirst.status);
+
+      await app.close();
+    });
+
+    it("does not auto-return once reviewRounds already used its one round — findings are still captured", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-bounded", cwd: "/tmp" },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "already used its round",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          reviewRounds: 1,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      mockFinishedSessionIds(app, reviewSession.json().id);
+      writeFindings(app, task.id, 1, "A second-round finding, arriving too late to auto-return.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(1);
+      expect(row.reviewFindings).toContain("arriving too late to auto-return");
+      expect(row.sessionId).toBe(workerSession.json().id);
+
+      await app.close();
+    });
+
+    it("does not auto-return while Task Master is disabled, even with non-empty findings", async () => {
+      const app = await buildApp();
+      try {
+        const { taskId, workerSessionId } = await claimIntoReviewing(app, "codex");
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        writeFindings(app, taskId, 0, "Findings nobody will act on automatically.");
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewFindings).toContain("Findings nobody will act on automatically");
+        expect(row.sessionId).toBe(workerSessionId);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("runs even on a tick with zero claimed/in_progress tasks", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "Should still be picked up.");
+      // No other claimed/in_progress task exists at this point — the
+      // claimed/in_progress loop's own `rows.length === 0` early return
+      // must not skip this task's processing.
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.reviewFindings).toContain("Should still be picked up");
 
       await app.close();
     });
