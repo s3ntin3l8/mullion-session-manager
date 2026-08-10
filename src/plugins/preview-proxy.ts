@@ -127,6 +127,57 @@ function stripPreviewTokenParam(search: string): string {
   return rest ? `?${rest}` : "";
 }
 
+// Finding AS4 — this hop's fetch() target (buildUpstreamUrl's own
+// resolution: a `kind: "external"` preview is a URL the operator typed into
+// a browser pane, i.e. attacker-chosen the moment that preview points
+// somewhere hostile) must never see either credential a client attaches to
+// reach the preview proxy itself. Mirrors http-proxy.ts's own
+// extraExcluded stripping of "authorization" for the agent's own onward hop
+// to its loopback dev server ("that secret must never reach arbitrary
+// project dev-server code" — see buildUpstreamRequestHeaders' doc comment)
+// — the primary's direct-fetch hop used to pass no exclusions at all, on
+// the assumption no client ever sends that header to a preview host, which
+// doesn't hold once the target is attacker-controlled. "proxy-authorization"
+// is already covered by HOP_BY_HOP_REQUEST_HEADERS below; passed here too
+// so this call site is explicit about both credentials it must never leak,
+// without relying on a reader to cross-reference the other module.
+//
+// The `mullion_preview` auth cookie needs the same treatment but isn't a
+// header http-proxy.ts's own extraExcluded mechanism can strip (it strips
+// whole headers, not individual cookies within "cookie") — stripCookieValue
+// below removes just that one cookie, leaving any other cookie the browser
+// happens to send untouched.
+const PREVIEW_UPSTREAM_EXCLUDED_HEADERS = ["authorization", "proxy-authorization"];
+
+// Removes a single named cookie from a raw Cookie header value, leaving
+// every other cookie in place — used to strip the `mullion_preview`
+// auth cookie (see PREVIEW_UPSTREAM_EXCLUDED_HEADERS' own comment) before
+// forwarding to an upstream this proxy doesn't control.
+function stripCookieValue(cookieHeader: string, name: string): string | undefined {
+  const kept = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .filter((part) => {
+      const eq = part.indexOf("=");
+      const cookieName = eq === -1 ? part : part.slice(0, eq);
+      return cookieName !== name;
+    });
+  return kept.length > 0 ? kept.join("; ") : undefined;
+}
+
+// In-place: strips PREVIEW_COOKIE_NAME out of `headers`' own "cookie" value
+// (or removes the header entirely once it's the only cookie present) — see
+// PREVIEW_UPSTREAM_EXCLUDED_HEADERS' doc comment for why this can't just be
+// another entry in that list.
+function stripPreviewAuthCookie(headers: Headers): void {
+  const cookieHeader = headers.get("cookie");
+  if (!cookieHeader) return;
+  const stripped = stripCookieValue(cookieHeader, PREVIEW_COOKIE_NAME);
+  if (stripped === undefined) headers.delete("cookie");
+  else headers.set("cookie", stripped);
+}
+
 function buildUpstreamUrl(base: URL, requestUrl: string, stripPreviewToken = false): URL {
   const incoming = new URL(requestUrl, "http://placeholder");
   const prefix = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
@@ -211,6 +262,18 @@ async function handlePreviewRequest(
   // API rather than directly.
   if (isRemoteProjectTarget(target)) {
     const headers = buildUpstreamRequestHeaders(request, `127.0.0.1:${portFromUrl(upstreamUrl)}`);
+    // AS4's "authorization" leak is already closed for this hop by a
+    // different, pre-existing mechanism: remote-host-client.ts's own
+    // openPreviewHttp deletes whatever "authorization" this browser-derived
+    // header set carries and replaces it with the primary's own
+    // agent-session bearer token before it ever reaches the wire (issue
+    // #249 — see that file's own comment on why a delete-then-set, not a
+    // conditional one, is required). The `mullion_preview` auth cookie has
+    // no equivalent scrubbing anywhere on this hop, though — the agent's own
+    // onward fetch to its loopback dev server (internal.ts) only strips
+    // "authorization", not "cookie" — so it must be stripped here, same as
+    // the direct-fetch hop below.
+    stripPreviewAuthCookie(headers);
     let upstreamResponse: Response;
     try {
       upstreamResponse = await getRemoteHostClient(app, target.hostId).openPreviewHttp(
@@ -236,7 +299,12 @@ async function handlePreviewRequest(
     return relayFetchResponse(reply, request.method, upstreamResponse, loopbackBase);
   }
 
-  const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host);
+  const headers = buildUpstreamRequestHeaders(
+    request,
+    upstreamUrl.host,
+    PREVIEW_UPSTREAM_EXCLUDED_HEADERS,
+  );
+  stripPreviewAuthCookie(headers);
   const policy = previewUrlPolicy(target);
   let upstreamResponse: Response;
   try {
@@ -303,6 +371,13 @@ async function handlePreviewWsUpgrade(
   head: Buffer,
   slug: string,
 ) {
+  // Finding AS5 — same unconditional per-IP volume meter as the HTTP path's
+  // onRequest hook, applied before the PREVIEW_AUTH_REQUIRED branch below so
+  // it covers HMR upgrade traffic even when that flag is off.
+  if (isPreviewRequestRateLimited(req.socket.remoteAddress, app.config.PREVIEW_RATE_LIMIT_MAX)) {
+    return rejectUpgrade(socket, "429 Too Many Requests");
+  }
+
   // Checked before resolvePreviewTarget, same ordering (and for the same
   // reason) as the HTTP path's onRequest hook below: checking auth only
   // *after* resolving the slug would turn the 404-vs-401 status difference
@@ -463,32 +538,54 @@ type PreviewAuthDecision =
 // XFF-derived and spoofable the moment it does) — so a legitimately
 // cookie-authenticated preview session's own traffic volume never throttles
 // itself; only repeated failed guesses count against the bound.
-const PREVIEW_AUTH_FAILURE_WINDOW_MS = 60_000;
-const PREVIEW_AUTH_FAILURE_MAX = 30;
-const previewAuthFailures = new Map<string, { count: number; windowStart: number }>();
+//
+// Shared bookkeeping for this counter and previewRequestCounts below (AS5)
+// — same shape, different key/window/max per caller. Opportunistic eviction
+// of stale entries on a fresh window starting, rather than a dedicated
+// timer, bounded the same way ManagedBrowser's consoleLogs/pageErrors
+// buffers are, just time- rather than count-keyed. In practice each map
+// holds one entry per distinct active IP, so a size-gated sweep is cheap
+// and rare.
+interface FixedWindowEntry {
+  count: number;
+  windowStart: number;
+}
 
-function isPreviewAuthRateLimited(remoteAddress: string | undefined): boolean {
+function hitFixedWindow(
+  counts: Map<string, FixedWindowEntry>,
+  remoteAddress: string | undefined,
+  windowMs: number,
+  max: number,
+): boolean {
   const key = remoteAddress ?? "unknown";
   const now = Date.now();
-  const entry = previewAuthFailures.get(key);
-  if (!entry || now - entry.windowStart > PREVIEW_AUTH_FAILURE_WINDOW_MS) {
-    previewAuthFailures.set(key, { count: 1, windowStart: now });
-    // Opportunistic eviction of stale entries on a fresh window starting,
-    // rather than a dedicated timer — bounded the same way ManagedBrowser's
-    // consoleLogs/pageErrors buffers are, just time- rather than
-    // count-keyed. In practice this map holds one entry per distinct
-    // offending IP, so a size-gated sweep is cheap and rare.
-    if (previewAuthFailures.size > 1000) {
-      for (const [staleKey, staleEntry] of previewAuthFailures) {
-        if (now - staleEntry.windowStart > PREVIEW_AUTH_FAILURE_WINDOW_MS) {
-          previewAuthFailures.delete(staleKey);
+  const entry = counts.get(key);
+  if (!entry || now - entry.windowStart > windowMs) {
+    counts.set(key, { count: 1, windowStart: now });
+    if (counts.size > 1000) {
+      for (const [staleKey, staleEntry] of counts) {
+        if (now - staleEntry.windowStart > windowMs) {
+          counts.delete(staleKey);
         }
       }
     }
     return false;
   }
   entry.count += 1;
-  return entry.count > PREVIEW_AUTH_FAILURE_MAX;
+  return entry.count > max;
+}
+
+const PREVIEW_AUTH_FAILURE_WINDOW_MS = 60_000;
+const PREVIEW_AUTH_FAILURE_MAX = 30;
+const previewAuthFailures = new Map<string, FixedWindowEntry>();
+
+function isPreviewAuthRateLimited(remoteAddress: string | undefined): boolean {
+  return hitFixedWindow(
+    previewAuthFailures,
+    remoteAddress,
+    PREVIEW_AUTH_FAILURE_WINDOW_MS,
+    PREVIEW_AUTH_FAILURE_MAX,
+  );
 }
 
 /** Test-only: this counter is module-level (not per-app-instance) so a test
@@ -496,6 +593,33 @@ function isPreviewAuthRateLimited(remoteAddress: string | undefined): boolean {
  * happens to run next against the same default injected remoteAddress. */
 export function resetPreviewAuthFailuresForTests(): void {
   previewAuthFailures.clear();
+}
+
+// Finding AS5 — with PREVIEW_AUTH_REQUIRED off (the default), preview-host
+// traffic is exempt from securityPlugin's app-wide rate limiter (see that
+// comment) with NO compensating meter at all: isPreviewAuthRateLimited
+// above only ever runs inside the `if (app.config.PREVIEW_AUTH_REQUIRED)`
+// branch below, so an unauthenticated deployment metered nothing on a
+// surface that can trigger a 30s-lived outbound fetch per request. This is
+// a separate, much more generous per-IP counter than the app-wide default
+// (RATE_LIMIT_MAX, 100/min) — previews legitimately fan out into dozens of
+// subresource requests per page load — but still bounded, applied
+// unconditionally (both HTTP, in the onRequest hook below, and the WS
+// upgrade path in handlePreviewWsUpgrade), and keyed the same
+// forgery-resistant way as every other counter on this path. The ceiling
+// itself is `app.config.PREVIEW_RATE_LIMIT_MAX` (env.ts), not a hardcoded
+// constant — an operator whose dev server's cold load legitimately needs
+// more headroom than the default has a lever, rather than being stuck.
+const PREVIEW_REQUEST_WINDOW_MS = 60_000;
+const previewRequestCounts = new Map<string, FixedWindowEntry>();
+
+function isPreviewRequestRateLimited(remoteAddress: string | undefined, max: number): boolean {
+  return hitFixedWindow(previewRequestCounts, remoteAddress, PREVIEW_REQUEST_WINDOW_MS, max);
+}
+
+/** Test-only, same reasoning as resetPreviewAuthFailuresForTests above. */
+export function resetPreviewRequestCountsForTests(): void {
+  previewRequestCounts.clear();
 }
 
 // Called before resolvePreviewTarget runs at all (see this plugin's onRequest
@@ -597,6 +721,19 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
   app.addHook("onRequest", async (request, reply) => {
     const slug = extractPreviewSlug(request.headers.host, hostPattern);
     if (!slug) return; // not a preview host — fall through to normal routing
+
+    // Finding AS5 — applies unconditionally, before the PREVIEW_AUTH_REQUIRED
+    // branch below: with that flag off (the default), preview-host traffic
+    // is otherwise metered by nothing at all (see isPreviewRequestRateLimited's
+    // own doc comment).
+    if (
+      isPreviewRequestRateLimited(
+        request.raw.socket.remoteAddress,
+        app.config.PREVIEW_RATE_LIMIT_MAX,
+      )
+    ) {
+      return reply.tooManyRequests("too many preview requests — try again later");
+    }
 
     // Preview-host auth token (issue #383) — opt-in, default off (see
     // plugins/env.ts). Checked here, before handlePreviewRequest (and

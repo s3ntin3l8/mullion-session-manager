@@ -21,7 +21,7 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-function verifySignature(payload: string, signature: string, secret: string): boolean {
+function verifySignature(payload: string | Buffer, signature: string, secret: string): boolean {
   const expected = `sha256=${crypto.createHmac("sha256", secret).update(payload).digest("hex")}`;
   return timingSafeEqual(expected, signature);
 }
@@ -52,6 +52,28 @@ interface GitHubPushPayload {
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
+  // GitHub's HMAC (X-Hub-Signature-256) is computed over the exact bytes it
+  // sent on the wire. Fastify's inherited `application/json` parser hands
+  // this handler an already-*parsed* object, so reconstructing "the same
+  // bytes" via `JSON.stringify(request.body)` is a lossy re-serialization —
+  // a payload that doesn't round-trip byte-identically (key order, unicode
+  // escape variance, whitespace) would silently and permanently 401, and an
+  // empty body makes `request.body === undefined`, and
+  // `JSON.stringify(undefined)` is the *value* `undefined`, not a string, so
+  // `.update(undefined)` used to throw a 500 instead of the intended 401
+  // (AS6). Removing the inherited parsers and installing a single raw-buffer
+  // "*" one captures the exact bytes GitHub signed instead — verify the HMAC
+  // against those, then JSON.parse only after the signature has checked out.
+  // This route is registered as its own top-level plugin (see
+  // `app.register(webhookRoutes)` in app.ts), so it already has its own
+  // encapsulated Fastify context — these parser calls only affect this
+  // route, the same isolation internal.ts's own dev-server-proxy route
+  // documents for the identical pattern.
+  app.removeAllContentTypeParsers();
+  app.addContentTypeParser("*", { parseAs: "buffer" }, (_req, payload, done) => {
+    done(null, payload);
+  });
+
   // No route-level auth — HMAC-SHA256 is the trust mechanism. GitHub can't
   // send custom auth headers. The webhook handler is unauthenticated at the
   // app level and relies entirely on signature verification.
@@ -69,8 +91,13 @@ export async function webhookRoutes(app: FastifyInstance) {
         return reply.code(401).send({ error: "missing signature" });
       }
 
-      const rawBody =
-        typeof request.body === "string" ? request.body : JSON.stringify(request.body);
+      // The raw bytes captured by the content-type parser above — a Buffer,
+      // except when GitHub sends a genuinely empty POST with no
+      // Content-Type header at all, which no parser matches, leaving
+      // request.body undefined. Falling back to an empty Buffer keeps the
+      // HMAC comparison well-defined (it will simply never match a real
+      // signature) rather than throwing.
+      const rawBody: Buffer = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
       if (!verifySignature(rawBody, signature, secret)) {
         return reply.code(401).send({ error: "invalid signature" });
       }
@@ -80,8 +107,12 @@ export async function webhookRoutes(app: FastifyInstance) {
         return reply.code(200).send({ ok: true });
       }
 
-      const payload: GitHubPushPayload =
-        typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+      let payload: GitHubPushPayload;
+      try {
+        payload = rawBody.length > 0 ? JSON.parse(rawBody.toString("utf8")) : {};
+      } catch {
+        return reply.code(400).send({ error: "invalid JSON body" });
+      }
       const repoFullName: string | undefined = payload?.repository?.full_name;
       if (!repoFullName) {
         return reply.code(200).send({ ok: true });

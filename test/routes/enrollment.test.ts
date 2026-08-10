@@ -355,6 +355,35 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
         delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
       }
     });
+
+    // Finding AS7: this gate now reads the raw socket's remoteAddress (via
+    // getRawRemoteAddress), the same source security.ts and preview-proxy.ts
+    // already use, instead of request.ip — which this app never enables
+    // trustProxy for, but would otherwise become X-Forwarded-For-forgeable
+    // the day that changes (this app deploys behind Traefik, per CLAUDE.md).
+    // Proof: an X-Forwarded-For header naming an address OUTSIDE the allowed
+    // range must not influence the decision at all — only the connection's
+    // own (in-range) remoteAddress matters, exactly as the other three
+    // call sites document.
+    it("ignores X-Forwarded-For entirely — only the raw connection address is checked", async () => {
+      process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "127.0.0.0/8";
+      try {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/internal/register",
+          payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.15:4000", hostname: "x" },
+          headers: { "x-forwarded-for": "203.0.113.9" }, // outside the allowed range
+          remoteAddress: "127.0.0.1", // inside the allowed range
+        });
+        expect(res.statusCode).toBe(200);
+        await app.close();
+      } finally {
+        delete process.env.MULLION_ENROLLMENT_SECRET;
+        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
+      }
+    });
   });
 });
 

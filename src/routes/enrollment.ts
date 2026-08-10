@@ -10,6 +10,7 @@ import {
 } from "../services/host-registry.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
+import { getRawRemoteAddress } from "../services/raw-remote-address.js";
 
 // Issue #245 / roadmap 7.1 — the primary-side half of agent-initiated
 // registration — plus, below, issue #248 / roadmap 7.3's graceful
@@ -166,7 +167,12 @@ export async function enrollmentRoute(app: FastifyInstance) {
       const enrollmentSecret = app.config.MULLION_ENROLLMENT_SECRET;
       if (enrollmentSecret && timingSafeTokenMatch(token, enrollmentSecret)) {
         const allowedCidrs = app.config.MULLION_ENROLLMENT_ALLOWED_CIDRS;
-        if (allowedCidrs && !isIpAllowed(request.ip, allowedCidrs)) {
+        // request.raw.socket.remoteAddress, not request.ip — see
+        // getRawRemoteAddress's own doc comment. `.ip` is XFF-forgeable the
+        // moment trustProxy is enabled, which would let any external caller
+        // bypass this CIDR gate on a grant env.ts itself calls "arbitrary-
+        // command-execution trust" (AS7).
+        if (allowedCidrs && !isIpAllowed(getRawRemoteAddress(request), allowedCidrs)) {
           return reply.forbidden("peer address not in MULLION_ENROLLMENT_ALLOWED_CIDRS");
         }
         const enrolled = enrollHost(app, input);
