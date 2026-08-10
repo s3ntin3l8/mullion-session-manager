@@ -55,6 +55,19 @@ vi.mock("node-pty", () => ({
   }),
 }));
 
+// Perf audit finding B8(2) — PtyManager.isMasterAliveBatch replies with
+// `systemctl --user list-units ... crs-session-*.scope`, one call for the
+// whole batch, instead of one `is-active` spawn per id. Tracked here (same
+// approach as test/routes/internal.test.ts's own mock) by recording every
+// unit name a fake `systemd-run -u <unit>` spawn below "activates", so
+// list-units' fake reply matches whichever sessions this file has actually
+// spawned so far — this file's own `reconcileExitedSessions` calls need a
+// real per-unit answer, not the `is-active` branch's blanket "always
+// active" shortcut (which has no equivalent for list-units: an empty/
+// generic reply would report every id as not-alive and mass-flip this
+// file's real local sessions to "exited").
+const activeScopeUnits = new Set<string>();
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -72,7 +85,32 @@ vi.mock("node:child_process", async (importOriginal) => {
         });
         return ee;
       }
-      if ((file === "systemctl" && args[1] === "stop") || file === "systemd-run") {
+      if (file === "systemctl" && args[1] === "list-units") {
+        ee.stdout = new EventEmitter();
+        setImmediate(() => {
+          ee.emit("exit", 0);
+          setImmediate(() => {
+            const lines = [...activeScopeUnits]
+              .map((unit) => `${unit} loaded active running ${unit}`)
+              .join("\n");
+            ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
+            ee.emit("close", 0);
+          });
+        });
+        return ee;
+      }
+      if (file === "systemd-run") {
+        // args: ["--user", "--scope", "--collect", "-u", unitName, "--", ...]
+        const unitIndex = args.indexOf("-u");
+        if (unitIndex !== -1 && args[unitIndex + 1]) {
+          activeScopeUnits.add(`${args[unitIndex + 1]}.scope`);
+        }
+        setImmediate(() => ee.emit("exit", 0));
+        return ee;
+      }
+      if (file === "systemctl" && args[1] === "stop") {
+        const unit = args[2];
+        if (unit) activeScopeUnits.delete(unit);
         setImmediate(() => ee.emit("exit", 0));
         return ee;
       }

@@ -192,13 +192,13 @@ class LocalBackend implements SessionBackend {
     return result;
   }
 
+  // Perf audit finding B8(2) — used to Promise.all(ids.map(id =>
+  // app.pty.isMasterAlive(id))): one `systemctl --user is-active` subprocess
+  // spawn per active session, every reconcile tick. isMasterAliveBatch
+  // (pty-manager.ts) does the equivalent check with a single `systemctl
+  // --user list-units` spawn for the whole batch.
   async isMasterAlive(ids: string[]): Promise<Record<string, boolean>> {
-    const entries = await Promise.all(
-      ids.map(async (id) => [id, await this.app.pty.isMasterAlive(id)] as const),
-    );
-    const result: Record<string, boolean> = Object.create(null);
-    for (const [id, alive] of entries) result[id] = alive;
-    return result;
+    return this.app.pty.isMasterAliveBatch(ids);
   }
 
   async terminate(id: string): Promise<void> {

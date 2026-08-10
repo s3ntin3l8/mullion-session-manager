@@ -41,7 +41,7 @@ import {
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
-import { isPathGitIgnored } from "./git-ignore.js";
+import { isPathGitIgnoredCached } from "./git-ignore.js";
 import type {
   HookMessageKind,
   HookMessage,
@@ -956,6 +956,20 @@ export class Session {
   // arrived, even though emitHookEvent() itself stays synchronous for every
   // other message kind.
   private fileChangeQueue: Promise<void> = Promise.resolve();
+  // Perf audit finding B8(3) — memoizes isPathGitIgnoredCached's
+  // check-ignore results (both a directory-level "is this whole directory
+  // excluded" answer and, for a directory that isn't, per-file answers —
+  // see that function's own doc comment for why both levels are needed
+  // for correctness, not just directory-level) for this session's whole
+  // lifetime (cleared in kill() below, alongside this class's other
+  // per-lifetime state). Real edits overwhelmingly cluster in a handful of
+  // directories, so this eliminates the vast majority of redundant `git
+  // check-ignore` subprocess spawns an agent's multi-file operation would
+  // otherwise cause, one per changed file. Unbounded per session (not an
+  // LRU) — a session realistically touches at most a few hundred distinct
+  // directories/files over its lifetime, nowhere near a memory concern, and
+  // it's fully discarded at kill() either way.
+  private gitIgnoreDirCache = new Map<string, boolean>();
   // True while a nudgeRedraw() repaint is in flight — see nudgeRedraw()'s
   // suppression window. Deliberately dual-purpose (two call sites in onData
   // below both check it) rather than two separate flags with the same
@@ -2375,21 +2389,26 @@ export class Session {
         // issue's motivating case) shouldn't surface as a Row 4 chip.
         // `message.path` isn't normalized by the forwarder (Claude Code sends
         // an absolute path, Codex's apply_patch-derived one is relative —
-        // see forwarder-core.mjs) — isPathGitIgnored resolves it against
-        // `root` itself. `root` prefers the live cwd (a worktree the shell
-        // has since `cd`'d into) over the static spawn cwd, same precedence
-        // as everywhere else liveCwd overrides cwd. `UnknownHookMessage`'s
-        // fallback shape (`kind: string`) means TS can't discriminate this
-        // down to `FileChangeHookMessage` from `message.kind` alone — same
-        // explicit-cast gap the `review_gate` case below documents; safe for
-        // the same reason (hook-protocol.ts's validateFileChange only ever
-        // produces a real FileChangeHookMessage for this kind).
+        // see forwarder-core.mjs) — isPathGitIgnoredCached resolves it
+        // against `root` itself. `root` prefers the live cwd (a worktree the
+        // shell has since `cd`'d into) over the static spawn cwd, same
+        // precedence as everywhere else liveCwd overrides cwd.
+        // `UnknownHookMessage`'s fallback shape (`kind: string`) means TS
+        // can't discriminate this down to `FileChangeHookMessage` from
+        // `message.kind` alone — same explicit-cast gap the `review_gate`
+        // case below documents; safe for the same reason (hook-protocol.ts's
+        // validateFileChange only ever produces a real FileChangeHookMessage
+        // for this kind).
         const fileChange = message as FileChangeHookMessage;
         const root = this._liveCwd ?? this.cwd;
         const { path: filePath, action, agentId } = fileChange;
         this.fileChangeQueue = this.fileChangeQueue
           .then(async () => {
-            const ignored = await isPathGitIgnored(root, filePath);
+            // B8(3) — memoized (gitIgnoreDirCache, this session's whole
+            // lifetime) instead of a fresh `git check-ignore` subprocess
+            // spawn every single call — see isPathGitIgnoredCached's own
+            // doc comment for exactly what is and isn't safe to cache.
+            const ignored = await isPathGitIgnoredCached(root, filePath, this.gitIgnoreDirCache);
             if (ignored) return;
             // Phase 5 (Track A) — attribute to the subagent that made this
             // change, if the hook carried one. Skipped for an ignored path
@@ -2398,7 +2417,7 @@ export class Session {
             if (agentId !== undefined) this.bumpSubagentActivity(agentId, "file_change");
             this.emitEvent("file_change", { path: filePath, action, agentId: agentId ?? null });
           })
-          // isPathGitIgnored itself never rejects, but a listener this
+          // isPathGitIgnoredCached itself never rejects, but a listener this
           // event fans out to (emitEvent's eventListeners) might throw
           // synchronously — without this, that would leave
           // `fileChangeQueue` permanently rejected, silently dropping every
@@ -3161,6 +3180,38 @@ export class Session {
   }
 
   /**
+   * Perf audit finding B8(1) — the LAST `maxBytes` of buffered output, no
+   * mode preamble (unlike getScrollback() above, this isn't replayed to a
+   * reattaching terminal — it only ever feeds a text scan, e.g.
+   * dev-server-detect.ts's banner regex, where alt-screen/mouse-tracking
+   * escape sequences are irrelevant noise). Walks `this.scrollback`'s chunk
+   * list from the newest end, stopping as soon as `maxBytes` is covered,
+   * so this is O(chunks needed to reach maxBytes) rather than
+   * getScrollback()'s O(entire ring) `Buffer.concat` + the caller's own
+   * full `toString("utf8")` copy — the pty.ts dev-server-detect timer
+   * used to pay both costs every 10s for every eligible session
+   * regardless of how much (if any) of a ~1 MiB scrollback ring had ever
+   * changed. A startup banner is virtually always near the most recent
+   * output, so tail-only scanning doesn't meaningfully reduce detection
+   * accuracy.
+   */
+  getScrollbackTail(maxBytes: number): Buffer {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (let i = this.scrollback.length - 1; i >= 0 && total < maxBytes; i--) {
+      const chunk = this.scrollback[i];
+      chunks.push(chunk);
+      total += chunk.length;
+    }
+    chunks.reverse();
+    const tail = Buffer.concat(chunks, total);
+    // The oldest included chunk may itself start well before the maxBytes
+    // boundary — trim to exactly the last maxBytes so a caller's cost bound
+    // holds regardless of how large this session's individual chunks are.
+    return total > maxBytes ? tail.subarray(total - maxBytes) : tail;
+  }
+
+  /**
    * Writes browser/control-socket input into the pty. B9 — routes/terminal.ts's
    * `message` handler (and control-socket.ts's `sessions.input` op, which
    * ultimately calls this too) used to write straight through with no cap,
@@ -3561,6 +3612,13 @@ export class Session {
     // so clear it rather than risk it being misread as a prefix of the new
     // attach-client's first chunk.
     this.detectCarry = "";
+    // B8(3) — this Session instance is permanently done after this kill()
+    // call (see this method's own doc comment above), so the per-session
+    // git-ignore memoization cache has nothing left to serve; drop it
+    // explicitly rather than leaving it to whatever later GC pass reclaims
+    // this whole Session, same "don't leave per-lifetime state dangling"
+    // posture as detectCarry/cwdDetectCarry below.
+    this.gitIgnoreDirCache.clear();
     // Same reasoning as detectCarry just above — a byte-stream artifact of
     // the old attach-client, not meaningful once that stream is gone. Note
     // `_liveCwd` itself is NOT cleared here: it tracks true, ongoing shell
@@ -4172,5 +4230,90 @@ export class PtyManager {
    */
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
     return listScopeProcesses(`${scopeUnitName(id)}.scope`);
+  }
+
+  /**
+   * Perf audit finding B8(2) — batched counterpart to isMasterAlive() above,
+   * for a caller checking liveness of MANY sessions in one go
+   * (session-backend.ts's LocalSessionBackend.isMasterAlive, and
+   * routes/internal.ts's `/internal/sessions/liveness` for a remote agent's
+   * own sessions). Both used to call isMasterAlive(id) once per id via
+   * `Promise.all` — N simultaneous `systemctl --user is-active` subprocess
+   * spawns every reconcile tick, scaling with the number of active
+   * sessions. A single `systemctl --user list-units`, filtered to this
+   * app's own `crs-session-*` scope naming convention (scopeUnitName) and
+   * to active units only, returns every currently-active scope in one
+   * spawn; membership in that result is then a plain in-memory Set lookup
+   * per id, no further subprocesses.
+   *
+   * Trust rule — deliberately NOT the same "unknown collapses to false"
+   * posture isMasterAlive() takes for a single id: `is-active` on one
+   * specific, already-known unit failing IS a real, trustworthy negative
+   * signal for that one unit. A *list-units spawn/parse failure* here is a
+   * different kind of event — an infrastructure problem (systemctl
+   * missing, a `--user` D-Bus hiccup, an unexpected output shape) that
+   * says nothing about whether any particular session is actually alive.
+   * Collapsing that to "every id is false" would mass-flip every active
+   * session to exited on a single transient systemctl error — exactly the
+   * "missing key -> false" mass-exit landmine session-reconciler.ts's own
+   * doc comment calls out and specifically protects against for the
+   * multi-host case (a key a REACHABLE host's response merely omits is
+   * treated as "unknown," never "not alive"). So on spawn error or a
+   * non-zero exit (systemctl's own signal that this list-units call itself
+   * failed, not "no matches" — verified empirically: a `--state=active`
+   * query matching zero units still exits 0 with empty stdout), this
+   * returns an EMPTY record — every id "unknown," not "false" — which
+   * every caller already handles correctly via that same
+   * `alive === undefined` -> skip path. Only a clean, successfully-parsed
+   * response asserts real true/false answers.
+   */
+  isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
+    if (ids.length === 0) return Promise.resolve(Object.create(null));
+
+    return new Promise((resolve) => {
+      let stdout = "";
+      const child = spawnChild(
+        "systemctl",
+        [
+          "--user",
+          "list-units",
+          "--type=scope",
+          "--state=active",
+          "--no-legend",
+          "--plain",
+          "crs-session-*.scope",
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      // Spawn failure (systemctl missing, etc.) — unknown for every id, per
+      // this method's own trust-rule doc comment above.
+      child.on("error", () => resolve(Object.create(null)));
+      // 'close', not 'exit' — same stdout-delivery race isMasterAlive()
+      // guards against above.
+      child.on("close", (code) => {
+        if (code !== 0) {
+          resolve(Object.create(null));
+          return;
+        }
+        // `--plain --no-legend` output is one unit per line: "UNIT LOAD
+        // ACTIVE SUB DESCRIPTION", whitespace-separated (DESCRIPTION may
+        // itself contain spaces, but only the first field — the unit name
+        // — is needed here).
+        const activeUnits = new Set(
+          stdout
+            .split("\n")
+            .map((line) => line.trim().split(/\s+/)[0])
+            .filter((unit): unit is string => Boolean(unit)),
+        );
+        const result: Record<string, boolean> = Object.create(null);
+        for (const id of ids) {
+          result[id] = activeUnits.has(`${scopeUnitName(id)}.scope`);
+        }
+        resolve(result);
+      });
+    });
   }
 }

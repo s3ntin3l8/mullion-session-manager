@@ -172,6 +172,44 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
     expect(session.getEvents().filter((e) => e.kind === "file_change")).toHaveLength(1);
   });
 
+  // Perf audit finding B8(3) — Session.gitIgnoreDirCache memoizes by
+  // directory, so a SECOND ignored file in the same already-checked
+  // directory must still correctly land as dropped (served from the
+  // cache, not a fresh `git check-ignore` this time) rather than the
+  // memoization accidentally breaking the ignore filter for anything past
+  // the first file in a directory.
+  it("drops file_change events for MULTIPLE files in the same ignored directory (memoized path)", async () => {
+    const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "filechange-multi-ignored-"));
+    tmpDirs.push(projectCwd);
+    initRepo(projectCwd);
+    fs.writeFileSync(path.join(projectCwd, ".gitignore"), ".claude/\n");
+    fs.mkdirSync(path.join(projectCwd, ".claude"));
+
+    const manager = mkManager();
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: projectCwd,
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+
+    session.emitHookEvent({
+      kind: "file_change",
+      path: path.join(projectCwd, ".claude", "plan.md"),
+      action: "modify",
+    });
+    session.emitHookEvent({
+      kind: "file_change",
+      path: path.join(projectCwd, ".claude", "notes.md"),
+      action: "create",
+    });
+    session.emitHookEvent({ kind: "progress", phase: "done" });
+    await waitUntil(() => session.getEvents().some((e) => e.kind === "status_change"));
+
+    expect(session.getEvents().filter((e) => e.kind === "file_change")).toHaveLength(0);
+  });
+
   it("preserves per-session event order across a rapid ignored-then-tracked pair", async () => {
     const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "filechange-order-project-"));
     tmpDirs.push(projectCwd);

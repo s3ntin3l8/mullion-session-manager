@@ -11,6 +11,19 @@ import type { FastifyInstance } from "fastify";
 // frontend/'s package.json at all. Registering @fastify/static against a
 // missing root throws at startup, so this is a no-op until the directory
 // is actually there — rootRoute's placeholder handles "/" until then.
+// Perf audit finding A4 — Vite content-hashes every file under `assets/`
+// (its default `assetsDir`), so a given URL's bytes never change; it's safe
+// (and, per the audit, the single biggest day-to-day UX cost left unfixed)
+// to cache those forever. `index.html` and the generated service worker
+// (`sw.js`) are the opposite: `frontend/vite.config.ts`'s VitePWA config
+// runs `registerType: "autoUpdate"`, which depends on the browser
+// re-fetching and diffing `sw.js`'s bytes on every load to detect an
+// update, and `index.html` is what points at the current release's
+// content-hashed asset URLs in the first place — both must keep the
+// existing effectively-uncached (`maxAge: 0`) behavior below, not the
+// long-cache override.
+const ASSETS_DIR_SEGMENT = `${path.sep}assets${path.sep}`;
+
 export const staticPlugin = fp(async (app: FastifyInstance) => {
   const root = path.resolve(app.config.FRONTEND_DIST);
   if (!existsSync(root)) {
@@ -18,5 +31,17 @@ export const staticPlugin = fp(async (app: FastifyInstance) => {
     return;
   }
 
-  await app.register(fastifyStatic, { root });
+  await app.register(fastifyStatic, {
+    root,
+    // Default for everything NOT overridden below (index.html, sw.js,
+    // manifest, etc.) — matches this route's pre-existing behavior
+    // (`cache-control: public, max-age=0`), so those keep being revalidated
+    // on every request.
+    maxAge: 0,
+    setHeaders: (reply, filePath) => {
+      if (filePath.includes(ASSETS_DIR_SEGMENT)) {
+        reply.header("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  });
 });

@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import sensible from "@fastify/sensible";
+import compress from "@fastify/compress";
 import { envPlugin } from "./plugins/env.js";
 import { loggingPlugin } from "./plugins/logging.js";
 import { securityPlugin } from "./plugins/security.js";
@@ -306,6 +307,36 @@ export async function buildApp() {
   // of websocketPlugin instead — this phase's own test suite caught the
   // result: both handlers wrote to the same socket, corrupting the
   // WebSocket frame stream).
+  // Perf audit finding A4/A6 — no compression at all today (a 1.39 MB JS
+  // bundle and a 443 KB /api/sessions payload both go over the wire raw).
+  // @fastify/compress wires itself in via an `onRoute` hook (fired once per
+  // registered route, at registration time, not a request-time global
+  // onSend) — so it only ever needs to be registered BEFORE the routes it
+  // should cover: staticPlugin (its own docs call this out explicitly) and
+  // every API route below. That `onRoute` mechanism is also why
+  // previewProxyPlugin's relayed responses are NOT covered by this,
+  // registration order notwithstanding: that plugin intercepts requests via
+  // a bare `onRequest` hook (see its own comment on why — it needs to own
+  // the single dispatcher for a preview-host request/WS-upgrade), never
+  // registering an actual Fastify route for the proxied path, so
+  // @fastify/compress's onRoute hook never fires for it. Left uncompressed
+  // deliberately rather than plumbing a manual reply.compress() call
+  // through relayFetchResponse (services/http-proxy.ts) — out of scope for
+  // this change, which only ever measured/promised static assets (A4) and
+  // JSON API responses (A6).
+  //
+  // globalDecompression is explicitly off: this plugin's default also
+  // installs a REQUEST-decompression preParsing hook app-wide, which sits
+  // in front of two raw-body signature paths — webhooks.ts's GitHub HMAC
+  // verification and routes/internal.ts's hashBody/buildCanonicalString
+  // request-signature check (issue #249) — both of which need the exact
+  // bytes the client sent, not a transparently-decompressed body. Nothing
+  // sends a compressed request today (no caller sets Content-Encoding), so
+  // this is currently a no-op either way, but response compression is all
+  // A4/A6 asked for — leaving request decompression on would be an
+  // unrelated, unreviewed expansion of what sits in front of those two
+  // signature checks.
+  await app.register(compress, { globalDecompression: false });
   await app.register(previewProxyPlugin);
   await app.register(staticPlugin);
 
