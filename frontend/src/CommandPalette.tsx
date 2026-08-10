@@ -5,6 +5,7 @@ import { useDashboardStore } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDownIcon,
+  DockIcon,
   FileTextIcon,
   FolderIcon,
   GitBranchIcon,
@@ -87,6 +88,8 @@ interface CommandPaletteProps {
   // Issue #431: same section, opening the CLAUDE.md/AGENTS.md/GEMINI.md
   // editor for this project.
   onOpenAgentRules: (projectId: number) => void;
+  // U4: same section, opening the `.crs/dock.json` editor for this project.
+  onOpenDockConfig: (projectId: number) => void;
   // Issue #432: same section, opening the (read-only) skills panel for this
   // project.
   onOpenSkills: (projectId: number) => void;
@@ -118,6 +121,7 @@ export function CommandPalette({
   onOpenGitHub,
   onOpenGit,
   onOpenAgentRules,
+  onOpenDockConfig,
   onOpenSkills,
   onOpenBrowser,
   onOpenIntegrationsSettings,
@@ -646,6 +650,26 @@ export function CommandPalette({
                         Agent Rules: {target?.name ?? "this project"}
                       </span>
                       <span className="cmd-row-subtitle">CLAUDE.md, AGENTS.md, GEMINI.md</span>
+                    </span>
+                  </button>
+                )}
+                {effectiveProjectId !== null && (
+                  <button
+                    className="cmd-row"
+                    onClick={() => {
+                      onOpenDockConfig(effectiveProjectId);
+                      onClose();
+                    }}
+                  >
+                    <span
+                      className="cmd-row-icon"
+                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                    >
+                      <DockIcon size={13} style={{ color: "var(--muted)" }} />
+                    </span>
+                    <span className="cmd-row-body">
+                      <span className="cmd-row-title">Dock: {target?.name ?? "this project"}</span>
+                      <span className="cmd-row-subtitle">Edit this project's dock monitors</span>
                     </span>
                   </button>
                 )}

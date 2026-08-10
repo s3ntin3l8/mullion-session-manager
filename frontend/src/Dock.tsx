@@ -449,14 +449,16 @@ function DockColumn({
   // pure action-callers (used inside async handlers below, never read as a
   // value) — see the useDashboardStore.getState() calls at their own call
   // sites instead of subscribing to them here.
-  const { projects, sessions, gitBranchesByProject, settings } = useDashboardStore(
-    useShallow((s) => ({
-      projects: s.projects,
-      sessions: s.sessions,
-      gitBranchesByProject: s.gitBranchesByProject,
-      settings: s.settings,
-    })),
-  );
+  const { projects, sessions, gitBranchesByProject, settings, dockConfigRefreshTrigger } =
+    useDashboardStore(
+      useShallow((s) => ({
+        projects: s.projects,
+        sessions: s.sessions,
+        gitBranchesByProject: s.gitBranchesByProject,
+        settings: s.settings,
+        dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
+      })),
+    );
   const [controls, setControls] = useState<DockControl[]>([]);
   // Issue #73 — a "Pull & restart stack" session's synthesized control
   // (POST .../docker/update's response), never returned by GET .../dock —
@@ -540,7 +542,13 @@ function DockColumn({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [projectId]);
+    // U4 — dockConfigRefreshTrigger in the dependency array means a save in
+    // DockConfigPanel re-runs this effect immediately (same "bump a shared
+    // counter, subscribers refetch" shape as GitHubPanel's own
+    // prsRefreshTrigger dependency), instead of waiting out the
+    // DOCKER_POLL_INTERVAL_MS poll above or a page reload — docs/dock.md's
+    // own troubleshooting note calls that wait out explicitly.
+  }, [projectId, dockConfigRefreshTrigger]);
 
   useEffect(() => {
     // Guards against a stale response on a fast project switch — same

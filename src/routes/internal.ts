@@ -30,6 +30,15 @@ import {
   resolveProjectActions,
   resolveProjectDock,
 } from "../services/project-config.js";
+import {
+  readDockConfig,
+  writeDockConfig,
+  validateDockConfig,
+  DockConfigValidationError,
+  DockConfigTooLargeError,
+  DockConfigSymlinkError,
+  isTransientReadError as isTransientDockConfigReadError,
+} from "../services/dock-config.js";
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
@@ -382,6 +391,25 @@ const promoteDecisionSchema = {
 // tuned for a browser). Still bounded, since the token alone doesn't prove
 // the caller is well-behaved.
 const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 minute" } } };
+
+// Mirrors routes/dock-config.ts's own writeDockConfigSchema exactly —
+// deliberately thin (see that file's own comment on why: Fastify's ajv
+// defaults to `removeAdditional: true`, which SILENTLY STRIPS an unknown
+// property under `additionalProperties: false` instead of rejecting it, so
+// per-control shape validation is left entirely to validateDockConfig
+// against the untouched raw array). Kept as a second literal copy rather
+// than a shared export for the same reason agentRuleWriteBodySchema just
+// below is its own copy rather than imported from routes/agent-rules.ts.
+const writeDockConfigBodySchema = {
+  body: {
+    type: "object",
+    required: ["controls"],
+    additionalProperties: false,
+    properties: {
+      controls: { type: "array", items: { type: "object" } },
+    },
+  },
+};
 
 // Mirrors routes/agent-rules.ts's own writeRuleSchema — Hermes review, PR
 // #458: this route had no body schema at all, so a missing/malformed
@@ -797,6 +825,68 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return resolveProjectDock(resolvedCwd, app.config.CRS_CONFIG_DIR);
+    },
+  );
+
+  // U4 — the agent-side half of the dock-config write triple
+  // (routes/dock-config.ts is the primary side, remote-host-client.ts the
+  // client that calls here). Same resolveWithinRoots containment as
+  // /internal/dock above — required here too since `cwd` arrives as a
+  // caller-supplied query param over the wire, unlike the primary's own
+  // routes, which can trust project.cwd straight from the DB (see
+  // dock-config.ts's own resolveDockConfigPath comment on why it still
+  // re-checks anyway).
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/dock-config",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      try {
+        return readDockConfig(resolvedCwd);
+      } catch (err) {
+        // Same "unreachable via any current call site, kept as a guard
+        // against a future one" reasoning as routes/dock-config.ts's own
+        // GET — resolvedCwd is already path.resolve()d by
+        // resolveWithinRoots above.
+        if (err instanceof DockConfigValidationError) return reply.badRequest(err.message);
+        if (isTransientDockConfigReadError(err)) {
+          return reply.serviceUnavailable("Permission denied reading dock.json");
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.put<{ Querystring: { cwd?: string }; Body: { controls: unknown[] } }>(
+    "/internal/dock-config",
+    { ...INTERNAL_RATE_LIMIT, schema: writeDockConfigBodySchema },
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      let controls;
+      try {
+        controls = validateDockConfig({ controls: request.body.controls });
+      } catch (err) {
+        if (err instanceof DockConfigValidationError) return reply.badRequest(err.message);
+        throw err;
+      }
+      try {
+        writeDockConfig(resolvedCwd, controls);
+        return readDockConfig(resolvedCwd);
+      } catch (err) {
+        if (err instanceof DockConfigTooLargeError) return reply.badRequest(err.message);
+        if (err instanceof DockConfigSymlinkError) return reply.badRequest(err.message);
+        if (err instanceof DockConfigValidationError) return reply.badRequest(err.message);
+        if (isTransientDockConfigReadError(err)) {
+          return reply.serviceUnavailable("Permission denied writing dock.json");
+        }
+        throw err;
+      }
     },
   );
 

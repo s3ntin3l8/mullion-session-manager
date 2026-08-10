@@ -83,13 +83,14 @@ export function parseDeepLinkSessionId(search: string): number | null {
 // (issue #433's Source Control section). Mirrors BrowserPanel.tsx's own
 // `activeSessionId` regex for the session-scoped panel ids (session/
 // timeline/browserPane), plus the project-scoped ones (git/github/
-// agent-rules) that App.tsx opens with a bare `-<projectId>` suffix.
+// agent-rules/dock-config) that App.tsx opens with a bare `-<projectId>`
+// suffix.
 export function resolveActiveProjectId(
   activePanelId: string | null,
   sessions: Session[],
 ): number | null {
   if (!activePanelId) return null;
-  const projectMatch = activePanelId.match(/^(?:git|github|agent-rules)-(\d+)$/);
+  const projectMatch = activePanelId.match(/^(?:git|github|agent-rules|dock-config)-(\d+)$/);
   if (projectMatch) return parseInt(projectMatch[1], 10);
   const sessionMatch = activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
   if (sessionMatch) {
