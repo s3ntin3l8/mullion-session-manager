@@ -6113,6 +6113,62 @@ body {
   z-index: 10;
 }
 
+/* Scrollback find bar (U1) — top-left, so it never collides with the
+   always-visible attach-image button in the opposite corner (above). Same
+   translucent/blurred "floating over the terminal" treatment as
+   .terminal-copy-indicator/.terminal-upload-indicator, just anchored as a
+   bar instead of a centered toast. */
+.terminal-find-bar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 44px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: color-mix(in srgb, var(--term) 88%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.terminal-find-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.terminal-find-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 2px 0;
+}
+.terminal-find-input:focus {
+  outline: none;
+}
+.terminal-find-count {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.terminal-find-btn {
+  flex-shrink: 0;
+  padding: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.terminal-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 button {
   background: var(--track);
   border: 1px solid var(--border-soft);
