@@ -297,9 +297,20 @@ export const schema = {
     // multiplier would predict, and an operator hitting this ceiling has no
     // other lever — see previewProxyPlugin's own doc comment on this
     // counter for the full reasoning.
+    //
+    // `minimum: 1` — same reasoning as MULLION_TASK_MAX_CONCURRENT above,
+    // and unlike MULLION_TASK_BUDGET_MINUTES/_PROGRESS_COMMENT_MINUTES: 0
+    // has no "unlimited" meaning here. hitFixedWindow's check is
+    // `entry.count > max`, so 0 doesn't disable the limiter — the first
+    // request in a window still opens it and returns false, but every
+    // request after that 429s, silently taking down the whole preview
+    // feature the moment an operator tries the "0 = no limit" convention
+    // this schema uses elsewhere. Rejected at boot (ajv, via @fastify/env)
+    // instead.
     PREVIEW_RATE_LIMIT_MAX: {
       type: "number",
       default: 2000,
+      minimum: 1,
     },
     // Absolute path to the versioned-release install root (e.g.
     // ~/opt/mullion), i.e. the parent of `releases/`, `current` (a symlink
