@@ -874,7 +874,18 @@ function DockColumn({
                       }
                     } else {
                       bumpToggleGen(control.id);
-                      void launchForValue(selectedValue);
+                      // Hermes review — this discarded the promise outright:
+                      // a failed createSession (dead remote host, a bad
+                      // worktree path, ...) became an unhandled rejection
+                      // with nothing on screen, the exact P9 silent-failure
+                      // class this PR fixes everywhere else. Reuses this
+                      // file's own showCheckStatus transient-message infra
+                      // (already rendered next to this same tag for
+                      // "Check for update"/"Pull & restart") rather than
+                      // introducing a new error-state shape.
+                      launchForValue(selectedValue).catch(() => {
+                        showCheckStatus(control.id, "Failed to start — try again", true);
+                      });
                     }
                   }}
                 >
@@ -920,6 +931,20 @@ function DockColumn({
                           // KILL_ARM_DISARM_MS after this delete+relaunch —
                           // this delete is a restart, not the armed kill.
                           disarmKill(control.id);
+                          // Hermes review — bumped here too, BEFORE
+                          // capturing genAtStart below: two rapid worktree
+                          // switches on the same control each start their
+                          // own delete-then-relaunch IIFE, and previously
+                          // only a header click bumped this counter — so if
+                          // both deletes happened to resolve, the FIRST
+                          // switch's relaunch could still fire (with its
+                          // now-stale path) after the SECOND switch had
+                          // already moved the select on to a newer value.
+                          // Bumping unconditionally on every switch means
+                          // each one invalidates any still-in-flight
+                          // predecessor's pending relaunch, the same way an
+                          // explicit header click already did.
+                          bumpToggleGen(control.id);
                           // U5 — capture the restart intent BEFORE the
                           // delete, not by re-deriving it from post-delete
                           // session state. `store.deleteSession` itself
@@ -934,16 +959,18 @@ function DockColumn({
                           // render's own closure, so it can't be corrupted
                           // by the delete it's about to trigger.
                           //
-                          // The one case that still has to suppress the
+                          // The two cases that still have to suppress the
                           // relaunch — the user manually toggling THIS
                           // monitor (start or kill) from the header while
-                          // this switch is in flight — is now tracked via
-                          // toggleGenRef instead of session status: the
-                          // header's own onClick bumps that counter on an
-                          // actual toggle, so comparing it before/after the
-                          // await detects an intervening manual action
-                          // without depending on state this delete call
-                          // itself mutates.
+                          // this switch is in flight, OR a second, newer
+                          // switch superseding this one — are both tracked
+                          // via toggleGenRef instead of session status: any
+                          // of the header's onClick, or this onChange
+                          // itself (see the bump right above), bumps that
+                          // counter on an actual toggle, so comparing it
+                          // before/after the await detects an intervening
+                          // action without depending on state the delete
+                          // call itself mutates.
                           const shouldRestart = Boolean(running);
                           const genAtStart = toggleGenRef.current.get(control.id) ?? 0;
                           void (async () => {
@@ -955,10 +982,12 @@ function DockColumn({
                                 await launchForValue(newValue);
                               }
                             } catch {
-                              console.warn(
-                                "[dock] worktree switch delete+create failed",
-                                control.id,
-                              );
+                              // Hermes review (suggestion) — reuses the same
+                              // showCheckStatus transient-message infra as
+                              // the header's own start-affordance catch
+                              // above, instead of a console-only warning, so
+                              // a failed switch is visible in the UI too.
+                              showCheckStatus(control.id, "Failed to switch — try again", true);
                             }
                           })();
                         }

@@ -1174,6 +1174,112 @@ describe("Dock", () => {
           kind: "dock",
         });
       });
+
+      // Hermes review round 1 — the header's start affordance used to
+      // discard launchForValue's promise with a bare `void`, so a failed
+      // createSession (dead remote host, a bad worktree path, ...) was an
+      // unhandled rejection with nothing shown — the exact P9 silent-
+      // failure class this PR fixes everywhere else.
+      it("surfaces an inline error when starting a monitor fails, instead of an unhandled rejection", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const createSession = vi.fn().mockRejectedValue(new Error("Host is unreachable"));
+        setupStore({ createSession, gitBranchesByProject: {} });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        const header = await screen.findByText("Dev server");
+
+        await user.click(header);
+
+        expect(await screen.findByText("Failed to start — try again")).toBeInTheDocument();
+      });
+    });
+
+    // Hermes review round 1 (suggestion) — the toggleGenRef generation
+    // counter previously only advanced on an explicit header click, so two
+    // rapid worktree switches on the same control could race: each starts
+    // its own delete-then-relaunch IIFE, and if both deletes resolved, the
+    // FIRST switch's relaunch could still fire (at its own, now-stale
+    // path) after the SECOND switch had already moved the select on to a
+    // newer one. The fix bumps the counter at the START of every switch
+    // too, not just on a manual header toggle.
+    it("Hermes review round 1 — a second, newer worktree switch invalidates a still in-flight first switch's relaunch", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      const resolvers: Array<() => void> = [];
+      const deleteSession = vi.fn((id: number) => {
+        return new Promise<void>((resolve) => {
+          resolvers.push(() => {
+            useDashboardStore.setState((s) => ({
+              sessions: s.sessions.map((sess) =>
+                sess.id === id ? { ...sess, status: "killed" as const } : sess,
+              ),
+            }));
+            resolve();
+          });
+        });
+      });
+      const THREE_WORKTREE: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: false },
+          { name: "feature-x", isCurrent: false },
+          { name: "feature-y", isCurrent: true },
+        ],
+        worktrees: [
+          { path: "/home/x/mullion", branch: "main", isMain: true },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-x",
+            branch: "feature-x",
+            isMain: false,
+          },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-y",
+            branch: "feature-y",
+            isMain: false,
+          },
+        ],
+        remoteBranches: [],
+      };
+      setupStore({ createSession, deleteSession, gitBranchesByProject: { 1: THREE_WORKTREE } });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await screen.findByText("Dev server");
+
+      useDashboardStore.setState({
+        sessions: [makeRunningDockSession()],
+        gitBranchesByProject: { 1: THREE_WORKTREE },
+      });
+      await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
+
+      // First switch — its own deleteSession call stays pending.
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-x");
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(1));
+
+      // Before the first switch's delete resolves, a second, newer switch
+      // starts — its own deleteSession call also stays pending. Both
+      // target the same still-running session id (99): the first switch
+      // hasn't mutated `sessions` yet (its own delete is still in flight),
+      // so the select still reads this session as running.
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-y");
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(2));
+
+      // Resolve the FIRST switch's delete now — its relaunch must be
+      // suppressed (superseded by the second switch), not fire at the
+      // stale feature-x path.
+      resolvers[0]!();
+      await waitFor(() => expect(createSession).not.toHaveBeenCalled());
+
+      // Resolve the SECOND (newer) switch's delete — its relaunch, at
+      // feature-y, is the only one that should ever fire.
+      resolvers[1]!();
+      await waitFor(() =>
+        expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+          cwd: "/home/x/mullion/.mullion-worktrees/feature-y",
+          kind: "dock",
+        }),
+      );
+      expect(createSession).toHaveBeenCalledTimes(1);
     });
 
     // PR #341 review: preview worktrees are checked out with a detached
