@@ -62,6 +62,20 @@ const HOOK_ADAPTER_EMITS_BY_BIN: Partial<Record<string, readonly HookMessageKind
   agy: agyAdapter.emits,
 };
 
+// B7 — this was the one shell-out in this repo with no timeout at all
+// (every git helper has one, e.g. git-status.ts's GIT_TIMEOUT_MS). A login
+// shell that writes more than the OS pipe buffer (~64 KiB) to stderr
+// (nvm/direnv/rvm warnings on a `-l` profile are the realistic source)
+// blocks on the write syscall forever with nothing here ever reading
+// stderr — so the promise never settled, and with no in-flight dedup
+// around getCachedAgents' cache miss, ten concurrent uncached requests
+// leaked ten blocked shells. PROBE_TIMEOUT_MS matches GIT_TIMEOUT_MS's
+// magnitude; PROBE_KILL_ESCALATION_MS mirrors the same SIGKILL-escalation
+// grace period the git-*.ts helpers now use (a `command -v` probe ignoring
+// SIGTERM is exactly as plausible as a wedged git process).
+const PROBE_TIMEOUT_MS = 5_000;
+const PROBE_KILL_ESCALATION_MS = 2_000;
+
 /** Resolve one binary's path via `command -v`, run inside a login shell so
  * PATH matches exactly what a spawned session would see. Never rejects —
  * "not found" and "probe itself failed to launch" both resolve to null. */
@@ -73,18 +87,56 @@ function probe(bin: string): Promise<string | null> {
 
     const child = spawnChild(shell, ["-lc", `command -v ${bin}`], {
       env: buildSessionEnv(),
+      // B7 — stderr is never read by anything below, so dropping it
+      // entirely (rather than leaving it as a pipe no one drains) is what
+      // actually prevents the blocked-write hang; the timeout below is a
+      // backstop for whatever this doesn't cover (a shell that blocks for
+      // some other reason). Matches this repo's other spawn calls that
+      // don't need stderr (e.g. git-refs.ts's runGit).
+      stdio: ["ignore", "pipe", "ignore"],
     });
+
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
 
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
       resolve(value);
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    const timer = setTimeout(() => {
+      child.kill(); // SIGTERM
+      // Escalate to SIGKILL if the process is still alive after a short
+      // grace period — a timeout firing means it already ignored our
+      // attempt to end it cooperatively. `killed`/`exitCode` don't tell us
+      // this (Node sets `killed` once a signal is successfully *sent*, not
+      // once the process has actually died) — `exitCode`/`signalCode` both
+      // staying `null` is the real "still alive" signal.
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, PROBE_KILL_ESCALATION_MS);
+      finish(null);
+    }, PROBE_TIMEOUT_MS);
+
+    child.on("error", () => {
+      clearKillTimer();
+      finish(null);
     });
-    child.on("error", () => finish(null));
     // 'close' (stdio streams closed), NOT 'exit' (process ended) — 'exit'
     // only guarantees the process itself has ended, not that every stdout
     // 'data' chunk has actually been delivered yet. Found live: under the
@@ -92,7 +144,10 @@ function probe(bin: string): Promise<string | null> {
     // enough to intermittently report a genuinely-installed CLI as
     // unavailable (empty `stdout` read at the moment 'exit' fired, even
     // though the shell's `command -v` output arrived a moment later).
-    child.on("close", () => finish(stdout.trim() || null));
+    child.on("close", () => {
+      clearKillTimer();
+      finish(stdout.trim() || null);
+    });
   });
 }
 

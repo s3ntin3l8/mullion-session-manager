@@ -483,6 +483,20 @@ const MAX_TRACKED_SUBAGENTS = 50;
 // helps.
 const SCROLLBACK_MAX_BYTES = 1024 * 1024;
 
+// B9 — WS->PTY backpressure (write()'s own doc comment has the full
+// rationale). 4 MiB matches every other *_BACKPRESSURE_MAX_BUFFERED_BYTES
+// constant in this codebase (terminal.ts, browser.ts, ws-pipe.ts,
+// task-events.ts, events.ts) rather than inventing a new magnitude — the
+// mechanism differs (there's no live "buffered bytes" signal to read from
+// node-pty, only what this class tracks itself), but the threshold doesn't
+// need to.
+const WRITE_BACKPRESSURE_MAX_BYTES = 4 * 1024 * 1024;
+// Window over which WRITE_BACKPRESSURE_MAX_BYTES resets. A real shell (or
+// any program actually reading stdin) drains 4 MiB in well under a second
+// under normal conditions, so this only ever engages against a program
+// that's genuinely not reading its input at all.
+const WRITE_BACKPRESSURE_WINDOW_MS = 1000;
+
 // The two escape sequences synthesized as a scrollback-replay preamble (see
 // Session.getScrollback()) — the modern alt-screen-buffer pair. Prepending
 // one of these lets a fresh xterm.js land in the tracked TRUE screen mode
@@ -1093,6 +1107,19 @@ export class Session {
   // channel — see USER_INPUT_ECHO_MS's docstring). Used by toInfo()'s timing
   // fall-through to tell keystroke echo apart from autonomous output.
   private lastUserInputAt: number | null = null;
+  // B9 — WS->PTY backpressure. Bytes written to ptyProcess.write() within
+  // the current WRITE_BACKPRESSURE_WINDOW_MS window; reset to 0 whenever a
+  // write() call lands outside that window. See write()'s own doc comment
+  // for why this exists (node-pty exposes no drain signal, unlike a WS
+  // socket's own bufferedAmount).
+  private pendingWriteBytes = 0;
+  private writeWindowStartedAt = 0;
+  // Log at most once per window (not once per dropped chunk) — a sustained
+  // flood would otherwise spam a console.warn line, unfiltered by pino's
+  // level machinery, at the frequency of every subsequent WS frame for as
+  // long as the flood continues. Same rationale applyAttentionTransition
+  // documents for suppressing PENDING_ATTENTION churn.
+  private writeDropLogged = false;
   // Set once spawn() learns whether applyHookAdapters actually matched this
   // session's command to a real hook adapter (Claude Code/opencode/codex/agy)
   // — see AppliedHooks.matched's own docstring. Gates Session.tick()'s
@@ -3133,9 +3160,64 @@ export class Session {
     return Buffer.concat([preamble, ...this.scrollback]);
   }
 
+  /**
+   * Writes browser/control-socket input into the pty. B9 — routes/terminal.ts's
+   * `message` handler (and control-socket.ts's `sessions.input` op, which
+   * ultimately calls this too) used to write straight through with no cap,
+   * while the PTY->WS direction (Session.onData's consumer in terminal.ts)
+   * has always dropped past BACKPRESSURE_MAX_BUFFERED_BYTES using the
+   * browser WS socket's own live `bufferedAmount`. There's no equivalent
+   * signal on this side: node-pty's IPty.write() returns void, and the
+   * underlying write queue (unixTerminal.js's private `_writeQueue`) isn't
+   * exposed — so a large paste (or a burst of rapid messages) into a
+   * program that isn't reading its stdin would otherwise grow that queue
+   * without bound in a process meant to run for days. This tracks bytes
+   * handed to ptyProcess.write() in a rolling WRITE_BACKPRESSURE_WINDOW_MS
+   * window instead, and drops (never queues) once WRITE_BACKPRESSURE_MAX_BYTES
+   * is exceeded within it — a dropped paste is recoverable (retype/repaste)
+   * in a way an unbounded in-process buffer for a stuck program is not.
+   *
+   * Only the actual pty write is skipped on a drop — everything below
+   * (lastUserInputAt, the genuine-user-input attention transition) still
+   * runs unconditionally: the user DID act, and clearing a stale permission/
+   * gate/promote latch on that basis is correct regardless of whether this
+   * particular chunk made it to the program.
+   *
+   * Tradeoff, stated explicitly: this keys off elapsed wall-clock time, not
+   * whether the pty is actually draining — there's no signal to key off
+   * instead (see above). A legitimate multi-megabyte paste into a program
+   * reading its stdin perfectly well can still land truncated if it crosses
+   * WRITE_BACKPRESSURE_MAX_BYTES within one window; 4 MiB/sec of sustained
+   * interactive input is generous enough that this is expected to be rare in
+   * practice, and the alternative (no cap at all) is unbounded growth. No
+   * single `data` call can exceed the cap on its own and get stuck
+   * permanently undeliverable either: every path that reaches this method
+   * caps an individual frame well under WRITE_BACKPRESSURE_MAX_BYTES already
+   * (`plugins/websocket.ts`'s `maxPayload: 1 MiB`, `control-socket.ts`'s
+   * `MAX_LINE_BYTES` = 2 MiB).
+   */
   write(data: string): void {
-    this.ptyProcess?.write(data);
-    this.lastUserInputAt = Date.now();
+    const now = Date.now();
+    if (now - this.writeWindowStartedAt >= WRITE_BACKPRESSURE_WINDOW_MS) {
+      this.writeWindowStartedAt = now;
+      this.pendingWriteBytes = 0;
+      this.writeDropLogged = false;
+    }
+    const byteLength = Buffer.byteLength(data, "utf8");
+    if (this.pendingWriteBytes + byteLength > WRITE_BACKPRESSURE_MAX_BYTES) {
+      if (!this.writeDropLogged) {
+        this.writeDropLogged = true;
+        console.warn(
+          `[pty-manager] session ${this.id} dropping input — write backpressure cap ` +
+            `(${WRITE_BACKPRESSURE_MAX_BYTES} bytes/${WRITE_BACKPRESSURE_WINDOW_MS}ms) exceeded ` +
+            `(further drops in this window are not logged individually)`,
+        );
+      }
+    } else {
+      this.pendingWriteBytes += byteLength;
+      this.ptyProcess?.write(data);
+    }
+    this.lastUserInputAt = now;
     // Follow-up to #275 (gap #3): a genuine human keystroke (or a paste, or a
     // decline like Ctrl-C) is the authoritative "the user actually acted"
     // signal an OUTPUT_IMMUNE_KINDS-confirmed flag (hookNotification/
@@ -3938,6 +4020,19 @@ export class PtyManager {
       console.error(`[pty-manager] error killing session ${id}:`, err);
     }
     this.sessions.delete(id);
+    // B9 — a seed stashed for this id (promote flow, see stashSeed's doc
+    // comment) is only ever cleared by consumeSeed(), which only runs if a
+    // SessionStart hook actually fires. A promote into a session whose agent
+    // has no hook adapter (or whose forwarder dies before ever connecting)
+    // would otherwise leak the seed string in this map for the process's
+    // entire lifetime. Every caller of this method (spawn-failure rollback
+    // in routes/sessions.ts, the exited-session reconciler, terminate()
+    // below, and killAll() on shutdown) is exactly the set of moments a
+    // stashed-but-never-consumed seed can no longer ever be picked up, so
+    // clearing it here — alongside the existing hookTokens cleanup right
+    // below, not duplicating any of that teardown logic — is safe
+    // regardless of which caller reached this.
+    this.pendingSeeds.delete(id);
     // A killed session's in-memory Session object is discarded here, but —
     // unlike before hook-token persistence — its hookToken is NOT: this
     // path (via killAll()) runs on every graceful shutdown/redeploy, and

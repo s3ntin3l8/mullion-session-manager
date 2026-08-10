@@ -62,6 +62,9 @@ export interface GitWorktreeInfo {
 }
 
 const GIT_TIMEOUT_MS = 10_000;
+// B9 — see git-status.ts's identical constant for the full rationale
+// (shared across every runGit-shaped helper in this sibling group).
+const KILL_ESCALATION_MS = 2_000;
 
 function isSafeAbsolutePath(cwd: string): boolean {
   return path.isAbsolute(cwd) && !path.normalize(cwd).split(path.sep).includes("..");
@@ -78,23 +81,47 @@ function runGit(cwd: string, args: string[]): Promise<string | null> {
       env: gitEnv(),
     });
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+
+    // B9 — see git-status.ts's runGitStatus for the full rationale on both
+    // the escalation and the listener-detach-in-finish shape below.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
       resolve(value);
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill(); // SIGTERM
       finish(null);
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", () => {
+      clearKillTimer();
+      finish(null);
     });
-    child.on("error", () => finish(null));
-    child.on("close", (code) => finish(code === 0 ? stdout : null));
+    child.on("close", (code) => {
+      clearKillTimer();
+      finish(code === 0 ? stdout : null);
+    });
   });
 }
 
