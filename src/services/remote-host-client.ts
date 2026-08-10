@@ -12,6 +12,7 @@ import {
 } from "./request-signature.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
+import type { DockConfigReadResult } from "./dock-config.js";
 import type { SkillInfo, SkillAgent } from "./skills.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
@@ -373,6 +374,25 @@ export class RemoteHostClient {
 
   resolveDock(cwd: string): Promise<DockControl[]> {
     return this.request(`/internal/dock?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  // U4 — the client half of the dock-config write triple; see
+  // routes/internal.ts's /internal/dock-config for the agent-side
+  // resolveWithinRoots containment these two rely on. Deliberately a
+  // separate pair from resolveDock above, not a rename/reuse of it: that
+  // route returns the MERGED view (global default + Docker-discovered
+  // controls), the wrong shape for an editor to read back or write through
+  // (see dock-config.ts's readDockConfig doc comment).
+  resolveDockConfig(cwd: string): Promise<DockConfigReadResult> {
+    return this.request(`/internal/dock-config?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  writeDockConfig(cwd: string, controls: DockControl[]): Promise<DockConfigReadResult> {
+    return this.request(`/internal/dock-config?cwd=${encodeURIComponent(cwd)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ controls }),
+    });
   }
 
   // Issue #431 — the client half of the agent-rules triple; see

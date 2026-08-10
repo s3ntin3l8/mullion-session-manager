@@ -786,6 +786,28 @@ export interface DockControl {
   docker?: DockerServiceInfo;
 }
 
+// U4 — mirrors src/services/dock-config.ts's DockConfigReadResult 1:1. The
+// raw, per-project `.crs/dock.json` (never the merged global+Docker view
+// GET /api/projects/:id/dock returns — see that module's own doc comment
+// on why an editor needs a separate, unmerged read/write pair).
+export interface DockConfigResult {
+  controls: DockControl[];
+  /** True when `.crs/dock.json` exists but doesn't parse/validate — see
+   * dock-config.ts's own doc comment for why this is surfaced rather than
+   * silently shown as an empty (and therefore overwrite-on-save-able)
+   * config. */
+  invalid: boolean;
+  reason: string | null;
+}
+
+// The subset of DockControl fields this editor can actually set — `source`/
+// `docker` are docker-service-detect.ts-only fields a project's own
+// dock.json can never carry (see project-config.ts's normalizeRawControl
+// and dock-config.ts's ALLOWED_CONTROL_KEYS); typing the editor's own state
+// around this narrower shape means it's simply not possible to construct a
+// payload containing them.
+export type DockControlInput = Omit<DockControl, "source" | "docker">;
+
 export type DockerUpdateCheckResult =
   | {
       updateAvailable: boolean;
@@ -1377,6 +1399,19 @@ export const api = {
     request<Launcher[]>(`/api/projects/${projectId}/actions`),
 
   listProjectDock: (projectId: number) => request<DockControl[]>(`/api/projects/${projectId}/dock`),
+
+  // U4 — the raw, per-project `.crs/dock.json` (unmerged — see
+  // DockConfigResult's own doc comment). Distinct from listProjectDock
+  // above, which returns the merged, Docker-discovery-enriched view
+  // Dock.tsx renders from; this pair is for the editor only.
+  getProjectDockConfig: (projectId: number) =>
+    request<DockConfigResult>(`/api/projects/${projectId}/dock/config`),
+
+  writeProjectDockConfig: (projectId: number, controls: DockControlInput[]) =>
+    request<DockConfigResult>(`/api/projects/${projectId}/dock/config`, {
+      method: "PUT",
+      body: JSON.stringify({ controls }),
+    }),
 
   // Issue #73 — Docker Compose service management for a discovered dock
   // control (control.docker). Both scoped to a `controlId` the server

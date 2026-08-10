@@ -15,6 +15,8 @@ import { GitPanel } from "./GitPanel.js";
 import type { GitPanelParams } from "./GitPanel.js";
 import { AgentRulesPanel } from "./AgentRulesPanel.js";
 import type { AgentRulesPanelParams } from "./AgentRulesPanel.js";
+import { DockConfigPanel } from "./DockConfigPanel.js";
+import type { DockConfigPanelParams } from "./DockConfigPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
 import type { SkillsPanelParams } from "./SkillsPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
@@ -159,6 +161,17 @@ function AgentRulesPanelWrapper(props: IDockviewPanelProps<AgentRulesPanelParams
   );
 }
 
+// Same reasoning as GitHubPanelWrapper above — a crashing dock-config fetch
+// shouldn't blank the whole dashboard either.
+function DockConfigPanelWrapper(props: IDockviewPanelProps<DockConfigPanelParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <DockConfigPanel key={resetKey} params={props.params} />
+    </ErrorBoundary>
+  );
+}
+
 // Same reasoning as GitHubPanelWrapper above — a crashing skills fetch
 // shouldn't blank the whole dashboard either.
 function SkillsPanelWrapper(props: IDockviewPanelProps<SkillsPanelParams>) {
@@ -264,6 +277,7 @@ const components = {
   github: GitHubPanelWrapper,
   git: GitPanelWrapper,
   "agent-rules": AgentRulesPanelWrapper,
+  "dock-config": DockConfigPanelWrapper,
   skills: SkillsPanelWrapper,
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
@@ -1646,6 +1660,35 @@ export function App() {
     [dockviewApi, projects, isMobile],
   );
 
+  // U4 — opens (or focuses) the dock-config editor for a project, same
+  // open-or-focus-by-stable-id shape as onOpenAgentRules above.
+  const onOpenDockConfig = useCallback(
+    (projectId: number) => {
+      if (!dockviewApi) return;
+      const project = projects.find((p) => p.id === projectId);
+      const panelId = `dock-config-${projectId}`;
+      const existing = dockviewApi.getPanel(panelId);
+      if (existing) {
+        existing.api.setActive();
+        if (isMobile) dockviewApi.maximizeGroup(existing);
+      } else {
+        const panel = dockviewApi.addPanel({
+          id: panelId,
+          component: "dock-config",
+          title: project ? `Dock: ${project.name}` : "Dock",
+          params: { projectId },
+          ...(!isMobile &&
+            (hasTiledPanels(dockviewApi)
+              ? { floating: true }
+              : { position: { direction: "right" } })),
+        });
+        if (isMobile) dockviewApi.maximizeGroup(panel);
+      }
+      setSidebarOpen(false);
+    },
+    [dockviewApi, projects, isMobile],
+  );
+
   // Opens (or focuses) the (read-only) skills panel for a project (issue
   // #432) — same open-or-focus-by-stable-id shape as onOpenAgentRules above.
   const onOpenSkills = useCallback(
@@ -2169,6 +2212,7 @@ export function App() {
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
           onOpenAgentRules={onOpenAgentRules}
+          onOpenDockConfig={onOpenDockConfig}
           onOpenSkills={onOpenSkills}
           onOpenBrowser={onOpenBrowser}
           onOpenIntegrationsSettings={() => openSettings("integrations")}

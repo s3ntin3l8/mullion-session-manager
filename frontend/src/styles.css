@@ -6552,6 +6552,97 @@ button.danger.armed {
   border-color: var(--accent-solid);
 }
 
+/* DockConfigPanel.tsx (U4) — reuses .agent-rules-panel's list/editor shell
+   above; these are just the pieces that shell doesn't already cover: an
+   outer column layout with a document-level Save/Discard toolbar on top
+   (see that component's own comment on why Save lives OUTSIDE the
+   per-monitor `.agent-rules-panel` split below it), a scrollable stack of
+   .settings-row fields (form body), and the small env-var key/value editor
+   beneath it. */
+.dock-config-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dock-config-panel-toolbar {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.dock-config-panel-toolbar-notice {
+  margin: 0 14px 8px;
+}
+.dock-config-panel .agent-rules-panel {
+  flex: 1;
+  min-height: 0;
+}
+.dock-config-panel-monitor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.dock-config-panel-empty-hint {
+  color: var(--dim);
+  font-size: 11.5px;
+  padding: 8px 6px;
+}
+.dock-config-panel-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  justify-content: center;
+  margin-top: 6px;
+}
+.dock-config-panel-form {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.dock-config-panel-env {
+  padding: 12px 0 6px;
+}
+.dock-config-env-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+.dock-config-env-key,
+.dock-config-env-value {
+  flex: 1;
+  min-width: 0;
+  background: var(--field);
+  border: 1px solid var(--border-soft);
+  color: var(--fg);
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.dock-config-env-remove {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.dock-config-env-remove:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
 /* SkillsPanel.tsx's per-agent enable/disable toggle row (issue #463) —
    reuses .git-panel-toggle-label's look, stacked one row per toggleable
    agent rather than GitPanel's single inline row. */

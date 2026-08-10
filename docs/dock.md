@@ -29,7 +29,7 @@ A project's column can also show:
 
 ## Quick start
 
-Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root):
+Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open the Command Palette → **Dock: \<project\>** and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
 
 ```json
 {
@@ -128,6 +128,36 @@ separately in [`git-panel.md`](git-panel.md).
 - `env` entries must be string-to-string.
 - A malformed file is silently treated as empty — the backend logs a
   warning but never throws.
+
+This is the read-side contract (`resolveProjectDock`'s merge, described
+above). The UI editor's own write path (below) is intentionally stricter: it
+rejects a malformed save outright with a specific error, rather than
+persisting something the merge would later have to shrug off as empty.
+
+### Editing from the UI
+
+Open the Command Palette (project scope) and choose **Dock: \<project\>** to
+edit a project's own `.crs/dock.json` from the dashboard — a structured
+form (add/remove a monitor, edit its fields) rather than a raw-JSON editor,
+since `dock.json` is small, fixed-shape data. A few things to know:
+
+- **Only the project-scope file.** The global `<configDir>/dock.json`
+  default (see [Global vs. per-project config](#global-vs-per-project-config)
+  below) isn't editable from this panel yet — hand-edit it on the host, same
+  as today.
+- **Whole-file replace, not a per-control patch.** Saving writes the
+  editor's full monitor list back to `.crs/dock.json`; it never merges in
+  the global default or a Docker-discovered monitor (those stay
+  read-only/synthesized, exactly as `dock.json schema`'s Validation section
+  above says a project's own file can never carry them).
+- **An already-broken file is called out, not hidden.** If `.crs/dock.json`
+  on disk doesn't parse or validate, the editor opens with an inline notice
+  saying so instead of silently showing an empty (and therefore
+  overwrite-on-save-able) form — you still get a blank slate to build a
+  fresh, valid config from, and saving replaces the broken file.
+- **Takes effect immediately**, not just on the next poll or a page reload
+  (see the Troubleshooting note below) — a save is picked up by every
+  tiled/pinned Dock column right away.
 
 ## Global vs. per-project config
 
@@ -290,13 +320,15 @@ ephemeral and reset on reload.
 - **Monitors don't appear.** Check that `.crs/dock.json` is valid JSON
   with a `controls` array. A parse failure is silently reduced to an
   empty list — check the backend logs for a warning.
-- **Config changes don't take effect.** Every tiled/pinned column polls
+- **Config changes don't take effect.** A save from the UI editor (see
+  [Editing from the UI](#editing-from-the-ui) above) takes effect
+  immediately — no wait. A **hand** edit to either `.crs/dock.json` or the
+  global `<configDir>/dock.json` doesn't go through that same immediate
+  path, so it shows up once every tiled/pinned column's own poll catches up:
   `GET .../dock` every ~15s (issue #73's own Docker-discovery poll, which
   re-fetches the FULL merged list — configured controls included, not just
-  discovered ones), so an edit to either `.crs/dock.json` or the global
-  `<configDir>/dock.json` now shows up within that window. Re-navigating to
-  the project still works too, for an immediate refresh rather than waiting
-  out the poll.
+  discovered ones). Re-navigating to the project still works too, for an
+  immediate refresh rather than waiting out the poll.
 - **A Docker service doesn't appear.** Confirm its stack's `working_dir`
   (`docker inspect <container> --format
 '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'`) is
