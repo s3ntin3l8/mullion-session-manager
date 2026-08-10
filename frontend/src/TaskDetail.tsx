@@ -3,13 +3,23 @@ import { useDashboardStore } from "./store.js";
 import { statusLabel } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import { ApiError } from "./api.js";
-import type { Session, Task } from "./api.js";
+import type { GitHubCiStatus, Session, Task } from "./api.js";
 import { commandToBinary } from "./cliLogos.js";
 import { BotIcon, GitHubIcon, TerminalPromptIcon, WarningTriangleIcon } from "./icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 
 export interface TaskDetailParams {
   taskId: number;
+}
+
+// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
+// duplicated across Sidebar.tsx/GitHubPanel.tsx/Dock.tsx/UnifiedBoard.tsx —
+// this codebase's own established precedent for this exact small guard.
+function taskDetailPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
+  if (status === "success") return "good";
+  if (status === "failure") return "bad";
+  if (status === "in_progress") return "pending";
+  return "none";
 }
 
 // Phase 6 (6.5/#218) — the task board's detail panel: metadata, issue/PR
@@ -29,6 +39,10 @@ export function TaskDetail({
   const task = useDashboardStore((s) => s.tasks.find((t) => t.id === params.taskId));
   const sessions = useDashboardStore((s) => s.sessions);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
+  // Selected unconditionally (task may still be undefined here, before the
+  // not-found guard below) — same posture as UnifiedBoard.tsx's TaskCard,
+  // joined on task.branchName once `task` is known to exist.
+  const prsByProject = useDashboardStore((s) => s.prsByProject);
 
   // A workspace layout can restore this panel (by taskId), or the unified
   // board's drawer can open it, before the store's own task list has loaded
@@ -47,6 +61,11 @@ export function TaskDetail({
   const workerSession =
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
+  const prsStatus = prsByProject[task.projectId];
+  const matchedPr =
+    task.branchName && prsStatus?.prs
+      ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
+      : undefined;
 
   return (
     <div className="task-detail cmux-scroll">
@@ -82,11 +101,20 @@ export function TaskDetail({
         {task.prUrl && (
           <a
             className="task-detail-meta-row task-detail-link"
-            href={task.prUrl}
+            // Hermes review, PR #577/#582 — the CI dot below reflects
+            // matchedPr (branch-matched, so it's the CURRENT PR on
+            // task.branchName), but this href previously stayed on
+            // task.prUrl regardless. If that branch's PR was closed and a
+            // new one opened on the same branch, the dot would describe the
+            // new PR while the link opened the old, closed one.
+            href={matchedPr?.htmlUrl ?? task.prUrl}
             target="_blank"
             rel="noreferrer"
           >
             <GitHubIcon size={12} /> Pull request
+            {matchedPr && (
+              <span className={`github-panel-ci-dot ${taskDetailPrDotClass(matchedPr.ciStatus)}`} />
+            )}
           </a>
         )}
         {agentName && (
