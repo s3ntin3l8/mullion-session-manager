@@ -272,28 +272,32 @@ export function Sidebar({
     [projects, filterActive, filteredSessionsByProject],
   );
 
-  // U3 — the virtualized path's own collapse state. Parallel to (not
-  // shared with) ProjectSection's own per-instance `useState` below: the
-  // two rendering paths are mutually exclusive per `shouldVirtualize` and
-  // never mounted at the same time, so there's no synchronization to do —
-  // both read/write the same PROJECT_COLLAPSED_KEY-backed module state
-  // (`projectCollapsedState`, declared next to ProjectSection), they just
-  // need their own piece of *React* state to trigger a re-flatten when it
-  // changes (ProjectSection needs no such thing since toggling it only
-  // affects that one component's own subtree).
-  const [collapsedOverrides, setCollapsedOverrides] = useState<Map<number, boolean>>(
-    () => new Map(Object.entries(projectCollapsedState).map(([id, v]) => [Number(id), v])),
-  );
+  // U3 — the virtualized path's own re-flatten trigger for collapse
+  // toggles. Both rendering paths read/write the SAME persisted
+  // `projectCollapsedState` object (declared next to ProjectSection) as
+  // their one source of truth — there is deliberately no separate Map
+  // cached here. An earlier version of this file DID cache a
+  // `collapsedOverrides` Map, seeded once from `projectCollapsedState` at
+  // Sidebar's own mount: that went stale the moment a below-threshold
+  // `ProjectSection` toggle wrote straight to `projectCollapsedState`
+  // without this component ever hearing about it, so a project collapsed
+  // under VIRTUALIZE_SESSION_THRESHOLD would silently re-expand the moment
+  // the session count crossed it and `VirtualizedProjectTree` took over —
+  // reading a stale snapshot instead of the same live truth ProjectSection
+  // itself was already using (Hermes review, PR #583). `flatRows` below
+  // now reads `projectCollapsedState` directly on every recompute instead;
+  // this counter carries no data of its own, it exists purely so that
+  // memo has something in its deps array that changes on every toggle,
+  // forcing an immediate re-flatten (rather than waiting on the next
+  // unrelated `sessions` poll tick, which would also eventually pick up
+  // the live value but with a visible lag after the click).
+  const [collapseVersion, setCollapseVersion] = useState(0);
   const toggleProjectCollapsedVirtualized = useCallback(
     (projectId: number, derivedDefault: boolean) => {
-      setCollapsedOverrides((prev) => {
-        const current = prev.get(projectId) ?? derivedDefault;
-        const next = !current;
-        setProjectCollapsedPersisted(projectId, next);
-        const copy = new Map(prev);
-        copy.set(projectId, next);
-        return copy;
-      });
+      const current =
+        projectId in projectCollapsedState ? projectCollapsedState[projectId] : derivedDefault;
+      setProjectCollapsedPersisted(projectId, !current);
+      setCollapseVersion((v) => v + 1);
     },
     [],
   );
@@ -305,17 +309,26 @@ export function Sidebar({
   // branch below renders instead, so small dashboards (the common case)
   // never pay for this at all.
   const flatRows = useMemo<SidebarFlatRow[]>(() => {
+    // `collapseVersion` carries no data of its own (see its own comment
+    // above) — this reference exists only so `react-hooks/exhaustive-deps`
+    // sees it used and doesn't flag the dep-array entry below as
+    // unnecessary; the actual live read is `projectCollapsedState` inside
+    // the loop.
+    void collapseVersion;
     if (!shouldVirtualize) return [];
     const rows: SidebarFlatRow[] = [];
     for (const project of visibleProjects) {
       const base = baseSessionsByProject.get(project.id) ?? [];
       const derivedDefault = base.length === 0;
-      // Filter active -> force-expanded (same "reveal matches rather than
-      // hide them behind a stale collapse" reasoning as forceExpanded on
-      // ProjectSection below).
-      const collapsed = filterActive
-        ? false
-        : (collapsedOverrides.get(project.id) ?? derivedDefault);
+      // Read the SAME persisted `projectCollapsedState` object
+      // ProjectSection itself reads/writes below — live, not a cached
+      // snapshot (see `collapseVersion`'s own comment above for why that
+      // distinction matters). Filter active -> force-expanded (same
+      // "reveal matches rather than hide them behind a stale collapse"
+      // reasoning as forceExpanded on ProjectSection below).
+      const persistedCollapsed =
+        project.id in projectCollapsedState ? projectCollapsedState[project.id] : null;
+      const collapsed = filterActive ? false : (persistedCollapsed ?? derivedDefault);
       rows.push({
         key: `p-${project.id}`,
         type: "header",
@@ -344,7 +357,7 @@ export function Sidebar({
     baseSessionsByProject,
     filteredSessionsByProject,
     filterActive,
-    collapsedOverrides,
+    collapseVersion,
     hierarchicalView,
   ]);
 
@@ -604,10 +617,10 @@ type SidebarFlatRow = ProjectHeaderFlatRow | SessionFlatRow | EmptyProjectFlatRo
 // Extracted out of ProjectSection so both the plain (below-threshold) and
 // virtualized (above-threshold) rendering paths share the exact same header
 // markup/behavior instead of two copies drifting apart. Collapse is now
-// owned by the CALLER (ProjectSection below, or Sidebar's own
-// `collapsedOverrides` in the virtualized path) — this component is a pure
-// function of `collapsed`/`onToggleCollapsed`, with no state of its own for
-// it, so it doesn't matter which path is driving.
+// owned by the CALLER (ProjectSection below, or Sidebar's own flatten step
+// reading `projectCollapsedState` directly in the virtualized path) — this
+// component is a pure function of `collapsed`/`onToggleCollapsed`, with no
+// state of its own for it, so it doesn't matter which path is driving.
 //
 // P1 perf fix (carried over from ProjectSection's original header comment)
 // — every field this component reads is either a prop (never a rendered
@@ -987,7 +1000,23 @@ function VirtualizedProjectTree({
   });
 
   return (
-    <div ref={listRef} style={{ position: "relative", height: rowVirtualizer.getTotalSize() }}>
+    // `getTotalSize()` already includes `scrollMargin` (tanstack offsets
+    // every item's own `start` by it) — but THIS div also sits in normal
+    // document flow, after the real (non-virtualized) content whose height
+    // `scrollMargin` measures, so that content's height is already
+    // reserved once by the page's own layout. Using `getTotalSize()`
+    // directly here would reserve it a SECOND time inside this div's own
+    // height, doubling it into a dead-scroll zone the size of the
+    // preceding content at the bottom of the list (Hermes review, PR
+    // #583) — subtracting `scrollMargin` back out is what keeps this
+    // div's own height to just the rows it actually contains.
+    <div
+      ref={listRef}
+      style={{
+        position: "relative",
+        height: rowVirtualizer.getTotalSize() - rowVirtualizer.options.scrollMargin,
+      }}
+    >
       {rowVirtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
         const row = rows[virtualRow.index];
         if (!row) return null;

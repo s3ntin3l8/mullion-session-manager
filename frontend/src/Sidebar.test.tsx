@@ -403,6 +403,61 @@ describe("Sidebar project collapse persistence (U3)", () => {
     const second = renderSidebar();
     expect(second.queryByText("claude code")).toBeNull();
   });
+
+  // Hermes review, PR #583 — an earlier version cached collapse state in a
+  // Sidebar-owned Map snapshotted once at mount, which a below-threshold
+  // `ProjectSection` toggle never wrote to; crossing VIRTUALIZE_SESSION_
+  // THRESHOLD then silently re-expanded the project. This exercises the
+  // exact repro: collapse while below threshold (the plain ProjectSection
+  // path), grow the session count past the threshold via a rerender (the
+  // same live `sessions` update a real poll tick would cause), and confirm
+  // the collapsed project's sessions stay hidden once VirtualizedProjectTree
+  // takes over — i.e. both rendering paths agree on the SAME live
+  // (persisted) collapse state rather than each holding its own snapshot.
+  it("keeps a project collapsed across the render path switching from ProjectSection to VirtualizedProjectTree", async () => {
+    stubVirtualizerLayout();
+    const collapseTarget: Project = { ...PROJECT, id: 77_201, name: "collapse-across-threshold" };
+    const filler: Project = { ...PROJECT, id: 77_202, name: "filler-project" };
+    projects = [collapseTarget, filler];
+    sessions = [
+      makeSession({ id: 77_211, projectId: collapseTarget.id, command: "a0" }),
+      makeSession({ id: 77_212, projectId: collapseTarget.id, command: "a1" }),
+      makeSession({ id: 77_213, projectId: collapseTarget.id, command: "a2" }),
+    ];
+    const user = userEvent.setup();
+    const { rerender, queryByText } = renderSidebar();
+
+    // Still below VIRTUALIZE_SESSION_THRESHOLD (3 sessions total) — this is
+    // the plain ProjectSection path.
+    expect(queryByText("a0")).toBeTruthy();
+    await user.click(screen.getByText("collapse-across-threshold"));
+    expect(queryByText("a0")).toBeNull();
+
+    // Grow an UNRELATED project's session count past the threshold — same
+    // "sessions changed under the same Sidebar instance" shape a live 4s
+    // poll tick produces, not a fresh mount.
+    sessions = [
+      ...sessions,
+      ...Array.from({ length: 25 }, (_, i) =>
+        makeSession({ id: 77_300 + i, projectId: filler.id, command: `b${i}` }),
+      ),
+    ];
+    rerender(
+      <div className="sidebar-wrapper">
+        <Sidebar {...NOOP_PROPS} />
+      </div>,
+    );
+
+    // Now above the threshold — VirtualizedProjectTree is the active path.
+    // The filler project's sessions (never manually touched, non-empty)
+    // render normally, proving the virtualized list is genuinely active...
+    expect(queryByText("b0")).toBeTruthy();
+    // ...while the explicitly-collapsed project's sessions stay hidden,
+    // proving the collapse survived the path switch rather than reverting.
+    expect(queryByText("a0")).toBeNull();
+    expect(queryByText("a1")).toBeNull();
+    expect(queryByText("a2")).toBeNull();
+  });
 });
 
 describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () => {
@@ -458,5 +513,35 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     const { container } = renderSidebar();
 
     expect(container.querySelector(".project-host-badge")?.textContent).toBe("build-box");
+  });
+
+  // Hermes review, PR #583 (suggestion, declined — see the reply on that
+  // thread): flagged the "empty" flat-row branch as unreachable, reasoning
+  // that a zero-session project is always auto-collapsed before it. That's
+  // only true absent an explicit override — a project the user has
+  // manually EXPANDED (independent of its session count; ProjectHeader's
+  // collapse toggle has no session-count gate) and which currently has zero
+  // sessions reaches it, exactly mirroring the plain ProjectSection path's
+  // own pre-existing "No sessions yet" note for the identical case. This
+  // proves the branch live rather than asserting it in the abstract.
+  it("reaches the empty-project row when a zero-session project is explicitly expanded", async () => {
+    stubVirtualizerLayout();
+    const emptyProject: Project = { ...PROJECT, id: 77_401, name: "empty-but-expanded" };
+    const filler: Project = { ...PROJECT, id: 77_402, name: "filler" };
+    projects = [emptyProject, filler];
+    // filler alone pushes the total past VIRTUALIZE_SESSION_THRESHOLD so
+    // this exercises VirtualizedProjectTree, not ProjectSection.
+    sessions = Array.from({ length: 25 }, (_, i) =>
+      makeSession({ id: 77_500 + i, projectId: filler.id, command: `f${i}` }),
+    );
+    const user = userEvent.setup();
+    renderSidebar();
+
+    // emptyProject has 0 sessions -> auto-collapsed by default; its header
+    // still renders (a project is only ever hidden entirely by an active
+    // filter, not by being empty).
+    await user.click(screen.getByText("empty-but-expanded"));
+
+    expect(screen.getByText("No sessions yet")).toBeTruthy();
   });
 });
