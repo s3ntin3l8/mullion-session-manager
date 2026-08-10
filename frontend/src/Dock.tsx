@@ -449,16 +449,30 @@ function DockColumn({
   // pure action-callers (used inside async handlers below, never read as a
   // value) — see the useDashboardStore.getState() calls at their own call
   // sites instead of subscribing to them here.
-  const { projects, sessions, gitBranchesByProject, settings, dockConfigRefreshTrigger } =
-    useDashboardStore(
-      useShallow((s) => ({
-        projects: s.projects,
-        sessions: s.sessions,
-        gitBranchesByProject: s.gitBranchesByProject,
-        settings: s.settings,
-        dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
-      })),
-    );
+  const {
+    projects,
+    sessions,
+    gitBranchesByProject,
+    settings,
+    dockConfigRefreshTrigger,
+    prsRefreshTrigger,
+  } = useDashboardStore(
+    useShallow((s) => ({
+      projects: s.projects,
+      sessions: s.sessions,
+      gitBranchesByProject: s.gitBranchesByProject,
+      settings: s.settings,
+      dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
+      // P12 — GitHubPanel.tsx's own live-updating widget already reads
+      // this (see its effect below's mirrored comment); the dock's own
+      // GitHub widget fetched once per projectId and never again, so its
+      // CI/PR counts froze at whatever they were when the panel first
+      // mounted while GitHubPanel next to it kept updating live off the
+      // same `/ws/github` push channel (store.ts's connectGitHubWS bumps
+      // this counter on every message for a subscribed project).
+      prsRefreshTrigger: s.prsRefreshTrigger,
+    })),
+  );
   // U8 — Settings -> Session management's "Confirm before kill" toggle,
   // same setting Sidebar.tsx's ConfirmButton and PaneTab.tsx's own kill gate
   // both read; the dock monitor header had no such gate at all before this.
@@ -643,7 +657,14 @@ function DockColumn({
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+    // P12 — prsRefreshTrigger in the deps means a live `/ws/github` push for
+    // this project (a check completing, a new PR) re-fetches immediately,
+    // exactly matching GitHubPanel.tsx's own identical effect — before this
+    // fix the dock widget only ever fetched once per projectId and showed
+    // stale CI/PR counts frozen at whatever they were when the column first
+    // mounted, even while GitHubPanel elsewhere on the same page updated
+    // live off the same push.
+  }, [projectId, prsRefreshTrigger]);
 
   const project = projects.find((p) => p.id === projectId) ?? null;
   const dockSessions = sessions.filter(
@@ -841,6 +862,43 @@ function DockColumn({
           );
           const dockerStatus = control.docker ? dockerServiceStatus(control.docker.state) : null;
 
+          // P10 — named so the header's new onKeyDown (Enter/Space) can call
+          // the exact same action as a click, rather than dispatching a
+          // synthetic `.click()` at the DOM node — matching how
+          // UnifiedBoard.tsx's TaskCard and NotificationBell.tsx's EventRow
+          // both call a plain function from both handlers.
+          const handleHeaderActivate = () => {
+            if (running) {
+              // U8 — only the KILL half of this header needs
+              // arm-then-confirm; the header doubles as the START
+              // affordance when nothing is running (the `else`
+              // branch below), and starting a session is never
+              // destructive, so it always fires on the first click
+              // regardless of confirmBeforeKill.
+              if (!confirmBeforeKill || killArmedIds.has(control.id)) {
+                disarmKill(control.id);
+                bumpToggleGen(control.id);
+                void useDashboardStore.getState().deleteSession(running.id);
+              } else {
+                armKill(control.id);
+              }
+            } else {
+              bumpToggleGen(control.id);
+              // Hermes review — this discarded the promise outright:
+              // a failed createSession (dead remote host, a bad
+              // worktree path, ...) became an unhandled rejection
+              // with nothing on screen, the exact P9 silent-failure
+              // class this PR fixes everywhere else. Reuses this
+              // file's own showCheckStatus transient-message infra
+              // (already rendered next to this same tag for
+              // "Check for update"/"Pull & restart") rather than
+              // introducing a new error-state shape.
+              launchForValue(selectedValue).catch(() => {
+                showCheckStatus(control.id, "Failed to start — try again", true);
+              });
+            }
+          };
+
           return (
             <Fragment key={control.id}>
               {isFirstDockerControl && <div className="dock-group-label">Docker</div>}
@@ -857,37 +915,27 @@ function DockColumn({
                           : undefined
                       : undefined
                   }
-                  onClick={() => {
-                    if (running) {
-                      // U8 — only the KILL half of this header needs
-                      // arm-then-confirm; the header doubles as the START
-                      // affordance when nothing is running (the `else`
-                      // branch below), and starting a session is never
-                      // destructive, so it always fires on the first click
-                      // regardless of confirmBeforeKill.
-                      if (!confirmBeforeKill || killArmedIds.has(control.id)) {
-                        disarmKill(control.id);
-                        bumpToggleGen(control.id);
-                        void useDashboardStore.getState().deleteSession(running.id);
-                      } else {
-                        armKill(control.id);
-                      }
-                    } else {
-                      bumpToggleGen(control.id);
-                      // Hermes review — this discarded the promise outright:
-                      // a failed createSession (dead remote host, a bad
-                      // worktree path, ...) became an unhandled rejection
-                      // with nothing on screen, the exact P9 silent-failure
-                      // class this PR fixes everywhere else. Reuses this
-                      // file's own showCheckStatus transient-message infra
-                      // (already rendered next to this same tag for
-                      // "Check for update"/"Pull & restart") rather than
-                      // introducing a new error-state shape.
-                      launchForValue(selectedValue).catch(() => {
-                        showCheckStatus(control.id, "Failed to start — try again", true);
-                      });
-                    }
+                  // P10 — U8's own finding flags this same header as "one
+                  // unconfirmed click kills a running dev server," and on
+                  // top of that it was entirely unreachable from the
+                  // keyboard. Same role="button"/tabIndex/Enter-Space
+                  // pattern as Sidebar.tsx's SessionRow/ProjectHeader,
+                  // including the `e.target !== e.currentTarget` guard —
+                  // this header nests a CustomSelect (worktree picker), a
+                  // "open preview" button, and (for a Docker-backed
+                  // control) a KebabMenu, and without the guard tabbing to
+                  // any of those and pressing Enter/Space would ALSO
+                  // toggle/kill this monitor.
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${control.title} — ${running ? "click to end" : "click to start"}`}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    handleHeaderActivate();
                   }}
+                  onClick={handleHeaderActivate}
                 >
                   <span
                     style={{

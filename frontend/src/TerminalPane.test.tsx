@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { act } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -11,6 +11,7 @@ import { useDashboardStore } from "./store.js";
 import { TerminalPane } from "./TerminalPane.js";
 import { api } from "./api.js";
 import type * as ApiModule from "./api.js";
+import type { Session } from "./api.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -44,6 +45,10 @@ interface FakeSocket {
   close: ReturnType<typeof vi.fn>;
   binaryType: string;
   _openHandlers: Array<() => void>;
+  // P13 — close/message handlers, needed by the reconnect-vs-ended tests
+  // below (every other existing test in this file only needs `_openHandlers`).
+  _closeHandlers: Array<(event: { code?: number; reason?: string }) => void>;
+  _messageHandlers: Array<(event: { data: unknown }) => void>;
 }
 
 let fakeSocket: FakeSocket;
@@ -187,15 +192,23 @@ vi.mock("@xterm/addon-search", () => ({
 
 function makeFakeSocket(): FakeSocket {
   const openHandlers: Array<() => void> = [];
+  const closeHandlers: Array<(event: { code?: number; reason?: string }) => void> = [];
+  const messageHandlers: Array<(event: { data: unknown }) => void> = [];
   const socket = {
     readyState: 0,
     send: vi.fn(),
-    addEventListener: vi.fn((event: string, handler: () => void) => {
-      if (event === "open") openHandlers.push(handler);
+    addEventListener: vi.fn((event: string, handler: (arg?: unknown) => void) => {
+      if (event === "open") openHandlers.push(handler as () => void);
+      else if (event === "close")
+        closeHandlers.push(handler as (event: { code?: number; reason?: string }) => void);
+      else if (event === "message")
+        messageHandlers.push(handler as (event: { data: unknown }) => void);
     }),
     close: vi.fn(),
     binaryType: "",
     _openHandlers: openHandlers,
+    _closeHandlers: closeHandlers,
+    _messageHandlers: messageHandlers,
   };
   return socket;
 }
@@ -394,6 +407,65 @@ function renderPane(extra: { active?: boolean } = {}) {
     groups: [],
   });
   return render(<TerminalPane params={{ sessionId: 1 }} {...extra} />);
+}
+
+// P13 — a minimal-but-complete Session fixture for the reconnect-vs-ended
+// tests below, which only care about `id`/`status`. Mirrors SessionRow.
+// test.tsx's own makeSession default shape.
+function makeMinimalSession(overrides: Partial<Session>): Session {
+  return {
+    id: 1,
+    projectId: 1,
+    parentSessionId: null,
+    name: null,
+    nameLocked: false,
+    command: "claude code",
+    cwd: null,
+    liveCwd: null,
+    previewBranch: null,
+    kind: "terminal",
+    status: "active",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastAttachedAt: null,
+    alive: true,
+    subscriberCount: 0,
+    activity: "working",
+    lastActivityAt: Date.now(),
+    attention: false,
+    attentionAt: null,
+    lastTitle: null,
+    gateState: "idle",
+    gatePrompt: null,
+    promoteState: "idle",
+    promoteSummary: null,
+    promoteSuggestedBaseRef: null,
+    permissionState: "idle",
+    planState: "idle",
+    errorState: "idle",
+    endedReason: null,
+    liveBranch: null,
+    exitCode: null,
+    attentionKind: null,
+    errorDetail: null,
+    lastAssistantMessage: null,
+    compactState: "idle",
+    subagentCount: 0,
+    subagents: [],
+    elicitationState: "idle",
+    elicitationServer: null,
+    lastTurnEndedAt: null,
+    stateRestored: true,
+    staleHooks: false,
+    restoredVersion: null,
+    sessionStatus: "working",
+    sessionStatusSeverity: "busy",
+    sessionStatusDetail: null,
+    sessionStatusAttentionRequired: false,
+    hookEmits: [],
+    pendingDevServerPort: null,
+    outstandingBackgroundTasks: [],
+    ...overrides,
+  };
 }
 
 describe("TerminalPane repaint registry (issue #107)", () => {
@@ -1694,5 +1766,118 @@ describe("TerminalPane pane-activation focus (U7)", () => {
     renderPane({ active: true });
 
     expect(getLatestTermInstance().focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+// P13 — the WS close listener used to retry with backoff regardless of why
+// the connection closed, then show a generic "Disconnected / Retry now"
+// that can never succeed once the session is genuinely gone (killed, or its
+// program exited). Two signals now distinguish "gone" from "network blip":
+// an `{type:"exited"}` control message (sent the instant the PTY exits,
+// terminal.ts's onExit), and cross-checking store.sessions at close time —
+// the close event's own code/reason carry no usable signal here (see the
+// close listener's own comment in TerminalPane.tsx for why: a reconnect
+// against an already-killed session fails at the WS opening handshake, which
+// every browser reports as code 1006/empty reason regardless of cause).
+describe("TerminalPane reconnect vs. session-ended (P13)", () => {
+  function enableReconnect(maxAttempts = 5) {
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: { ...s.settings.terminal, reconnect: { enabled: true, maxAttempts } },
+        },
+      }));
+    });
+  }
+
+  it('shows "Session ended" (no retry) when the session is absent from store.sessions at close time', () => {
+    stubFakeWebSocket(false);
+    renderPane();
+    enableReconnect();
+    useDashboardStore.setState({ sessions: [] });
+
+    act(() => {
+      for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
+    });
+
+    expect(screen.getByText("Session ended")).toBeInTheDocument();
+    expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+    expect(screen.queryByText("Retry now")).not.toBeInTheDocument();
+  });
+
+  it('shows "Session ended" when store.sessions reports this session as killed', () => {
+    stubFakeWebSocket(false);
+    renderPane();
+    enableReconnect();
+    useDashboardStore.setState({
+      sessions: [makeMinimalSession({ id: 1, status: "killed" })],
+    });
+
+    act(() => {
+      for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
+    });
+
+    expect(screen.getByText("Session ended")).toBeInTheDocument();
+  });
+
+  it('shows "Session ended" immediately on an {type:"exited"} message, without waiting for close', () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    useDashboardStore.setState({
+      sessions: [makeMinimalSession({ id: 1, status: "active" })],
+    });
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "exited" }) });
+      }
+    });
+
+    expect(screen.getByText("Session ended")).toBeInTheDocument();
+  });
+
+  it("an ordinary close (e.g. code 1006, abnormal closure) still retries with backoff when the session is still active in the store", () => {
+    vi.useFakeTimers();
+    try {
+      stubFakeWebSocket(false);
+      renderPane();
+      enableReconnect();
+      useDashboardStore.setState({
+        sessions: [makeMinimalSession({ id: 1, status: "active" })],
+      });
+
+      act(() => {
+        for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
+      });
+      // The close handler only SCHEDULES the retry (RECONNECT_BASE_DELAY_MS,
+      // TerminalPane.tsx) — status flips to "reconnecting" once that timer
+      // actually fires and connect() re-runs, not synchronously on close.
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+
+      expect(screen.getByText(/Reconnecting/)).toBeInTheDocument();
+      expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the ordinary Disconnected/Retry state (not Session ended) once backoff is exhausted against a still-active session", () => {
+    stubFakeWebSocket(false);
+    renderPane();
+    enableReconnect(0);
+    useDashboardStore.setState({
+      sessions: [makeMinimalSession({ id: 1, status: "active" })],
+    });
+
+    act(() => {
+      for (const handler of fakeSocket._closeHandlers) handler({ code: 1006, reason: "" });
+    });
+
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.getByText("Retry now")).toBeInTheDocument();
+    expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
   });
 });

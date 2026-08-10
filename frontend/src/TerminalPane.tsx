@@ -12,6 +12,7 @@ import {
   ChevronDownIcon,
   CloseIcon,
   ImageIcon,
+  KillIcon,
   RefreshIcon,
   SearchIcon,
   SpinnerIcon,
@@ -36,7 +37,12 @@ interface ResizeMessage {
   rows: number;
 }
 
-type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed";
+// P13 — "ended" is new: a session that is genuinely gone (killed, or its
+// program exited on its own), as opposed to "failed" (backoff exhausted
+// against a session that, as far as the client can tell, might still be
+// alive — a real network blip, a redeploy). See the reconnect effect below
+// for exactly which signals distinguish the two.
+type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed" | "ended";
 
 // Ceiling on how many scrollback matches @xterm/addon-search decorates
 // (terminal scrollback search, U1) — matches the addon's own default
@@ -522,6 +528,11 @@ export function TerminalPane(props: {
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectAttempt = 0;
+    // P13 — set the instant an `{type:"exited"}` control message arrives on
+    // an already-open connection (see the "message" listener inside connect()
+    // below); survives across reconnect attempts within this same mount,
+    // unlike anything scoped inside connect() itself.
+    let sessionExited = false;
 
     const dataSub = term.onData((data) => {
       if (ws?.readyState === WebSocket.OPEN) {
@@ -861,12 +872,64 @@ export function TerminalPane(props: {
       });
 
       socket.addEventListener("message", (event) => {
-        if (typeof event.data === "string") return;
-        term.write(new Uint8Array(event.data as ArrayBuffer));
+        if (typeof event.data !== "string") {
+          term.write(new Uint8Array(event.data as ArrayBuffer));
+          return;
+        }
+        // P13 — terminal.ts's onExit handler sends this the instant the PTY
+        // process exits, independent of whether the underlying WS connection
+        // itself ever closes (killing a session doesn't force-close an
+        // already-open browser socket — see that route's own "kept alive"
+        // comment). This is the earliest, most direct "this session is
+        // genuinely gone" signal available — well before any close event
+        // might eventually follow, possibly never for an already-open
+        // connection. Previously dropped outright (a bare `return` for any
+        // string message); now the one string frame this protocol actually
+        // sends is read.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if ((parsed as { type?: unknown })?.type === "exited") {
+          sessionExited = true;
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          setStatus("ended");
+        }
       });
 
       socket.addEventListener("close", () => {
         if (destroyed) return;
+        // P13 — distinguishes "this session is genuinely gone" (no retry;
+        // show "Session ended") from an ordinary network blip (keep the
+        // existing backoff-and-retry behavior). The close event's own
+        // code/reason carry no usable signal for the specific case this
+        // exists to catch: a reconnect attempt against an already-killed
+        // session fails at the WS opening handshake itself
+        // (routes/terminal.ts's preValidation returns 400 for a killed/
+        // exited row before the upgrade ever completes), and per the
+        // WebSocket spec every browser reports a failed opening handshake as
+        // code 1006 with an empty reason — indistinguishable from a genuine
+        // abnormal closure (verified by reading terminal.ts; there is no
+        // custom close code anywhere in this backend). The two signals that
+        // DO work: (a) `sessionExited`, set above the moment an "exited"
+        // control message arrives on a connection that was already open,
+        // and (b) cross-checking `store.sessions` — a reconnect attempt only
+        // lands here because a PRIOR attempt already failed, so by the time
+        // this fires, whatever kill/exit caused that has normally long since
+        // reached the store (an explicit kill's own store.deleteSession
+        // awaits refreshSessions() before resolving; a session killed from
+        // elsewhere reaches this store within one 4s live-refresh tick).
+        const stored = useDashboardStore
+          .getState()
+          .sessions.find((s) => s.id === props.params.sessionId);
+        const sessionGone =
+          sessionExited || !stored || stored.status === "killed" || stored.status === "exited";
+        if (sessionGone) {
+          setStatus("ended");
+          return;
+        }
         const reconnectPrefs = prefsRef.current.reconnect;
         if (!reconnectPrefs.enabled || reconnectAttempt >= reconnectPrefs.maxAttempts) {
           setStatus("failed");
@@ -1327,6 +1390,22 @@ export function TerminalPane(props: {
                 <RefreshIcon size={13} />
                 Retry now
               </button>
+            </>
+          )}
+          {
+            // P13 — distinct from "failed": the sidebar already knows this
+            // session is gone (killed, or its program exited), so retrying
+            // the same connection can never succeed — no "Retry now" button,
+            // which would otherwise burn through backoff against a session
+            // that's provably never coming back.
+          }
+          {status === "ended" && (
+            <>
+              <KillIcon size={22} style={{ color: "var(--muted)" }} />
+              <span className="terminal-status-text">Session ended</span>
+              <span className="terminal-status-subtext">
+                Open a new session from the sidebar to keep working here
+              </span>
             </>
           )}
         </div>

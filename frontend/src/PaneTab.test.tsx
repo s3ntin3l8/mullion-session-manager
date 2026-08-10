@@ -657,3 +657,111 @@ describe("PaneTab", () => {
     });
   });
 });
+
+// P11 — the overflow menu previously had no focus management at all and
+// only `mousedown` outside-click could close it (a keyboard user who
+// tabbed into it had no way to close it). Uses the shared useFocusTrap.ts
+// hook, plus a menu-scoped Escape handler and role="menu"/role="menuitem".
+describe("PaneTab overflow menu — focus management (P11)", () => {
+  function openMenu() {
+    const props = makeProps();
+    render(<PaneTab {...props} />);
+    return { toggle: screen.getByTitle("More…"), props };
+  }
+
+  it("is a role=menu with role=menuitem children, no aria-modal (no backdrop, same rule as UnifiedBoard's drawer)", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+
+    const menu = screen.getByRole("menu");
+    expect(menu).not.toHaveAttribute("aria-modal");
+    expect(screen.getAllByRole("menuitem").length).toBeGreaterThan(0);
+  });
+
+  it("moves focus into the menu (onto the first item) when it opens", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+
+    expect(screen.getByText("Rename").closest("button")).toHaveFocus();
+  });
+
+  it("restores focus to the toggle button when closed via outside click", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+    expect(screen.getByText("Rename").closest("button")).toHaveFocus();
+
+    // mousedown outside the menu and the toggle button both close it.
+    await userEvent.click(document.body);
+
+    expect(toggle).toHaveFocus();
+  });
+
+  it("closes on Escape, unlike before this fix (previously only mousedown outside-click worked)", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
+  });
+
+  it("traps Tab within the menu", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+
+    const menu = screen.getByRole("menu");
+    const items = Array.from(menu.querySelectorAll<HTMLElement>("button:not([disabled])"));
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+
+    last.focus();
+    await userEvent.tab();
+    expect(first).toHaveFocus();
+
+    first.focus();
+    await userEvent.tab({ shift: true });
+    expect(last).toHaveFocus();
+  });
+
+  it("does not restore focus to the toggle button when closing by opening the timeline panel", async () => {
+    const { toggle } = openMenu();
+    await userEvent.click(toggle);
+
+    await userEvent.click(screen.getByText("View timeline"));
+
+    expect(toggle).not.toHaveFocus();
+  });
+
+  it("does not restore focus to the toggle button when the kill click closes the pane", async () => {
+    const { toggle, props } = openMenu();
+    await userEvent.click(toggle);
+
+    await userEvent.click(screen.getByText("Kill session"));
+
+    expect(props.api.close).toHaveBeenCalled();
+    expect(toggle).not.toHaveFocus();
+  });
+
+  // Pins the trade-off documented alongside the outside-click handler's
+  // `e.preventDefault()` (added to fix a focus-restore race — see that
+  // handler's own comment in PaneTab.tsx): preventing mousedown's default
+  // action only suppresses the browser's own focus-shift-on-mousedown, not
+  // the click event itself, so a real interactive element sitting outside
+  // the menu (here, the tab's own "Close pane" button, a sibling in the tab
+  // bar, not the overflow menu) must still fire its own click handler
+  // normally when clicked while the menu happens to be open.
+  it("still fires a real button's own click handler when it closes the menu as an outside click", async () => {
+    const { toggle, props } = openMenu();
+    await userEvent.click(toggle);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByTitle("Close pane — detaches your view, session keeps running"),
+    );
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(props.api.close).toHaveBeenCalled();
+  });
+});

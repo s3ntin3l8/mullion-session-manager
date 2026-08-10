@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
@@ -22,6 +23,7 @@ import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
+import { useFocusTrap } from "./useFocusTrap.js";
 
 // The one distinction the design's States doc (section 1) stresses above
 // everything else: closing a pane only detaches the browser's view — the
@@ -320,11 +322,66 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       const target = e.target as Node;
       if (overflowBtnRef.current?.contains(target)) return;
       if (overflowMenuRef.current?.contains(target)) return;
+      // P11 — a plain mousedown's default action shifts focus to whatever
+      // was clicked (or document.body, for a non-focusable target); without
+      // suppressing it, that default focus shift wins the race against
+      // useFocusTrap's own restore-on-close cleanup (triggered by
+      // setOverflowOpen(false) below), leaving focus on <body> instead of
+      // back on the toggle button. Trade-off, and a deliberate one: if the
+      // "outside" click that dismisses this menu happens to land on some
+      // OTHER real focusable element (e.g. a different pane's own overflow
+      // toggle), that element loses its own native mousedown-focus this one
+      // time — its click handler still fires normally, only the focus
+      // assignment is redirected here instead. Narrow enough (mouse users
+      // rarely depend on focus landing exactly where they clicked) that
+      // reliably restoring focus for the keyboard-close paths (Escape, the
+      // Tab trap) is worth it.
+      e.preventDefault();
       setOverflowOpen(false);
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
   }, [overflowOpen]);
+
+  // P11 — this menu previously had NO focus management at all: opening it
+  // never moved focus in, Tab escaped straight into whatever's behind the
+  // portal, closing never restored focus to the toggle button, and — worse
+  // than any of the other three P11 sites — only `mousedown` outside-click
+  // could close it, so a keyboard user who tabbed into it had no way to
+  // close it at all. Same shared hook as Settings/CommandPalette/
+  // NotificationBell. No `aria-modal` (see UnifiedBoard.tsx's drawer for
+  // the rule this follows): there's no backdrop and the rest of the tab
+  // strip stays fully interactive while this is open.
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
+    active: overflowOpen,
+    containerRef: overflowMenuRef,
+  });
+  // Escape scoped to the menu's own onKeyDown (bubbling from whatever's
+  // focused inside it), not a window-level listener — same reasoning as
+  // UnifiedBoard.tsx's onDrawerKeyDown: a global listener would also catch
+  // an Escape meant for some other overlay (the command palette, Settings)
+  // sitting above this tab strip.
+  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setOverflowOpen(false);
+      return;
+    }
+    onTrapKeyDown(e);
+  };
+  // Every menu item action below already closes the menu by ALSO doing
+  // something else (renaming — see the effect above that moves focus into
+  // renameInputRef, opening a timeline/browser panel, opening the promote
+  // dialog, or killing the session) — same "closing by opening something
+  // else must not fight the restore-on-close effect" reasoning as
+  // CommandPalette's closeAfterAction. `armOrKill`'s FIRST click (arming,
+  // not killing) is the one path that closes nothing, so it's excluded —
+  // see its own call site below.
+  const closeMenuAfterAction = (action: () => void) => {
+    suppressRestore();
+    setOverflowOpen(false);
+    action();
+  };
 
   const commitRename = () => {
     const value = draftName.trim();
@@ -345,6 +402,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     if (killArmed || (!confirmBeforeKill && childCount === 0)) {
       if (armTimer.current) clearInterval(armTimer.current);
       setKillArmed(false);
+      // props.api.close() below tears down this whole pane — nothing left
+      // to restore focus to on this side, and the trap's own restore would
+      // otherwise try to focus the (about-to-be-removed) overflow toggle
+      // button right as dockview tears down the pane around it.
+      suppressRestore();
       setOverflowOpen(false);
       props.api.close();
       void deleteSession(session.id).catch((err) => {
@@ -491,13 +553,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             // background instead of falling back to the theme.
             className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
             style={{ position: "fixed", top: overflowPos.top, right: overflowPos.right }}
+            role="menu"
+            aria-label={`${props.api.title ?? "Pane"} actions`}
+            onKeyDown={onMenuKeyDown}
           >
             <button
               className="pane-tab-overflow-item"
+              role="menuitem"
               onClick={() => {
-                setDraftName(props.api.title ?? "");
-                setRenaming(true);
-                setOverflowOpen(false);
+                closeMenuAfterAction(() => {
+                  setDraftName(props.api.title ?? "");
+                  setRenaming(true);
+                });
               }}
             >
               <RenameIcon size={14} style={{ color: "var(--muted)" }} />
@@ -506,6 +573,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             </button>
             <button
               className="pane-tab-overflow-item"
+              role="menuitem"
               disabled
               title="Drag the tab to move it between panes/workspaces"
             >
@@ -515,9 +583,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             {session && (
               <button
                 className="pane-tab-overflow-item"
+                role="menuitem"
                 onClick={() => {
-                  openTimelinePanel(props.containerApi, session);
-                  setOverflowOpen(false);
+                  closeMenuAfterAction(() => openTimelinePanel(props.containerApi, session));
                 }}
               >
                 <ListIcon size={14} style={{ color: "var(--muted)" }} />
@@ -527,9 +595,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             {session && (
               <button
                 className="pane-tab-overflow-item"
+                role="menuitem"
                 onClick={() => {
-                  openBrowserPanePanel(props.containerApi, session);
-                  setOverflowOpen(false);
+                  closeMenuAfterAction(() => openBrowserPanePanel(props.containerApi, session));
                 }}
               >
                 <BotIcon size={14} style={{ color: "var(--muted)" }} />
@@ -539,9 +607,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             {session && project && (
               <button
                 className="pane-tab-overflow-item"
+                role="menuitem"
                 onClick={() => {
-                  setPromoteOpen(true);
-                  setOverflowOpen(false);
+                  closeMenuAfterAction(() => setPromoteOpen(true));
                 }}
               >
                 <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />
@@ -551,6 +619,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             <div className="pane-tab-overflow-divider" />
             <button
               className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
+              role="menuitem"
               onClick={armOrKill}
               title={
                 childCount > 0

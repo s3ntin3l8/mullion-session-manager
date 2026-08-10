@@ -637,6 +637,7 @@ function ProjectHeader({
   onToggleCollapsed,
   onOpenLauncher,
   onSessionEnded,
+  bodyId,
 }: {
   project: Project;
   sessions: Session[];
@@ -645,6 +646,17 @@ function ProjectHeader({
   onToggleCollapsed: () => void;
   onOpenLauncher: () => void;
   onSessionEnded: (session: Session) => void;
+  // P10/P11 polish — id of the collapsible region this header's
+  // `aria-expanded` governs, for `aria-controls` (the disclosure-button
+  // pattern; see UnifiedBoard.tsx's `kanban-lane-body` precedent). Only
+  // ProjectSection's plain (below-threshold) rendering path has a single
+  // contiguous body element to point at — the virtualized path (Sidebar's
+  // own flatten step, above) renders each project's session rows as
+  // independent absolutely-positioned siblings within one shared
+  // virtualizer container, with no per-project wrapper element to give an
+  // id, so that call site leaves this undefined rather than pointing
+  // `aria-controls` at a div that doesn't exist.
+  bodyId?: string;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   // P9 — deleteProject used to be `void deleteProject(...).then(...)` with
@@ -708,7 +720,28 @@ function ProjectHeader({
 
   return (
     <>
-      <div className="project-row-header" onClick={onToggleCollapsed}>
+      <div
+        className="project-row-header"
+        onClick={onToggleCollapsed}
+        // P10 — same role="button"/tabIndex/Enter-Space pattern as
+        // SessionRow above (see that row's own comment for the full
+        // rationale), including the `e.target !== e.currentTarget` guard:
+        // this header nests its own "+ session" button and a KebabMenu
+        // (both already wrapped in `onClick={(e) => e.stopPropagation()}`
+        // for the mouse case), and without the guard tabbing to either and
+        // pressing Enter/Space would ALSO toggle this row's collapse state.
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        aria-controls={bodyId}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggleCollapsed();
+          }
+        }}
+      >
         <ChevronDownIcon
           size={12}
           className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
@@ -930,10 +963,11 @@ export function ProjectSection({
         onToggleCollapsed={toggleCollapsed}
         onOpenLauncher={onOpenLauncher}
         onSessionEnded={onSessionEnded}
+        bodyId={`project-row-body-${project.id}`}
       />
 
       {!collapsed && (
-        <div className="project-row-body">
+        <div className="project-row-body" id={`project-row-body-${project.id}`}>
           {sessions.length === 0 ? (
             <div className="project-empty-note">No sessions yet</div>
           ) : (
@@ -1727,6 +1761,37 @@ export function SessionRow({
         onClick={onOpen}
         draggable={true}
         onDragStart={onDragStart}
+        // P10 — this is the single most-used control in the app ("opening a
+        // session is mouse-only" before this fix), so it gets the same
+        // role="button"/tabIndex/Enter-Space pattern as UnifiedBoard.tsx's
+        // TaskCard and NotificationBell.tsx's EventRow. Unlike either of
+        // those two, this row nests a REAL focusable rename `<input>` plus
+        // several of its own buttons (git-details toggle, kebab menu, end
+        // session) — every one of those already stops click propagation
+        // (the `onClick={(e) => e.stopPropagation()}` wrapper spans below),
+        // which keeps a mouse click on any of them from also opening the
+        // session. That alone doesn't cover keyboard: a nested `<button>`'s
+        // native Enter/Space activation dispatches its own click AND a raw
+        // keydown that bubbles here independently of that click's
+        // stopPropagation (a different event entirely) — so tabbing to,
+        // say, the kebab menu and pressing Enter would fire this row's
+        // onOpen too without a guard. `e.target !== e.currentTarget` is that
+        // guard: it only treats Enter/Space as "open" when the KEYDOWN's own
+        // target is the row itself (i.e. the row, not some focused
+        // descendant, has focus), which also covers typing Enter into the
+        // rename input for free — no per-descendant stopPropagation needed,
+        // unlike NotificationBell's GateActions, which has to do that by
+        // hand for its nested reason field.
+        role="button"
+        tabIndex={0}
+        aria-label={`Open session ${title}`}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
       >
         <div className="session-item-row">
           {dot}
@@ -1739,6 +1804,12 @@ export function SessionRow({
               ref={renameInputRef}
               className="session-rename-input"
               value={draftName}
+              // P10 — matches WorkspaceSwitcher.tsx's own rename inputs
+              // (`.workspace-rename-input`): without this, clicking into the
+              // field to place the cursor also bubbles up as a click on the
+              // row and fires `onOpen`, same class of bug the row's
+              // `onKeyDown` guard exists to prevent for the keyboard case.
+              onClick={(e) => e.stopPropagation()}
               onChange={(e) => setDraftName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") commitRename();
