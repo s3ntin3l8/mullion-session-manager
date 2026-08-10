@@ -75,6 +75,14 @@ vi.mock("node-pty", () => ({
 // don't need to care about it.
 const isActiveReplies: Record<string, string> = {};
 
+// Perf audit finding B8(2) — the fake `systemctl --user list-units` reply
+// isMasterAliveBatch() should see: a list of unit names to report as
+// active, in the real `--plain --no-legend` output shape. Defaults to
+// empty (nothing active) so tests unrelated to isMasterAliveBatch don't
+// need to care about it, mirroring isActiveReplies' own default-fallback
+// convention above.
+let listUnitsReply: string[] = [];
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -93,6 +101,20 @@ vi.mock("node:child_process", async (importOriginal) => {
           ee.emit("exit", 0);
           setImmediate(() => {
             ee.stdout?.emit("data", Buffer.from(`${reply}\n`));
+            ee.emit("close", 0);
+          });
+        });
+        return ee;
+      }
+      if (file === "systemctl" && args[1] === "list-units") {
+        ee.stdout = new EventEmitter();
+        setImmediate(() => {
+          ee.emit("exit", 0);
+          setImmediate(() => {
+            const lines = listUnitsReply
+              .map((unit) => `${unit} loaded active running ${unit}`)
+              .join("\n");
+            ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
             ee.emit("close", 0);
           });
         });
@@ -161,6 +183,7 @@ describe("PtyManager", () => {
   beforeEach(() => {
     fakePtyChildren.length = 0;
     for (const key of Object.keys(isActiveReplies)) delete isActiveReplies[key];
+    listUnitsReply = [];
     // mkdtempSync, not a hand-rolled random suffix: the OS's own atomic,
     // exclusive directory creation is what CodeQL's js/insecure-temporary-
     // file query treats as safe — a hand-templated path under os.tmpdir()
@@ -373,6 +396,65 @@ describe("PtyManager", () => {
     for (let i = 0; i < 8; i++) fakePtyChildren[0].emitData(chunk);
 
     expect(session.getScrollback().length).toBeLessThanOrEqual(1024 * 1024 + 32);
+  });
+
+  // Perf audit finding B8(1) — getScrollbackTail() backs the 10s
+  // dev-server-detect sweep (dev-server-detect.ts's
+  // detectDevServerPortForPlainSession): it must return only the most
+  // recent bytes, not getScrollback()'s full ring, and — unlike
+  // getScrollback() — no mode preamble, since callers only feed it into a
+  // text scan.
+  describe("getScrollbackTail", () => {
+    it("returns everything (no preamble) when total scrollback is under the requested cap", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      fakePtyChildren[0].emitData("hello world");
+
+      expect(session.getScrollbackTail(1024).toString()).toBe("hello world");
+    });
+
+    it("returns only the last N bytes when scrollback exceeds the requested cap", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      fakePtyChildren[0].emitData("a".repeat(100));
+      fakePtyChildren[0].emitData("b".repeat(100));
+      fakePtyChildren[0].emitData("c".repeat(100));
+
+      const tail = session.getScrollbackTail(150);
+      expect(tail.length).toBe(150);
+      // Exactly the last 150 bytes of "a"*100 + "b"*100 + "c"*100: the last
+      // 50 b's followed by all 100 c's.
+      expect(tail.toString()).toBe(`${"b".repeat(50)}${"c".repeat(100)}`);
+    });
+
+    it("never returns more than the requested cap even across many small chunks", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      for (let i = 0; i < 50; i++) fakePtyChildren[0].emitData(`chunk-${i}-`);
+
+      const tail = session.getScrollbackTail(64);
+      expect(tail.length).toBeLessThanOrEqual(64);
+      // Must end with the very last chunk emitted.
+      expect(tail.toString().endsWith("chunk-49-")).toBe(true);
+    });
   });
 
   it("tracks alt-screen state and prepends a matching preamble on replay", async () => {
@@ -1595,6 +1677,83 @@ describe("PtyManager", () => {
         return ee as unknown as ReturnType<typeof spawnChildProcess>;
       });
       await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+    });
+  });
+
+  // Perf audit finding B8(2) — batched counterpart to isMasterAlive above:
+  // a single `systemctl --user list-units` spawn for the whole id batch,
+  // instead of one `is-active` spawn per id.
+  describe("isMasterAliveBatch", () => {
+    it("resolves true only for ids whose scope unit is in the active list", async () => {
+      listUnitsReply = ["crs-session-1.scope", "crs-session-3.scope"];
+      await expect(manager.isMasterAliveBatch(["1", "2", "3"])).resolves.toEqual({
+        "1": true,
+        "2": false,
+        "3": true,
+      });
+    });
+
+    it("spawns exactly one systemctl call for the whole batch, not one per id", async () => {
+      listUnitsReply = ["crs-session-1.scope", "crs-session-2.scope"];
+      vi.mocked(spawnChildProcess).mockClear();
+      await manager.isMasterAliveBatch(["1", "2", "3", "4", "5"]);
+      expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
+        "systemctl",
+        [
+          "--user",
+          "list-units",
+          "--type=scope",
+          "--state=active",
+          "--no-legend",
+          "--plain",
+          "crs-session-*.scope",
+        ],
+        expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
+      );
+    });
+
+    it("resolves an empty record for an empty id list without spawning anything", async () => {
+      vi.mocked(spawnChildProcess).mockClear();
+      await expect(manager.isMasterAliveBatch([])).resolves.toEqual({});
+      expect(vi.mocked(spawnChildProcess)).not.toHaveBeenCalled();
+    });
+
+    it("resolves every id false when nothing is active", async () => {
+      listUnitsReply = [];
+      await expect(manager.isMasterAliveBatch(["1", "2"])).resolves.toEqual({
+        "1": false,
+        "2": false,
+      });
+    });
+
+    // Trust rule (see isMasterAliveBatch's own doc comment) — a spawn
+    // failure means "unknown," not "confirmed not alive": resolving with
+    // false for every id would tell session-reconciler.ts to mass-exit
+    // every active session on a single transient systemctl error. An empty
+    // record hits the reconciler's own "host omitted liveness, skip"
+    // branch instead (the same one that already protects the
+    // remote-host/partial-response case).
+    it("resolves an empty record (not all-false) when the spawn itself fails", async () => {
+      vi.mocked(spawnChildProcess).mockImplementationOnce(() => {
+        const ee = new EventEmitter();
+        setImmediate(() => ee.emit("error", new Error("ENOENT")));
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+      await expect(manager.isMasterAliveBatch(["1", "2"])).resolves.toEqual({});
+    });
+
+    it("resolves an empty record (not all-false) when systemctl exits non-zero", async () => {
+      vi.mocked(spawnChildProcess).mockImplementationOnce(() => {
+        const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+        ee.stdout = new EventEmitter();
+        setImmediate(() => {
+          ee.emit("exit", 1);
+          setImmediate(() => ee.emit("close", 1));
+        });
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+      await expect(manager.isMasterAliveBatch(["1", "2"])).resolves.toEqual({});
     });
   });
 

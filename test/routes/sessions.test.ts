@@ -280,6 +280,52 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Perf audit finding A6 — GET /api/sessions had no status filter at all,
+  // so every 4s poll tick paid for every `killed` tombstone ever created
+  // (nothing purges them). This asserts the new filter actually narrows the
+  // result set, same pattern as the ?kind= test above.
+  it("filters the session list by ?status=", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const sessionId = created.json().id;
+    await waitUntil(async () => {
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      return list.json()[0]?.alive === true;
+    });
+
+    const killed = await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+    expect(killed.statusCode).toBe(204);
+
+    const activeOnly = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}&status=active`,
+    });
+    expect(activeOnly.json()).toEqual([]);
+
+    const killedOnly = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}&status=killed`,
+    });
+    expect(killedOnly.json()).toEqual([
+      expect.objectContaining({ id: sessionId, status: "killed" }),
+    ]);
+
+    await app.close();
+  });
+
+  it("rejects an invalid status querystring value", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/sessions?status=bogus" });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
   it("rejects an invalid kind in the create body", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);
@@ -385,6 +431,95 @@ describe("sessions route", () => {
     expect(list.json()).toEqual([
       expect.objectContaining({ id: sessionId, status: "killed", alive: false }),
     ]);
+
+    await app.close();
+  });
+
+  // Perf audit finding A6 — withLiveInfo (routes/sessions.ts) used to call
+  // resolveProjectHostId(app, row.projectId) itself, re-running the exact
+  // per-project SELECT the route handler had already batched into
+  // `projectHostIds` just above it — one redundant synchronous
+  // better-sqlite3 query *per session row*, on every request. Pinned by
+  // counting `app.db.select` invocations for a 1-row vs. a 5-row list:
+  // before the fix this call count scaled with row count; after, GET
+  // /api/sessions issues the same fixed number of `select`s regardless of
+  // how many sessions it returns.
+  it("does not issue a per-row DB query for host resolution in the session list (no N+1)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+
+    const selectSpy = vi.spyOn(app.db, "select");
+    selectSpy.mockClear();
+    const oneRow = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+    expect(oneRow.json()).toHaveLength(1);
+    const callsForOneRow = selectSpy.mock.calls.length;
+
+    for (let i = 0; i < 4; i++) {
+      await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+    }
+
+    selectSpy.mockClear();
+    const fiveRows = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}`,
+    });
+    expect(fiveRows.json()).toHaveLength(5);
+    const callsForFiveRows = selectSpy.mock.calls.length;
+
+    // Constant, not scaling with row count — an N+1 here would show
+    // callsForFiveRows == callsForOneRow + 4.
+    expect(callsForFiveRows).toBe(callsForOneRow);
+
+    selectSpy.mockRestore();
+    await app.close();
+  });
+
+  // Perf audit finding A4 — @fastify/compress is registered via app.ts's
+  // onRoute hook before routes/sessions.ts's routes are registered, so it
+  // must cover this API route too, not just @fastify/static's assets (see
+  // test/plugins/static.test.ts's equivalent assertion). This is the
+  // biggest single win in A4 (a poll-heavy JSON payload hit every 4s from
+  // every open tab), so it's pinned directly rather than just assumed from
+  // registration order — the preview-proxy path in
+  // test/plugins/preview-proxy.test.ts is the one route that does NOT get
+  // this coverage, and is asserted separately as a documented exception.
+  it("compresses a large GET /api/sessions response when the client accepts gzip", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    // Pad well past @fastify/compress's default 1024-byte threshold — a
+    // single session row is small, so create enough of them.
+    for (let i = 0; i < 10; i++) {
+      await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", name: `session-${i}-with-a-somewhat-longer-name` },
+      });
+    }
+
+    const uncompressedCheck = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}`,
+    });
+    expect(uncompressedCheck.rawPayload.length).toBeGreaterThan(1024);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}`,
+      headers: { "accept-encoding": "gzip" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-encoding"]).toBe("gzip");
 
     await app.close();
   });

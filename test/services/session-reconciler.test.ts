@@ -59,6 +59,21 @@ describe("reconcileExitedSessions", () => {
     mockSyncTaskTransition.mockClear();
   });
 
+  // Perf audit finding B8(2) — LocalSessionBackend.isMasterAlive(ids) now
+  // calls app.pty.isMasterAliveBatch(ids) (a single `systemctl --user
+  // list-units` call for the whole batch) instead of Promise.all-ing
+  // app.pty.isMasterAlive(id) once per id. Every test below used to stub
+  // the old per-id method uniformly (every id "alive" or every id "not
+  // alive") — this stubs the batch method the same uniform way, answering
+  // every id in whatever batch it's called with identically.
+  function mockMasterAlive(app: Awaited<ReturnType<typeof buildApp>>, alive: boolean) {
+    return vi.spyOn(app.pty, "isMasterAliveBatch").mockImplementation(async (ids: string[]) => {
+      const result: Record<string, boolean> = Object.create(null);
+      for (const id of ids) result[id] = alive;
+      return result;
+    });
+  }
+
   async function createSession(app: Awaited<ReturnType<typeof buildApp>>) {
     const project = await app.inject({
       method: "POST",
@@ -78,7 +93,7 @@ describe("reconcileExitedSessions", () => {
   // otherwise make "no active sessions at all" untrue by the time this ran.
   it("is a no-op when there are no active sessions", async () => {
     const app = await buildApp();
-    const isMasterAliveSpy = vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+    const isMasterAliveSpy = mockMasterAlive(app, true);
 
     await expect(reconcileExitedSessions(app)).resolves.toBeUndefined();
     expect(isMasterAliveSpy).not.toHaveBeenCalled();
@@ -89,7 +104,31 @@ describe("reconcileExitedSessions", () => {
   it("leaves an active session alone when its scope is still alive", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);
-    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+    mockMasterAlive(app, true);
+
+    await reconcileExitedSessions(app);
+
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
+    expect(row?.status).toBe("active");
+
+    await app.close();
+  });
+
+  // Perf audit finding B8(2), trust-rule regression — isMasterAliveBatch
+  // resolves an EMPTY record (not all-false) on a systemctl spawn/parse
+  // failure (see its own doc comment in pty-manager.ts). This pins that a
+  // local session's row is left alone in that case — the reconciler's
+  // `alive === undefined` -> skip branch must treat "the batch call itself
+  // failed" exactly like "a reachable host's response omitted this key,"
+  // not like "confirmed not alive." Getting this wrong would mass-exit
+  // every active local session on a single transient systemctl error.
+  it("leaves an active session alone when the batch liveness check itself fails (empty record, not all-false)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    vi.spyOn(app.pty, "isMasterAliveBatch").mockResolvedValue(Object.create(null));
 
     await reconcileExitedSessions(app);
 
@@ -105,7 +144,7 @@ describe("reconcileExitedSessions", () => {
   it("flips an active session to exited once its scope is no longer alive", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);
-    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+    mockMasterAlive(app, false);
 
     await reconcileExitedSessions(app);
 
@@ -129,7 +168,7 @@ describe("reconcileExitedSessions", () => {
     const app = await buildApp();
     const sessionId = await createSession(app);
     app.pty.stashSeed(String(sessionId), "some initial prompt");
-    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+    mockMasterAlive(app, false);
 
     await reconcileExitedSessions(app);
 
@@ -148,7 +187,7 @@ describe("reconcileExitedSessions", () => {
   it("flips the row to exited BEFORE cleanupPreviewWorktree resolves, not after (A9)", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);
-    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+    mockMasterAlive(app, false);
 
     const gitWorktreeModule = await import("../../src/services/git-worktree.js");
     let resolveCleanup!: (value: boolean) => void;
@@ -166,7 +205,7 @@ describe("reconcileExitedSessions", () => {
 
     // Poll for the flip rather than assuming a fixed number of microtask
     // ticks — isMasterAlive resolves through a couple of its own layers
-    // (LocalBackend.isMasterAlive -> app.pty.isMasterAlive) before the
+    // (LocalBackend.isMasterAlive -> app.pty.isMasterAliveBatch) before the
     // reconciler reaches the DB write, and hard-coding that depth would be
     // an implementation detail this test shouldn't need to know.
     let row: { status: string } | undefined;
@@ -203,7 +242,7 @@ describe("reconcileExitedSessions", () => {
     const closeForProjectSpy = vi
       .spyOn(app.browser, "closeForProject")
       .mockResolvedValue(undefined);
-    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+    mockMasterAlive(app, false);
 
     await reconcileExitedSessions(app);
 
@@ -241,7 +280,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       await reconcileExitedSessions(app);
 
@@ -260,7 +299,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed", 77);
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       await reconcileExitedSessions(app);
 
@@ -286,7 +325,7 @@ describe("reconcileExitedSessions", () => {
         .set({ worktreePath: "/tmp/.mullion-worktrees/mullion-task-1" })
         .where(eq(tasks.id, taskId))
         .run();
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const realResolveBackend = sessionBackendModule.resolveBackend;
@@ -320,7 +359,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       await reconcileExitedSessions(app);
 
@@ -336,7 +375,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "in_progress");
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       await reconcileExitedSessions(app);
 
@@ -364,7 +403,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       const gitWorktreeModule = await import("../../src/services/git-worktree.js");
       const cleanupSpy = vi
@@ -394,7 +433,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "reviewing");
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+      mockMasterAlive(app, false);
 
       await reconcileExitedSessions(app);
 
@@ -410,7 +449,7 @@ describe("reconcileExitedSessions", () => {
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      mockMasterAlive(app, true);
 
       await reconcileExitedSessions(app);
 
@@ -427,13 +466,18 @@ describe("reconcileExitedSessions", () => {
     const sessionId = await createSession(app);
     await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
 
-    const isMasterAliveSpy = vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+    const isMasterAliveSpy = mockMasterAlive(app, false);
     await reconcileExitedSessions(app);
 
     // The row was already "killed" (not "active"), so it's outside the
-    // query the reconciler selects — isMasterAlive should never be asked
-    // about it at all.
-    expect(isMasterAliveSpy).not.toHaveBeenCalledWith(String(sessionId));
+    // query the reconciler selects — this file's shared on-disk DB can
+    // still have OTHER leftover "active" sessions from earlier tests
+    // (no per-test cleanup here), so the batch call itself may still
+    // happen for those — this only asserts THIS session's id was never
+    // included in any batch it was asked about.
+    for (const call of isMasterAliveSpy.mock.calls) {
+      expect(call[0]).not.toContain(String(sessionId));
+    }
 
     const res = await app.inject({ method: "GET", url: "/api/sessions" });
     const row = (res.json() as Array<{ id: number; status: string }>).find(
@@ -452,7 +496,7 @@ describe("reconcileExitedSessions", () => {
       // still reconcile normally even while the remote group's host is
       // down (grouped-by-host, one failure doesn't abort the other group).
       const localSessionId = await createSession(app);
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      mockMasterAlive(app, true);
 
       const badHost = await app.inject({
         method: "POST",
@@ -495,7 +539,7 @@ describe("reconcileExitedSessions", () => {
       // doesn't stub it hangs forever on that leftover group. Every other
       // test here either stubs this or never leaves an active local
       // session; this one only cares about the remote group below.
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      mockMasterAlive(app, true);
       let omittedId: string | null = null;
 
       const server = http.createServer((req, res) => {
@@ -573,7 +617,7 @@ describe("reconcileExitedSessions", () => {
 
     it("logs a HostRequestError distinctly from unreachable, without exiting the session (Hermes review, PR #34)", async () => {
       const app = await buildApp();
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      mockMasterAlive(app, true);
 
       // A reachable agent whose bulk liveness endpoint has a persistent
       // bug (always 400s) is a fundamentally different situation from a

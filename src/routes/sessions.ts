@@ -318,15 +318,24 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
   return live;
 }
 
+// Perf audit finding A6 — `hostId` is a required parameter, not resolved
+// internally: every call site already knows it (either passed in directly,
+// as withLiveStatus does, or batched up-front via the projectId->hostId map
+// GET /api/sessions builds below, same reasoning as its own bulkLiveStatus
+// batching just above). Before this, this function called
+// resolveProjectHostId(app, row.projectId) itself — one extra synchronous
+// better-sqlite3 SELECT *per session, per request* on top of the list
+// route's own already-batched lookup, hit on every 4s poll tick from every
+// open tab.
 function withLiveInfo(
   app: FastifyInstance,
   row: typeof sessions.$inferSelect,
   info: SessionInfo | null | undefined,
+  hostId: string,
 ) {
   const live = buildLiveInfo(info);
   let browserUrl = live.browserUrl;
 
-  const hostId = resolveProjectHostId(app, row.projectId);
   if (hostId === LOCAL_HOST_ID && app.config.BROWSER_ENABLED) {
     const managed = app.browser.get(row.projectId);
     if (managed && managed.browser.isConnected()) {
@@ -405,7 +414,7 @@ export async function withLiveStatus(
       "host unreachable, reporting default live status",
     );
   }
-  return withLiveInfo(app, row, info);
+  return withLiveInfo(app, row, info, hostId);
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -963,12 +972,25 @@ export async function sessionsRoute(app: FastifyInstance) {
     done();
   });
 
-  app.get<{ Querystring: { projectId?: string; kind?: string } }>(
+  app.get<{ Querystring: { projectId?: string; kind?: string; status?: string } }>(
     "/api/sessions",
     async (request, reply) => {
-      const { kind } = request.query;
+      const { kind, status } = request.query;
       if (kind !== undefined && kind !== "terminal" && kind !== "dock") {
         return reply.badRequest("kind must be 'terminal' or 'dock'");
+      }
+      // Perf audit finding A6 — prod's own /api/sessions payload was 293
+      // rows, 284 of them `killed` tombstones the frontend already filters
+      // back out client-side (Sidebar.tsx). Nothing ever purges killed
+      // rows, so an unfiltered list grows without bound; this lets a caller
+      // (store.ts's poll loop) ask for only the rows it actually renders.
+      if (
+        status !== undefined &&
+        status !== "active" &&
+        status !== "killed" &&
+        status !== "exited"
+      ) {
+        return reply.badRequest("status must be 'active', 'killed', or 'exited'");
       }
 
       const conditions = [
@@ -976,6 +998,7 @@ export async function sessionsRoute(app: FastifyInstance) {
           ? eq(sessions.projectId, Number(request.query.projectId))
           : undefined,
         kind !== undefined ? eq(sessions.kind, kind) : undefined,
+        status !== undefined ? eq(sessions.status, status) : undefined,
       ].filter((c) => c !== undefined);
 
       const rows =
@@ -1034,7 +1057,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       return rows.map((row) => {
         const hostId = projectHostIds.get(row.projectId) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
-        return withLiveInfo(app, row, info);
+        return withLiveInfo(app, row, info, hostId);
       });
     },
   );
