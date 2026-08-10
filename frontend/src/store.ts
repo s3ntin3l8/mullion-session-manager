@@ -1510,6 +1510,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
           const data = JSON.parse(event.data as string);
           if (data.projectId != null) {
             set((state) => ({ prsRefreshTrigger: state.prsRefreshTrigger + 1 }));
+            // prsRefreshTrigger alone only reaches GitHubPanel (its own
+            // effect dependency) — prsByProject itself, which every OTHER
+            // consumer (Sidebar's SessionRow, UnifiedBoard's TaskCard,
+            // TaskDetail) reads directly, stays on refreshGitRefs' own
+            // ~60s throttle otherwise. Refreshing it here too means a real
+            // GitHub push (a check completing, a new PR) reaches every
+            // consumer within one WS round trip, not up to a minute later.
+            void get().refreshGitRefs();
           }
         } catch (err) {
           console.warn("[GitHubWS] failed to parse message:", err);

@@ -18,7 +18,7 @@ import {
 import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { SessionRow } from "./Sidebar.js";
 import { TaskDetail } from "./TaskDetail.js";
-import type { Project, Session, Task, TaskStatus } from "./api.js";
+import type { GitHubCiStatus, Project, Session, Task, TaskStatus } from "./api.js";
 import { commandToBinary, resolveAgentLogo } from "./cliLogos.js";
 import {
   STATUS_PRESENTATION,
@@ -38,6 +38,17 @@ import {
 import { ApiError } from "./api.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
+
+// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
+// as Sidebar.tsx's sessionPrDotClass/GitHubPanel.tsx's ciDotClass —
+// duplicated rather than imported, this codebase's own established
+// precedent for this exact small guard (see Sidebar.tsx's own comment).
+function taskCardPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
+  if (status === "success") return "good";
+  if (status === "failure") return "bad";
+  if (status === "in_progress") return "pending";
+  return "none";
+}
 
 // Merges Mullion's two Kanban surfaces (issue #211's session-only
 // KanbanBoard.tsx + 6.5/#218's TasksPanel.tsx, both deleted) into one: task
@@ -591,6 +602,19 @@ function TaskCard({
   const [dropTarget, setDropTarget] = useState(false);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
+  // Matched client-side against the project's unfiltered PR list, same
+  // posture as Sidebar.tsx's own matchedPr (its doc comment explains why:
+  // avoids firing a `?branch=` request per card). Joined on task.branchName
+  // — deterministic (`mullion/task-<id>`, set at claim time) — rather than
+  // SessionRow's own displayBranch precedence dance, which exists only to
+  // handle a worktree session's hook-reported branch lagging its actual
+  // one; a task's branchName has no such ambiguity.
+  const prsStatus = useDashboardStore((s) => (project ? s.prsByProject[project.id] : undefined));
+  const matchedPr =
+    task.branchName && prsStatus?.prs
+      ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
+      : undefined;
+
   // Hermes review — the same click-after-drag issue TaskSessionSlot had
   // (see its own comment below): a completed reorder drop on an accepting
   // column still fires a plain click on the source card right after
@@ -674,6 +698,19 @@ function TaskCard({
           <span className="task-card-issue" title={task.htmlUrl ?? undefined}>
             <GitHubIcon size={11} />#{task.issueNumber}
           </span>
+        )}
+        {matchedPr && (
+          <a
+            className="task-card-pr"
+            href={matchedPr.htmlUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={matchedPr.title}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className={`github-panel-ci-dot ${taskCardPrDotClass(matchedPr.ciStatus)}`} />#
+            {matchedPr.number}
+          </a>
         )}
         {agentName && (
           <span className="task-card-agent" title={`Agent: ${agentName}`}>
