@@ -46,11 +46,36 @@ export function isOidcConfigPartial(config: OidcConfig): boolean {
 // doesn't hammer the IdP on every click). A failed discovery is evicted
 // immediately so a transient IdP outage doesn't wedge every future login
 // behind one cached rejection.
-const discoveryCache = new Map<string, Promise<client.Configuration>>();
+//
+// Finding AS10: a *successful* entry used to live forever — no TTL, no
+// eviction. An IdP that rotates its signing keys or moves its token
+// endpoint (both legitimate, expected-to-happen-eventually events) would
+// silently wedge every login behind a stale cached Configuration until this
+// process was manually restarted, with no log line pointing at the cause.
+// DISCOVERY_CACHE_TTL_MS bounds that: an hour is long enough that discovery
+// (a network round-trip on the login critical path) still isn't happening
+// per-request in any realistic traffic pattern, short enough that a
+// same-day IdP config change self-heals without operator intervention.
+//
+// Kept module-level, not moved onto the app instance, deliberately — same
+// tradeoff already made and documented for preview-proxy.ts's
+// previewAuthFailures/previewRequestCounts maps (see that file's own
+// comment): this module is explicitly "not a Fastify plugin" (see the
+// top-of-file comment) so it has no FastifyInstance to decorate onto in the
+// first place, and the existing resetOidcDiscoveryCacheForTests() escape
+// hatch already gives tests the isolation a per-instance cache would.
+const DISCOVERY_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+interface DiscoveryCacheEntry {
+  config: Promise<client.Configuration>;
+  expiresAt: number;
+}
+
+const discoveryCache = new Map<string, DiscoveryCacheEntry>();
 
 async function getClientConfig(config: OidcConfig): Promise<client.Configuration> {
   const cached = discoveryCache.get(config.MULLION_OIDC_ISSUER);
-  if (cached) return cached;
+  if (cached && cached.expiresAt > Date.now()) return cached.config;
 
   const discovered = client
     .discovery(
@@ -75,7 +100,10 @@ async function getClientConfig(config: OidcConfig): Promise<client.Configuration
       client.enableNonRepudiationChecks(clientConfig);
       return clientConfig;
     });
-  discoveryCache.set(config.MULLION_OIDC_ISSUER, discovered);
+  discoveryCache.set(config.MULLION_OIDC_ISSUER, {
+    config: discovered,
+    expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS,
+  });
   discovered.catch(() => discoveryCache.delete(config.MULLION_OIDC_ISSUER));
   return discovered;
 }

@@ -148,7 +148,21 @@ export function loadStoredCookiesForProject(
     return row.id > latest.id ? row : latest;
   });
   try {
-    return app.encryption.decryptJson(mostRecent.cookiesEnc) as ImportedCookie[];
+    const decrypted = app.encryption.decryptJson(mostRecent.cookiesEnc);
+    // Finding AS14: decryptJson now returns `null` (not `{}`) when
+    // decryption succeeded but the plaintext wasn't valid JSON — e.g. a
+    // stale row left over from a key change. Treated the same as the
+    // decrypt-itself-failed case just below: nothing usable came back, so
+    // log and fall back to "no stored cookies" rather than casting `null`
+    // into an `ImportedCookie[]` a caller would then iterate.
+    if (decrypted === null) {
+      app.log.warn(
+        { projectId, profileId: mostRecent.id },
+        "stored browser cookies decrypted but were not valid JSON",
+      );
+      return [];
+    }
+    return decrypted as ImportedCookie[];
   } catch (err) {
     app.log.warn(
       { err, projectId, profileId: mostRecent.id },

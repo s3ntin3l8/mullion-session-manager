@@ -236,6 +236,29 @@ function issueSession(app: FastifyInstance, hostId: string): HostRegistration {
  * matches — every candidate row is checked via timingSafeTokenMatch (not a
  * naive ===) so a per-byte oracle can't be built against any single row.
  */
+// Finding AS13: this used to `continue` past the rest of the loop body the
+// moment a row matched — early-exiting the loop itself (via `return` inside
+// the loop) once a match was found. The per-row compare
+// (timingSafeTokenMatch) is constant-time, but the *loop* wasn't: which
+// iteration returns leaks a row's position in `candidates`, and — more
+// concretely — a call against a token near the front of the table does
+// fewer AES-GCM decrypts than one near the back or one that matches
+// nothing. Now every candidate is unconditionally decrypted and compared,
+// so total work is the same (len(candidates) decrypts + compares) no matter
+// which row matches or whether any do; only the first match (by iteration
+// order) is kept, same as before.
+//
+// Hermes review, PR #579: decryptString throws DecryptionError on a
+// malformed row (bad GCM auth tag, wrong shape) — the pre-AS13 code only
+// ever reached a corrupt row if it was scanned *before* any match, so a
+// corrupt row *after* the match was simply never decrypted (the early
+// return skipped it). Now every row is decrypted unconditionally, so
+// without a try/catch here a single corrupt row anywhere in the table would
+// throw and break claimHost for every caller, including one presenting the
+// correct token for a perfectly healthy row. A failed decrypt is treated as
+// a non-match (logged, not swallowed silently) rather than re-thrown —
+// keeps the "decrypt every candidate" property this fix exists for while
+// not letting one bad row deny every legitimate claim.
 export function claimHost(
   app: FastifyInstance,
   presentedToken: string,
@@ -246,24 +269,34 @@ export function claimHost(
     .from(hosts)
     .where(and(ne(hosts.id, LOCAL_HOST_ID), isNotNull(hosts.authTokenEnc)))
     .all();
+  let matchedRow: HostRow | undefined;
   for (const row of candidates) {
-    const decrypted = app.encryption.decryptString(row.authTokenEnc!);
-    if (!timingSafeTokenMatch(presentedToken, decrypted)) continue;
-    app.db
-      .update(hosts)
-      .set({
-        baseUrl: input.baseUrl,
-        origin: "manual",
-        agentMetadata: JSON.stringify({
-          hostname: input.hostname,
-          capabilities: input.capabilities ?? null,
-        }),
-      })
-      .where(eq(hosts.id, row.id))
-      .run();
-    return issueSession(app, row.id);
+    let isMatch = false;
+    try {
+      const decrypted = app.encryption.decryptString(row.authTokenEnc!);
+      isMatch = timingSafeTokenMatch(presentedToken, decrypted);
+    } catch (err) {
+      app.log.warn(
+        { err, hostId: row.id },
+        "claimHost: failed to decrypt a candidate host's token; treating it as a non-match",
+      );
+    }
+    if (isMatch && matchedRow === undefined) matchedRow = row;
   }
-  return null;
+  if (matchedRow === undefined) return null;
+  app.db
+    .update(hosts)
+    .set({
+      baseUrl: input.baseUrl,
+      origin: "manual",
+      agentMetadata: JSON.stringify({
+        hostname: input.hostname,
+        capabilities: input.capabilities ?? null,
+      }),
+    })
+    .where(eq(hosts.id, matchedRow.id))
+    .run();
+  return issueSession(app, matchedRow.id);
 }
 
 /**
