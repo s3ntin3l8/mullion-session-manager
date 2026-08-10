@@ -339,7 +339,16 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // findings still happens; only the auto-return (and the round it
         // would spend) is skipped, leaving a human to act on what's now
         // visible on the task and the PR.
+        // Hermes review, PR #580 — a review agent that crashes mid-review
+        // AFTER writing a partial findings file also derives "exited" with
+        // a non-null file, so accepting "exited" for INGESTION (above)
+        // would also let a half-written review consume the task's one
+        // auto-return round. Only a genuine "finished" (a deliberate,
+        // complete turn end) is trustworthy enough to act on automatically
+        // — "exited" findings are still ingested and commented, just not
+        // auto-returned.
         const shouldAutoReturn =
+          derived.status === "finished" &&
           findings !== null &&
           task.reviewRounds < 1 &&
           resolvedTaskMaster.enabled &&
@@ -411,9 +420,33 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // tell it to stay running after finishing its turn, so "still
         // alive but idle" is the COMMON case here, not an edge case). See
         // reseedTaskIfSessionExited's own doc comment.
-        await reseedTaskIfSessionExited(app, task, project, prompt, "task review-feedback", {
-          force: true,
-        });
+        const reseeded = await reseedTaskIfSessionExited(
+          app,
+          task,
+          project,
+          prompt,
+          "task review-feedback",
+          { force: true },
+        );
+        // Hermes review, PR #580 — a failed re-seed (terminate/spawn error,
+        // or a lost race — see reseedTaskIfSessionExited's own doc comment)
+        // must not silently burn the task's one auto-return round: nobody
+        // received the findings, so a later, genuine round should still get
+        // its chance. reviewRounds is never reset elsewhere, so rolling it
+        // back here is the only way to keep that promise honest. Best-effort
+        // and CAS'd on the exact value this iteration itself just wrote —
+        // a concurrent write in between (e.g. approve/give-up) wins outright.
+        if (!reseeded) {
+          const rolledBack = app.db
+            .update(tasks)
+            .set({ reviewRounds: task.reviewRounds })
+            .where(and(eq(tasks.id, task.id), eq(tasks.reviewRounds, task.reviewRounds + 1)))
+            .run();
+          app.log.warn(
+            { taskId: task.id, rolledBack: rolledBack.changes > 0 },
+            "task reconcile: review-feedback re-seed failed — rolled back the spent auto-return round so a later review can still use it",
+          );
+        }
       }
     }),
   );

@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { spawn as childProcessSpawn } from "node:child_process";
+import type * as TaskReseedModule from "../../src/services/task-reseed.js";
 
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
@@ -45,6 +46,26 @@ vi.mock("../../src/services/task-promote.js", async (importOriginal) => {
   return {
     ...actual,
     openDraftPRForTask: mockOpenDraftPRForTask,
+  };
+});
+
+// Hermes review, PR #580 — the review-feedback auto-return's rollback of a
+// spent `reviewRounds` when the re-seed fails needs a controllable failure;
+// engineering a REAL terminate/spawn failure through this file's full
+// integration setup (real createSessionRecord, mocked node-pty/
+// child_process that always "succeed") isn't practical. Pass-through by
+// default (calls the real implementation, same behavior every other test
+// here already relies on) — only overridden with `.mockResolvedValueOnce`
+// in the one test that needs to simulate a failed re-seed.
+const actualReseedModule = await vi.importActual<typeof TaskReseedModule>(
+  "../../src/services/task-reseed.js",
+);
+const mockReseedTaskIfSessionExited = vi.fn(actualReseedModule.reseedTaskIfSessionExited);
+vi.mock("../../src/services/task-reseed.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    reseedTaskIfSessionExited: mockReseedTaskIfSessionExited,
   };
 });
 
@@ -1217,6 +1238,71 @@ describe("reconcileTasks", () => {
       expect(row.reviewFindings).toContain("should reach the drawer and the PR");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // Hermes review, PR #580 — accepting "exited" for ingestion (finding #2
+    // of the PR #576 round) opened a narrower gap: a review agent that
+    // crashes AFTER writing a partial findings file also derives "exited"
+    // with a non-null file. Auto-returning on that signal would spend the
+    // task's one round on a half-written review. Only a genuine "finished"
+    // may drive auto-return; "exited" is ingest-and-comment only.
+    it("ingests and comments an 'exited' review session's findings but does NOT spend the auto-return round on them", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "Possibly a partial review — the agent crashed right after.");
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ endedReason: "process-exit", exitCode: 1 })
+                : fakeInfo(),
+          }) as never,
+      );
+      app.db
+        .update(sessions)
+        .set({ status: "exited" })
+        .where(eq(sessions.id, reviewSessionId))
+        .run();
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("Possibly a partial review");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // Hermes review, PR #580 — reviewRounds is spent in the same CAS that
+    // flips status to in_progress, before the re-seed's own outcome is
+    // known. A re-seed failure (terminate/spawn error, or a lost race —
+    // see reseedTaskIfSessionExited's own doc comment) previously left the
+    // task's one auto-return round permanently spent with nobody having
+    // received the findings.
+    it("rolls back the spent auto-return round when the re-seed itself fails", async () => {
+      const app = await buildApp();
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "This should not cost the task its one round.");
+      mockReseedTaskIfSessionExited.mockResolvedValueOnce(false);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("should not cost the task its one round");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, rolledBack: true }),
+        expect.stringContaining("rolled back the spent auto-return round"),
+      );
 
       await app.close();
     });

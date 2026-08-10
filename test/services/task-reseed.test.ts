@@ -101,8 +101,9 @@ describe("reseedTaskIfSessionExited", () => {
       .returning()
       .all();
 
-    await reseedTaskIfSessionExited(app, row, project, "prompt", "test");
+    const result = await reseedTaskIfSessionExited(app, row, project, "prompt", "test");
 
+    expect(result).toBe(false);
     expect(mockCreateSessionRecord).not.toHaveBeenCalled();
     expect(mockTerminate).not.toHaveBeenCalled();
   });
@@ -111,8 +112,15 @@ describe("reseedTaskIfSessionExited", () => {
     const { task } = insertTaskWithSession("exited");
     const newSessionId = mockSuccessfulSpawn();
 
-    await reseedTaskIfSessionExited(app, task, project, "prompt text", "test reject");
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test reject",
+    );
 
+    expect(result).toBe(true);
     expect(mockTerminate).not.toHaveBeenCalled();
     expect(mockCreateSessionRecord).toHaveBeenCalledWith(
       expect.anything(),
@@ -125,8 +133,15 @@ describe("reseedTaskIfSessionExited", () => {
   it("without force: does nothing at all when the previous session is still active", async () => {
     const { task } = insertTaskWithSession("active");
 
-    await reseedTaskIfSessionExited(app, task, project, "prompt text", "test reject");
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test reject",
+    );
 
+    expect(result).toBe(false);
     expect(mockTerminate).not.toHaveBeenCalled();
     expect(mockCreateSessionRecord).not.toHaveBeenCalled();
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
@@ -137,10 +152,16 @@ describe("reseedTaskIfSessionExited", () => {
     const { task, sessionId } = insertTaskWithSession("active");
     const newSessionId = mockSuccessfulSpawn();
 
-    await reseedTaskIfSessionExited(app, task, project, "prompt text", "test review-feedback", {
-      force: true,
-    });
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test review-feedback",
+      { force: true },
+    );
 
+    expect(result).toBe(true);
     expect(mockTerminate).toHaveBeenCalledWith(String(sessionId));
     expect(mockCreateSessionRecord).toHaveBeenCalledTimes(1);
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
@@ -152,10 +173,16 @@ describe("reseedTaskIfSessionExited", () => {
     const { task } = insertTaskWithSession("active");
     const warnSpy = vi.spyOn(app.log, "warn");
 
-    await reseedTaskIfSessionExited(app, task, project, "prompt text", "test review-feedback", {
-      force: true,
-    });
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test review-feedback",
+      { force: true },
+    );
 
+    expect(result).toBe(false);
     expect(mockCreateSessionRecord).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id }),
@@ -170,13 +197,47 @@ describe("reseedTaskIfSessionExited", () => {
     const { task } = insertTaskWithSession("exited");
     const warnSpy = vi.spyOn(app.log, "warn");
 
-    await reseedTaskIfSessionExited(app, task, project, "prompt text", "test reject");
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test reject",
+    );
 
+    expect(result).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id }),
       expect.stringContaining("re-seed spawn failed"),
     );
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
+  });
+
+  // Hermes review, PR #580 — the final sessionId write had no status guard;
+  // force:true's new caller (task-reconciler.ts's review-feedback
+  // auto-return) makes the window between its own CAS (reviewing ->
+  // in_progress) and this write reachable by a concurrent transition in a
+  // way reject's own path never was.
+  it("does not clobber sessionId, and returns false, when a concurrent transition moves the task off 'in_progress' before the final write", async () => {
+    const { task } = insertTaskWithSession("exited");
+    mockSuccessfulSpawn();
+    // Simulates a concurrent approve/reject/give-up landing between
+    // createSessionRecord resolving and this function's own final CAS'd
+    // write — the row itself has already moved off "in_progress".
+    app.db.update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id)).run();
+
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test reject",
+    );
+
+    expect(result).toBe(false);
+    const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(updated.sessionId).toBe(task.sessionId);
+    expect(updated.status).toBe("done");
   });
 });

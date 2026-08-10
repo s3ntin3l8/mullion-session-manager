@@ -7,7 +7,7 @@
 // behaviors — but they DO differ on one thing (see `opts.force` below),
 // because reject and review-feedback have fundamentally different audiences.
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { sessions, tasks } from "../db/schema.js";
 import type { projects } from "../db/schema.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";
@@ -44,6 +44,13 @@ type ProjectRow = typeof projects.$inferSelect;
  * other Task Master spawn uses (claim/retry/review) — never injects
  * keystrokes into the live TUI, which would depend on guessing that CLI's
  * current, possibly-mid-tool-call UI state.
+ *
+ * Returns whether it actually re-seeded (assigned a new `sessionId`) —
+ * `false` covers every early-return below (no-op, terminate failure, spawn
+ * failure, lost CAS race). Callers that spend a limited resource on the
+ * assumption a re-seed happens (task-reconciler.ts's review-feedback
+ * auto-return burns the task's one round) use this to roll that back when
+ * it turns out nothing was actually re-seeded.
  */
 export async function reseedTaskIfSessionExited(
   app: FastifyInstance,
@@ -52,12 +59,12 @@ export async function reseedTaskIfSessionExited(
   prompt: string,
   logContext: string,
   opts: { force?: boolean } = {},
-): Promise<void> {
-  if (!task.sessionId || !task.worktreePath || !task.agentCommand) return;
+): Promise<boolean> {
+  if (!task.sessionId || !task.worktreePath || !task.agentCommand) return false;
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
   const wasActive = session?.status === "active";
   if (wasActive) {
-    if (!opts.force) return;
+    if (!opts.force) return false;
     try {
       await resolveBackend(app, project.hostId).terminate(String(task.sessionId));
     } catch (err) {
@@ -69,7 +76,7 @@ export async function reseedTaskIfSessionExited(
         { err, taskId: task.id, sessionId: task.sessionId },
         `${logContext}: failed to terminate the still-active session before force re-seeding, leaving it as-is`,
       );
-      return;
+      return false;
     }
   }
 
@@ -91,7 +98,7 @@ export async function reseedTaskIfSessionExited(
       { taskId: task.id, reason: result.reason },
       `${logContext}: re-seed spawn failed, worktree left as-is for a manual claim/retry`,
     );
-    return;
+    return false;
   }
   // Same version-skew guard as task-claim.ts's own — see
   // resolveSeedDelivered's doc comment.
@@ -114,15 +121,34 @@ export async function reseedTaskIfSessionExited(
         : `${logContext}: re-seeded agent's adapter can't receive an initial prompt — spawning with no instructions`,
     );
   }
-  app.db
+  // Hermes review, PR #580 — no status guard here previously, and
+  // `force: true`'s new caller (the auto-return path) makes the window
+  // between that CAS (status: reviewing -> in_progress) and THIS write
+  // reachable in a way reject's own path never was: reject's session was
+  // already confirmed exited (or, on the force path, already terminated
+  // just above) before this runs, but a concurrent reconcileTasks tick can
+  // still observe the task as in_progress before this write lands and race
+  // it. CAS on `status = "in_progress"` (the status every caller transitions
+  // to just before calling this) so a losing race leaves the freshly-spawned
+  // session orphaned rather than clobbering whatever a concurrent
+  // approve/reject/give-up/reviewing-transition already decided.
+  const updated = app.db
     .update(tasks)
     .set({ sessionId: result.row.id, seedDelivered })
-    .where(eq(tasks.id, task.id))
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
     .run();
+  if (updated.changes === 0) {
+    app.log.warn(
+      { taskId: task.id, newSessionId: result.row.id },
+      `${logContext}: lost a race with a concurrent transition — the freshly re-seeded session is orphaned, left for a human to notice`,
+    );
+    return false;
+  }
   app.log.info(
     { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.row.id },
     wasActive
       ? `${logContext}: force-terminated the still-active session and re-seeded a fresh one in the same worktree`
       : `${logContext}: re-seeded a fresh session in the same worktree (previous session had exited)`,
   );
+  return true;
 }
