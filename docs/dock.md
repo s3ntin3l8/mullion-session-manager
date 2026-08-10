@@ -95,6 +95,13 @@ nothing else that has the branch checked out is affected. This is safe only
 for HMR-capable servers — disable it for non-HMR servers (e.g., production
 builds, static generators).
 
+Preview worktrees work the same way on multi-host (remote-hosted) projects
+(issue #345) — creation, live sync, and cleanup all run on whichever host
+actually owns the project's filesystem, proxied through the same
+`SessionBackend`/`/internal/*` pattern GitPanel uses (see
+[`git-panel.md`](git-panel.md)). There's no user-visible difference between
+a local and a remote preview worktree.
+
 For managing branches and worktrees directly — deleting a branch, removing
 a worktree, pruning stale worktree metadata — see the GitPanel, documented
 separately in [`git-panel.md`](git-panel.md).

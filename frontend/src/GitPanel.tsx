@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
-import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
+import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
 import { Toggle } from "./settings/primitives.js";
@@ -108,7 +108,23 @@ function statusDotClass(status: GitFileStatus["status"]): string {
 // (the 503 "repo exists but git status itself failed" case, or a raw network
 // error) keeps whatever was last successfully shown, exactly like the
 // sidebar's own gitStatuses map now does (store.ts's refreshGitStatuses).
-export function GitPanel({ params }: { params: GitPanelParams }) {
+export function GitPanel({
+  params,
+  onOpenSession,
+}: {
+  params: GitPanelParams;
+  // U6 — a plain React prop, deliberately NOT a `GitPanelParams` field:
+  // `params` is exactly what dockview's autosave serializes into
+  // `workspaces.layout` and rehydrates from raw JSON on restore (App.tsx's
+  // own restore effect) — a function stashed in there would silently come
+  // back `undefined` after any reload. Mirrors TaskDetailWrapper (App.tsx),
+  // which resolves the identical "open a session pane" callback via
+  // `props.containerApi` in the wrapper rather than handing this component
+  // dockview access directly. Optional so every existing test render of
+  // `<GitPanel params={...} />` (no onOpenSession) keeps working — a real
+  // mount always comes through GitPanelWrapper, which always provides it.
+  onOpenSession?: (session: Session) => void;
+}) {
   const [status, setStatus] = useState<GitStatus | null | undefined>(undefined);
   // Branches + worktrees (issue #162's "worktree awareness") — fetched once
   // when the panel opens, deliberately NOT polled: unlike working-tree
@@ -346,6 +362,16 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   // Resolves the same default-agent launcher CommandPalette.tsx pre-selects
   // (`agent:${settings.launchers.defaultAgent}`), falling back to whatever
   // GET .../actions lists first.
+  //
+  // U6 — goes through the STORE action, not `api.createSession` directly:
+  // `store.createSession` also awaits `refreshSessions()` before resolving,
+  // which is what makes the new row show up in the sidebar/tab strip right
+  // away instead of silently waiting out the next ~4s poll tick (the
+  // previous version discarded the created session entirely, so nothing
+  // ever opened — this button's whole point). Passing the resolved session
+  // to `onOpenSession` is what actually opens a pane for it, the same
+  // "resolve via a threaded callback, not by reaching for dockview
+  // directly" shape TaskDetailWrapper (App.tsx) already uses.
   const handleOpenSessionHere = useCallback(
     async (worktreePath: string) => {
       if (openingSessionFor.has(worktreePath)) return;
@@ -363,8 +389,11 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
           setRowRequestError(key, new Error("No launcher is configured for this project."));
           return;
         }
-        await api.createSession(params.projectId, launcher.command, { cwd: worktreePath });
+        const session = await useDashboardStore
+          .getState()
+          .createSession(params.projectId, launcher.command, { cwd: worktreePath });
         clearRowError(key);
+        onOpenSession?.(session);
       } catch (err) {
         console.debug("[GitPanel] open session here failed", err);
         setRowRequestError(key, err);
@@ -376,7 +405,7 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         });
       }
     },
-    [params.projectId, openingSessionFor, setRowRequestError, clearRowError],
+    [params.projectId, openingSessionFor, setRowRequestError, clearRowError, onOpenSession],
   );
 
   const handleFetch = useCallback(async () => {

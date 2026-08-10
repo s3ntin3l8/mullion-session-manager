@@ -72,7 +72,15 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
-    spawn: vi.fn((file: string, args: string[] = []) => {
+    spawn: vi.fn((file: string, args: string[] = [], options?: unknown) => {
+      // `git` (issue #345's dock-preview-worktree describe block below) is
+      // passed straight through to the real implementation, same as
+      // test/routes/internal.test.ts's identical carve-out — that suite
+      // asserts on real git output, and a real temp repo is cheap here too.
+      // No other describe block in this file spawns git.
+      if (file === "git") {
+        return actual.spawn(file, args, options as ChildProcess.SpawnOptions);
+      }
       const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
       if (file === "systemctl" && args[1] === "is-active") {
         ee.stdout = new EventEmitter();
@@ -627,6 +635,132 @@ describe("multi-host proxy (issue #26)", () => {
     // earlier test still reconciles normally alongside it in the same
     // reconcileExitedSessions() call.
     expect(rows.find((s) => s.id === sessionId)?.status).toBe("active");
+  });
+});
+
+// Issue #345 — dock-preview worktrees on a remote host, end-to-end against
+// two real listening apps (same harness as the describe block above), with
+// a real git repo under the agent's own PROJECTS_ROOTS.
+//
+// Filesystem assertions alone can't tell "the closure routed over HTTP to
+// the agent" apart from "the local fallback ran git in-process" — both real
+// buildApp() instances here share this process's git-worktree.ts module, so
+// they share its module-level previewWorktrees/pathOps/removingPaths
+// singletons AND the temp filesystem (see git-worktree.ts's own doc comment
+// on why those are process-wide, not app-scoped). The directory would
+// appear and disappear identically either way. So this test asserts the
+// MECHANISM — spying on RemoteHostClient.prototype's resolve* methods —
+// alongside the filesystem outcome, not the filesystem outcome alone.
+describe("multi-host dock-preview worktrees (issue #345)", () => {
+  let agent: Awaited<ReturnType<typeof buildAndListen>>;
+  let primary: Awaited<ReturnType<typeof buildAndListen>>;
+  let hostId: string;
+  let projectId: number;
+  let repoRoot: string;
+  let cwd: string;
+
+  beforeAll(async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { gitEnv } = await import("../../src/services/git-env.js");
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "multi-host-dock-preview-"));
+    cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    const run = (args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+    run(["init", "-b", "main"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+    run(["add", "-A"]);
+    run(["commit", "-m", "initial", "--no-verify"]);
+
+    agent = await buildAndListen({
+      MULLION_ROLE: "agent",
+      MULLION_AGENT_TOKEN: AGENT_TOKEN,
+      PROJECTS_ROOTS: repoRoot,
+    });
+    primary = await buildAndListen({
+      DATABASE_URL: `file:${path.join(os.tmpdir(), `multi-host-dock-preview-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`)}`,
+    });
+
+    const hostRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: {
+        name: "integration-dock-preview-agent",
+        baseUrl: `http://127.0.0.1:${agent.port}`,
+        token: AGENT_TOKEN,
+      },
+    });
+    hostId = hostRes.json().id;
+
+    const projectRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "dock-preview-remote", cwd, hostId },
+    });
+    projectId = projectRes.json().id;
+  });
+
+  afterAll(async () => {
+    await primary.app.close();
+    await agent.app.close();
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it("creates the preview worktree on the AGENT (via RemoteHostClient, not local git), and cleans it up on DELETE", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const checkoutSpy = vi.spyOn(
+      remoteHostClientModule.RemoteHostClient.prototype,
+      "resolveCheckoutBranchWorktree",
+    );
+    const removeSpy = vi.spyOn(
+      remoteHostClientModule.RemoteHostClient.prototype,
+      "resolveRemoveWorktree",
+    );
+
+    const created = await primary.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", worktree: { branch: "main" } },
+    });
+    expect(created.statusCode).toBe(201);
+    const session = created.json();
+    const sessionId = session.id as number;
+    const worktreePath = session.cwd as string;
+
+    expect(checkoutSpy).toHaveBeenCalledWith(cwd, "main");
+    expect(worktreePath).toMatch(/\.mullion-worktrees\/dock-preview-main-/);
+    expect(session.previewBranch).toBe("main");
+    // The worktree exists on disk under the agent's own PROJECTS_ROOTS
+    // (repoRoot) — created there because /internal/git-worktree/checkout
+    // ran on the agent, not because a local fallback happened to write to
+    // the same shared temp filesystem.
+    expect(worktreePath.startsWith(repoRoot)).toBe(true);
+    expect(fs.existsSync(worktreePath)).toBe(true);
+
+    const deleted = await primary.app.inject({
+      method: "DELETE",
+      url: `/api/sessions/${sessionId}`,
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    expect(removeSpy).toHaveBeenCalledWith(worktreePath, cwd);
+    expect(fs.existsSync(worktreePath)).toBe(false);
+    // The primary checkout — which shares "main" with the (now-removed)
+    // detached preview — is untouched.
+    const { execFileSync } = await import("node:child_process");
+    const { gitEnv } = await import("../../src/services/git-env.js");
+    expect(
+      execFileSync("git", ["status", "--porcelain"], {
+        cwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      }).toString(),
+    ).toBe("");
+
+    checkoutSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });
 

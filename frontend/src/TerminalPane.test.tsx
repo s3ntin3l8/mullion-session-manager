@@ -295,7 +295,11 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, "clipboard");
 });
 
-function renderPane() {
+// U7 — `active` (and any other prop a specific test wants set from the
+// very first render, e.g. mount-already-active) is optional and defaults to
+// unset so every existing `renderPane()` call site — none of which know or
+// care about it — keeps behaving identically.
+function renderPane(extra: { active?: boolean } = {}) {
   useDashboardStore.setState({
     settings: {
       theme: "dark",
@@ -389,7 +393,7 @@ function renderPane() {
     workspaces: [],
     groups: [],
   });
-  return render(<TerminalPane params={{ sessionId: 1 }} />);
+  return render(<TerminalPane params={{ sessionId: 1 }} {...extra} />);
 }
 
 describe("TerminalPane repaint registry (issue #107)", () => {
@@ -1629,5 +1633,66 @@ describe("TerminalPane scrollback search (U1)", () => {
     unmount();
 
     expect(searchAddon.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// U7 — clicking a pane tab (or activating it via keyboard pane-switching, a
+// deep link, a push-notification open, or auto-focus-on-attention) changes
+// dockview's active panel, but TerminalPane itself never called .focus() in
+// reaction to that — only a direct click inside xterm's own DOM landed
+// focus in its hidden textarea. TerminalPanelWrapper (App.tsx) now threads
+// the dockview panel's own api.onDidActiveChange signal down as a plain
+// `active` boolean (mirroring PaneTab.tsx's identical subscription); these
+// tests exercise that boolean directly, the same way the existing
+// captureCtrlC tests above exercise a prop via `rerender` rather than
+// mounting the whole dockview panel machinery.
+describe("TerminalPane pane-activation focus (U7)", () => {
+  it("focuses the terminal when `active` transitions from unset to true", () => {
+    stubFakeWebSocket(true);
+    const { rerender } = renderPane();
+    const term = getLatestTermInstance();
+    expect(term.focus).not.toHaveBeenCalled();
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} />);
+
+    expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call focus again on an unrelated re-render while already active", () => {
+    stubFakeWebSocket(true);
+    const { rerender } = renderPane();
+    const term = getLatestTermInstance();
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} />);
+    expect(term.focus).toHaveBeenCalledTimes(1);
+
+    // Same `active` value, different otherwise-irrelevant prop identity —
+    // must not retrigger the activation-focus effect (it's keyed on
+    // `[props.active]` alone).
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} captureCtrlC={false} />);
+
+    expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call focus when `active` becomes false", () => {
+    stubFakeWebSocket(true);
+    const { rerender } = renderPane();
+    const term = getLatestTermInstance();
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} />);
+    expect(term.focus).toHaveBeenCalledTimes(1);
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={false} />);
+
+    // Still just the one call from the true transition above — going
+    // inactive is intentionally a no-op, not a second call.
+    expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("mounting already-active (e.g. the default tab on first load) focuses immediately", () => {
+    stubFakeWebSocket(true);
+    renderPane({ active: true });
+
+    expect(getLatestTermInstance().focus).toHaveBeenCalledTimes(1);
   });
 });

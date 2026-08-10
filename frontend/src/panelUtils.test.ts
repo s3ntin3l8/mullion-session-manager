@@ -19,6 +19,7 @@ import {
   extractSessionIds,
   resolveActiveProjectId,
   parseDeepLinkSessionId,
+  handleGlobalEscape,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
@@ -1074,5 +1075,32 @@ describe("resolveActiveProjectId (issue #433's Source Control section)", () => {
 
   it("returns null when the session-scoped panel's session isn't found", () => {
     expect(resolveActiveProjectId("session-999999", sessions)).toBeNull();
+  });
+});
+
+// U9 — App.tsx's global window-level Escape handler calls this directly
+// (see its own doc comment for why it lives here rather than as an
+// App.test.tsx mount test: App.tsx pulls in real dockview/xterm/WS
+// machinery this suite has never had to mock, so there's no existing
+// full-mount pattern to extend). The bug this closes: the handler used to
+// only clear `palette.open`, never `clearSplitRequest()` — but the palette
+// also renders for a pending split-right/split-down splitRequest
+// (App.tsx's own `paletteOpen = palette.open || (splitRequest !== null &&
+// ...)`), and the palette's OWN Escape handler only fires while focus is
+// inside its search input, so a split-triggered palette with focus moved
+// elsewhere inside it (the project picker, a launcher row, the worktree
+// checkbox, the base-ref dropdown) had no way to close via Escape at all.
+describe("handleGlobalEscape (U9)", () => {
+  it("clears the palette, closes settings, AND clears the split request", () => {
+    const clearPalette = vi.fn();
+    const closeSettings = vi.fn();
+    const clearSplitRequest = vi.fn();
+
+    handleGlobalEscape({ clearPalette, closeSettings, clearSplitRequest });
+
+    expect(clearPalette).toHaveBeenCalledTimes(1);
+    expect(closeSettings).toHaveBeenCalledTimes(1);
+    // The actual regression: this used to never be called at all.
+    expect(clearSplitRequest).toHaveBeenCalledTimes(1);
   });
 });
