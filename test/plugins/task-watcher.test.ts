@@ -211,7 +211,8 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
 
     const localBackend = {
       listTaskWorktreeDirs: vi.fn().mockImplementation((cwd: string) => {
-        if (cwd === firstProject.cwd) return Promise.reject(new Error("unexpected DB read failure"));
+        if (cwd === firstProject.cwd)
+          return Promise.reject(new Error("unexpected DB read failure"));
         return Promise.resolve([]);
       }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),

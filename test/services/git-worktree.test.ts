@@ -10,6 +10,7 @@ import {
   createWorktree,
   deletePreviewWorktree,
   deriveWorktreePath,
+  ensurePreviewSyncTick,
   findPreviewWorktreeSessionId,
   getPreviewWorktree,
   isDockPreviewWorktree,
@@ -20,6 +21,8 @@ import {
   removeWorktree,
   removeWorktreeIfClean,
   resumeTaskWorktree,
+  stopPreviewSyncTick,
+  syncTimerHasRefForTests,
   syncWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
@@ -577,6 +580,97 @@ describe("cleanupPreviewWorktree (pendingRemoval retry)", () => {
   it("returns true with no side effects when nothing is tracked for the session", async () => {
     expect(await cleanupPreviewWorktree(sessionId)).toBe(true);
     expect(getPreviewWorktree(sessionId)).toBeUndefined();
+  });
+});
+
+describe("preview worktree host-routed remove/sync closures (issue #345)", () => {
+  let tmpDir: string;
+  let sessionId: number;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-closures-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    sessionId = Math.floor(Math.random() * 1_000_000) + 900_000;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("cleanupPreviewWorktree calls the tracked entry's remove closure instead of local git when present", async () => {
+    const remove = vi.fn().mockResolvedValue(true);
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/some/remote/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/some/remote",
+      projectId: 1,
+      hostId: "remote-1",
+      remove,
+    });
+
+    expect(await cleanupPreviewWorktree(sessionId)).toBe(true);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(getPreviewWorktree(sessionId)).toBeUndefined();
+    // Never touched the local filesystem — the path doesn't even exist.
+  });
+
+  it("cleanupPreviewWorktree marks pendingRemoval when the remove closure resolves false, without local git", async () => {
+    const remove = vi.fn().mockResolvedValue(false);
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/some/remote/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/some/remote",
+      projectId: 1,
+      hostId: "remote-1",
+      remove,
+    });
+
+    const warn = vi.fn();
+    expect(await cleanupPreviewWorktree(sessionId, { warn })).toBe(false);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
+    // hostId is diagnostic-only (never consulted for routing — see
+    // PreviewWorktreeInfo's own doc comment) but must actually reach the
+    // log, or the field earns nothing for carrying it around.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "remote-1" }),
+      expect.any(String),
+    );
+  });
+
+  it("a remove closure that rejects (violating its own never-reject contract) is treated as a failed attempt, not an escaping error", async () => {
+    const remove = vi.fn().mockRejectedValue(new Error("boom"));
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/some/remote/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/some/remote",
+      projectId: 1,
+      hostId: "remote-1",
+      remove,
+    });
+
+    await expect(cleanupPreviewWorktree(sessionId)).resolves.toBe(false);
+    expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
+  });
+
+  it("omitting the closures preserves today's local-only behavior (falls back to real git)", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+    trackPreviewWorktree(sessionId, {
+      worktreePath: created!.path,
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: tmpDir,
+      projectId: 1,
+    });
+
+    expect(await cleanupPreviewWorktree(sessionId)).toBe(true);
+    expect(fs.existsSync(created!.path)).toBe(false);
   });
 });
 
@@ -1280,5 +1374,32 @@ describe("resumeTaskWorktree (#483)", () => {
     git(tmpDir, ["branch", "someone-elses-feature-branch", "main"]);
     const result = await resumeTaskWorktree(tmpDir, "someone-elses-feature-branch");
     expect(result).toBeNull();
+  });
+});
+
+describe("preview-worktree sync timer (B9 — .unref())", () => {
+  afterEach(() => {
+    // Best-effort: drain any refs a failed assertion left behind so this
+    // doesn't bleed into a later test — the timer/refcount are module-level
+    // singletons (see git-worktree.ts's own doc comment on previewWorktrees).
+    // stopPreviewSyncTick() is a no-op once syncTickRefs hits 0, so this is
+    // bounded rather than an unconditional `while`, which would spin forever
+    // (turning a bug into a CI hang, not a failure) if that state were ever
+    // reached with a non-null timer — unreachable today, but a bounded loop
+    // costs nothing and fails loudly instead.
+    for (let i = 0; i < 10 && syncTimerHasRefForTests() !== null; i++) {
+      stopPreviewSyncTick();
+    }
+  });
+
+  it("is unref'd so it never keeps the process alive on its own", () => {
+    expect(syncTimerHasRefForTests()).toBeNull(); // nothing running yet
+    ensurePreviewSyncTick();
+    try {
+      expect(syncTimerHasRefForTests()).toBe(false);
+    } finally {
+      stopPreviewSyncTick();
+    }
+    expect(syncTimerHasRefForTests()).toBeNull();
   });
 });

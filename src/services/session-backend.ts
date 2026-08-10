@@ -12,8 +12,10 @@ import {
   pruneWorktrees,
   pruneWorktreeMetadata,
   removeListedWorktree,
+  removeWorktree,
   removeWorktreeIfClean,
   resumeTaskWorktree,
+  syncWorktree,
   type ClearOrphanedTaskWorktreeResult,
   type PruneWorktreesResult,
   type RemoveIfCleanResult,
@@ -61,9 +63,10 @@ export interface SessionBackend {
   // `Bash run_in_background` jobs, nested CLIs), not to be confused with
   // Claude Code subagents (in-process, no PID — see #191/#193). Local hosts
   // only for now: it reads this process's own systemd/cgroupfs, the same
-  // scoping RemoteBackend already applies to checkoutBranchWorktree/
-  // resumeTaskWorktree above. Returns `[]` on a remote host rather than
-  // throwing, same "not supported yet" posture as those two.
+  // scoping RemoteBackend still applies to resumeTaskWorktree below (#484's
+  // scope — checkoutBranchWorktree above got its own remote support in
+  // #345). Returns `[]` on a remote host rather than throwing, same "not
+  // supported yet" posture as resumeTaskWorktree.
   listSessionProcesses(id: string): Promise<CgroupProcess[]>;
   // Issue #68: writes a pasted/attached image under a session's own cwd —
   // on whichever host actually runs that session's CLI, since a file path
@@ -85,10 +88,23 @@ export interface SessionBackend {
     seed: string,
     branchName?: string,
   ): Promise<WorktreeResult | null>;
-  // Checks out an existing branch in a new worktree (dock preview flow).
-  // Currently only supported on local hosts — cleanup and sync run local
-  // git commands; full remote support tracked in issue #345.
+  // Checks out an existing branch into a fresh detached-HEAD worktree on
+  // whichever host owns `cwd`'s filesystem (dock preview flow, issue #345).
   checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null>;
+  // Issue #345 — force-removes a dock-preview worktree (`git worktree
+  // remove --force`) on whichever host owns it. Distinct from
+  // removeWorktreeIfClean below (never `--force`) — an HMR dev server
+  // running inside a preview worktree is almost always dirty. Used by
+  // killSession/the reconciler/the spawn-failure rollback, and by the
+  // worktreeRefresh sync tick's `pendingRemoval` retry — see
+  // git-worktree.ts's PreviewWorktreeInfo.remove doc comment.
+  removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean>;
+  // Issue #345 — resets a dock-preview worktree to the current tip of a
+  // LOCAL branch ref (`git reset --hard`, no fetch) on whichever host owns
+  // it, for the worktreeRefresh live-sync tick. Safe only because the
+  // worktree's HEAD is detached (checkoutBranchWorktree above) — see
+  // git-worktree.ts's syncWorktree doc comment.
+  syncWorktree(worktreePath: string, branch: string): Promise<boolean>;
   // #483 — the retry route's resume-on-preserved-branch checkout (see
   // git-worktree.ts's resumeTaskWorktree doc comment). #484 — proxied to a
   // remote host via /internal/git-worktree/resume, the same way every
@@ -244,6 +260,14 @@ class LocalBackend implements SessionBackend {
     return checkoutBranchWorktree(cwd, branch);
   }
 
+  removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
+    return removeWorktree(worktreePath, parentCwd);
+  }
+
+  syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
+    return syncWorktree(worktreePath, branch);
+  }
+
   resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
     return resumeTaskWorktree(cwd, branchName);
   }
@@ -363,9 +387,16 @@ class RemoteBackend implements SessionBackend {
     return this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName);
   }
 
-  checkoutBranchWorktree(_cwd: string, _branch: string): Promise<WorktreeResult | null> {
-    // Not supported on remote hosts — guarded by route handler (issue #345).
-    return Promise.resolve(null);
+  checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null> {
+    return this.client.resolveCheckoutBranchWorktree(cwd, branch);
+  }
+
+  removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
+    return this.client.resolveRemoveWorktree(worktreePath, parentCwd);
+  }
+
+  syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
+    return this.client.resolveSyncWorktree(worktreePath, branch);
   }
 
   resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {

@@ -27,6 +27,9 @@ export interface GitDiffStats {
 }
 
 const GIT_TIMEOUT_MS = 5_000;
+// B9 — see git-status.ts's identical constant for the full rationale
+// (shared across every runGit-shaped helper in this sibling group).
+const KILL_ESCALATION_MS = 2_000;
 
 /** Runs `git -C <cwd> diff [baseRef]...HEAD --numstat`, capturing stdout on
  * `'close'`. When `baseRef` is provided, diffs the branch's work vs that base
@@ -47,23 +50,47 @@ function runGitDiffNumstat(cwd: string, baseRef?: string): Promise<string | null
       env: gitEnv(),
     });
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+
+    // B9 — see git-status.ts's runGitStatus for the full rationale on both
+    // the escalation and the listener-detach-in-finish shape below.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
       resolve(value);
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill(); // SIGTERM
       finish(null);
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", () => {
+      clearKillTimer();
+      finish(null);
     });
-    child.on("error", () => finish(null));
-    child.on("close", (code) => finish(code === 0 ? stdout : null));
+    child.on("close", (code) => {
+      clearKillTimer();
+      finish(code === 0 ? stdout : null);
+    });
   });
 }
 
@@ -167,11 +194,33 @@ export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDi
   return promise;
 }
 
+// B9 — getFileDiff below previously had no upper bound on patch size: a
+// single huge generated diff (a vendored dependency bump, a lockfile
+// regen) accumulates an unbounded string, and GIT_TIMEOUT_MS's 5s timeout
+// doesn't help — a local `git diff` streams fast, well within that window,
+// long before it produces megabytes of output. 2 MiB mirrors the order of
+// magnitude this codebase already uses for other single in-memory buffers
+// it deliberately bounds (SCROLLBACK_MAX_BYTES in pty-manager.ts is 1 MiB
+// per session; the various *_BACKPRESSURE_MAX_BUFFERED_BYTES constants in
+// terminal.ts/browser.ts/ws-pipe.ts/task-events.ts are 4 MiB) — large
+// enough that no single-file diff a human would actually read through hits
+// it, small enough to bound memory against a pathological one.
+const FILE_DIFF_MAX_BYTES = 2 * 1024 * 1024;
+// parseUnifiedDiff (frontend/src/diffUtils.ts) classifies every line by its
+// leading characters and falls through to a plain "context" line for
+// anything it doesn't recognize, so appending human-readable text after the
+// real patch content renders safely rather than corrupting the diff view.
+const FILE_DIFF_TRUNCATED_MARKER =
+  "\n\n[diff truncated: exceeds 2 MiB, showing the first part only]\n";
+
 /** Best-effort unified diff for a single file against HEAD (or
  * `<baseRef>...HEAD` when `baseRef` is set). Returns the raw patch text or
  * `null` on any failure (not a repo, missing file, git error, timeout).
- * Never throws. Cache-deliberately absent — this is a user-click-triggered
- * fetch (not a poll loop), and the patch is inherently single-use.
+ * Truncated with a trailing marker (see FILE_DIFF_TRUNCATED_MARKER) once the
+ * accumulated patch exceeds FILE_DIFF_MAX_BYTES, rather than buffering the
+ * whole thing. Never throws. Cache-deliberately absent — this is a
+ * user-click-triggered fetch (not a poll loop), and the patch is inherently
+ * single-use.
  */
 export async function getFileDiff(
   cwd: string,
@@ -195,23 +244,59 @@ export async function getFileDiff(
       env: gitEnv(),
     });
 
+    // B9 — see git-status.ts's runGitStatus for the full rationale on the
+    // escalation/listener-detach shape shared with this file's sibling
+    // runGitDiffNumstat above.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+    const killWithEscalation = () => {
+      child.kill(); // SIGTERM
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
+    };
+
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
       resolve(value);
     };
 
+    let stdoutBytes = 0;
+    const onStdoutData = (chunk: Buffer) => {
+      stdoutBytes += chunk.byteLength;
+      if (stdoutBytes > FILE_DIFF_MAX_BYTES) {
+        // B9 — stop accumulating and end the process rather than let a huge
+        // diff keep growing `stdout`; return only what's been buffered so
+        // far plus the marker, not the full (unbounded) patch.
+        killWithEscalation();
+        finish(stdout + FILE_DIFF_TRUNCATED_MARKER);
+        return;
+      }
+      stdout += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+
     const timer = setTimeout(() => {
-      child.kill();
+      killWithEscalation();
       finish(null);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", () => {
+      clearKillTimer();
+      finish(null);
     });
-    child.on("error", () => finish(null));
     child.on("close", (code) => {
+      clearKillTimer();
       // git diff exit codes: 0 = no differences found, 1 = differences
       // found, >1 = error. Either 0 or 1 is valid — stdout content is the
       // patch in both cases (empty when exit 0, populated when exit 1).

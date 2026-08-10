@@ -50,6 +50,9 @@ import { listWorktrees } from "./git-refs.js";
 // preview's reset touch only its own HEAD, never a ref anything else reads.
 
 const GIT_TIMEOUT_MS = 15_000;
+// B9 — see git-status.ts's identical constant for the full rationale
+// (shared across every runGit-shaped helper in this sibling group).
+const KILL_ESCALATION_MS = 2_000;
 
 interface GitResult {
   code: number | null;
@@ -70,26 +73,52 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
       env: gitEnv(),
     });
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    const onStderrData = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+    child.stderr?.on("data", onStderrData);
+
+    // B9 — see git-status.ts's runGitStatus for the full rationale on both
+    // the escalation and the listener-detach-in-finish shape below.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
     const finish = (result: GitResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.off("data", onStdoutData);
+      child.stderr?.off("data", onStderrData);
       resolve(result);
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill(); // SIGTERM
       finish({ code: null, stdout, stderr });
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    child.on("error", (err) => {
+      clearKillTimer();
+      finish({ code: null, stdout, stderr: String(err) });
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+    child.on("close", (code) => {
+      clearKillTimer();
+      finish({ code, stdout, stderr });
     });
-    child.on("error", (err) => finish({ code: null, stdout, stderr: String(err) }));
-    child.on("close", (code) => finish({ code, stdout, stderr }));
   });
 }
 
@@ -867,6 +896,24 @@ export interface PreviewWorktreeInfo {
   worktreeRefresh: boolean;
   parentCwd: string;
   projectId: number;
+  // Issue #345 — the host that owns worktreePath's filesystem. Diagnostic
+  // only — cleanupPreviewWorktree's own failure log includes it so "local
+  // vs. remote" is distinguishable after the fact; routing decisions live
+  // entirely in whether `remove`/`sync` below are set, not in this field.
+  // Optional so that existing (local-only) test fixtures need no change:
+  // production code (sessions.ts) always sets it.
+  hostId?: string;
+  // Issue #345 — host-routed removal/sync, captured (as closures over a
+  // specific FastifyInstance + hostId) at trackPreviewWorktree time by the
+  // caller, which has resolveBackend available and this module does not
+  // (no DB/FastifyInstance import here — see the module header). Left
+  // undefined for a local host: falls back to this module's own
+  // removeWorktree/syncWorktree below, preserving today's exact code path
+  // for every existing (local) test. Must never reject — an unreachable
+  // remote agent has to read as `false` (queues a retry), not as a thrown
+  // error escaping into killSession/the reconciler/the sync tick.
+  remove?: () => Promise<boolean>;
+  sync?: () => Promise<boolean>;
   /** Set when a prior removal attempt (killSession or the reconciler) failed.
    * The sync tick below retries removal for these entries every tick instead
    * of syncing them, until one succeeds — this is what makes
@@ -888,6 +935,19 @@ const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
  * *enqueueing* a duplicate sync on top of one already running; the lock
  * prevents a sync and a removal from *interleaving* on the same path. */
 const inflightSyncPaths = new Set<string>();
+
+/** Same guard as `inflightSyncPaths` above, for the `pendingRemoval` retry
+ * branch below (Hermes review, this PR — this branch originally had no
+ * such guard, unlike the sync branch it sits next to). A remote removal
+ * that takes close to GIT_WORKTREE_REQUEST_TIMEOUT_MS (45s,
+ * remote-host-client.ts) to fail would otherwise re-fire on every 5s tick,
+ * stacking up concurrent `/internal/git-worktree/force-remove` requests to
+ * the same path — the agent's own per-path lock (`pathOps`/`removingPaths`
+ * above, mirrored server-side by removeWorktree) serializes them so this
+ * was never unsafe, just wasteful. Local removal was never affected either
+ * (same in-process lock covers it directly), so this is purely about the
+ * remote HTTP round trip. */
+const inflightRemovalPaths = new Set<string>();
 
 const SYNC_INTERVAL_MS = 5000;
 let syncTimer: ReturnType<typeof setInterval> | null = null;
@@ -919,6 +979,35 @@ export function findPreviewWorktreeSessionId(worktreePath: string): number | und
   return undefined;
 }
 
+// Issue #345 — routes removal/sync through a tracked entry's own host-routed
+// closure when present (a remote host), falling back to this module's local
+// removeWorktree/syncWorktree otherwise (a local host — today's exact
+// behavior, unchanged). Centralized here so cleanupPreviewWorktree and the
+// tick below don't each re-implement the fallback. The closure's own
+// contract (see PreviewWorktreeInfo.remove/sync's doc comment, and
+// trackPreviewWorktree's call site in sessions.ts) is to never reject; the
+// try/catch here is a defensive backstop only — a violation must not crash
+// killSession/the reconciler (cleanupPreviewWorktree has no try/catch of its
+// own), same "best-effort, retry next tick" posture as every other failure
+// path in this module.
+async function previewRemove(info: PreviewWorktreeInfo): Promise<boolean> {
+  if (!info.remove) return removeWorktree(info.worktreePath, info.parentCwd);
+  try {
+    return await info.remove();
+  } catch {
+    return false;
+  }
+}
+
+async function previewSync(info: PreviewWorktreeInfo): Promise<boolean> {
+  if (!info.sync) return syncWorktree(info.worktreePath, info.branch);
+  try {
+    return await info.sync();
+  } catch {
+    return false;
+  }
+}
+
 function startSyncTick() {
   if (syncTimer !== null) return;
   syncTimer = setInterval(() => {
@@ -928,20 +1017,31 @@ function startSyncTick() {
         // session this worktree belonged to is already gone. removeWorktree
         // guards its own path against re-entrancy the same way syncWorktree
         // does below, so it's safe to just fire this every tick until it
-        // succeeds.
-        void removeWorktree(info.worktreePath, info.parentCwd)
+        // succeeds. inflightRemovalPaths (Hermes review, this PR) still
+        // skips *enqueueing* a duplicate attempt on top of one already in
+        // flight — see its own doc comment for why that matters for the
+        // remote case specifically.
+        if (inflightRemovalPaths.has(info.worktreePath)) continue;
+        inflightRemovalPaths.add(info.worktreePath);
+        void previewRemove(info)
           .then((removed) => {
             if (removed) previewWorktrees.delete(sessionId);
           })
           .catch(() => {
             // Best-effort: transient failures silently retry on next tick.
+            // A host-routed closure logs the reason itself before resolving
+            // false (see sessions.ts) — this catch only guards against a
+            // closure that broke that contract.
+          })
+          .finally(() => {
+            inflightRemovalPaths.delete(info.worktreePath);
           });
         continue;
       }
       if (!info.worktreeRefresh) continue;
       if (inflightSyncPaths.has(info.worktreePath)) continue;
       inflightSyncPaths.add(info.worktreePath);
-      syncWorktree(info.worktreePath, info.branch)
+      previewSync(info)
         .finally(() => {
           inflightSyncPaths.delete(info.worktreePath);
         })
@@ -950,6 +1050,14 @@ function startSyncTick() {
         });
     }
   }, SYNC_INTERVAL_MS);
+  // B9 — the one interval in this codebase that wasn't `.unref()`'d (every
+  // other timer here is — see plugins/pty.ts and pty-manager.ts's
+  // attention-eval timer for the same treatment with the same rationale):
+  // without this, an unclean teardown (a test that forgets
+  // stopPreviewSyncTick, or a process shutdown path that skips onClose)
+  // leaves the process alive with this 5s tick still running `git reset
+  // --hard` against tracked worktrees indefinitely.
+  syncTimer.unref();
 }
 
 function stopSyncTick() {
@@ -973,14 +1081,14 @@ export async function cleanupPreviewWorktree(
 ): Promise<boolean> {
   const info = previewWorktrees.get(sessionId);
   if (!info) return true;
-  const removed = await removeWorktree(info.worktreePath, info.parentCwd);
+  const removed = await previewRemove(info);
   if (removed) {
     previewWorktrees.delete(sessionId);
     return true;
   } else {
     previewWorktrees.set(sessionId, { ...info, pendingRemoval: true });
     log?.warn(
-      { sessionId, worktreePath: info.worktreePath },
+      { sessionId, worktreePath: info.worktreePath, hostId: info.hostId },
       "failed to remove preview worktree — marked for retry by the sync tick",
     );
     return false;
@@ -1011,4 +1119,15 @@ export function stopPreviewSyncTick(): void {
   // clearing removingPaths mid-removal would un-bail a queued sync).
   previewWorktrees.clear();
   inflightSyncPaths.clear();
+  inflightRemovalPaths.clear();
+}
+
+/** Exported for tests only — whether the sync timer is currently ref'd
+ * (i.e. would keep the process alive on its own). Production code never
+ * needs this; it exists solely to assert the `.unref()` call in
+ * startSyncTick above actually took effect, since `NodeJS.Timeout.hasRef()`
+ * is the only way to observe that from outside the timer itself. Returns
+ * `null` when no tick is currently running. */
+export function syncTimerHasRefForTests(): boolean | null {
+  return syncTimer?.hasRef() ?? null;
 }

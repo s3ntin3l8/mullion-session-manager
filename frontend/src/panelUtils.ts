@@ -19,6 +19,28 @@ import { initialPaneTitle } from "./paneTitle.js";
 // stale-by-one-render boolean would be, without new plumbing.
 const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
 
+// U9 — App.tsx's global Escape handler's own action list, extracted here
+// (App.tsx itself can only export components — react-refresh/only-export-
+// components) so it's directly unit-testable: App.tsx pulls in real
+// dockview/xterm/WS machinery App.test.tsx never had to mock before, so
+// mounting the whole component just to exercise a keydown handler isn't
+// this codebase's existing pattern (see App.test.tsx's absence). App.tsx's
+// effect calls this directly, so this IS the real code path, not a
+// parallel reimplementation of it. `clearSplitRequest` closing a
+// split-triggered palette (not just a plain-opened one — see App.tsx's own
+// `paletteOpen`'s `palette.open || (splitRequest !== null && ...)`
+// computation) is the actual U9 fix; `clearPalette`/`closeSettings` were
+// already correct.
+export function handleGlobalEscape(actions: {
+  clearPalette: () => void;
+  closeSettings: () => void;
+  clearSplitRequest: () => void;
+}): void {
+  actions.clearPalette();
+  actions.closeSettings();
+  actions.clearSplitRequest();
+}
+
 // A workspace's `layout` is an opaque dockview blob — this walks it
 // generically looking for any `sessionId` value, without assuming dockview's
 // exact panel-tree shape.

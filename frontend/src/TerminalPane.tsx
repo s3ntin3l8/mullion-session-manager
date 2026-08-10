@@ -260,6 +260,16 @@ export function TerminalPane(props: {
   // button handles stop/kill instead. Defaults to false, preserving the
   // standard terminal behavior for regular sessions.
   captureCtrlC?: boolean;
+  // U7 — whether THIS pane is dockview's currently active one (see the
+  // activation-focus effect near the find-bar effect below). Optional and
+  // dockview-agnostic like every other prop here (see this component's own
+  // header comment): the wrapper that actually knows about dockview's panel
+  // API (TerminalPanelWrapper, App.tsx) resolves this via the same
+  // `api.onDidActiveChange` subscription PaneTab.tsx already uses for its
+  // own badge logic and passes down a plain boolean; Dock.tsx, which
+  // renders a terminal outside any real dockview panel, simply omits it —
+  // the effect below is a no-op for `undefined`, same as for `false`.
+  active?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -302,6 +312,14 @@ export function TerminalPane(props: {
   // never auto-steals focus just by mounting/rendering), and an unguarded
   // `term.focus()` here would quietly break that.
   const prevFindOpenRef = useRef(false);
+  // U7 — mirrors `findOpen` for the activation-focus effect below, the same
+  // "expose current state to a ref so an unrelated effect can read it
+  // without depending on it" shape as uploadImageRef/retryRef/refitRef
+  // further down: that effect must fire ONLY on `props.active`'s own
+  // false->true transition, not additionally re-fire (and double-call
+  // `.focus()` alongside the findOpen-transition effect just below) every
+  // time the find bar itself opens/closes while a pane stays active.
+  const findOpenRef = useRef(findOpen);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
@@ -1130,7 +1148,33 @@ export function TerminalPane(props: {
       termRef.current?.focus();
     }
     prevFindOpenRef.current = findOpen;
+    findOpenRef.current = findOpen;
   }, [findOpen]);
+
+  // U7 fix — clicking a pane's tab (or activating it via keyboard pane-
+  // switching, a deep link, a push-notification open, or auto-focus-on-
+  // attention) changes dockview's *active panel*, but none of those paths
+  // ever click inside xterm's own DOM, so focus never actually lands in the
+  // hidden textarea xterm types into — the pane LOOKS focused and silently
+  // swallows the user's first keystroke. `props.active` (see this
+  // component's own prop doc comment) is the wrapper's `onDidActiveChange`
+  // signal. Deliberately keyed on `[props.active]` alone (findOpenRef reads
+  // the CURRENT findOpen without retriggering this effect on its own
+  // change — see that ref's own comment) so this only runs on the
+  // false->true (or mount-already-active) transition, same "guarded, never
+  // unconditional" posture as every other `.focus()` call in this file (see
+  // prevFindOpenRef's own comment above) — `active` going back to false
+  // intentionally does nothing, and `active` staying true across an
+  // unrelated re-render (including the find bar opening/closing) doesn't
+  // retrigger this effect, so it can't steal focus back from e.g. the find
+  // bar's own input while this same pane stays the active one. The
+  // `findOpenRef.current` check additionally skips the steal-back when the
+  // find bar was ALREADY open at the moment this pane became active — the
+  // findOpen-transition effect above owns focus in that case.
+  useEffect(() => {
+    if (!props.active || findOpenRef.current) return;
+    termRef.current?.focus();
+  }, [props.active]);
 
   // Auto-dismisses the "upload failed" toast — "uploading" instead clears
   // itself the moment uploadAndInjectImage's promise settles (see the mount

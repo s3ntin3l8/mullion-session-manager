@@ -548,6 +548,60 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("checks out a remote dock-preview branch via /internal/git-worktree/checkout (issue #345)", async () => {
+    const result = { path: "/x/y/.mullion-worktrees/dock-preview-main-abc123", branch: "main" };
+    fetchMock.mockResolvedValue(jsonResponse(200, result));
+    await expect(client().resolveCheckoutBranchWorktree("/x/y", "main")).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-worktree/checkout",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        body: JSON.stringify({ cwd: "/x/y", branch: "main" }),
+      }),
+    );
+  });
+
+  it("returns null when a remote checkout fails for a git-level reason (issue #345)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, null));
+    await expect(client().resolveCheckoutBranchWorktree("/x/y", "no-such-branch")).resolves.toBe(
+      null,
+    );
+  });
+
+  it("force-removes a remote dock-preview worktree via /internal/git-worktree/force-remove, unwrapping {removed} (issue #345)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { removed: true }));
+    await expect(
+      client().resolveRemoveWorktree("/x/y/.mullion-worktrees/foo", "/x/y"),
+    ).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-worktree/force-remove",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        body: JSON.stringify({
+          worktreePath: "/x/y/.mullion-worktrees/foo",
+          parentCwd: "/x/y",
+        }),
+      }),
+    );
+  });
+
+  it("syncs a remote dock-preview worktree via /internal/git-worktree/sync, unwrapping {synced} (issue #345)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { synced: false }));
+    await expect(client().resolveSyncWorktree("/x/y/.mullion-worktrees/foo", "main")).resolves.toBe(
+      false,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-worktree/sync",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        body: JSON.stringify({ worktreePath: "/x/y/.mullion-worktrees/foo", branch: "main" }),
+      }),
+    );
+  });
+
   it("resolves a remote session's diff stats via /internal/git-diff (issue #202)", async () => {
     const stats = { filesChanged: 2, insertions: 5, deletions: 1 };
     // { isRepo, stats } envelope, same "durable vs. transient" reasoning as

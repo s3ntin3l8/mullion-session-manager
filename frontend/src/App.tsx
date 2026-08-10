@@ -64,6 +64,7 @@ import {
   childPanelPosition,
   shouldAutoOpenChildPanels,
   closeLegacyPanels,
+  handleGlobalEscape,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -108,6 +109,18 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
     },
     [props.api, sessionId],
   );
+  // U7 — same api.onDidActiveChange subscription PaneTab.tsx already uses
+  // for its own badge logic (see that component's own comment on why the
+  // useState initializer, not the effect, is what makes an already-active
+  // tab at mount — e.g. the default tab on first load — read correctly).
+  // TerminalPane itself stays dockview-agnostic (see its own header
+  // comment), so this wrapper is where the dockview panel API lives and
+  // where the resulting plain boolean gets threaded down.
+  const [isActive, setIsActive] = useState(props.api.isActive);
+  useEffect(() => {
+    const disposable = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
+    return () => disposable.dispose();
+  }, [sessionId, props.api]);
   return (
     <div
       className={highlightedPanelId === panelId ? "panel-body-highlight" : ""}
@@ -120,7 +133,12 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
       style={{ width: "100%", height: "100%", position: "relative" }}
     >
       <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-        <TerminalPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
+        <TerminalPane
+          key={resetKey}
+          params={props.params}
+          onTitleChange={onTitleChange}
+          active={isActive}
+        />
       </ErrorBoundary>
     </div>
   );
@@ -140,12 +158,22 @@ function GitHubPanelWrapper(props: IDockviewPanelProps<GitHubPanelParams>) {
 }
 
 // Same reasoning as GitHubPanelWrapper above — a crashing status fetch
-// shouldn't blank the whole dashboard either.
+// shouldn't blank the whole dashboard either. U6 — resolves onOpenSession
+// via props.containerApi rather than needing App()'s own onOpenSession
+// closure threaded down, same shape as TaskDetailWrapper below.
 function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
   const [resetKey, setResetKey] = useState(0);
+  const projects = useDashboardStore((s) => s.projects);
   return (
     <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <GitPanel key={resetKey} params={props.params} />
+      <GitPanel
+        key={resetKey}
+        params={props.params}
+        onOpenSession={(session) => {
+          const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+          openSessionPanel(props.containerApi, session, isMobile, projects);
+        }}
+      />
     </ErrorBoundary>
   );
 }
@@ -900,8 +928,21 @@ export function App() {
         e.preventDefault();
         openSettings();
       } else if (e.key === "Escape") {
-        setPalette((p) => ({ ...p, open: false }));
-        setSettingsOpen(false);
+        // U9 — see handleGlobalEscape's own doc comment for why
+        // clearSplitRequest belongs here: the palette also renders for a
+        // pending split-right/split-down splitRequest (paletteOpen's own
+        // `palette.open || (splitRequest !== null && ...)` computation
+        // below), and the palette's OWN Escape handler only fires while
+        // focus is actually inside its search input — moving focus to the
+        // project picker, a launcher row, the worktree checkbox, or the
+        // base-ref dropdown (all still inside the palette) leaves this
+        // global, window-level handler as the only one that still sees the
+        // keypress.
+        handleGlobalEscape({
+          clearPalette: () => setPalette((p) => ({ ...p, open: false })),
+          closeSettings: () => setSettingsOpen(false),
+          clearSplitRequest: () => useDashboardStore.getState().clearSplitRequest(),
+        });
       }
     };
     window.addEventListener("keydown", onKeyDown);

@@ -51,14 +51,17 @@ import {
   resolveCommitSha,
 } from "../services/git-refs.js";
 import {
+  checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
   createWorktree,
   listTaskWorktreeDirs,
   pruneWorktrees,
   pruneWorktreeMetadata,
   removeListedWorktree,
+  removeWorktree,
   removeWorktreeIfClean,
   resumeTaskWorktree,
+  syncWorktree,
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
 import { runGitFetch } from "../services/git-fetch.js";
@@ -264,6 +267,68 @@ const gitWorktreeRemoveSchema = {
     properties: {
       worktreePath: { type: "string", minLength: 1 },
       parentCwd: { type: "string" },
+    },
+  },
+};
+
+interface GitWorktreeCheckoutBody {
+  cwd: string;
+  branch: string;
+}
+
+// Issue #345 — the agent-side counterpart of checkoutBranchWorktree, for a
+// remote-hosted project's dock-preview flow (an EXISTING branch, detached
+// HEAD — distinct from gitWorktreeCreateSchema above, which creates a new
+// branch from a baseRef).
+const gitWorktreeCheckoutSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "branch"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      branch: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+interface GitWorktreeForceRemoveBody {
+  worktreePath: string;
+  parentCwd?: string;
+}
+
+// Issue #345 — the agent-side counterpart of removeWorktree (--force,
+// unlike gitWorktreeRemoveSchema above which is the never-force
+// removeWorktreeIfClean). A dock-preview worktree running an HMR dev server
+// is almost always dirty, so the safe path can't be reused here.
+const gitWorktreeForceRemoveSchema = {
+  body: {
+    type: "object",
+    required: ["worktreePath"],
+    additionalProperties: false,
+    properties: {
+      worktreePath: { type: "string", minLength: 1 },
+      parentCwd: { type: "string" },
+    },
+  },
+};
+
+interface GitWorktreeSyncBody {
+  worktreePath: string;
+  branch: string;
+}
+
+// Issue #345 — the agent-side counterpart of syncWorktree (the
+// worktreeRefresh live-sync tick's `git reset --hard`), for a remote-hosted
+// project's dock-preview worktree.
+const gitWorktreeSyncSchema = {
+  body: {
+    type: "object",
+    required: ["worktreePath", "branch"],
+    additionalProperties: false,
+    properties: {
+      worktreePath: { type: "string", minLength: 1 },
+      branch: { type: "string", minLength: 1 },
     },
   },
 };
@@ -1406,6 +1471,72 @@ export async function internalRoutes(app: FastifyInstance) {
         resolvedParentCwd = resolved;
       }
       return await removeWorktreeIfClean(resolvedWorktreePath, resolvedParentCwd);
+    },
+  );
+
+  // Issue #345 — checks out an EXISTING branch into a fresh detached-HEAD
+  // worktree on THIS agent's own filesystem, for a remote-hosted project's
+  // dock-preview flow. Distinct from /internal/git-worktree above (which
+  // creates a NEW branch from a baseRef). Returns `null` (200) on a
+  // git-level failure, same "not applicable, not unreachable" posture as
+  // every other route in this file — see /internal/git-worktree's own
+  // comment.
+  app.post<{ Body: GitWorktreeCheckoutBody }>(
+    "/internal/git-worktree/checkout",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeCheckoutSchema },
+    async (request, reply) => {
+      const { cwd, branch } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return await checkoutBranchWorktree(resolvedCwd, branch);
+    },
+  );
+
+  // Issue #345 — force-removes a dock-preview worktree on THIS agent's own
+  // filesystem (`git worktree remove --force`), for the primary's
+  // killSession/reconciler/spawn-rollback cleanup paths. Unlike
+  // /internal/git-worktree/remove above (removeWorktreeIfClean, never
+  // force), a preview worktree running an HMR dev server is almost always
+  // dirty, so the safe path can't be reused here — see removeWorktree's own
+  // doc comment. Both path fields go through resolveWithinRoots
+  // independently, same as /internal/git-worktree/remove.
+  app.post<{ Body: GitWorktreeForceRemoveBody }>(
+    "/internal/git-worktree/force-remove",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeForceRemoveSchema },
+    async (request, reply) => {
+      const { worktreePath, parentCwd } = request.body;
+      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
+      if (!resolvedWorktreePath) {
+        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
+      }
+      let resolvedParentCwd: string | undefined;
+      if (parentCwd) {
+        const resolved = resolveWithinRoots(app, parentCwd);
+        if (!resolved)
+          return reply.badRequest("parentCwd must be within this agent's PROJECTS_ROOTS");
+        resolvedParentCwd = resolved;
+      }
+      const removed = await removeWorktree(resolvedWorktreePath, resolvedParentCwd);
+      return { removed };
+    },
+  );
+
+  // Issue #345 — resets a dock-preview worktree on THIS agent's own
+  // filesystem to the current tip of a LOCAL branch ref
+  // (`git reset --hard`), for the primary's worktreeRefresh live-sync tick.
+  // See syncWorktree's own doc comment for why this is safe only because
+  // the worktree's HEAD is detached (checkoutBranchWorktree above).
+  app.post<{ Body: GitWorktreeSyncBody }>(
+    "/internal/git-worktree/sync",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeSyncSchema },
+    async (request, reply) => {
+      const { worktreePath, branch } = request.body;
+      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
+      if (!resolvedWorktreePath) {
+        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
+      }
+      const synced = await syncWorktree(resolvedWorktreePath, branch);
+      return { synced };
     },
   );
 
