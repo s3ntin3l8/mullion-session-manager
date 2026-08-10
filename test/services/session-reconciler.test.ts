@@ -118,6 +118,26 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
+  // B9 — once isMasterAlive confirms the process is genuinely gone, any
+  // seed stashed for this id (the promote flow) can never be picked up by a
+  // SessionStart hook again — discard it rather than leaking it forever.
+  // Deliberately NOT covered by plain kill()'s own behavior (see
+  // pty-manager.test.ts's own coverage of that): this asserts the
+  // reconciler's explicit discardPendingSeed() call, independent of
+  // whatever kill() itself does or doesn't clear.
+  it("discards a stashed seed once a session is confirmed exited (B9)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    app.pty.stashSeed(String(sessionId), "some initial prompt");
+    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+    await reconcileExitedSessions(app);
+
+    expect(app.pty.consumeSeed(String(sessionId))).toBeNull();
+
+    await app.close();
+  });
+
   // A9 — kill/attach TOCTOU: the row must read non-"active" BEFORE this
   // function awaits cleanupPreviewWorktree, not only after it resolves.
   // Before the fix, a `/ws/terminal` upgrade landing in that window would

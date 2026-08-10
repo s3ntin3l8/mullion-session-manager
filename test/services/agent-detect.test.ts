@@ -9,17 +9,35 @@ import type * as ChildProcess from "node:child_process";
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
+  exitCode: number | null;
+  signalCode: string | null;
+  killSpy: ReturnType<typeof vi.fn>;
+  kill: (signal?: string) => void;
 }
 
 function makeFakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.stdout = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killSpy = vi.fn();
+  child.kill = (signal?: string) => {
+    child.killSpy(signal);
+  };
   return child;
 }
 
 // Maps binary name -> resolved path (or undefined = "not found"); the mock
 // inspects the invoked `command -v <bin>` string to decide which to reply.
 let available: Record<string, string>;
+
+// B7 — bins in this set never emit exit/data/close at all, modeling a login
+// shell blocked forever on an unread stderr write; `hungChildren` captures
+// the fake child spawned for each so the timeout test below can assert on
+// it directly (kill escalation, listener detachment).
+let hangBins: Set<string> = new Set();
+const hungChildren = new Map<string, FakeChild>();
+let lastSpawnOpts: { stdio?: unknown } | undefined;
 
 // getCodexHookTrust() reads the REAL ~/.codex (unless CODEX_HOME is set) —
 // mocked here for the same reason child_process is faked above: detectAgents
@@ -35,11 +53,20 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
-    spawn: vi.fn((_shell: string, args: string[]) => {
+    spawn: vi.fn((_shell: string, args: string[], opts?: { stdio?: unknown }) => {
       const child = makeFakeChild();
+      lastSpawnOpts = opts;
       const script = args[args.length - 1] ?? "";
       const match = /command -v (\S+)/.exec(script);
       const bin = match?.[1];
+
+      if (bin && hangBins.has(bin)) {
+        // B7 — deliberately never emits exit/data/close, modeling a login
+        // shell blocked on a write() syscall to an unread stderr pipe.
+        hungChildren.set(bin, child);
+        return child;
+      }
+
       const resolvedPath = bin ? available[bin] : undefined;
 
       // Deliberately fires 'exit' BEFORE the stdout 'data' chunk and the
@@ -125,6 +152,50 @@ describe("detectAgents", () => {
     expect(byId["shell:bash"].hookTrust).toBeUndefined();
 
     codexHookTrust = "not-installed"; // reset for tests below
+  });
+});
+
+describe("probe() timeout (B7)", () => {
+  it("spawns with stdio: ['ignore','pipe','ignore'] so stderr is never left as an unread pipe", async () => {
+    available = { bash: "/bin/bash" };
+    hangBins = new Set();
+    await detectAgents();
+    expect(lastSpawnOpts?.stdio).toEqual(["ignore", "pipe", "ignore"]);
+  });
+
+  it("settles within the timeout instead of hanging forever when a shell blocks on an unread stderr write", async () => {
+    available = {};
+    hangBins = new Set(["bash"]);
+    hungChildren.clear();
+    vi.useFakeTimers();
+    try {
+      const resultPromise = detectAgents();
+
+      // The hung child never emits 'close' on its own — only advancing past
+      // PROBE_TIMEOUT_MS should let this resolve at all.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const results = await resultPromise;
+
+      const bash = results.find((r) => r.id === "shell:bash");
+      expect(bash?.available).toBe(false);
+      expect(bash?.path).toBeNull();
+
+      const hungChild = hungChildren.get("bash");
+      expect(hungChild).toBeDefined();
+      expect(hungChild!.killSpy).toHaveBeenCalledTimes(1);
+      expect(hungChild!.killSpy).not.toHaveBeenCalledWith("SIGKILL");
+      expect(hungChild!.stdout.listenerCount("data")).toBe(0);
+
+      // Escalates to SIGKILL if still "alive" (exitCode/signalCode both
+      // null, same as a real process that ignored SIGTERM) after the grace
+      // period.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(hungChild!.killSpy).toHaveBeenLastCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+      hangBins = new Set();
+      hungChildren.clear();
+    }
   });
 });
 

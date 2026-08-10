@@ -37,6 +37,13 @@ export interface GitStatus {
 }
 
 const GIT_TIMEOUT_MS = 5_000;
+// B9 — grace period after the initial SIGTERM before escalating to SIGKILL,
+// shared by every runGit-shaped helper in this file's sibling group
+// (git-refs.ts, git-worktree.ts, git-branch-delete.ts, git-diff.ts). Without
+// this, a process that ignores SIGTERM (a hung filesystem call, a signal
+// handler that swallows it) never actually dies — `child.kill()` alone only
+// requests termination, it doesn't guarantee it.
+const KILL_ESCALATION_MS = 2_000;
 
 /** Runs `git -C <cwd> status --porcelain=v2 --branch`, capturing stdout on
  * `'close'` (not `'exit'`) — the same stdout-delivery race documented in
@@ -62,30 +69,61 @@ function runGitStatus(cwd: string): Promise<string | null> {
       env: gitEnv(),
     });
 
+    const onStdoutData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    };
+    const onStderrData = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", onStdoutData);
+    child.stderr?.on("data", onStderrData);
+
+    // B9 — armed only once the timeout fires (see below); cleared in
+    // 'close'/'error' regardless of whether finish() has already settled,
+    // since it guards the actual OS process, not the promise.
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearKillTimer = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    };
+
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // B9 — without this, a wedged process (killed but not yet reaped, or
+      // one that outright ignores SIGTERM) keeps its 'data' listeners live
+      // and keeps appending to `stdout`/`stderr` that nothing will ever read
+      // again.
+      child.stdout?.off("data", onStdoutData);
+      child.stderr?.off("data", onStderrData);
       resolve(value);
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill(); // SIGTERM
       console.debug("[git-status] git status timed out", { cwd, timeoutMs: GIT_TIMEOUT_MS });
       finish(null);
+      // B9 — escalate to SIGKILL if still alive after a grace period.
+      // `child.killed` only reflects whether a signal was successfully
+      // *sent*, not whether the process actually died, so check
+      // exitCode/signalCode instead.
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, KILL_ESCALATION_MS);
     }, GIT_TIMEOUT_MS);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
     child.on("error", (err) => {
+      clearKillTimer();
       console.debug("[git-status] git status spawn error", { cwd, err: String(err) });
       finish(null);
     });
     child.on("close", (code) => {
+      clearKillTimer();
       if (code !== 0) {
         console.debug("[git-status] git status exited non-zero", {
           cwd,

@@ -274,6 +274,18 @@ export function resolveAndAttach(
   }
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+  // B9 — currently unreachable given the DB's notNull FK + `foreign_keys =
+  // ON` (a session row always has a real project), but every sibling lookup
+  // in this codebase (routes/sessions.ts) guards a possibly-empty select
+  // before dereferencing it, and this function is also reached from
+  // control-socket.ts's `sessions.attach` op with no preValidation at all —
+  // defense-in-depth against an uncatchable TypeError inside a WS handler
+  // after the upgrade has already completed, where there's no HTTP response
+  // left to fail cleanly. Checked before the lastAttachedAt write below so a
+  // request that's about to fail never mutates the row first.
+  if (!project) {
+    return { ok: false, status: 404, error: `No project ${row.projectId}` };
+  }
   app.db
     .update(sessions)
     .set({ lastAttachedAt: new Date() })

@@ -97,7 +97,16 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // meaningful for a local session — a remote agent's own PtyManager
         // has nothing tracked here to clear), then mark the row so
         // terminal.ts's preValidation stops offering to reattach to it.
-        if (hostId === LOCAL_HOST_ID) app.pty.kill(String(row.session.id));
+        if (hostId === LOCAL_HOST_ID) {
+          app.pty.kill(String(row.session.id));
+          // B9 — this loop already confirmed via isMasterAlive that the
+          // process is genuinely gone (not just detached), so any seed
+          // stashed for this id (the promote flow) can never be picked up
+          // by a SessionStart hook now — discard it rather than leaking it
+          // forever. See PtyManager.discardPendingSeed's own doc comment
+          // for why this must NOT happen inside kill() itself.
+          app.pty.discardPendingSeed(String(row.session.id));
+        }
 
         // A9 — kill/attach TOCTOU: flip the row to "exited" BEFORE awaiting
         // cleanupPreviewWorktree below, not after.
