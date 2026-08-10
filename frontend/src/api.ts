@@ -939,6 +939,10 @@ export interface Task {
   // recorded once at claim time.
   agentCommand: string | null;
   prUrl: string | null;
+  // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR
+  // approve creates directly as a fallback for a task that reached
+  // "reviewing" before that shipped. Not otherwise rendered in the UI yet.
+  prNumber: number | null;
   assignee: string | null;
   // Why a task went "failed" — session death, budget exceeded, or spawn
   // failure. Also carries the human's reject feedback while the task is

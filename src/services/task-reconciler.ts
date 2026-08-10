@@ -18,6 +18,7 @@ import {
 import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 import { buildReviewPrompt } from "./task-prompt.js";
+import { openDraftPRForTask } from "./task-promote.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -108,6 +109,43 @@ async function maybeSpawnReviewAgent(
 }
 
 /**
+ * Opens (or, on a second "-> reviewing", pushes new commits to) a draft PR
+ * for the task — best-effort, mirroring maybeSpawnReviewAgent's own posture
+ * exactly: a failure here is logged and swallowed, never rolled back into
+ * the reviewing transition that already committed. task-promote.ts's
+ * openDraftPRForTask already records tasks.githubSyncError for every
+ * failure reason that's an actual sync problem (and deliberately doesn't
+ * for the ones that aren't — remote-not-supported, dirty-tree, an
+ * undeterminable base branch), so this only needs to log, not duplicate
+ * that bookkeeping.
+ */
+async function maybeOpenDraftPR(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<void> {
+  const result = await openDraftPRForTask(app, task, project);
+  if (!result.ok) {
+    // remote-not-supported/dirty-tree/no-worktree are ordinary, expected
+    // outcomes here (a task barely out of its worker's last turn very often
+    // has an untracked scratch file, or lives on a remote host) — logged at
+    // info, not warn, so this doesn't read as an operational alert on every
+    // routine skip.
+    app.log.info(
+      { taskId: task.id, reason: result.reason, detail: result.detail },
+      "task reconcile: draft PR not opened",
+    );
+    return;
+  }
+  app.db
+    .update(tasks)
+    .set({ prUrl: result.prUrl, prNumber: result.prNumber })
+    .where(eq(tasks.id, task.id))
+    .run();
+  app.log.info({ taskId: task.id, prUrl: result.prUrl }, "task reconcile: draft PR opened");
+}
+
+/**
  * Phase 6 Task Master (6.2/#215) — the automatic-transition half of the
  * state machine (task-state.ts owns the legal-transition table; this is
  * what actually walks it). Polls every task in "claimed"/"in_progress" and:
@@ -133,9 +171,11 @@ async function maybeSpawnReviewAgent(
  *    MULLION_TASK_BUDGET_MINUTES has elapsed since claimedAt, regardless of
  *    what the session is doing — the budget is a hard backstop, not a
  *    negotiation with the agent's own judgment.
- *  - on entering "reviewing" (either path above), spawns the configured
- *    review agent if one is set (see maybeSpawnReviewAgent above) —
- *    advisory only, in the worker's own worktree.
+ *  - on entering "reviewing" (either path above), opens a draft PR
+ *    (maybeOpenDraftPR above — best-effort, never blocks the transition)
+ *    and spawns the configured review agent if one is set (see
+ *    maybeSpawnReviewAgent above) — advisory only, in the worker's own
+ *    worktree.
  *
  * Deliberately does NOT touch "reviewing" tasks — the roadmap's own
  * distinction: a reviewing task's session exiting doesn't fail it (the turn
@@ -303,6 +343,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 "reviewing",
                 { diffStat: await computeTaskDiffStat(task) },
               );
+              await maybeOpenDraftPR(app, task, project);
               await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
             }
           } else if (derived.status !== "idle" && derived.status !== "finished") {
@@ -354,6 +395,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               "reviewing",
               { diffStat: await computeTaskDiffStat(task) },
             );
+            await maybeOpenDraftPR(app, task, project);
             await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
           }
         }
