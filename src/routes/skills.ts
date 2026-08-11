@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
-import { forwardHostRequestError } from "./agent-rules.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
   listGlobalSkills,
   listProjectSkills,
