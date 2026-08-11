@@ -270,7 +270,17 @@ export interface DockConfigReadResult {
 // it can't be bypassed by this function ever getting the flag wrong).
 function isSymlinkPath(filePath: string): boolean {
   try {
-    // codeql[js/path-injection]
+    // Dismissed in GHAS as alert #188 (js/path-injection, won't-fix) — see
+    // resolveDockConfigPath's own doc comment for the containment argument.
+    // A `codeql[js/path-injection]` line comment above this call IS a real
+    // CodeQL suppression annotation (recognized since CodeQL 2.12, marks the
+    // matching SARIF result as suppressed) — but this repo's codeql.yml
+    // workflow runs plain codeql-action/analyze with no follow-up step (e.g.
+    // advanced-security/dismiss-alerts) that reads that SARIF suppression
+    // data and calls the code-scanning API to actually dismiss the alert.
+    // So the annotation alone never flips the Security tab's alert state —
+    // dismissal there only ever happens via the API/UI, which is what
+    // produced the "won't-fix" dismissal above.
     return lstatSync(filePath).isSymbolicLink();
   } catch {
     return false;
@@ -306,15 +316,15 @@ export function readDockConfig(cwd: string): DockConfigReadResult {
   // before ever calling in here — verified directly by
   // test/services/dock-config.test.ts's own resolveDockConfigPath suite and
   // test/routes/internal.test.ts's "/internal/dock-config" describe block.
-  // `CodeQL` is a non-required status check on this repo (see CLAUDE.md's
-  // required-contexts list); dismissed here rather than reshaping
-  // already-verified-safe code to chase a query that doesn't model manual
-  // containment checks as sanitizers.
-  // codeql[js/path-injection]
+  // Dismissed in GHAS as alerts #189 (below) and #183 (readFileSync below)
+  // rather than reshaping already-verified-safe code to chase a query that
+  // doesn't model manual containment checks as sanitizers — see
+  // isSymlinkPath's own doc comment above for why a `codeql[...]` line
+  // comment here wouldn't have flipped the Security tab's alert state on
+  // its own anyway.
   if (!existsSync(filePath)) {
     return { controls: [], invalid: false, reason: null, isSymlink };
   }
-  // codeql[js/path-injection]
   const raw = readFileSync(filePath, "utf8");
   let parsed: unknown;
   try {
@@ -358,11 +368,11 @@ export function writeDockConfig(cwd: string, controls: DockControl[]): void {
   const filePath = resolveDockConfigPath(cwd);
   // Same dismissal, same reasoning, as readDockConfig's own two flagged
   // calls above — see that comment for the full trust-boundary argument.
-  // codeql[js/path-injection]
+  // Dismissed in GHAS as alert #187.
   mkdirSync(path.dirname(filePath), { recursive: true });
   let fd: number;
   try {
-    // codeql[js/path-injection]
+    // Dismissed in GHAS as alert #185.
     fd = openSync(
       filePath,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
