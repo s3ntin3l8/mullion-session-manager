@@ -295,15 +295,29 @@ export function PaneActionsMenu({
             aria-label={`${api.title ?? "Pane"} actions`}
             onKeyDown={onMenuKeyDown}
           >
-            <button
-              className="pane-tab-overflow-item"
-              role="menuitem"
-              onClick={() => closeMenuAfterAction(onRename)}
-            >
-              <RenameIcon size={14} style={{ color: "var(--muted)" }} />
-              <span style={{ flex: 1 }}>Rename</span>
-              <span className="pane-tab-overflow-hint">↵</span>
-            </button>
+            {/* Hermes review, PR #613 — gated on `session`, not rendered
+                unconditionally like "Move" below. On desktop this component
+                only ever mounted for terminal panels (PaneTab.tsx's
+                tabComponents mapping), so `session` was always present and
+                this never mattered; App.tsx's mobile bar now renders this
+                menu for every panel type, including timeline/Agent-Browser/
+                task-detail panels whose params carry no plain `sessionId`
+                (timeline's is `sessionIds`, plural). Ungated, Rename opened
+                an input whose commit silently discarded the typed name
+                (commitMobileRename's own `sessionId === undefined` guard),
+                and Kill was a no-op button that looked destructive but did
+                nothing (armOrKill's `if (!session) return`). */}
+            {session && (
+              <button
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() => closeMenuAfterAction(onRename)}
+              >
+                <RenameIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Rename</span>
+                <span className="pane-tab-overflow-hint">↵</span>
+              </button>
+            )}
             <button
               className="pane-tab-overflow-item"
               role="menuitem"
@@ -349,31 +363,33 @@ export function PaneActionsMenu({
                 <span style={{ flex: 1 }}>Promote to worktree…</span>
               </button>
             )}
-            <div className="pane-tab-overflow-divider" />
-            <button
-              className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
-              role="menuitem"
-              onClick={armOrKill}
-              title={
-                childCount > 0
-                  ? `${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
-                  : undefined
-              }
-            >
-              <KillIcon size={14} />
-              <span style={{ flex: 1 }}>
-                {killArmed
-                  ? "Click again to kill"
-                  : childCount > 0
-                    ? `Kill session (${childCount} child${childCount === 1 ? "" : "ren"} will detach)`
-                    : "Kill session"}
-              </span>
-              {killArmed && (
-                <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
-                  {killSecondsLeft}s
+            {session && <div className="pane-tab-overflow-divider" />}
+            {session && (
+              <button
+                className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
+                role="menuitem"
+                onClick={armOrKill}
+                title={
+                  childCount > 0
+                    ? `${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
+                    : undefined
+                }
+              >
+                <KillIcon size={14} />
+                <span style={{ flex: 1 }}>
+                  {killArmed
+                    ? "Click again to kill"
+                    : childCount > 0
+                      ? `Kill session (${childCount} child${childCount === 1 ? "" : "ren"} will detach)`
+                      : "Kill session"}
                 </span>
-              )}
-            </button>
+                {killArmed && (
+                  <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
+                    {killSecondsLeft}s
+                  </span>
+                )}
+              </button>
+            )}
           </div>,
           document.body,
         )}

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
-import { eventKey, useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { formatBranchLabel } from "./paneTitle.js";
 import { BellIcon, CheckIcon, CloseIcon } from "./icons.js";
-import { notifyKind } from "./eventDescriptions.js";
+import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
@@ -25,11 +25,6 @@ const NARROW_TAB_BADGE_THRESHOLD_PX = 190;
 // settling into the steady-state cmuxRing pulse — long enough to catch the
 // eye on an unwatched dashboard, short enough not to nag once it has.
 const JUST_FIRED_ATTENTION_MS = 1800;
-
-// notifyKind (which of a session's buffered NotificationEvents count
-// toward its unread badge) moved to eventDescriptions.ts for #169, which
-// needed the identical classification for the notification panel's own
-// unread count — see that module's own doc comment.
 
 export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const sessionId = props.params.sessionId;
@@ -79,20 +74,16 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       ? formatBranchLabel(displayBranch, gitStatus ? !gitStatus.isClean : false)
       : null;
 
-  // Unread notification-worthy events (see notifyKind above) newer than the
-  // read cursor. Bell wins over check when both are present — attention is
-  // the higher-priority signal (matches PaneTab's own status-badge
-  // priority further below).
-  const unreadKinds = (events ?? [])
-    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[eventKey(sessionId, e.seq)])
-    .map(notifyKind)
-    .filter((k): k is "attention" | "exited" => k !== null);
-  const unreadCount = unreadKinds.length;
-  const unreadIconKind = unreadKinds.includes("attention")
-    ? "attention"
-    : unreadCount > 0
-      ? "exited"
-      : null;
+  // Unread notification-worthy events (issue #168) — shared with App.tsx's
+  // mobile pane bar via eventDescriptions.ts's unreadEventSummary (Hermes
+  // review, PR #613), which is where the "bell wins over check when both are
+  // present" note now lives.
+  const { count: unreadCount, kind: unreadIconKind } = unreadEventSummary(
+    sessionId,
+    events,
+    lastSeenSeq,
+    dismissedEventKeys,
+  );
 
   // #98 item 1 — tab-group underline accent. dockview 7.0.2's own
   // `tabGroupAccent`/`--dv-tab-group-color` (what the issue's proposed code

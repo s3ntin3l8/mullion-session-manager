@@ -195,10 +195,15 @@ describe("PaneActionsMenu", () => {
   });
 
   // The mobile bar renders this for every panel in dockviewApi.panels, not
-  // just terminal ones — a github/git/browser panel has no sessionId at all
-  // (panelUtils.ts's panelSessionId returns undefined for those).
+  // just terminal ones — a github/git/timeline/browser panel has no plain
+  // `sessionId` at all (timeline's params carry `sessionIds`, plural).
+  // Hermes review, PR #613 — Rename and Kill must be GATED on session, not
+  // just left to silently no-op: ungated, Rename opened an input whose
+  // commit silently discarded the typed name, and Kill was a no-op button
+  // that looked destructive but did nothing. Only the always-disabled
+  // "Move" item is session-independent by design.
   describe("panel with no resolvable session (non-terminal panel)", () => {
-    it("still renders Rename and the disabled Move item", async () => {
+    it("hides Rename, the kill divider, and Kill session — shows only the disabled Move item", async () => {
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
@@ -212,7 +217,8 @@ describe("PaneActionsMenu", () => {
 
       await user.click(screen.getByTitle("More…"));
 
-      expect(screen.getByText("Rename")).toBeInTheDocument();
+      expect(screen.queryByText("Rename")).not.toBeInTheDocument();
+      expect(screen.queryByText("Kill session")).not.toBeInTheDocument();
       expect(screen.getByText("Move (drag tab)").closest("button")).toBeDisabled();
     });
 
@@ -233,22 +239,6 @@ describe("PaneActionsMenu", () => {
       expect(screen.queryByText("View timeline")).not.toBeInTheDocument();
       expect(screen.queryByText("Open Agent Browser")).not.toBeInTheDocument();
       expect(screen.queryByText("Promote to worktree…")).not.toBeInTheDocument();
-    });
-
-    it("does not throw when Kill session is clicked with no resolvable session", async () => {
-      const user = userEvent.setup();
-      render(
-        <PaneActionsMenu
-          api={makeApi()}
-          params={undefined as TerminalPaneParams | undefined}
-          containerApi={CONTAINER_API}
-          onRename={vi.fn()}
-          triggerClassName="pane-tab-btn"
-        />,
-      );
-
-      await user.click(screen.getByTitle("More…"));
-      await expect(user.click(screen.getByText("Kill session"))).resolves.not.toThrow();
     });
   });
 

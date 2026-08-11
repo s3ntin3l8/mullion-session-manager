@@ -37,7 +37,6 @@ import { Dock } from "./Dock.js";
 import { GridIcon, RefreshIcon, ServerRackIcon, SpinnerIcon, CloseIcon } from "./icons.js";
 import {
   useDashboardStore,
-  eventKey,
   LIVE_REFRESH_INTERVAL_MS,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
@@ -66,7 +65,7 @@ import {
   handleGlobalEscape,
   panelSessionId,
 } from "./panelUtils.js";
-import { describeEvent, notifyKind } from "./eventDescriptions.js";
+import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
 import {
   pickNewNotifiableEvents,
   notificationChannelEnabled,
@@ -2340,20 +2339,17 @@ export function App() {
                   else if (session?.activity === "working") dotColor = "var(--g)";
                   const agentLogo = session ? resolveAgentLogo(session.command, theme) : null;
                   // Same unread derivation as PaneTab.tsx's own tab badge —
-                  // events newer than the read cursor, minus anything
-                  // already dismissed from the notification panel, that
-                  // actually classifies as notify-worthy.
-                  const sessionEvents = sessionId === undefined ? undefined : events[sessionId];
-                  const lastSeen = sessionId === undefined ? 0 : (lastSeenSeq[sessionId] ?? 0);
+                  // shared via eventDescriptions.ts's unreadEventSummary
+                  // (Hermes review, PR #613) rather than a third copy.
                   const unreadCount =
                     sessionId === undefined
                       ? 0
-                      : (sessionEvents ?? []).filter(
-                          (e) =>
-                            e.seq > lastSeen &&
-                            !dismissedEventKeys[eventKey(sessionId, e.seq)] &&
-                            notifyKind(e) !== null,
-                        ).length;
+                      : unreadEventSummary(
+                          sessionId,
+                          events[sessionId],
+                          lastSeenSeq[sessionId] ?? 0,
+                          dismissedEventKeys,
+                        ).count;
                   const commitMobileRename = () => {
                     const value = mobileDraftName.trim();
                     setMobileRenamingPanelId(null);
