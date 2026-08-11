@@ -45,7 +45,7 @@ describe("Settings mobile drill-down", () => {
     expect(container.querySelector(".settings-modal-body")).not.toHaveClass(
       "settings-modal-body-showing-content",
     );
-    expect(screen.queryByLabelText("Back to settings list")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Back to settings list/)).not.toBeInTheDocument();
   });
 
   it("picking a section swaps to its content and shows the back chevron", async () => {
@@ -57,10 +57,23 @@ describe("Settings mobile drill-down", () => {
     expect(document.querySelector(".settings-modal-body")).toHaveClass(
       "settings-modal-body-showing-content",
     );
-    expect(screen.getByLabelText("Back to settings list")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Back to settings list/)).toBeInTheDocument();
     expect(document.querySelector(".settings-content-title")).toHaveTextContent(
       "Terminal behavior",
     );
+  });
+
+  // Hermes review, PR #621 round 2 (non-blocking suggestion) — focus lands
+  // on the back chevron, not the content title, so the section name needs
+  // to be in ITS label for a screen-reader user to know which section
+  // opened.
+  it("the back chevron's label names the currently-open section", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+
+    expect(screen.getByLabelText(/Terminal behavior/)).toBeInTheDocument();
   });
 
   it("the back chevron returns to the nav list", async () => {
@@ -68,12 +81,12 @@ describe("Settings mobile drill-down", () => {
     render(<Settings onClose={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
-    await user.click(screen.getByLabelText("Back to settings list"));
+    await user.click(screen.getByLabelText(/^Back to settings list/));
 
     expect(document.querySelector(".settings-modal-body")).not.toHaveClass(
       "settings-modal-body-showing-content",
     );
-    expect(screen.queryByLabelText("Back to settings list")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Back to settings list/)).not.toBeInTheDocument();
   });
 
   // Hermes review, PR #621 — both drill-down pane swaps used to hide
@@ -86,7 +99,7 @@ describe("Settings mobile drill-down", () => {
 
     await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
 
-    expect(screen.getByLabelText("Back to settings list")).toHaveFocus();
+    expect(screen.getByLabelText(/^Back to settings list/)).toHaveFocus();
   });
 
   it("restores focus to the active nav item on back nav", async () => {
@@ -94,7 +107,7 @@ describe("Settings mobile drill-down", () => {
     render(<Settings onClose={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
-    await user.click(screen.getByLabelText("Back to settings list"));
+    await user.click(screen.getByLabelText(/^Back to settings list/));
 
     expect(screen.getByRole("button", { name: /terminal behavior/i })).toHaveFocus();
   });
@@ -112,7 +125,7 @@ describe("Settings mobile drill-down", () => {
     expect(document.querySelector(".settings-modal-body")).toHaveClass(
       "settings-modal-body-showing-content",
     );
-    expect(screen.getByLabelText("Back to settings list")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Back to settings list/)).toBeInTheDocument();
   });
 
   // Independent code review, PR #621 — a deep link mounts `.settings-back-btn`
@@ -134,6 +147,6 @@ describe("Settings mobile drill-down", () => {
     expect(document.querySelector(".settings-modal-body")).not.toHaveClass(
       "settings-modal-body-showing-content",
     );
-    expect(screen.queryByLabelText("Back to settings list")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Back to settings list/)).not.toBeInTheDocument();
   });
 });

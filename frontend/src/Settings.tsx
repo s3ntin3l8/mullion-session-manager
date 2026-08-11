@@ -373,7 +373,13 @@ export function Settings({
               ref={backBtnRef}
               className="settings-back-btn"
               onClick={() => setMobileNavOpen(true)}
-              aria-label="Back to settings list"
+              // Hermes review, PR #621 round 2 (non-blocking suggestion) —
+              // this is exactly where focus lands after picking a section
+              // (see the mobileNavOpen effect above), so folding the
+              // section title in here announces which section opened
+              // without a separate aria-live region (which would risk a
+              // double announcement racing the focus-move announcement).
+              aria-label={`Back to settings list — currently viewing ${meta.title}`}
             >
               <ChevronLeftIcon size={16} />
             </button>

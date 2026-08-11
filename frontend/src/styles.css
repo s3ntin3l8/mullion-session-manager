@@ -6871,8 +6871,16 @@ button.danger.armed {
   .settings-modal-header {
     padding-top: calc(16px + env(safe-area-inset-top));
   }
+  /* Hermes review, PR #621 round 2 — item E's own 44px floor applies here
+     too: this is the drill-down's primary control, same as the close
+     button right beside it (already bumped a few rules up), not just a
+     visibility toggle. */
   .settings-back-btn {
     display: flex;
+    width: 44px;
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   /* Settings.tsx's drill-down: nav list first, tapping a section swaps to
      its content (Settings.tsx's `mobileNavOpen` state adds this modifier
