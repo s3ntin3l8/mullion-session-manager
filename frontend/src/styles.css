@@ -6931,6 +6931,21 @@ button.danger.armed {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
+  /* Independent code review, PR #621 — .view-mode-toggle/.hierarchy-toggle's
+     own `.toolbar-icon-btn` override (two-class selector, styles.css:315,
+     335) outranks the plain `.toolbar-icon-btn` bump above regardless of
+     source order — CSS specificity, not cascade position, decides here —
+     so both toggles were silently staying at 26x26 on mobile despite this
+     block's own comment claiming every reachable .toolbar-icon-btn was
+     covered. ViewModeToggle.tsx always renders in .toolbar-actions (never
+     hidden on mobile) and HierarchyToggle.tsx renders in the sidebar drawer
+     (Sidebar.tsx), which is reachable on mobile too — both need their own,
+     equally-specific override. */
+  .view-mode-toggle .toolbar-icon-btn,
+  .hierarchy-toggle .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
   /* The card itself is a drag-and-drop reorder handle (out of scope on
      touch — see the plan's "Explicitly out of scope"), not a tap target;
      this only guards against its own padding/border squeezing the nested

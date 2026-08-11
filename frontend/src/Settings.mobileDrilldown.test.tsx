@@ -115,6 +115,19 @@ describe("Settings mobile drill-down", () => {
     expect(screen.getByLabelText("Back to settings list")).toBeInTheDocument();
   });
 
+  // Independent code review, PR #621 — a deep link mounts `.settings-back-btn`
+  // before `.settings-modal-close` in DOM order (mobileNavOpen starts
+  // false), so the focus trap's "first focusable descendant" default would
+  // pick the back button instead — a real bug on desktop, where that button
+  // is CSS `display: none` and `.focus()` on it silently does nothing,
+  // leaving the dialog never actually focused on open. `initialFocusRef`
+  // pins it to the close button explicitly instead.
+  it("still focuses the close button on mount, even with a deep-link initialSection", () => {
+    const { container } = render(<Settings onClose={vi.fn()} initialSection="server" />);
+
+    expect(container.querySelector(".settings-modal-close")).toHaveFocus();
+  });
+
   it("a generic open (default 'appearance') opens on the nav list, not straight to Appearance", () => {
     render(<Settings onClose={vi.fn()} initialSection="appearance" />);
 

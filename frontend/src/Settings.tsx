@@ -332,7 +332,25 @@ export function Settings({
   // including outside this modal's own subtree, which is exactly what U9
   // exists to fix for the command palette. Adding a second, redundant local
   // handler would just call `onClose` twice for the same keypress.
-  const { onKeyDown: onTrapKeyDown } = useFocusTrap({ active: true, containerRef: modalRef });
+  //
+  // Independent code review, PR #621 — explicit `initialFocusRef` (the
+  // close button), not the hook's own "first focusable descendant"
+  // default: whenever `initialSection` is a deep link, `mobileNavOpen`
+  // starts `false`, so `.settings-back-btn` mounts before the close button
+  // in DOM order. `getFocusable()` only filters `aria-hidden` ancestry, not
+  // `display: none` — the back button's `display: none` outside the mobile
+  // breakpoint (styles.css) makes `.focus()` a silent no-op there (verified
+  // in real Chromium), so the default would leave focus on the trigger
+  // behind the modal on every desktop deep-link open, never actually
+  // entering the dialog. The close button is always present, always
+  // visible, and identical to what the no-deep-link case already resolved
+  // to before this PR — so this doesn't change behavior for that path.
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const { onKeyDown: onTrapKeyDown } = useFocusTrap({
+    active: true,
+    containerRef: modalRef,
+    initialFocusRef: closeBtnRef,
+  });
 
   return (
     <div className="settings-backdrop" onClick={onClose}>
@@ -361,7 +379,12 @@ export function Settings({
             </button>
           )}
           <span className="settings-modal-title">Settings</span>
-          <button className="settings-modal-close" style={{ marginLeft: "auto" }} onClick={onClose}>
+          <button
+            ref={closeBtnRef}
+            className="settings-modal-close"
+            style={{ marginLeft: "auto" }}
+            onClick={onClose}
+          >
             <CloseIcon size={15} />
           </button>
         </div>
