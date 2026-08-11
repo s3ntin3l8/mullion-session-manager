@@ -52,7 +52,7 @@ export interface EventQueryResult {
 // reasoning as sanitizeSettings' safeNumber (services/settings.ts) — a
 // querystring/control-socket `limit` reaches a SQL LIMIT directly otherwise.
 export const DEFAULT_QUERY_LIMIT = 100;
-export const MAX_QUERY_LIMIT = 500;
+const MAX_QUERY_LIMIT = 500;
 
 interface MinimalLogger {
   warn: (obj: unknown, msg: string) => void;

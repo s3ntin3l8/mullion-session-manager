@@ -21,6 +21,11 @@ type BrowserPanelState =
   | { status: "unavailable"; message: string }
   | { status: "ready"; src: string };
 
+// Mirrors App.tsx's/panelUtils.ts's own private MOBILE_BREAKPOINT_QUERY —
+// see panelUtils.ts's comment on why this stays a small per-file duplicate
+// rather than a shared export.
+const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
+
 function isDangerousIframeSrc(url: string): boolean {
   try {
     const protocol = new URL(url).protocol;
@@ -550,7 +555,16 @@ export function BrowserPanel({
           value={addressInput}
           onChange={(e) => setAddressInput(e.target.value)}
           placeholder="https://example.com"
-          autoFocus={state.status === "empty"}
+          // Mobile UI/UX overhaul, item B.5 — the one genuine "keyboard pops
+          // up unwanted" case left after re-auditing every autoFocus/.focus()
+          // call site in the app: every other one is gated behind an
+          // explicit user action (clicking Rename/Create/Add/Deny, or the
+          // login screen itself) — this one fires the instant an empty
+          // browser panel mounts, with no click involved, popping the
+          // keyboard on mobile before the user has asked to type a URL.
+          autoFocus={
+            state.status === "empty" && !window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
+          }
           onKeyDown={(e) => {
             if (e.key === "Enter") navigate();
           }}

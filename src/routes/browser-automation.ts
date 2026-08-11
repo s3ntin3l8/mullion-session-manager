@@ -27,7 +27,7 @@ import type { DownloadEntry } from "../services/browser-manager.js";
 // only valid until the next navigation or snapshot/find call re-tags the
 // page — callers should treat them as short-lived, not persisted.
 
-export const REF_ATTRIBUTE = "data-mullion-ref";
+const REF_ATTRIBUTE = "data-mullion-ref";
 
 export interface SnapshotElement {
   ref: string;
@@ -53,7 +53,7 @@ export interface SnapshotElement {
 // element get any implicit binding inside a string's IIFE scope (there's no
 // "arguments[0]" or similar) — see TAG_SINGLE_ELEMENT_SCRIPT below, which
 // needs that element and so must be a real function reference instead.
-export const TAG_INTERACTIVE_ELEMENTS_SCRIPT = `
+const TAG_INTERACTIVE_ELEMENTS_SCRIPT = `
 (() => {
   const results = [];
   let counter = 0;
@@ -168,7 +168,7 @@ export interface RefOrSelector {
   frame?: string;
 }
 
-export function resolveLocator(root: SearchRoot, target: RefOrSelector) {
+function resolveLocator(root: SearchRoot, target: RefOrSelector) {
   if (target.ref) return root.locator(`[${REF_ATTRIBUTE}="${target.ref}"]`);
   if (target.selector) return root.locator(target.selector);
   return null;

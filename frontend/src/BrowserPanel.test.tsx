@@ -56,9 +56,28 @@ const SERVER_INFO_BASE = {
   previewAuthRequired: false,
 };
 
+// jsdom provides no window.matchMedia at all (unlike a real browser) — every
+// test needs one now that BrowserPanel.tsx's own empty-address-bar autoFocus
+// reads it (item B.5 of the mobile UI/UX overhaul). Defaults to desktop
+// (matches: false) so the ~25 pre-existing tests, none of which cared about
+// this before, keep their original (implicit) desktop assumption; the two
+// mobile-specific tests below override it explicitly.
+function stubMatchMedia(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
 describe("BrowserPanel", () => {
   beforeEach(() => {
     vi.spyOn(api, "getDevServerStatus").mockResolvedValue({ online: true });
+    stubMatchMedia(false);
   });
 
   afterEach(() => {
@@ -262,6 +281,34 @@ describe("BrowserPanel", () => {
       expect(await screen.findByText(/Type a URL above/)).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith("/api/browser-urls/favorites", expect.anything());
+    });
+
+    // Mobile UI/UX overhaul, item B.5 — the address bar autofocuses on an
+    // empty panel (so a desktop user can start typing immediately), but that
+    // same autofocus pops the on-screen keyboard on mobile the instant the
+    // panel mounts, with no click involved — unlike every other autoFocus in
+    // the app, which is gated behind an explicit user action. (stubMatchMedia
+    // is defined at module scope — see its own comment — and defaults to
+    // desktop in the outer beforeEach; these two tests just make the
+    // per-scenario override explicit.)
+    it("autofocuses the empty address bar on desktop", async () => {
+      stubMatchMedia(false);
+      const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, [])));
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<BrowserPanel params={{ kind: "external" }} />);
+
+      expect(await screen.findByPlaceholderText("https://example.com")).toHaveFocus();
+    });
+
+    it("does not autofocus the empty address bar on mobile", async () => {
+      stubMatchMedia(true);
+      const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, [])));
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<BrowserPanel params={{ kind: "external" }} />);
+
+      expect(await screen.findByPlaceholderText("https://example.com")).not.toHaveFocus();
     });
 
     it("embeds a typed URL directly (no POST) when previews aren't enabled server-wide", async () => {

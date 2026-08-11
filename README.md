@@ -126,11 +126,13 @@ Backend (repo root):
 - `make install` / `make install-hooks` — install dependencies / pre-commit
   - pre-push git hooks
 - `make dev` — backend + frontend dev servers together, with reload
-- `make test` / `make test-coverage` — Vitest suite
+- `make test` / `make lint` / `make typecheck` — Vitest / ESLint / `tsc`,
+  across **both** the backend and `frontend/` workspaces
+- `make test-backend` — Vitest, backend only (the fast inner loop)
+- `make test-coverage` — Vitest with coverage, backend only
 - `make test-e2e` — opt-in socket API e2e suite (real Unix sockets, a real
   spawned `mullion` CLI process, a real Chromium); not part of `make test`,
   but **is** its own job in CI — see [`test/e2e/README.md`](test/e2e/README.md)
-- `make lint` / `make typecheck` — ESLint / `tsc`
 - `make format` / `make format-check` — Prettier, repo-wide (covers
   `frontend/` too)
 - `make build` — production build to `dist/`
@@ -138,8 +140,6 @@ Backend (repo root):
 - `npm run db:generate` — generate a migration from schema changes
 - `npm run db:migrate` — apply migrations (also run automatically at startup)
 - `npm run db:seed` — seed initial data
-- `npm run lint:all` / `typecheck:all` / `test:all` — the above, across
-  both the backend and `frontend/` workspaces at once
 
 Frontend (`frontend/`):
 

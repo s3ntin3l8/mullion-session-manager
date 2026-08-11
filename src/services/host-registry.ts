@@ -90,11 +90,6 @@ export function getHostRow(app: FastifyInstance, id: string): HostRow | undefine
   return row;
 }
 
-export function getHostSummary(app: FastifyInstance, id: string): HostSummary | undefined {
-  const row = getHostRow(app, id);
-  return row ? toSummary(row) : undefined;
-}
-
 export function decryptToken(app: FastifyInstance, row: HostRow): string {
   if (!row.authTokenEnc) return "";
   return app.encryption.decryptString(row.authTokenEnc);
@@ -152,7 +147,7 @@ export function updateHost(
   return updated.length > 0 ? toSummary(updated[0]) : undefined;
 }
 
-export function countProjectsForHost(app: FastifyInstance, hostId: string): number {
+function countProjectsForHost(app: FastifyInstance, hostId: string): number {
   return app.db.select().from(projects).where(eq(projects.hostId, hostId)).all().length;
 }
 
