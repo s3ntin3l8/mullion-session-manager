@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.2.26](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.25...v0.2.26) (2026-08-10)
+
+
+### Features
+
+* add per-session cgroup process inventory ([#566](https://github.com/s3ntin3l8/mullion-session-manager/issues/566)) ([eb14e12](https://github.com/s3ntin3l8/mullion-session-manager/commit/eb14e1285428d16eba2010e408330be20e2089cc))
+* add sidebar filtering, persisted collapse state, and virtualization ([#583](https://github.com/s3ntin3l8/mullion-session-manager/issues/583)) ([9e52b4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/9e52b4b0f3c13ca1c2103412b32b9ad848b90ce8))
+* add terminal scrollback search ([#578](https://github.com/s3ntin3l8/mullion-session-manager/issues/578)) ([84ceae0](https://github.com/s3ntin3l8/mullion-session-manager/commit/84ceae0808078a7f0116e6f5693de81d4f11a8e7))
+* capture review findings and auto-return one round to the worker ([#580](https://github.com/s3ntin3l8/mullion-session-manager/issues/580)) ([909aaf9](https://github.com/s3ntin3l8/mullion-session-manager/commit/909aaf98f223802d32eddc96b7afbfb6f68e34e1))
+* connection-time SSRF pinning for outbound host/preview connections (issue [#250](https://github.com/s3ntin3l8/mullion-session-manager/issues/250)) ([#567](https://github.com/s3ntin3l8/mullion-session-manager/issues/567)) ([fda6051](https://github.com/s3ntin3l8/mullion-session-manager/commit/fda60513c879d2f18101ab2339d77b40cfd2f129))
+* make a project's dock config editable from the UI ([#586](https://github.com/s3ntin3l8/mullion-session-manager/issues/586)) ([919aa1c](https://github.com/s3ntin3l8/mullion-session-manager/commit/919aa1cde7a50b69eba8269b340765755a4f48be))
+* open a draft PR when a task enters review ([#574](https://github.com/s3ntin3l8/mullion-session-manager/issues/574)) ([3420d9e](https://github.com/s3ntin3l8/mullion-session-manager/commit/3420d9eed7d6e3af87227d9f65a46328dab18bef))
+* search sessions and workspaces from the command palette ([#581](https://github.com/s3ntin3l8/mullion-session-manager/issues/581)) ([3463bbc](https://github.com/s3ntin3l8/mullion-session-manager/commit/3463bbc6813a99089c761d4e162e226aad992f77))
+* show PR and CI status on task cards ([#582](https://github.com/s3ntin3l8/mullion-session-manager/issues/582)) ([1497c7d](https://github.com/s3ntin3l8/mullion-session-manager/commit/1497c7d1f8af670c55426401c6a6f31f6a0ffde5))
+* support dock preview worktrees on remote hosts ([0a39024](https://github.com/s3ntin3l8/mullion-session-manager/commit/0a3902432442003a743d41db01f828bd61a0dd04))
+* Task Master support for remote-hosted projects ([36c54d3](https://github.com/s3ntin3l8/mullion-session-manager/commit/36c54d362269e2f7118770237c6e449ff90a4843)), closes [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484)
+* tell Task Master agents how the loop actually works ([#569](https://github.com/s3ntin3l8/mullion-session-manager/issues/569)) ([2cdfdc4](https://github.com/s3ntin3l8/mullion-session-manager/commit/2cdfdc456cd2e028068b8bd08b93f1853c52229e))
+
+
+### Bug Fixes
+
+* add keyboard accessibility and focus management to core controls ([#592](https://github.com/s3ntin3l8/mullion-session-manager/issues/592)) ([0773cca](https://github.com/s3ntin3l8/mullion-session-manager/commit/0773ccafdbe248627edc7bf501e02e89307e6bff))
+* add timeouts, backpressure, and cleanup guards to git/PTY subprocess plumbing ([#587](https://github.com/s3ntin3l8/mullion-session-manager/issues/587)) ([c9fa821](https://github.com/s3ntin3l8/mullion-session-manager/commit/c9fa8214309a937dfcee3a4ada592fbff3c67eed))
+* close CSRF gap, unify auth-token checks, and validate the encryption key length ([#570](https://github.com/s3ntin3l8/mullion-session-manager/issues/570)) ([a30d2ce](https://github.com/s3ntin3l8/mullion-session-manager/commit/a30d2ce17a72ee2a845410311ef198327816429c))
+* correct dock worktree restart, GitPanel session open, and pane focus bugs ([#588](https://github.com/s3ntin3l8/mullion-session-manager/issues/588)) ([fbbd4a2](https://github.com/s3ntin3l8/mullion-session-manager/commit/fbbd4a26396a32b4538b242b89c15bc59aad3c29))
+* don't open a panel when a task is claimed or retried manually ([#572](https://github.com/s3ntin3l8/mullion-session-manager/issues/572)) ([492d252](https://github.com/s3ntin3l8/mullion-session-manager/commit/492d252aa96835411c029792d49df8829a61ef7b))
+* harden preview proxy header forwarding and webhook signature verification ([#575](https://github.com/s3ntin3l8/mullion-session-manager/issues/575)) ([43556df](https://github.com/s3ntin3l8/mullion-session-manager/commit/43556df13fa6bfa5e417cb99ed8a90cafe3b89c1))
+* pre-trust a session's worktree so agy doesn't stall on a folder-trust prompt ([#573](https://github.com/s3ntin3l8/mullion-session-manager/issues/573)) ([81db934](https://github.com/s3ntin3l8/mullion-session-manager/commit/81db93481c6bc67f0652b566825f7d743ea57ae3))
+* prevent env leakage, state loss, and orphaned sessions in the PTY lifecycle ([#584](https://github.com/s3ntin3l8/mullion-session-manager/issues/584)) ([ce203c6](https://github.com/s3ntin3l8/mullion-session-manager/commit/ce203c6a6914fda1e16b8663c11adb84580e8cbd))
+* replace hardcoded /home/bjoern test path with a portable temp dir ([#585](https://github.com/s3ntin3l8/mullion-session-manager/issues/585)) ([7c289fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/7c289fb9a7fa7b82f674c8a45aabe2fed2f743c1))
+
+
+### Performance Improvements
+
+* coalesce title_change events instead of persisting every OSC title update ([#593](https://github.com/s3ntin3l8/mullion-session-manager/issues/593)) ([c2f5213](https://github.com/s3ntin3l8/mullion-session-manager/commit/c2f5213ed2e79a360a4ac90f5619b70ffc036942))
+* enable WAL mode, add missing indexes, compress static assets, and fix the sessions N+1 ([#591](https://github.com/s3ntin3l8/mullion-session-manager/issues/591)) ([7df0f06](https://github.com/s3ntin3l8/mullion-session-manager/commit/7df0f06c29e850afc3ecee1f0118fc9f4bbfbc39))
+* replace whole-store subscriptions with selectors across the frontend ([#571](https://github.com/s3ntin3l8/mullion-session-manager/issues/571)) ([aefffc2](https://github.com/s3ntin3l8/mullion-session-manager/commit/aefffc2869c76041f2b4bbdebda4c8505337b02e))
+
 ## [0.2.25](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.24...v0.2.25) (2026-08-09)
 
 
