@@ -13,11 +13,12 @@
 // version of this file's PUT/DELETE rejected global-scope ids and forced
 // the frontend through a primary-host-only route instead — silently
 // writing a remote project's global file to the *primary's* filesystem).
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
   listAgentRules,
   getAgentRule,
@@ -29,39 +30,6 @@ import {
   AgentRulesTimeoutError,
   isTransientReadError,
 } from "../services/agent-rules.js";
-
-// Hermes review, PR #458 — a remote host's 4xx (symlink refusal, oversized
-// content, an unknown target) used to be flattened into the same 503 "Host
-// unreachable" as a genuine connectivity failure. The host isn't
-// unreachable here — it responded and said no — so forward its real status
-// and the reason it gave, the same way a local-host failure already does.
-export function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
-  // Independent review, PR #458 — a 401/403 from the agent means its own
-  // bearer-token check rejected us (a rotated MULLION_AGENT_TOKEN, e.g.) —
-  // an infrastructure/config problem, not something about THIS specific
-  // edit. Forwarding it raw would read to a browser like "you need to log
-  // in," which it isn't (and no other RemoteHostClient caller in this repo
-  // forwards a HostRequestError's status verbatim at all — this is the
-  // first place that does, precisely because the OTHER 4xx classes here
-  // genuinely are request-specific and worth showing as-is).
-  if (err.statusCode === 401 || err.statusCode === 403) {
-    return reply.serviceUnavailable("Host rejected the request — check its agent token");
-  }
-  let message = err.message;
-  try {
-    const parsed: unknown = JSON.parse(err.body);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      typeof (parsed as { message?: unknown }).message === "string"
-    ) {
-      message = (parsed as { message: string }).message;
-    }
-  } catch {
-    // Not a JSON body — fall back to HostRequestError's own message.
-  }
-  return reply.code(err.statusCode).send({ message });
-}
 
 const RULES_RATE_LIMIT = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
 
