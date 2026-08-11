@@ -11,7 +11,7 @@ const SESSION_ID = 1;
 let handle: TerminalInputHandle;
 
 beforeEach(() => {
-  handle = { sendInput: vi.fn(), sendArrow: vi.fn() };
+  handle = { sendInput: vi.fn(), sendArrow: vi.fn(), sendCtrlC: vi.fn() };
   registerTerminalInput(SESSION_ID, handle);
 });
 
@@ -30,7 +30,6 @@ describe("MobileKeyBar", () => {
     ["Escape", "\x1b"],
     ["Tab", "\t"],
     ["Shift+Tab", "\x1b[Z"],
-    ["Ctrl+C", "\x03"],
     ["Slash", "/"],
   ])("sends the right sequence for %s", async (ariaLabel, sequence) => {
     const user = userEvent.setup();
@@ -53,9 +52,30 @@ describe("MobileKeyBar", () => {
     expect(handle.sendInput).not.toHaveBeenCalled();
   });
 
+  // Independent code review, PR #616 — Ctrl+C is deliberately NOT a raw
+  // "\x03" through sendInput: term.input() bypasses TerminalPane's own
+  // attachCustomKeyEventHandler (dock-monitor copy-not-kill, opt-in
+  // selection-aware copy) entirely, so it has to go through sendCtrlC
+  // instead, which replicates that handler's decision inside TerminalPane —
+  // see terminalInputRegistry.ts's own comment.
+  it("routes Ctrl+C through sendCtrlC, not a raw sequence", async () => {
+    const user = userEvent.setup();
+    render(<MobileKeyBar sessionId={SESSION_ID} />);
+
+    await user.click(screen.getByRole("button", { name: "Ctrl+C" }));
+
+    expect(handle.sendCtrlC).toHaveBeenCalledTimes(1);
+    expect(handle.sendInput).not.toHaveBeenCalled();
+  });
+
   // The whole reason this exists: without it, a plain click's own mousedown
   // default shifts focus to the button, blurring the terminal and dismissing
-  // the on-screen keyboard before the tap even registers as a send.
+  // the on-screen keyboard before the tap even registers as a send. This
+  // only proves the handler calls preventDefault() — jsdom doesn't
+  // synthesize a real browser's native focus-shift-on-mousedown chain from a
+  // dispatched PointerEvent, so it can't verify the actual on-device effect;
+  // that's covered by the manual real-device test plan instead (independent
+  // code review, PR #616).
   it("prevents the default pointerdown action so the tap can't blur the terminal", () => {
     render(<MobileKeyBar sessionId={SESSION_ID} />);
     const button = screen.getByRole("button", { name: "Escape" });

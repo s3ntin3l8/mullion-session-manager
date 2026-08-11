@@ -6,6 +6,15 @@ import {
 } from "./terminalInputRegistry.js";
 import type { TerminalInputHandle } from "./terminalInputRegistry.js";
 
+function makeHandle(overrides: Partial<TerminalInputHandle> = {}): TerminalInputHandle {
+  return {
+    sendInput: vi.fn(),
+    sendArrow: vi.fn(),
+    sendCtrlC: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("terminalInputRegistry", () => {
   // Module-level Map, not cleared automatically between tests — each test
   // below already unregisters what it registers, but start from a clean
@@ -21,10 +30,7 @@ describe("terminalInputRegistry", () => {
   });
 
   it("returns the exact handle a session registered", () => {
-    const handle: TerminalInputHandle = {
-      sendInput: vi.fn(),
-      sendArrow: vi.fn(),
-    };
+    const handle = makeHandle();
     registerTerminalInput(1, handle);
 
     expect(getTerminalInputHandle(1)).toBe(handle);
@@ -33,8 +39,8 @@ describe("terminalInputRegistry", () => {
   });
 
   it("keeps handles for different sessions independent", () => {
-    const handleA: TerminalInputHandle = { sendInput: vi.fn(), sendArrow: vi.fn() };
-    const handleB: TerminalInputHandle = { sendInput: vi.fn(), sendArrow: vi.fn() };
+    const handleA = makeHandle();
+    const handleB = makeHandle();
     registerTerminalInput(1, handleA);
     registerTerminalInput(2, handleB);
 
@@ -48,19 +54,31 @@ describe("terminalInputRegistry", () => {
   });
 
   it("no longer resolves a session once unregistered", () => {
-    registerTerminalInput(1, { sendInput: vi.fn(), sendArrow: vi.fn() });
+    registerTerminalInput(1, makeHandle());
     unregisterTerminalInput(1);
 
     expect(getTerminalInputHandle(1)).toBeUndefined();
   });
 
   it("a later registration for the same session replaces the earlier one", () => {
-    const first: TerminalInputHandle = { sendInput: vi.fn(), sendArrow: vi.fn() };
-    const second: TerminalInputHandle = { sendInput: vi.fn(), sendArrow: vi.fn() };
+    const first = makeHandle();
+    const second = makeHandle();
     registerTerminalInput(1, first);
     registerTerminalInput(1, second);
 
     expect(getTerminalInputHandle(1)).toBe(second);
+
+    unregisterTerminalInput(1);
+  });
+
+  it("exposes sendCtrlC as a distinct method from sendInput", () => {
+    const handle = makeHandle();
+    registerTerminalInput(1, handle);
+
+    getTerminalInputHandle(1)?.sendCtrlC();
+
+    expect(handle.sendCtrlC).toHaveBeenCalledTimes(1);
+    expect(handle.sendInput).not.toHaveBeenCalled();
 
     unregisterTerminalInput(1);
   });

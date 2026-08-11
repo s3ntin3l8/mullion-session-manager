@@ -563,6 +563,100 @@ describe("TerminalPane input registry (mobile key bar, issue: mobile UI/UX overh
     expect(term.input).toHaveBeenNthCalledWith(1, "\x1bOA");
     expect(term.input).toHaveBeenNthCalledWith(2, "\x1bOB");
   });
+
+  // Independent code review, PR #616 — sendCtrlC has to replicate
+  // attachCustomKeyEventHandler's own three-way Ctrl+C decision (below),
+  // not just forward a raw byte through term.input() (which would bypass
+  // that handler entirely — see terminalInputRegistry.ts's own comment).
+  // Same stubClipboardWrite/useDashboardStore.setState pattern as the
+  // "TerminalPane captureCtrlC for dock monitors" and opt-in clipboardKeys
+  // describe blocks further down, which test the identical decision via a
+  // real keydown chord instead of this registry handle.
+  describe("sendCtrlC (independent code review, PR #616)", () => {
+    function stubClipboardWrite() {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      return writeText;
+    }
+
+    it("copies the selection instead of SIGINT for a captureCtrlC (dock monitor) session", async () => {
+      stubFakeWebSocket(true);
+      const writeText = stubClipboardWrite();
+      const { rerender } = renderPane();
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      rerender(<TerminalPane params={{ sessionId: 1 }} captureCtrlC={true} />);
+
+      const term = getLatestTermInstance();
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("dock output");
+
+      const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+      handle.sendCtrlC();
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("dock output"));
+      expect(term.input).not.toHaveBeenCalledWith("\x03");
+    });
+
+    it("copies the selection instead of SIGINT when the opt-in clipboardKeys.ctrlC setting is on", async () => {
+      stubFakeWebSocket(true);
+      const writeText = stubClipboardWrite();
+      renderPane();
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      act(() => {
+        useDashboardStore.setState((s) => ({
+          settings: {
+            ...s.settings,
+            terminal: { ...s.settings.terminal, clipboardKeys: { ctrlV: false, ctrlC: true } },
+          },
+        }));
+      });
+
+      const term = getLatestTermInstance();
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("selected text");
+
+      const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+      handle.sendCtrlC();
+
+      await waitFor(() => expect(term.clearSelection).toHaveBeenCalledTimes(1));
+      expect(writeText).toHaveBeenCalledWith("selected text");
+      expect(term.input).not.toHaveBeenCalledWith("\x03");
+    });
+
+    it("sends a raw SIGINT byte when neither captureCtrlC nor the opt-in setting apply", () => {
+      stubFakeWebSocket(true);
+      renderPane();
+      const term = getLatestTermInstance();
+
+      const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+      handle.sendCtrlC();
+
+      expect(term.input).toHaveBeenCalledWith("\x03");
+    });
+
+    it("sends a raw SIGINT byte when the opt-in setting is on but there is no selection", () => {
+      stubFakeWebSocket(true);
+      renderPane();
+      act(() => {
+        useDashboardStore.setState((s) => ({
+          settings: {
+            ...s.settings,
+            terminal: { ...s.settings.terminal, clipboardKeys: { ctrlV: false, ctrlC: true } },
+          },
+        }));
+      });
+      const term = getLatestTermInstance();
+      term.hasSelection.mockReturnValue(false);
+
+      const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+      handle.sendCtrlC();
+
+      expect(term.input).toHaveBeenCalledWith("\x03");
+    });
+  });
 });
 
 describe("TerminalPane WebGL shared-atlas repaint (dock terminal corruption fix)", () => {

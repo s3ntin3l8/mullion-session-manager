@@ -615,20 +615,49 @@ export function TerminalPane(props: {
     registerTerminalRepaint(props.params.sessionId, repaint);
 
     // Mobile UI/UX overhaul, item C.1 — lets MobileKeyBar.tsx inject
-    // Esc/Tab/Shift+Tab/Ctrl+C/`/` (sendInput) and DECCKM-aware arrow keys
+    // Esc/Tab/Shift+Tab/`/` (sendInput) and DECCKM-aware arrow keys
     // (sendArrow, resolved against the live term.modes here — see
     // terminalInputRegistry.ts's own comment on why that resolution can't
     // happen in the bar itself) into this session's terminal from outside
     // this component. `term.input()` (not a direct ws.send) routes through
-    // the existing `onData` subscription above, so a key-bar tap behaves
-    // identically to a real keystroke — including `wasUserInput`'s default
-    // `true`, which keeps/returns focus to the terminal exactly the way
-    // typing normally would, so the on-screen keyboard stays up after a tap.
+    // the existing `onData` subscription above, so a key-bar tap reaches the
+    // PTY exactly like a real keystroke would. (Independent code review, PR
+    // #616: `wasUserInput`'s default `true` does NOT focus anything — per
+    // the installed @xterm/xterm source it only triggers scroll-to-bottom
+    // and clears an active selection. The on-screen keyboard staying up is
+    // entirely MobileKeyBar.tsx's own `preventDefault()` on pointerdown, not
+    // anything on this end.)
     registerTerminalInput(props.params.sessionId, {
       sendInput: (data) => term.input(data),
       sendArrow: (direction) => {
         const csi = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
         term.input(csi + (direction === "up" ? "A" : "B"));
+      },
+      // Independent code review, PR #616 — a raw `term.input("\x03")` here
+      // would bypass attachCustomKeyEventHandler's own Ctrl+C branch above
+      // entirely (that handler intercepts the physical keydown before it
+      // ever reaches `onData`; injecting the byte directly through
+      // `term.input()` skips it), silently reintroducing exactly the two
+      // cases that branch exists to prevent: a captureCtrlC dock monitor
+      // (issue #332) would get a raw SIGINT byte forwarded instead of
+      // triggering its copy-not-kill behavior, and a user with the opt-in
+      // "Ctrl+C copies when there's a selection" setting on would have that
+      // selection silently discarded and a SIGINT sent instead of copied.
+      // Mirrors that branch's exact three-way decision (dock-monitor copy /
+      // opt-in selection-aware copy / raw SIGINT) via the same refs it
+      // reads, rather than special-casing MobileKeyBar.tsx around it.
+      sendCtrlC: () => {
+        if (captureCtrlCRef.current) {
+          void copyHandlerRef.current();
+          return;
+        }
+        if (prefsRef.current.clipboardKeys.ctrlC && term.hasSelection() && hasClipboardApi()) {
+          void copyHandlerRef.current().then((copied) => {
+            if (copied) term.clearSelection();
+          });
+          return;
+        }
+        term.input("\x03");
       },
     });
 

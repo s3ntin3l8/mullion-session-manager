@@ -18,10 +18,26 @@
 // TerminalPane's own mount effect can resolve correctly (it's the one place
 // with a live reference to `term.modes`) — so `sendArrow` takes a direction,
 // not a raw sequence, and the registered closure decides the actual bytes.
-// `sendInput` is a raw passthrough for the bar's other, unambiguous keys.
+//
+// Ctrl+C is its own method, not routed through `sendInput`, for the same
+// reason arrows aren't a raw sequence: `term.input()` fires `onData`
+// directly, bypassing TerminalPane's own `attachCustomKeyEventHandler`
+// entirely (that handler intercepts the *keydown*, upstream of `onData` —
+// injecting bytes through `term.input()` skips it). A raw `sendInput("\x03")`
+// would silently reintroduce exactly what that handler exists to prevent: a
+// captureCtrlC dock-monitor session getting a real SIGINT instead of its
+// copy-not-kill behavior, or a user's selection being discarded instead of
+// copied when the opt-in "Ctrl+C copies" setting is on. `sendCtrlC` mirrors
+// that same decision inside TerminalPane instead (see its own comment at the
+// registration call site).
+//
+// `sendInput` is a raw passthrough for the bar's other, genuinely
+// unambiguous keys (Esc/Tab/Shift+Tab/`/`), none of which
+// attachCustomKeyEventHandler intercepts at all.
 export interface TerminalInputHandle {
   sendInput: (data: string) => void;
   sendArrow: (direction: "up" | "down") => void;
+  sendCtrlC: () => void;
 }
 
 const terminalInputRegistry = new Map<number, TerminalInputHandle>();

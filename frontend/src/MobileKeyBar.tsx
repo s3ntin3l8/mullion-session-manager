@@ -21,11 +21,13 @@ export interface MobileKeyBarProps {
 interface KeyBarButton {
   label: string;
   ariaLabel: string;
-  // A fixed sequence (Esc/Tab/Shift+Tab/Ctrl+C/`/`) sent via sendInput, or
-  // an arrow direction resolved through sendArrow — DECCKM (application vs
-  // normal cursor-keys mode) makes the actual bytes for an arrow key
-  // context-dependent, so that resolution has to happen inside TerminalPane
-  // (see terminalInputRegistry.ts's own comment), not as a fixed string here.
+  // A fixed sequence (Esc/Tab/Shift+Tab/`/`) sent via sendInput; an arrow
+  // direction resolved through sendArrow (DECCKM makes the actual bytes
+  // context-dependent — see terminalInputRegistry.ts's own comment); or
+  // Ctrl+C through its own sendCtrlC, which — unlike sendInput — has to
+  // replicate TerminalPane's own key-conflict handling (dock-monitor
+  // copy-not-kill, opt-in selection-aware copy) rather than just forwarding
+  // a raw byte, since `term.input()` bypasses that handler entirely.
   send: (handle: TerminalInputHandle) => void;
 }
 
@@ -33,7 +35,7 @@ const KEYS: KeyBarButton[] = [
   { label: "Esc", ariaLabel: "Escape", send: (h) => h.sendInput("\x1b") },
   { label: "Tab", ariaLabel: "Tab", send: (h) => h.sendInput("\t") },
   { label: "⇧Tab", ariaLabel: "Shift+Tab", send: (h) => h.sendInput("\x1b[Z") },
-  { label: "^C", ariaLabel: "Ctrl+C", send: (h) => h.sendInput("\x03") },
+  { label: "^C", ariaLabel: "Ctrl+C", send: (h) => h.sendCtrlC() },
   { label: "↑", ariaLabel: "Arrow up", send: (h) => h.sendArrow("up") },
   { label: "↓", ariaLabel: "Arrow down", send: (h) => h.sendArrow("down") },
   { label: "/", ariaLabel: "Slash", send: (h) => h.sendInput("/") },
@@ -53,11 +55,14 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
           // behavior shifts focus to the button itself first, which blurs
           // the terminal's hidden input and dismisses the on-screen
           // keyboard before the click (and this send) even fires. Blocking
-          // that default here means focus never leaves the terminal, so the
-          // keyboard stays up between taps — the whole reason this bar can
-          // sit right above it. sendInput/sendArrow's own `term.input(...,
-          // wasUserInput: true)` (default) call is what then (re)focuses the
-          // terminal exactly the way a real keystroke would.
+          // that default here is what keeps the keyboard up between taps —
+          // the whole reason this bar can sit right above it. (Independent
+          // code review, PR #616 — corrected: it isn't term.input()'s own
+          // `wasUserInput` default doing any (re)focusing here, verified
+          // against the installed @xterm/xterm source; that flag only
+          // affects scroll-to-bottom and clearing an active selection.
+          // preventDefault() on this pointerdown, alone, is the entire
+          // mechanism.)
           onPointerDown={(e) => e.preventDefault()}
           onClick={() => {
             const handle = getTerminalInputHandle(sessionId);
