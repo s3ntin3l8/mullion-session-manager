@@ -447,14 +447,15 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  // Mobile UI/UX overhaul, item B.2 — the keyboard's on-screen height (0
-  // when closed), fed into `.app`'s own `--kb-inset` custom property below
-  // so the mobile-only `bottom: var(--kb-inset)` rule (styles.css) shrinks
-  // the fixed-position shell to sit above the keyboard instead of letting it
-  // overlay the terminal's active line. A no-op on desktop: the CSS that
-  // reads this variable is scoped to the mobile breakpoint, same as every
-  // other mobile-only rule in that file.
-  const kbInset = useVisualViewportInset();
+  // Mobile UI/UX overhaul, item B.2 — writes the keyboard's on-screen height
+  // (0 when closed) directly onto `document.documentElement`'s own
+  // `--kb-inset` custom property (no React state — see the hook's own
+  // comment on why), which the mobile-only `.app { bottom: var(--kb-inset) }`
+  // rule (styles.css) inherits to shrink the fixed-position shell above the
+  // keyboard instead of letting it overlay the terminal's active line. A
+  // no-op on desktop: the CSS that reads this variable is scoped to the
+  // mobile breakpoint, same as every other mobile-only rule in that file.
+  useVisualViewportInset();
   // Mobile UI/UX overhaul, item A.5 — the mobile pane bar's own inline
   // rename, mirroring PaneTab.tsx's renaming/draftName pair (the actual
   // rename UI can't move into the shared PaneActionsMenu — see that
@@ -2194,12 +2195,7 @@ export function App() {
   return (
     <div
       className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}`}
-      style={
-        {
-          "--sidebar-width": `${sidebarWidth}px`,
-          "--kb-inset": `${kbInset}px`,
-        } as CSSProperties
-      }
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
         onToggleSidebar={toggleSidebar}
