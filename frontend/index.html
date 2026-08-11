@@ -6,8 +6,23 @@
          indicator instead of leaving a hard black bar there in standalone
          mode — see styles.css's mobile media query for the matching
          env(safe-area-inset-*) padding this requires on every fixed-
-         position mobile chrome element. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+         position mobile chrome element.
+
+         interactive-widget=resizes-content (Chrome/Android only — Safari
+         has no equivalent and ignores the unknown token harmlessly) opts
+         into the on-screen keyboard actually shrinking the layout viewport
+         (and window.innerHeight/visualViewport.height along with it) rather
+         than just overlaying it. Mobile UI/UX overhaul, item B.3 — belongs
+         alongside src/useVisualViewportInset.ts's own --kb-inset fix, not
+         instead of it: on a browser that honors this, innerHeight and
+         visualViewport.height end up reporting the same already-shrunk
+         value, so that hook's own gap computation is a harmless no-op; on
+         iOS, which never supports this attribute at all, the hook is doing
+         all of the actual work. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>Mullion</title>
     <meta
       name="description"
