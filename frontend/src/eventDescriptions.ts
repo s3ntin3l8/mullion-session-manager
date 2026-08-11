@@ -398,3 +398,33 @@ export function notifyKind(event: NotificationEvent): "attention" | "exited" | n
   if (event.kind === "dev_server_detected" && event.payload.state === undefined) return "attention";
   return null;
 }
+
+export interface UnreadEventSummary {
+  count: number;
+  // Bell wins over check when both are present — attention is the
+  // higher-priority signal (matches PaneTab's own status-badge priority).
+  kind: "attention" | "exited" | null;
+}
+
+// Shared by PaneTab.tsx's own tab badge and App.tsx's mobile pane bar (issue
+// #168 / mobile UI overhaul, PR #613 Hermes review) — the identical "events
+// newer than the read cursor, minus anything already dismissed from the
+// notification panel, that classify as notify-worthy" derivation, previously
+// duplicated verbatim in both places. Inlines the `sessionId:seq` key format
+// directly rather than importing store.ts's own eventKey, so this leaf util
+// module doesn't pull store.ts's whole import graph into every consumer.
+export function unreadEventSummary(
+  sessionId: number,
+  events: NotificationEvent[] | undefined,
+  lastSeenSeq: number,
+  dismissedEventKeys: Record<string, true>,
+): UnreadEventSummary {
+  const kinds = (events ?? [])
+    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[`${sessionId}:${e.seq}`])
+    .map(notifyKind)
+    .filter((k): k is "attention" | "exited" => k !== null);
+  return {
+    count: kinds.length,
+    kind: kinds.includes("attention") ? "attention" : kinds.length > 0 ? "exited" : null,
+  };
+}

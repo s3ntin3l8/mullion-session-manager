@@ -1861,12 +1861,24 @@ body {
   border-bottom: 1px solid var(--border);
   -webkit-overflow-scrolling: touch;
 }
+/* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
+   trailing close/kebab buttons (added conditionally in App.tsx) sit next to
+   its own tab without being swept into that tab's own flex sizing. */
+.mobile-tab-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
 .mobile-tab {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   flex-shrink: 0;
-  height: 30px;
+  /* Item E's touch-target floor (44px), applied here directly rather than
+     shipped at the old 30px and raised again in a later pass — this bar's
+     markup is new in this same change. */
+  height: 44px;
   padding: 0 12px;
   border: none;
   border-radius: 8px;
@@ -1876,6 +1888,8 @@ body {
   font-family: inherit;
   font-size: 12.5px;
   font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 .mobile-tab.active {
   background: color-mix(in srgb, var(--fg) 12%, transparent);
@@ -1886,6 +1900,70 @@ body {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+.mobile-tab-agent-logo {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+.mobile-tab-title {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-tab-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: 15px;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--ring);
+}
+/* The active pane's close (×) + kebab (PaneActionsMenu) — same glyph sizes
+   as .pane-tab-btn's desktop equivalent, just a larger hit area to clear the
+   44px touch floor. */
+.mobile-tab-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mobile-tab-btn:hover,
+.mobile-tab-btn:active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+}
+.mobile-tab-rename-input {
+  height: 44px;
+  min-width: 140px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--term);
+  border: 1px solid var(--accent-solid);
+  border-radius: 8px;
+  padding: 0 10px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
 }
 
 .grid-area {
@@ -6520,9 +6598,6 @@ button.danger.armed {
 /* ============================================================ */
 /* Mobile (<700px): single active pane + switcher, sidebar overlay */
 /* ============================================================ */
-.sidebar-toggle {
-  display: none;
-}
 
 @media (max-width: 699px) {
   .toolbar-lead {
@@ -6533,19 +6608,6 @@ button.danger.armed {
   }
   .run-cmd-btn {
     display: none !important;
-  }
-
-  .sidebar-toggle {
-    display: flex;
-    width: 30px;
-    height: 30px;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    border-radius: 7px;
-    cursor: pointer;
   }
 
   .sidebar-wrapper {
