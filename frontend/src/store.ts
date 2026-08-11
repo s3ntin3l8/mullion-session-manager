@@ -3,6 +3,8 @@ import { api, DEFAULT_SETTINGS } from "./api.js";
 import type {
   AppSettings,
   CodexHookTrust,
+  CreateProjectDirOptions,
+  CreateProjectResult,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -509,13 +511,19 @@ interface DashboardState {
   refreshWorkspaces: () => Promise<void>;
   refreshGroups: () => Promise<void>;
   refreshHosts: () => Promise<void>;
-  createProject: (name: string, cwd: string, hostId?: string) => Promise<Project>;
+  createProject: (
+    name: string,
+    cwd: string,
+    hostId?: string,
+    opts?: CreateProjectDirOptions,
+  ) => Promise<CreateProjectResult>;
   updateProject: (
     id: number,
     patch: Partial<
       Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
-    >,
-  ) => Promise<void>;
+    > &
+      CreateProjectDirOptions,
+  ) => Promise<CreateProjectResult>;
   deleteProject: (id: number) => Promise<void>;
   refreshProjectUrls: (projectId: number) => Promise<void>;
   addProjectUrl: (
@@ -1152,15 +1160,27 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       return task;
     },
 
-    createProject: async (name, cwd, hostId) => {
-      const project = await api.createProject(name, cwd, hostId);
-      await get().refreshProjects();
+    createProject: async (name, cwd, hostId, opts) => {
+      const project = await api.createProject(name, cwd, hostId, opts);
+      // Best-effort (Hermes review, PR #620 — same pattern as claimTask's
+      // own PR #281 fix): the create itself already succeeded and the
+      // caller already has `project` to act on — a transient
+      // refreshProjects() failure must not surface as "create failed" when
+      // it actually succeeded, which would both show a false error AND
+      // invite a retry that inserts a duplicate row (no unique constraint
+      // on projects.name/cwd).
+      void get()
+        .refreshProjects()
+        .catch(() => {});
       return project;
     },
 
     updateProject: async (id, patch) => {
-      await api.updateProject(id, patch);
-      await get().refreshProjects();
+      const project = await api.updateProject(id, patch);
+      void get()
+        .refreshProjects()
+        .catch(() => {});
+      return project;
     },
 
     deleteProject: async (id) => {

@@ -142,7 +142,7 @@ describe("mullion CLI — full advertised sequence against a real server (issue 
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "cli-e2e", cwd: "/tmp" },
+      payload: { createDir: true, name: "cli-e2e", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
 

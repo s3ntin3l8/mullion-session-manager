@@ -112,7 +112,7 @@ describe("actions routes", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "with-actions", cwd: projectCwd },
+        payload: { createDir: true, name: "with-actions", cwd: projectCwd },
       });
       const projectId = created.json().id;
 

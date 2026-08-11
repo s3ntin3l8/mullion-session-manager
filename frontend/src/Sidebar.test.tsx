@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
+import { ApiError } from "./api.js";
 import type * as ApiModule from "./api.js";
 import type { Host, Project, Session } from "./api.js";
 
@@ -636,5 +637,26 @@ describe("Sidebar P9 — inline error on a failed delete", () => {
     await user.click(screen.getByTitle("End this session (the program will be terminated)"));
 
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+  });
+});
+
+describe("DiscoverProjects — a failed Add surfaces an inline error", () => {
+  it("a rejected createProject shows an error next to the candidate row instead of an unhandled rejection", async () => {
+    const { api } = await import("./api.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([
+      { name: "widgets", cwd: "/repos/widgets", isGitRepo: true, isRegistered: false },
+    ]);
+    createProject.mockRejectedValueOnce(
+      new ApiError("Directory /repos/widgets does not exist.", 400, "PROJECT_DIR_MISSING"),
+    );
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByText("Discover projects"));
+    await user.click(await screen.findByText("Add"));
+
+    expect(await screen.findByText(/does not exist/i)).toBeInTheDocument();
+    // Not marked as added on failure.
+    expect(screen.getByText("Add")).toBeInTheDocument();
   });
 });

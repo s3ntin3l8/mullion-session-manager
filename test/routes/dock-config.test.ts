@@ -45,7 +45,7 @@ describe("dock-config routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "dock-config-test", cwd: projectCwd },
+      payload: { createDir: true, name: "dock-config-test", cwd: projectCwd },
     });
     return { app, projectId: created.json().id as number };
   }
