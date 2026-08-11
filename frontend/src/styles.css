@@ -1966,6 +1966,16 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
 }
 
+/* Mobile UI/UX overhaul, item C.2 — the terminal key bar (MobileKeyBar.tsx).
+   Hidden by default/on desktop; shown only via the mobile breakpoint block
+   further down, same pattern as .mobile-tabs above. Claims the bottom
+   safe-area inset itself when present — see .grid-area-body's own comment
+   and the `.app.key-bar` override below for why that ownership moves here
+   rather than staying on .grid-area-body. */
+.mobile-key-bar {
+  display: none;
+}
+
 .grid-area {
   flex: 1;
   min-height: 0;
@@ -1987,12 +1997,15 @@ body {
   flex-direction: column;
   /* Issue #87 — unconditional; env() is 0px without a home-indicator gesture
      area to account for. This is the bottom-most visible content region on
-     mobile (.dock is hidden there, .mobile-tabs is a top-of-screen pane
-     switcher, not a bottom bar), but a landscape phone can have this inset
-     outside the <700px breakpoint too — see .toolbar's own comment above.
-     left/right cover the landscape case specifically — a notch/Dynamic
-     Island sits on one side in landscape, not top/bottom, and the live
-     terminal/panel content would otherwise render underneath it. */
+     mobile EXCEPT when the key bar is showing (.dock is hidden there,
+     .mobile-tabs is a top-of-screen pane switcher, not a bottom bar) — see
+     the `.app.key-bar` override below, where MobileKeyBar.tsx becomes the
+     bottom-most element instead and claims this inset itself. A landscape
+     phone can have this inset outside the <700px breakpoint too — see
+     .toolbar's own comment above. left/right cover the landscape case
+     specifically — a notch/Dynamic Island sits on one side in landscape, not
+     top/bottom, and the live terminal/panel content would otherwise render
+     underneath it. */
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
@@ -6666,6 +6679,48 @@ button.danger.armed {
      assumption if it turns out to matter on a real device. */
   .app {
     bottom: var(--kb-inset, 0px);
+  }
+
+  /* Mobile UI/UX overhaul, item B.4 — when the key bar renders, App.tsx adds
+     `.key-bar` to `.app` and the bar itself becomes the bottom-most element
+     in `.grid-area-body`'s flex column, so it — not `.grid-area-body` — is
+     what should touch the home-indicator gesture area. Without dropping
+     `.grid-area-body`'s own padding here, the inset would be reserved twice
+     (once by the now-irrelevant gap it leaves below the dockview container,
+     once by the bar), pushing real content up for no reason. */
+  .app.key-bar .grid-area-body {
+    padding-bottom: 0;
+  }
+
+  .mobile-key-bar {
+    display: flex;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--chrome);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-key-bar-btn {
+    flex: 1;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-right: 1px solid var(--border-soft);
+    background: transparent;
+    color: var(--fg);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mobile-key-bar-btn:last-child {
+    border-right: none;
+  }
+  .mobile-key-bar-btn:active {
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
   }
 
   .toolbar-lead {

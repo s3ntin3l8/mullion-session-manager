@@ -30,6 +30,7 @@ import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
+import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
@@ -2183,6 +2184,29 @@ export function App() {
     return ids;
   }, [mobilePanels, sessions]);
 
+  // Mobile UI/UX overhaul, item C.2 — the key bar only makes sense while a
+  // terminal session is the active mobile pane (not the timeline/Agent
+  // Browser/task-detail/git/github panels, which don't accept keystrokes).
+  // `session-${id}` is the terminal panel's own id format everywhere else in
+  // this file (e.g. the sessionIsActive check in the auto-focus-on-attention
+  // effect above) — reused here rather than inspecting dockview's internal
+  // component-type metadata. Also requires `status === "active"` (Hermes
+  // review, PR #616 round 1): a killed/exited session's pane can still be
+  // the active one (closing is a separate, explicit action from the program
+  // exiting — see PaneTab.tsx's own close-vs-kill distinction), and there's
+  // nothing left alive on the other end of a key-bar tap at that point.
+  //
+  // Also requires `viewMode !== "kanban"` (Hermes review, PR #616 round 2):
+  // KanbanBoardOverlay renders as a visual overlay ON TOP of the dockview
+  // container without changing activePanelId (it's a "toggled view", not a
+  // panel switch — see its own render site further down) — without this,
+  // the bar would keep showing and sending keys to a terminal the Kanban
+  // board is currently covering, with no way to see what a tap even did.
+  const activeTerminalSession =
+    activePanelId && viewMode !== "kanban"
+      ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
+      : undefined;
+
   // Dockview ships its own hardcoded light/dark chrome colors, unaware of
   // the selected terminal color scheme — so a scheme's background (e.g.
   // Dracula's off-white) visibly seams against dockview's fixed white/black
@@ -2194,7 +2218,7 @@ export function App() {
 
   return (
     <div
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}`}
+      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isMobile && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
@@ -2489,6 +2513,14 @@ export function App() {
               onOpenGitHub={onOpenGitHub}
               onOpenBrowser={onOpenBrowser}
             />
+            {/* Mobile UI/UX overhaul, item C.2 — last child of
+                .grid-area-body (a flex column), so it sits at the bottom of
+                the already-`bottom: var(--kb-inset)`-shrunk .app shell —
+                i.e. directly above the keyboard — with no position:fixed or
+                separate inset tracking of its own needed. */}
+            {isMobile && activeTerminalSession && (
+              <MobileKeyBar sessionId={activeTerminalSession.id} />
+            )}
           </div>
         </div>
       </div>
