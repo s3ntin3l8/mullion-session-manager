@@ -536,6 +536,28 @@ describe("TerminalPane input registry (mobile key bar, issue: mobile UI/UX overh
     expect(term.input).toHaveBeenCalledExactlyOnceWith("\x1b[Z");
   });
 
+  // Hermes review, PR #616 round 2 — MobileKeyBar's own pointerdown
+  // preventDefault only ever *preserves* focus the terminal already had; if
+  // the on-screen keyboard was already dismissed before the tap, a send
+  // with no explicit focus() would be real but invisible to the user.
+  // Covers all three handle methods, since each one independently needs
+  // this (sendCtrlC's own dock/opt-in/raw branches all still focus first).
+  it("focuses the terminal before every send, regardless of prior focus state", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+
+    const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+    handle.sendInput("\x1b");
+    expect(term.focus).toHaveBeenCalledTimes(1);
+
+    handle.sendArrow("up");
+    expect(term.focus).toHaveBeenCalledTimes(2);
+
+    handle.sendCtrlC();
+    expect(term.focus).toHaveBeenCalledTimes(3);
+  });
+
   it("sendArrow emits normal-mode CSI sequences when DECCKM (applicationCursorKeysMode) is off", () => {
     stubFakeWebSocket(true);
     renderPane();

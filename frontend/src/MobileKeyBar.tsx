@@ -50,19 +50,20 @@ export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {
           type="button"
           className="mobile-key-bar-btn"
           aria-label={ariaLabel}
-          // preventDefault on pointerdown, not just onClick, is the whole
-          // point of this button: a plain click's own default mousedown
-          // behavior shifts focus to the button itself first, which blurs
-          // the terminal's hidden input and dismisses the on-screen
-          // keyboard before the click (and this send) even fires. Blocking
-          // that default here is what keeps the keyboard up between taps —
-          // the whole reason this bar can sit right above it. (Independent
-          // code review, PR #616 — corrected: it isn't term.input()'s own
-          // `wasUserInput` default doing any (re)focusing here, verified
-          // against the installed @xterm/xterm source; that flag only
-          // affects scroll-to-bottom and clearing an active selection.
-          // preventDefault() on this pointerdown, alone, is the entire
-          // mechanism.)
+          // preventDefault on pointerdown, not just onClick, is what keeps
+          // the on-screen keyboard up WHILE it's already showing: a plain
+          // click's own default mousedown behavior shifts focus to the
+          // button itself first, which would blur the terminal's hidden
+          // input and dismiss the keyboard before the click (and this send)
+          // even fires. It only ever *preserves* focus the terminal already
+          // had, though — if the keyboard was already dismissed (or focus
+          // was elsewhere) before the tap, TerminalPane.tsx's own
+          // registered handle explicitly (re)focuses the terminal itself
+          // (Hermes review, PR #616 round 2), so a tap's effect is never
+          // silently invisible. (term.input()'s own `wasUserInput` default
+          // does NOT do any focusing on its own — verified against the
+          // installed @xterm/xterm source, it only affects scroll-to-bottom
+          // and clearing an active selection.)
           onPointerDown={(e) => e.preventDefault()}
           onClick={() => {
             const handle = getTerminalInputHandle(sessionId);

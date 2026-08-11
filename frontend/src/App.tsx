@@ -2191,13 +2191,21 @@ export function App() {
   // this file (e.g. the sessionIsActive check in the auto-focus-on-attention
   // effect above) — reused here rather than inspecting dockview's internal
   // component-type metadata. Also requires `status === "active"` (Hermes
-  // review, PR #616): a killed/exited session's pane can still be the
-  // active one (closing is a separate, explicit action from the program
+  // review, PR #616 round 1): a killed/exited session's pane can still be
+  // the active one (closing is a separate, explicit action from the program
   // exiting — see PaneTab.tsx's own close-vs-kill distinction), and there's
   // nothing left alive on the other end of a key-bar tap at that point.
-  const activeTerminalSession = activePanelId
-    ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
-    : undefined;
+  //
+  // Also requires `viewMode !== "kanban"` (Hermes review, PR #616 round 2):
+  // KanbanBoardOverlay renders as a visual overlay ON TOP of the dockview
+  // container without changing activePanelId (it's a "toggled view", not a
+  // panel switch — see its own render site further down) — without this,
+  // the bar would keep showing and sending keys to a terminal the Kanban
+  // board is currently covering, with no way to see what a tap even did.
+  const activeTerminalSession =
+    activePanelId && viewMode !== "kanban"
+      ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
+      : undefined;
 
   // Dockview ships its own hardcoded light/dark chrome colors, unaware of
   // the selected terminal color scheme — so a scheme's background (e.g.

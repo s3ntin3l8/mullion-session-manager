@@ -627,11 +627,28 @@ export function TerminalPane(props: {
     // and clears an active selection. The on-screen keyboard staying up is
     // entirely MobileKeyBar.tsx's own `preventDefault()` on pointerdown, not
     // anything on this end.)
+    // Hermes review, PR #616 round 2 — every send below focuses the
+    // terminal first. `preventDefault()` on the bar's own pointerdown
+    // (MobileKeyBar.tsx) only ever *keeps* focus from leaving the terminal
+    // if it was already there; it can't bring focus (or the on-screen
+    // keyboard) TO the terminal if the user tapped the bar while focus was
+    // somewhere else (e.g. the keyboard was already dismissed). Without
+    // this, that tap's own send would be real but invisible — nothing
+    // visibly happens until the user separately taps the terminal itself.
+    // A deliberate explicit action (the user tapped a button that targets
+    // this terminal specifically), same category as the find-bar's own
+    // close-time `termRef.current?.focus()` below — not the unconditional,
+    // no-user-action focus this component is otherwise kept free of (see
+    // that effect's own comment).
+    const focusThenInput = (data: string) => {
+      term.focus();
+      term.input(data);
+    };
     registerTerminalInput(props.params.sessionId, {
-      sendInput: (data) => term.input(data),
+      sendInput: focusThenInput,
       sendArrow: (direction) => {
         const csi = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
-        term.input(csi + (direction === "up" ? "A" : "B"));
+        focusThenInput(csi + (direction === "up" ? "A" : "B"));
       },
       // Independent code review, PR #616 — a raw `term.input("\x03")` here
       // would bypass attachCustomKeyEventHandler's own Ctrl+C branch above
@@ -647,6 +664,7 @@ export function TerminalPane(props: {
       // opt-in selection-aware copy / raw SIGINT) via the same refs it
       // reads, rather than special-casing MobileKeyBar.tsx around it.
       sendCtrlC: () => {
+        term.focus();
         if (captureCtrlCRef.current) {
           void copyHandlerRef.current();
           return;
