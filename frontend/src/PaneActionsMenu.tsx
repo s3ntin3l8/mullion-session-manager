@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { DockviewApi, DockviewPanelApi } from "dockview";
@@ -38,14 +38,13 @@ const KILL_ARM_MS = 3000;
 const KILL_ARM_SECONDS = KILL_ARM_MS / 1000;
 
 // A right-anchored fixed menu positioned from the trigger button's own
-// getBoundingClientRect() (see the position-computing onClick below) can run
-// off the left edge on a narrow phone — PaneTab's desktop tab strip never
-// got close enough to the viewport edge for this to matter, but the mobile
-// bar's kebab, anchored near the bar's own left edge, can. Clamped against
-// this nominal width (matches `.pane-tab-overflow-menu`'s CSS width) rather
-// than measuring the real rendered width, since the clamp has to run in the
-// same synchronous click handler that decides whether to open at all.
-const MENU_WIDTH_PX = 214;
+// getBoundingClientRect() can run off the left edge on a narrow phone —
+// PaneTab's desktop tab strip never got close enough to the viewport edge
+// for this to matter, but the mobile bar's kebab, anchored near the bar's
+// own left edge, can. The re-clamp effect below measures the menu's actual
+// rendered width after mount rather than hardcoding it here (Hermes review,
+// PR #613) — a hardcoded constant would silently drift out of sync with
+// `.pane-tab-overflow-menu`'s CSS width the next time that changes.
 const VIEWPORT_MARGIN_PX = 8;
 
 export interface PaneActionsMenuProps {
@@ -236,15 +235,31 @@ export function PaneActionsMenu({
     const btn = overflowBtnRef.current;
     if (!btn) return;
     const rect = btn.getBoundingClientRect();
-    // Clamp the right offset so the menu's left edge can't run past the
-    // viewport — see MENU_WIDTH_PX's own comment.
-    const right = Math.min(
-      window.innerWidth - rect.right,
-      window.innerWidth - MENU_WIDTH_PX - VIEWPORT_MARGIN_PX,
-    );
-    setOverflowPos({ top: rect.bottom + 4, right: Math.max(right, VIEWPORT_MARGIN_PX) });
+    // Anchored to the trigger button's own right edge — correct whenever the
+    // menu fits; the layout effect below nudges this inward on the rare
+    // narrow-viewport case where it doesn't.
+    setOverflowPos({
+      top: rect.bottom + 4,
+      right: Math.max(window.innerWidth - rect.right, VIEWPORT_MARGIN_PX),
+    });
     setOverflowOpen(true);
   }, []);
+
+  // Hermes review, PR #613 — re-clamps against the menu's real rendered
+  // width instead of a hardcoded constant. useLayoutEffect (not useEffect)
+  // so a correction lands before the browser paints — no visible flash of
+  // the menu at its wrong position first. Only nudges `right` when the
+  // menu's own left edge has actually run past the viewport; a menu that
+  // already fits (the common case) is left untouched.
+  useLayoutEffect(() => {
+    if (!overflowOpen) return;
+    const menu = overflowMenuRef.current;
+    if (!menu) return;
+    const rect = menu.getBoundingClientRect();
+    if (rect.left >= VIEWPORT_MARGIN_PX) return;
+    const overflowBy = VIEWPORT_MARGIN_PX - rect.left;
+    setOverflowPos((pos) => (pos ? { ...pos, right: pos.right + overflowBy } : pos));
+  }, [overflowOpen]);
 
   return (
     <>
@@ -252,6 +267,9 @@ export function PaneActionsMenu({
         ref={overflowBtnRef}
         className={triggerClassName}
         title="More…"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={overflowOpen}
         onClick={() => {
           if (overflowOpen) setOverflowOpen(false);
           else openMenu();

@@ -343,6 +343,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       <button
         className="pane-tab-btn"
         title="Close pane — detaches your view, session keeps running"
+        aria-label="Close pane"
         onClick={() => props.api.close()}
       >
         <CloseIcon size={14} />

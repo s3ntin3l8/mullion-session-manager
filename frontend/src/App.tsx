@@ -892,13 +892,23 @@ export function App() {
   // down this file) would otherwise show its header un-hidden until the next
   // breakpoint change. Every one of those calls `maximizeGroup`, which fires
   // this event — subscribing here once covers all of them (current and
-  // future) without editing each call site individually.
+  // future) without editing each call site individually. Also covers
+  // `onDidAddGroup` (Hermes review, PR #613): a group created WITHOUT an
+  // intervening maximizeGroup — a drag-split, or a future programmatic
+  // `addGroup()` — would otherwise render dockview's own tab strip un-hidden
+  // until the next breakpoint change, reintroducing this PR's own "doubled
+  // switcher" bug for that one group.
   useEffect(() => {
     if (!dockviewApi) return;
-    const disposable = dockviewApi.onDidMaximizedGroupChange(({ group }) => {
+    const hideIfMobile = (group: DockviewGroupPanel) => {
       group.header.hidden = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-    });
-    return () => disposable.dispose();
+    };
+    const maximizedSub = dockviewApi.onDidMaximizedGroupChange(({ group }) => hideIfMobile(group));
+    const addedSub = dockviewApi.onDidAddGroup((group) => hideIfMobile(group));
+    return () => {
+      maximizedSub.dispose();
+      addedSub.dispose();
+    };
   }, [dockviewApi]);
 
   // Focuses the mobile pane bar's inline rename input the moment it opens —
@@ -2371,6 +2381,7 @@ export function App() {
                           <button
                             className="mobile-tab-btn"
                             title="Close pane — detaches your view, session keeps running"
+                            aria-label="Close pane"
                             onClick={() => panel.api.close()}
                           >
                             <CloseIcon size={13} />
