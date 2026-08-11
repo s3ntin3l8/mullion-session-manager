@@ -18,6 +18,7 @@ const retryTask = vi.fn(async () => makeSession({ id: 100 }));
 const giveUpTask = vi.fn(async () => makeTask({}));
 const refreshTasks = vi.fn(async () => {});
 const deleteTask = vi.fn(async () => {});
+const updateTask = vi.fn(async () => makeTask({}));
 
 function storeState() {
   return {
@@ -32,6 +33,7 @@ function storeState() {
     giveUpTask,
     refreshTasks,
     deleteTask,
+    updateTask,
     prsByProject,
   };
 }
@@ -148,6 +150,7 @@ beforeEach(() => {
   giveUpTask.mockClear();
   refreshTasks.mockClear();
   deleteTask.mockClear();
+  updateTask.mockClear();
 });
 
 describe("TaskDetail", () => {
@@ -433,6 +436,82 @@ describe("TaskDetail claim action", () => {
     expect(screen.queryByRole("button", { name: "Claim" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+// A non-drag path between the board's only user-driven, non-terminal status
+// change (backlog<->ready) — drag is otherwise the sole way to reach it, and
+// HTML5 drag-and-drop never fires on a touch device.
+describe("TaskDetail backlog/ready move actions", () => {
+  it("shows a Move to Ready button for a backlog task and calls updateTask with status and boardOrder", async () => {
+    tasks = [makeTask({ id: 1, status: "backlog" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "ready", boardOrder: 0 });
+  });
+
+  it("shows a Move to Backlog button alongside Claim for a ready task, unaffected by taskMasterEnabled", async () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "ready" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    const moveBtn = screen.getByRole("button", { name: "Move to Backlog" });
+    expect(moveBtn).not.toBeDisabled();
+    await user.click(moveBtn);
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "backlog", boardOrder: 0 });
+  });
+
+  // Hermes review — an earlier version sent a bare `{ status }` patch and
+  // claimed this "always appends," which doesn't hold: routes/tasks.ts's
+  // PATCH endpoint never reindexes, so without an explicit boardOrder the
+  // task would keep its previous one and land wherever the target column's
+  // (boardOrder, id) sort happened to put it — often not the end. This
+  // proves the fix: with two existing ready tasks at boardOrder 0 and 1,
+  // moving the backlog task there must append it at boardOrder 2, not
+  // collide with or precede either of them.
+  it("appends to the end of the target column's existing boardOrder sequence, not just a bare status patch", async () => {
+    tasks = [
+      makeTask({ id: 1, status: "backlog", boardOrder: 0 }),
+      makeTask({ id: 2, status: "ready", boardOrder: 0 }),
+      makeTask({ id: 3, status: "ready", boardOrder: 1 }),
+    ];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "ready", boardOrder: 2 });
+    expect(updateTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an error when updateTask rejects", async () => {
+    updateTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "backlog" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(screen.getByText("Failed to move task")).toBeInTheDocument();
+  });
+
+  // Independent review — UnifiedBoard.tsx's own applyDrop resyncs the store
+  // from the server on a failed patch (its own per-update .catch calls
+  // refreshTasks()); an earlier version of this action didn't, so a failed
+  // write here left the store's optimistic-free state stale until the next
+  // regular poll. Only refreshTasks itself is asserted (not updateTask's
+  // call count/args, already covered by "appends to the end..." above) —
+  // this test is specifically about the resync-on-failure behavior.
+  it("resyncs from the server (refreshTasks) when updateTask rejects, same as the drag path", async () => {
+    updateTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "backlog" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    refreshTasks.mockClear();
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(refreshTasks).toHaveBeenCalled();
   });
 });
 

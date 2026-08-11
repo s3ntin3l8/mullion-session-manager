@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store.js";
-import { statusLabel } from "./tasksBoard.js";
+import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import { ApiError } from "./api.js";
 import type { GitHubCiStatus, Session, Task } from "./api.js";
@@ -273,8 +273,17 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 // card already shows the new session's live status, and "Open session" in
 // TaskDetail's own meta row above opens it on demand.
 function TaskActions({ task }: { task: Task }) {
-  const { taskMasterEnabled, claimTask, approveTask, rejectTask, retryTask, giveUpTask } =
-    useDashboardStore();
+  const {
+    taskMasterEnabled,
+    claimTask,
+    approveTask,
+    rejectTask,
+    retryTask,
+    giveUpTask,
+    updateTask,
+    refreshTasks,
+    tasks,
+  } = useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
   // Which free-text-reason-then-confirm flow is open, if any — reject and
   // give-up share the same input/confirm/cancel shape, so one bit of state
@@ -287,6 +296,74 @@ function TaskActions({ task }: { task: Task }) {
   const disabledHint = !taskMasterEnabled
     ? "Task Master is disabled — enable it to use this action."
     : null;
+
+  // Backlog<->Ready is the board's only user-driven, non-terminal drag
+  // (UnifiedBoard.tsx's DRAG_EDITABLE_STATUSES) — and drag is the ONLY way
+  // to reach it, which HTML5 drag-and-drop never fires on a touch device.
+  // Not gated on taskMasterEnabled — it's local board CRUD, same posture as
+  // DeleteTaskAction above, not one of the spawn/promote-an-agent actions
+  // that flag actually guards.
+  //
+  // Hermes review — an earlier version sent a bare `{ status }` patch and
+  // claimed (wrongly) that this "always appends". PATCH /api/tasks/:id
+  // (routes/tasks.ts) only writes the fields given and never reindexes, so
+  // a status-only patch would have kept the task's PREVIOUS boardOrder and
+  // left it wherever orderTasksForColumn's (boardOrder, id) sort happened
+  // to place it in the new column — often not the end, and inconsistent
+  // with the drag path. Reusing computeTaskReorder with a target index of
+  // "one past the target column's last task" is the same REORDER MATH
+  // UnifiedBoard.tsx's own applyDrop uses for a drop.
+  //
+  // Independent review — that parity claim didn't extend to failure
+  // handling, which is NOT identical: applyDrop fires its updates
+  // concurrently, each with its own resync-on-failure (a failed PATCH
+  // there still calls refreshTasks(), so the store recovers whatever the
+  // server actually persisted). This loop awaits sequentially inside one
+  // try/catch instead — appropriate here, since a click-triggered action
+  // wants one definitive success/failure outcome rather than N
+  // independently-racing writes — but that also means a failure partway
+  // through a multi-update reindex (rare: only when the target column
+  // already has tasks needing their own boardOrder shifted) left earlier,
+  // already-successful writes unreflected in the store until the next
+  // regular poll. refreshTasks() in the catch closes that gap the same way
+  // applyDrop's own per-update .catch does.
+  const moveStatus = async (status: "backlog" | "ready") => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const targetIndex = orderTasksForColumn(tasks, status).length;
+      const updates = computeTaskReorder(tasks, task.id, status, targetIndex);
+      for (const update of updates) {
+        const patch: { status?: "backlog" | "ready"; boardOrder: number } = {
+          boardOrder: update.boardOrder,
+        };
+        if (update.id === task.id && update.status !== task.status) {
+          patch.status = update.status as "backlog" | "ready";
+        }
+        await updateTask(update.id, patch);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to move task");
+      void refreshTasks();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (task.status === "backlog") {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => void moveStatus("ready")}
+        >
+          Move to Ready
+        </button>
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    );
+  }
 
   if (task.status === "ready") {
     return (
@@ -307,6 +384,13 @@ function TaskActions({ task }: { task: Task }) {
           }}
         >
           Claim
+        </button>
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => void moveStatus("backlog")}
+        >
+          Move to Backlog
         </button>
         {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
         {error && <span className="task-detail-error">{error}</span>}
