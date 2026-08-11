@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { buildTestApp } from "../helpers/app.js";
 
 // The DB-facing half of cookie import — browser-cookie-import.ts's actual
 // host-file reading is mocked out here so this only exercises storage
@@ -11,7 +12,6 @@ vi.mock("../../src/services/browser-cookie-import.js", () => ({
   readBrowserCookies: vi.fn(),
 }));
 
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { readBrowserCookies } = await import("../../src/services/browser-cookie-import.js");
 const {
@@ -37,7 +37,7 @@ describe("browser-cookies", () => {
     delete process.env.DB_ENCRYPTION_KEY;
   });
 
-  async function createProject(app: Awaited<ReturnType<typeof buildApp>>) {
+  async function createProject(app: Awaited<ReturnType<typeof buildTestApp>>) {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -47,7 +47,7 @@ describe("browser-cookies", () => {
   }
 
   it("imports a profile, storing cookies encrypted at rest", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([
       { name: "sid", value: "abc", domain: "example.com", path: "/", httpOnly: true, secure: true },
@@ -70,12 +70,10 @@ describe("browser-cookies", () => {
       .all();
     expect(row.cookiesEnc).not.toContain("sid"); // never stored in plaintext
     expect(row.cookiesEnc.startsWith("enc:")).toBe(true);
-
-    await app.close();
   });
 
   it("upserts by (projectId, label) rather than accumulating rows on re-import", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([
       { name: "a", value: "1", domain: "x.com", path: "/", httpOnly: false, secure: false },
@@ -100,12 +98,10 @@ describe("browser-cookies", () => {
     expect(second.id).toBe(first.id);
     expect(second.cookieCount).toBe(2);
     expect(listCookieProfiles(app, projectId)).toHaveLength(1);
-
-    await app.close();
   });
 
   it("supports multiple distinct profiles per project", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([]);
 
@@ -118,12 +114,10 @@ describe("browser-cookies", () => {
 
     const profiles = listCookieProfiles(app, projectId);
     expect(profiles.map((p) => p.label).sort()).toEqual(["personal", "work"]);
-
-    await app.close();
   });
 
   it("listCookieProfiles never exposes decrypted cookie values", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([
       {
@@ -140,12 +134,10 @@ describe("browser-cookies", () => {
     const profiles = listCookieProfiles(app, projectId);
     expect(JSON.stringify(profiles)).not.toContain("super-sensitive");
     expect(profiles[0]).not.toHaveProperty("cookiesEnc");
-
-    await app.close();
   });
 
   it("deleteCookieProfile removes a profile scoped to its project", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([]);
     const summary = importCookieProfile(app, projectId, {
@@ -158,12 +150,10 @@ describe("browser-cookies", () => {
     expect(listCookieProfiles(app, projectId)).toEqual([]);
     // Deleting again (already gone) is a clean false, not a throw.
     expect(deleteCookieProfile(app, projectId, summary.id)).toBe(false);
-
-    await app.close();
   });
 
   it("deleteCookieProfile does not delete a profile belonging to a different project", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectA = await createProject(app);
     const projectB = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([]);
@@ -175,21 +165,17 @@ describe("browser-cookies", () => {
 
     expect(deleteCookieProfile(app, projectB, summary.id)).toBe(false);
     expect(listCookieProfiles(app, projectA)).toHaveLength(1);
-
-    await app.close();
   });
 
   it("loadStoredCookiesForProject returns [] when no profile is stored", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
 
     expect(loadStoredCookiesForProject(app, projectId)).toEqual([]);
-
-    await app.close();
   });
 
   it("loadStoredCookiesForProject applies the most recently imported profile", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
 
     vi.mocked(readBrowserCookies).mockReturnValue([
@@ -213,12 +199,10 @@ describe("browser-cookies", () => {
     expect(cookies).toEqual([
       { name: "new", value: "2", domain: "x.com", path: "/", httpOnly: false, secure: false },
     ]);
-
-    await app.close();
   });
 
   it("loadStoredCookiesForProject returns [] and logs a warning on a decrypt failure", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([
       { name: "a", value: "1", domain: "x.com", path: "/", httpOnly: false, secure: false },
@@ -234,7 +218,6 @@ describe("browser-cookies", () => {
     expect(warnSpy).toHaveBeenCalled();
 
     decryptSpy.mockRestore();
-    await app.close();
   });
 
   // Finding AS14: decryptJson now distinguishes "decryption succeeded but
@@ -244,7 +227,7 @@ describe("browser-cookies", () => {
   // never cast null into an ImportedCookie[] and hand it to a consumer that
   // will iterate it.
   it("loadStoredCookiesForProject returns [] and logs a warning when decryptJson returns null", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const projectId = await createProject(app);
     vi.mocked(readBrowserCookies).mockReturnValue([
       { name: "a", value: "1", domain: "x.com", path: "/", httpOnly: false, secure: false },
@@ -258,6 +241,5 @@ describe("browser-cookies", () => {
     expect(warnSpy).toHaveBeenCalled();
 
     decryptSpy.mockRestore();
-    await app.close();
   });
 });

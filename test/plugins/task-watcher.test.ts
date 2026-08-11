@@ -4,13 +4,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
+import { buildTestApp } from "../helpers/app.js";
 
 // Boot-time orphan sweep (6.8/#283, widened to remote hosts by #484) — this
 // file only exercises the plugin's onReady wiring (does it call the sweep,
 // on the right project, with the right delete list). The sweep's own
 // removal/prune mechanics are covered directly by
 // test/services/git-worktree.test.ts.
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { projects, tasks } = await import("../../src/db/schema.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -75,7 +75,7 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     // plugin's onReady sweep before a project created through it existed
     // yet (chicken-and-egg: the very first inject() call both creates the
     // project AND races the sweep that's supposed to see it).
-    const app = await buildApp();
+    const app = await buildTestApp();
     const [project] = app.db
       .insert(projects)
       .values({ name: "boot-sweep-p", cwd })
@@ -96,8 +96,6 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
 
     expect(fs.existsSync(orphan!.path)).toBe(false);
     expect(fs.existsSync(active!.path)).toBe(true);
-
-    await app.close();
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -115,20 +113,18 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     const orphan = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-sentinel" });
     expect(orphan).not.toBeNull();
 
-    const app = await buildApp();
+    const app = await buildTestApp();
     app.db.insert(projects).values({ name: "boot-sweep-preview-p", cwd }).run();
 
     await app.ready();
     await waitUntil(() => !fs.existsSync(orphan!.path));
 
     expect(fs.existsSync(preview!.path)).toBe(true);
-
-    await app.close();
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
   it("#484 — sweeps a remote-hosted project's orphan worktrees through the SessionBackend proxy, and skips (without throwing) an unreachable host's projects", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const [okProject] = app.db
       .insert(projects)
       .values({ name: "boot-sweep-remote-ok-p", cwd: "/remote/ok", hostId: "remote-host-ok" })
@@ -193,11 +189,10 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     expect(downBackend.pruneWorktrees).not.toHaveBeenCalled();
 
     vi.restoreAllMocks();
-    await app.close();
   });
 
   it("#484, Hermes review PR #590 — a non-transport error (e.g. a local DB glitch) is per-project, never aborting the rest of that host's projects", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const [firstProject] = app.db
       .insert(projects)
       .values({ name: "boot-sweep-local-glitch-p1", cwd: "/local/one", hostId: "local" })
@@ -229,6 +224,5 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     expect(localBackend.listTaskWorktreeDirs).toHaveBeenCalledWith(secondProject.cwd);
 
     vi.restoreAllMocks();
-    await app.close();
   });
 });

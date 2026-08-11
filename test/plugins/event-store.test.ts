@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { buildTestApp } from "../helpers/app.js";
 
 // Issue #213 (roadmap 4.7) — plugin-level wiring: the role gate (agent gets
 // no decorator/hooks at all) and a primary-role smoke test that the
@@ -34,37 +34,33 @@ describe("eventStorePlugin", () => {
   it("does not decorate reconfigureEventRetention for MULLION_ROLE=agent (no app.db to use)", async () => {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_AGENT_TOKEN = "agent-token-0123456789";
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
     expect(app.hasDecorator("reconfigureEventRetention")).toBe(false);
-    await app.close();
   });
 
   it("decorates reconfigureEventRetention for the (default) primary role", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
     expect(app.hasDecorator("reconfigureEventRetention")).toBe(true);
-    await app.close();
   });
 
   it("does not decorate reconfigureRemoteEventSubscriptions for MULLION_ROLE=agent (no app.db to use)", async () => {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_AGENT_TOKEN = "agent-token-0123456789";
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
     expect(app.hasDecorator("reconfigureRemoteEventSubscriptions")).toBe(false);
-    await app.close();
   });
 
   it("decorates reconfigureRemoteEventSubscriptions for the (default) primary role", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
     expect(app.hasDecorator("reconfigureRemoteEventSubscriptions")).toBe(true);
-    await app.close();
   });
 
   it("PATCH /api/settings changing eventPersistence also reconciles remote-event-subscriber.ts (issue #213 hazard 6)", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
 
     // The retention sweep's own onTick (event-store.ts) is what wires this
@@ -82,12 +78,10 @@ describe("eventStorePlugin", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(sweepSpy).toHaveBeenCalledTimes(1);
-
-    await app.close();
   });
 
   it("PATCH /api/settings changing eventRetentionDays calls the decorator without throwing", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
 
     const res = await app.inject({
@@ -97,12 +91,10 @@ describe("eventStorePlugin", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions.eventRetentionDays).toBe(7);
-
-    await app.close();
   });
 
   it("PATCH /api/settings changing eventRetentionPerSession calls the decorator without throwing", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
 
     // Hermes review, PR #563 (round 3) — a bare 200 + echoed value doesn't
@@ -119,12 +111,10 @@ describe("eventStorePlugin", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions.eventRetentionPerSession).toBe(200);
     expect(spy).toHaveBeenCalledTimes(1);
-
-    await app.close();
   });
 
   it("PATCH /api/settings changing eventPersistence calls the decorator without throwing", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
 
     const res = await app.inject({
@@ -134,12 +124,10 @@ describe("eventStorePlugin", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions.eventPersistence).toBe(true);
-
-    await app.close();
   });
 
   it("app.close() tears down the writer/sweep timers cleanly with persistence on", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.ready();
     await app.inject({
       method: "PATCH",

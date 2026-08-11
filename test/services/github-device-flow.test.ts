@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { buildTestApp } from "../helpers/app.js";
 import { getIntegration, getToken } from "../../src/services/github-integration.js";
 import {
   DeviceFlowError,
@@ -63,7 +64,7 @@ describe("github-device-flow service", () => {
 
   it("throws DeviceFlowError when no GITHUB_OAUTH_CLIENT_ID is configured", async () => {
     delete process.env.GITHUB_OAUTH_CLIENT_ID;
-    const app = await buildApp();
+    const app = await buildTestApp();
     await expect(startDeviceFlow(app)).rejects.toThrow(DeviceFlowError);
     process.env.GITHUB_OAUTH_CLIENT_ID = "Iv1.test-client-id";
     await app.close();
@@ -71,7 +72,7 @@ describe("github-device-flow service", () => {
 
   it("starts a pending attempt and surfaces user_code/verification_uri", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     const summary = await startDeviceFlow(app);
     expect(summary).toEqual({
       status: "pending",
@@ -84,7 +85,7 @@ describe("github-device-flow service", () => {
 
   it("never exposes device_code — only user_code/verification_uri/status", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     const summary = await startDeviceFlow(app);
     expect(JSON.stringify(summary)).not.toContain("device-code-abc");
     await app.close();
@@ -92,21 +93,21 @@ describe("github-device-flow service", () => {
 
   it("throws DeviceFlowError when GitHub rejects the device-code request", async () => {
     fetchMock.mockResolvedValue(jsonResponse(400, { error: "bad request" }));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await expect(startDeviceFlow(app)).rejects.toThrow(DeviceFlowError);
     await app.close();
   });
 
   it("throws DeviceFlowError when GitHub is unreachable", async () => {
     fetchMock.mockRejectedValue(new Error("network down"));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await expect(startDeviceFlow(app)).rejects.toThrow(DeviceFlowError);
     await app.close();
   });
 
   it("stays pending on authorization_pending", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "authorization_pending" }));
@@ -117,7 +118,7 @@ describe("github-device-flow service", () => {
 
   it("stays pending on slow_down, without erroring", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "slow_down", interval: 10 }));
@@ -128,7 +129,7 @@ describe("github-device-flow service", () => {
 
   it("replaces (not adds to) the poll interval on slow_down, per RFC 8628", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE)); // interval: 5
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
     expect(getDeviceFlowIntervalMsForTests()).toBe(5000);
 
@@ -142,7 +143,7 @@ describe("github-device-flow service", () => {
 
   it("falls back to intervalMs + 5s on a slow_down with no interval field", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE)); // interval: 5
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "slow_down" }));
@@ -154,7 +155,7 @@ describe("github-device-flow service", () => {
   it("moves to expired once past expiresAt, without polling GitHub again", async () => {
     vi.useFakeTimers();
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { ...DEVICE_CODE_RESPONSE, expires_in: 1 }));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -170,7 +171,7 @@ describe("github-device-flow service", () => {
 
   it("connects on a successful token exchange, persisting it as tokenType oauth", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { access_token: "gho_device_flow_token" }));
@@ -188,7 +189,7 @@ describe("github-device-flow service", () => {
 
   it("moves to error if the token exchange succeeds but persisting it fails", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { access_token: "gho_device_flow_token" }));
@@ -205,7 +206,7 @@ describe("github-device-flow service", () => {
 
   it("retries on the same schedule if GitHub's poll response isn't valid JSON", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(new Response("not json", { status: 200 }));
@@ -218,7 +219,7 @@ describe("github-device-flow service", () => {
 
   it("moves to expired on expired_token", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "expired_token" }));
@@ -229,7 +230,7 @@ describe("github-device-flow service", () => {
 
   it("moves to denied on access_denied", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "access_denied" }));
@@ -240,7 +241,7 @@ describe("github-device-flow service", () => {
 
   it("moves to error with a message on an unrecognized error code", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(
@@ -255,7 +256,7 @@ describe("github-device-flow service", () => {
 
   it("a new startDeviceFlow supersedes a previous pending attempt", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE));
-    const app = await buildApp();
+    const app = await buildTestApp();
     await startDeviceFlow(app);
 
     fetchMock.mockResolvedValueOnce(

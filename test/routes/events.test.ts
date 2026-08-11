@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" — see mock-pty.ts's header comment for
+// the empirically confirmed hoisting/ordering failure mode.
+import { buildTestApp } from "../helpers/app.js";
+import { createNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 
 // Real integration test: a genuine WebSocket client against a real listening
@@ -11,52 +16,14 @@ import type * as ChildProcess from "node:child_process";
 // node-pty/child_process the same way, so this exercises the actual
 // /ws/events route logic (replay, live streaming, "seen" cursor messages)
 // without depending on a real systemd --user session.
-const fakePtyChildren: FakePty[] = [];
-
-class FakePty {
-  dataListeners: Array<(data: string) => void> = [];
-  exitListeners: Array<() => void> = [];
-
-  onData(cb: (data: string) => void) {
-    this.dataListeners.push(cb);
-    return { dispose: () => {} };
-  }
-
-  onExit(cb: () => void) {
-    this.exitListeners.push(cb);
-    return { dispose: () => {} };
-  }
-
-  write() {}
-  resize() {}
-  kill() {}
-
-  emitData(chunk: string) {
-    for (const cb of this.dataListeners) cb(chunk);
-  }
-}
-
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => {
-    const child = new FakePty();
-    fakePtyChildren.push(child);
-    return child;
-  }),
-}));
+const ptyMock = createNodePtyMock();
+vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
-  return {
-    ...actual,
-    spawn: vi.fn(() => {
-      const ee = new EventEmitter();
-      setImmediate(() => ee.emit("exit", 0));
-      return ee;
-    }),
-  };
+  return mockChildProcessSpawn(actual);
 });
 
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { shouldDropForBackpressure, EVENTS_BACKPRESSURE_MAX_BUFFERED_BYTES } =
   await import("../../src/routes/events.js");
@@ -123,7 +90,7 @@ describe("events route (/ws/events)", () => {
   });
 
   async function buildAndListen() {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();
     if (address === null || typeof address === "string") {
@@ -132,7 +99,7 @@ describe("events route (/ws/events)", () => {
     return { app, port: address.port };
   }
 
-  async function createProjectAndSession(app: Awaited<ReturnType<typeof buildApp>>) {
+  async function createProjectAndSession(app: Awaited<ReturnType<typeof buildTestApp>>) {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -140,7 +107,7 @@ describe("events route (/ws/events)", () => {
     });
     const projectId = project.json().id as number;
 
-    const before = fakePtyChildren.length;
+    const before = ptyMock.spawnedPtys.length;
     const session = await app.inject({
       method: "POST",
       url: "/api/sessions",
@@ -148,8 +115,8 @@ describe("events route (/ws/events)", () => {
     });
     const sessionId = session.json().id as number;
 
-    await waitUntil(() => fakePtyChildren.length > before);
-    return { sessionId, pty: fakePtyChildren[fakePtyChildren.length - 1] };
+    await waitUntil(() => ptyMock.spawnedPtys.length > before);
+    return { sessionId, pty: ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1] };
   }
 
   // A1: title_change events are now debounced at the source
@@ -187,7 +154,6 @@ describe("events route (/ws/events)", () => {
     });
 
     ws.close();
-    await app.close();
   }, 10_000);
 
   it("streams a live event to an already-connected client", async () => {
@@ -223,7 +189,6 @@ describe("events route (/ws/events)", () => {
     expect(titleEvents[0].payload).toEqual({ title: "idle" });
 
     ws.close();
-    await app.close();
   }, 10_000);
 
   it("delivers events from multiple sessions, each with its own per-session seq", async () => {
@@ -248,7 +213,6 @@ describe("events route (/ws/events)", () => {
     expect(fromB).toMatchObject({ seq: 1, sessionId: sessionB });
 
     ws.close();
-    await app.close();
   }, 10_000);
 
   it("accepts a 'seen' control message without erroring, and ignores malformed frames", async () => {
@@ -268,7 +232,6 @@ describe("events route (/ws/events)", () => {
     expect(ws.readyState).toBe(ws.OPEN);
 
     ws.close();
-    await app.close();
   });
 
   it("closes cleanly without leaving the session tracked incorrectly", async () => {
@@ -285,7 +248,5 @@ describe("events route (/ws/events)", () => {
     // unrelated app state.
     const list = await app.inject({ method: "GET", url: "/api/sessions" });
     expect(list.statusCode).toBe(200);
-
-    await app.close();
   });
 });
