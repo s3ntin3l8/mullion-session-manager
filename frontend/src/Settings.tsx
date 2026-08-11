@@ -31,6 +31,7 @@ import {
   BellIcon,
   BoltIcon,
   BotIcon,
+  ChevronLeftIcon,
   CloseIcon,
   DockIcon,
   FolderIcon,
@@ -247,6 +248,27 @@ export function Settings({
   const [query, setQuery] = useState("");
   const meta = SECTIONS.find((s) => s.id === section)!;
 
+  // Mobile UI/UX overhaul, item D — the nav rail and content pane can't sit
+  // side by side on a phone (no width for it; see `.settings-modal-body`'s
+  // mobile override in styles.css), so this drives a drill-down instead:
+  // the nav list shows first, picking a section swaps to its content with a
+  // back chevron to return. Purely additive state — outside the <700px
+  // breakpoint the CSS that reads it never applies, so desktop's existing
+  // side-by-side layout is untouched regardless of this value.
+  //
+  // Starts already showing content, not the nav list, when `initialSection`
+  // is a deep link (e.g. the server-status pill's `openSettings("server")`)
+  // rather than a generic open (⌘, / the toolbar gear, both of which default
+  // to "appearance" — see App.tsx's `openSettings`). There's no prop that
+  // distinguishes "explicitly opened to Appearance" from "defaulted to
+  // Appearance" by the time it reaches here — App.tsx's `settingsSection`
+  // state always holds a concrete section — so this reads it as "requested
+  // section isn't the default", which matches every current deep-link call
+  // site. A future deep link that specifically targets Appearance would
+  // start on the nav list instead of its content; harmless (one extra tap),
+  // and not a case that exists today.
+  const [mobileNavOpen, setMobileNavOpen] = useState(initialSection === "appearance");
+
   const visibleSections = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return SECTIONS;
@@ -256,6 +278,11 @@ export function Settings({
         SEARCH_INDEX.some((entry) => entry.section === s.id && entry.text.includes(q)),
     );
   }, [query]);
+
+  const selectSection = (id: SettingsSection) => {
+    setSection(id);
+    setMobileNavOpen(false);
+  };
 
   // P11 — this modal previously had none of UnifiedBoard.tsx's task-detail
   // drawer's focus management (focus-in, Tab trap, focus-restore). App.tsx
@@ -289,12 +316,27 @@ export function Settings({
         aria-label="Settings"
       >
         <div className="settings-modal-header">
+          {/* CSS-hidden outside the mobile breakpoint (see .settings-back-btn
+              in styles.css) — only mounted at all while mobile drill-down
+              has navigated into a section, so it never has to hide itself
+              on desktop via its own logic, just via the media query. */}
+          {!mobileNavOpen && (
+            <button
+              className="settings-back-btn"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Back to settings list"
+            >
+              <ChevronLeftIcon size={16} />
+            </button>
+          )}
           <span className="settings-modal-title">Settings</span>
           <button className="settings-modal-close" style={{ marginLeft: "auto" }} onClick={onClose}>
             <CloseIcon size={15} />
           </button>
         </div>
-        <div className="settings-modal-body">
+        <div
+          className={`settings-modal-body${mobileNavOpen ? "" : " settings-modal-body-showing-content"}`}
+        >
           <div className="settings-nav">
             <div className="settings-nav-search">
               <SearchIcon size={15} strokeWidth={1.9} />
@@ -309,7 +351,7 @@ export function Settings({
                 <button
                   key={s.id}
                   className={`settings-nav-item${s.id === section ? " active" : ""}`}
-                  onClick={() => setSection(s.id)}
+                  onClick={() => selectSection(s.id)}
                 >
                   {s.icon(16)}
                   <span style={{ flex: 1 }}>{s.title}</span>
