@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { coverageConfig } from "../vitest.shared.js";
 
 // Frontend's unit-test setup. Started deliberately minimal (Phase 4d, pure
 // logic modules only, e.g. reorder.ts) — the default environment stays
@@ -47,10 +48,9 @@ export default defineConfig({
     // deliberately: enforcement lives entirely in ci-cd.yml's
     // `coverage-fail-under`, same as the backend — an in-config threshold
     // would just be a second, independently-driftable failure mode.
-    coverage: {
-      provider: "v8",
-      reporter: ["text", "json-summary", "json", "html"],
-      reportsDirectory: "coverage",
-    },
+    // (See ../vitest.shared.ts for the full rationale — shared with the
+    // backend's own vitest.config.ts, which this object was byte-identical
+    // to before being extracted.)
+    coverage: coverageConfig,
   },
 });
