@@ -81,7 +81,7 @@ describe("skills routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "skills-test", cwd: projectCwd },
+      payload: { createDir: true, name: "skills-test", cwd: projectCwd },
     });
     return { app, projectId: created.json().id as number };
   }

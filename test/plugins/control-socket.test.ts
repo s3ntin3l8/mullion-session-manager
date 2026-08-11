@@ -733,7 +733,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         method: "POST",
         url: "/api/projects",
         headers: authHeaders,
-        payload: { name: "p", cwd: "/tmp" },
+        payload: { createDir: true, name: "p", cwd: "/tmp" },
       });
       const before = fakePtyChildren.length;
       const created = await app!.inject({
@@ -966,7 +966,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           method: "POST",
           url: "/api/projects",
           headers: { authorization: `Bearer ${TEST_TOKEN}` },
-          payload: { name: "p2", cwd: "/tmp" },
+          payload: { createDir: true, name: "p2", cwd: "/tmp" },
         });
         const socket = await fullScopeSocket();
         socket.write(
@@ -2280,7 +2280,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: authHeaders,
-            payload: { name: "p", cwd: "/tmp" },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
           });
           const socket = await fullScopeSocket();
           socket.write(
@@ -2327,7 +2327,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { name: "other", cwd: "/tmp/other" },
+            payload: { createDir: true, name: "other", cwd: "/tmp/other" },
           });
           const socket = await sessionScopeSocket(hookToken);
           socket.write(
@@ -2352,7 +2352,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { name: "p", cwd: "/tmp" },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
           });
           const socket = await fullScopeSocket();
           socket.write(
