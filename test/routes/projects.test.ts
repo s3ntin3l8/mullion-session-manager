@@ -40,11 +40,31 @@ vi.mock("node-pty", () => ({
   })),
 }));
 
+// Marker substring a target cwd can contain to make runGitInit's own `git
+// init` spawn fail deterministically (real `git init` essentially never
+// fails on a fresh, writable directory) — Hermes review, PR #620: the
+// route-level gitInit-failure wiring (`gitInitialized = result.success`)
+// was only covered at the service level (git-init.test.ts's own mocked
+// spawn), not through POST/PATCH /api/projects itself. Everything else
+// still passes through to the real `git` binary — see this file's own
+// `execFileSync("git", ["init", ...])` fixture setup elsewhere, unaffected
+// since that's a different child_process API than the mocked `spawn`.
+const GIT_INIT_FAIL_MARKER = "route-git-init-fail";
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
     spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
+      if (
+        command === "git" &&
+        args?.includes("init") &&
+        args?.some((a) => a.includes(GIT_INIT_FAIL_MARKER))
+      ) {
+        const ee = new EventEmitter();
+        setImmediate(() => ee.emit("close", 1));
+        return ee;
+      }
       if (command !== "systemd-run") return actual.spawn(command, args, options);
       const ee = new EventEmitter();
       setImmediate(() => ee.emit("exit", 0));
@@ -333,6 +353,24 @@ describe("projects route", () => {
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ dirCreated: false, gitInitialized: false });
     expect(fs.existsSync(path.join(cwd, ".git"))).toBe(false);
+    await app.close();
+  });
+
+  it("still 201s with gitInitialized: false when git init itself fails, on create — Hermes review, PR #620", async () => {
+    const app = await buildApp();
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), `${GIT_INIT_FAIL_MARKER}-`));
+    const cwd = path.join(base, "project");
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "git-init-fails", cwd, createDir: true, gitInit: true },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ dirCreated: true, gitInitialized: false });
+    // The directory itself still exists — a failed git init doesn't undo
+    // the directory creation or the project row.
+    expect(fs.existsSync(cwd)).toBe(true);
     await app.close();
   });
 

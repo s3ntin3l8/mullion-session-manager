@@ -1162,17 +1162,24 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     createProject: async (name, cwd, hostId, opts) => {
       const project = await api.createProject(name, cwd, hostId, opts);
-      // Errors from either call propagate to the caller (the modal owns
-      // presenting them) — including a refreshProjects() failure after a
-      // successful create, which the caller will see as if the create
-      // itself failed. A known wart, not worth a separate error channel.
-      await get().refreshProjects();
+      // Best-effort (Hermes review, PR #620 — same pattern as claimTask's
+      // own PR #281 fix): the create itself already succeeded and the
+      // caller already has `project` to act on — a transient
+      // refreshProjects() failure must not surface as "create failed" when
+      // it actually succeeded, which would both show a false error AND
+      // invite a retry that inserts a duplicate row (no unique constraint
+      // on projects.name/cwd).
+      void get()
+        .refreshProjects()
+        .catch(() => {});
       return project;
     },
 
     updateProject: async (id, patch) => {
       const project = await api.updateProject(id, patch);
-      await get().refreshProjects();
+      void get()
+        .refreshProjects()
+        .catch(() => {});
       return project;
     },
 

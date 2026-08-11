@@ -336,7 +336,8 @@ export function CreateProjectModal({
 
           {gitInitFailed && (
             <span className="create-modal-field-hint error">
-              Project added, but `git init` failed — you can initialize it manually later.
+              {isEdit ? "Project updated" : "Project added"}, but `git init` failed — you can
+              initialize it manually later.
             </span>
           )}
 
