@@ -284,7 +284,7 @@ verified — and therefore only acted on — while webhooks are enabled; a
 secret left over from a previous enable no longer verifies anything once
 disabled.
 
-`/ws/github`'s wire contract, unlike [`/ws/tasks`](tasks.md#the-tasks-panel)
+`/ws/github`'s wire contract, unlike [`/ws/tasks`](tasks.md#the-task-board)
 (which pushes every task event install-wide with no handshake): a client
 sends `{"type": "subscribe", "projectId": <number|string>}` per project it
 wants events for — one socket can subscribe to several projects — and the
@@ -399,14 +399,12 @@ project (see [`multi-host.md`](multi-host.md)) — 503.
 
 ## Configuration reference
 
-| Variable                      | Default        | Description                                                                                                                                 |
-| ----------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GITHUB_OAUTH_CLIENT_ID`      | _(empty)_      | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button. PAT connect works with no client id at all.               |
-| `GITHUB_POLL_INTERVAL_ACTIVE` | `15`           | Seconds between adaptive poller ticks when a repo has open PRs or running CI.                                                               |
-| `GITHUB_POLL_INTERVAL_QUIET`  | `60`           | Seconds between adaptive poller ticks when no repo has open PRs or running CI.                                                              |
-| `GITHUB_POLL_STALE_THRESHOLD` | `300`          | Seconds without a webhook delivery before the poller enters stalled mode and syncs at 30s.                                                  |
-| `MULLION_WEBHOOK_BASE_URL`    | _(empty)_      | Public https:// base URL for webhook delivery. Empty disables webhook support — polling alone is always active as a fallback.               |
-| `MULLION_WEBHOOK_SECRET`      | Auto-generated | HMAC-SHA256 secret for webhook payload verification. If unset on first enable, a random secret is generated and stored encrypted in the DB. |
+See [`configuration.md`](configuration.md)'s "GitHub integration" section
+for `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_POLL_INTERVAL_ACTIVE`,
+`GITHUB_POLL_INTERVAL_QUIET`, `GITHUB_POLL_STALE_THRESHOLD`,
+`MULLION_WEBHOOK_BASE_URL`, and `MULLION_WEBHOOK_SECRET` — that's the single
+copy of this table now, so it doesn't drift from `.env.example` the way it
+once did.
 
 ## Security
 

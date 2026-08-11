@@ -17,11 +17,13 @@ tour.
 `make install-hooks` wires up local git hooks that catch most of this
 automatically — `pre-commit` runs lint/typecheck (scoped to whichever
 workspace you touched) and `pre-push` additionally runs the full test suite
-and a **repo-wide** `prettier --check` (covers `frontend/` too, not just the
-backend). Run the same checks manually before opening a PR:
+(both workspaces) and a **repo-wide** `prettier --check` (covers
+`frontend/` too, not just the backend). Run the same checks manually before
+opening a PR — note `make lint`/`typecheck`/`test` are backend-only, so use
+the `:all` variants to also cover `frontend/`:
 
 ```bash
-make lint && make typecheck && make test && make format-check
+npm run lint:all && npm run typecheck:all && npm run test:all && make format-check
 ```
 
 If `make format-check` fails, `make format` applies the fix in place.
