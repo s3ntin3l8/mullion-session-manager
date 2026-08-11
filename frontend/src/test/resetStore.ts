@@ -31,14 +31,27 @@ type DashboardState = ReturnType<typeof useDashboardStore.getState>;
 // renames, or removes later — the same "typed against the real shape"
 // reasoning fixtures.ts's builders follow.
 //
-// This is a SHALLOW capture — PRISTINE_STATE holds references to the same
-// nested objects/arrays the live store starts with, not deep clones. Safe
-// as long as every mutation goes through `setState` (which always installs
-// fresh nested values, per zustand convention and this codebase's own
-// store.ts actions) rather than mutating a value in place
-// (`getState().sessions[0].x = ...`) — an in-place mutation before any
-// `setState` would corrupt this snapshot for every later test in the file.
-const PRISTINE_STATE: DashboardState = useDashboardStore.getState();
+// Recursively frozen (Hermes review, PR #623) rather than left as a plain
+// shallow capture: without this, PRISTINE_STATE would hold references to
+// the SAME nested objects/arrays the live store starts with, and a legal
+// zustand in-place mutation somewhere (`getState().sessions.push(...)`)
+// would silently corrupt this "pristine" snapshot for every later
+// `resetStore()` call in the file — precisely the cross-test leak this
+// helper exists to prevent. Freezing turns that from a silent corruption
+// into a loud `TypeError` at the offending mutation site (ESM modules run
+// in strict mode). Functions (the store's action methods) are left
+// unfrozen at the leaf level — freezing doesn't affect callability, only
+// reassignment of a function's own properties, which nothing here does.
+const PRISTINE_STATE: DashboardState = deepFreeze(useDashboardStore.getState());
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
 
 /**
  * Resets `useDashboardStore` to its pristine boot-time state, then applies

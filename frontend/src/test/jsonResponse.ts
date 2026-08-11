@@ -14,6 +14,12 @@
 // accident before since `JSON.stringify(undefined)` is `undefined`, itself
 // a valid empty-body `Response` argument). So this shared version adopts
 // the 204-aware behavior unconditionally instead of keeping both.
+//
+// Note the `body === undefined` branch is not 204-specific: any status
+// called with no body (e.g. `jsonResponse(200, undefined)`) also gets no
+// `content-type` header, unlike the old plain variant which always set it.
+// No current call site across the converted files does this, but a future
+// one should expect the header to be absent, not just for 204.
 export function jsonResponse(status: number, body?: unknown): Response {
   if (status === 204 || body === undefined) {
     return new Response(null, { status });
