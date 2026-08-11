@@ -383,6 +383,66 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #604 — resolveWithinRoots used to compare only the LEXICAL cwd
+  // against PROJECTS_ROOTS, so a symlink planted inside a root (something
+  // an authenticated caller with filesystem access to a project could do)
+  // passed the containment check on its lexical path even though it points
+  // straight outside every configured root. Before the fix this cwd would
+  // have 200'd (following the symlink transparently); the fix compares
+  // realpath'd paths instead, so this must now 400 exactly like the
+  // "outside PROJECTS_ROOTS" case above.
+  it("rejects a cwd that is a symlink inside PROJECTS_ROOTS pointing outside it (issue #604)", async () => {
+    const app = await buildApp();
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-symlink-escape-"));
+    const escapeLink = path.join(projectsRoot, "escape-link");
+    fs.symlinkSync(outsideRoots, escapeLink);
+
+    try {
+      const actions = await app.inject({
+        method: "GET",
+        url: `/internal/actions?cwd=${encodeURIComponent(escapeLink)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(actions.statusCode).toBe(400);
+
+      const dock = await app.inject({
+        method: "GET",
+        url: `/internal/dock?cwd=${encodeURIComponent(escapeLink)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(dock.statusCode).toBe(400);
+    } finally {
+      fs.rmSync(escapeLink, { force: true });
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    }
+  });
+
+  // The other direction: a symlink INSIDE a legitimate project dir, still
+  // resolving to somewhere INSIDE that same PROJECTS_ROOTS entry, must stay
+  // accepted — the realpath-based check must not reject ordinary intra-root
+  // symlinks the way it now rejects an escaping one.
+  it("still accepts a cwd whose symlink resolves to somewhere inside the same PROJECTS_ROOTS entry", async () => {
+    const app = await buildApp();
+    const realProject = path.join(projectsRoot, "real-project");
+    fs.mkdirSync(realProject, { recursive: true });
+    const innerLink = path.join(projectsRoot, "inner-link");
+    fs.symlinkSync(realProject, innerLink);
+
+    try {
+      const actions = await app.inject({
+        method: "GET",
+        url: `/internal/actions?cwd=${encodeURIComponent(innerLink)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(actions.statusCode).toBe(200);
+    } finally {
+      fs.rmSync(innerLink, { force: true });
+      fs.rmSync(realProject, { recursive: true, force: true });
+      await app.close();
+    }
+  });
+
   // U4 — the agent-side half of the dock-config write triple
   // (routes/dock-config.ts is the primary side). Same
   // resolveWithinRoots-containment shape as /internal/actions and

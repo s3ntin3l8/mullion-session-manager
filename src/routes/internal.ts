@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
@@ -558,6 +559,38 @@ const toggleSkillBodySchema = {
 };
 
 /**
+ * A symlink-tolerant realpath: resolves every symlink in the deepest
+ * EXISTING prefix of `absPath`, then appends whatever tail doesn't exist yet
+ * unchanged (a nonexistent path component can't itself be a symlink, so
+ * there's nothing left to resolve once the walk hits one). Node's own
+ * fs.realpathSync throws ENOENT the instant any component is missing, which
+ * doesn't work for resolveWithinRoots below — a project cwd or one of its
+ * `.crs/`-relative sinks is frequently a path that doesn't exist yet (a
+ * fresh project with no `.crs/dock.json` written, a PROJECTS_ROOTS entry
+ * that hasn't been created on this particular agent host). Mirrors the tail
+ * behavior of Python's `os.path.realpath(strict=False)`, applied one
+ * component at a time so each step's containment check sees the FULLY
+ * resolved parent, not a lexical guess (issue #604).
+ */
+function realpathExistingPrefix(absPath: string): string {
+  const root = path.parse(absPath).root;
+  const segments = absPath.slice(root.length).split(path.sep).filter(Boolean);
+  let real = root;
+  for (let i = 0; i < segments.length; i++) {
+    const candidate = path.join(real, segments[i]);
+    try {
+      real = realpathSync(candidate);
+    } catch {
+      // candidate doesn't exist (or isn't accessible) — every remaining
+      // segment is a path we'd be creating, not one that could already be a
+      // pre-planted symlink, so append the rest lexically and stop walking.
+      return path.join(real, ...segments.slice(i));
+    }
+  }
+  return real;
+}
+
+/**
  * Constrain a request-supplied cwd to this agent's own PROJECTS_ROOTS before
  * it reaches a filesystem read — the sole trust anchor a DB-less agent has,
  * and the same scope /internal/discover already surfaces. Returns the
@@ -570,6 +603,21 @@ const toggleSkillBodySchema = {
  * warn() calls) once these routes started passing a raw request query
  * param into project-config.ts's file reads.
  *
+ * The containment check below compares REAL (symlink-resolved) paths, not
+ * the lexical ones (issue #604) — a symlink planted inside a root (e.g. an
+ * authenticated caller who already has filesystem access to a project
+ * creating `<root>/escape -> /etc`, then naming `cwd=<root>/escape`) used to
+ * pass the old lexical `startsWith` check and hand every downstream sink a
+ * path that silently escaped the root the moment it followed that symlink.
+ * The function still RETURNS the lexical `resolved` value on success, not
+ * the real one — every existing call site expects (and several persist)
+ * that exact value, and legitimate uses (a `PROJECTS_ROOTS` entry that's
+ * itself a symlink to a bind mount, a project containing an intentional
+ * symlink to shared assets) are unaffected either way, since ordinary fs
+ * calls follow symlinks transparently regardless of which form of the path
+ * they're given. This only closes the CHECK's blind spot, not what gets
+ * returned.
+ *
  * Deliberately NOT applied to /internal/sessions or /internal/ws/attach
  * (session spawn/attach) below: a session's cwd is the whole point of the
  * feature and, like the primary's own unrestricted POST /api/projects cwd,
@@ -580,9 +628,12 @@ const toggleSkillBodySchema = {
  */
 function resolveWithinRoots(app: FastifyInstance, cwd: string): string | null {
   const resolved = path.resolve(expandHome(cwd));
-  const roots = parseProjectsRootsEnv(app.config.PROJECTS_ROOTS).map((root) => path.resolve(root));
+  const realResolved = realpathExistingPrefix(resolved);
+  const roots = parseProjectsRootsEnv(app.config.PROJECTS_ROOTS).map((root) =>
+    realpathExistingPrefix(path.resolve(root)),
+  );
   const withinRoots = roots.some(
-    (root) => resolved === root || resolved.startsWith(root + path.sep),
+    (root) => realResolved === root || realResolved.startsWith(root + path.sep),
   );
   return withinRoots ? resolved : null;
 }

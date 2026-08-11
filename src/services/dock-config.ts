@@ -265,9 +265,18 @@ export interface DockConfigReadResult {
 // Never throws: a genuine lstat failure (permission denied, a real TOCTOU
 // unlink) just means "can't tell, so no" — the same "unknown collapses to
 // the less alarming case" posture project-config.ts's own read side uses
-// throughout, appropriate here since this is purely an informational flag,
-// not a security gate (writeDockConfig's own O_NOFOLLOW is that gate, and
-// it can't be bypassed by this function ever getting the flag wrong).
+// throughout.
+//
+// Two different roles depending on the caller (narrowed per issue #605 —
+// this used to claim it was purely informational everywhere, which stopped
+// being true the moment writeDockConfig started gating `.crs/` with it):
+// purely informational for readDockConfig's own `isSymlink` field below (the
+// real gate on THAT path is writeDockConfig's O_NOFOLLOW open, which this
+// function can't weaken by ever getting the flag wrong), but a real security
+// gate when writeDockConfig calls this on the `.crs/` directory itself
+// before mkdirSync — O_NOFOLLOW only protects dock.json's own leaf
+// component, nothing checks `.crs/` otherwise, so a wrong `false` here would
+// let a write walk straight through a symlinked `.crs/`.
 function isSymlinkPath(filePath: string): boolean {
   try {
     // Dismissed in GHAS as alert #188 (js/path-injection, won't-fix) — see
@@ -366,10 +375,25 @@ export function writeDockConfig(cwd: string, controls: DockControl[]): void {
   const byteLength = Buffer.byteLength(content, "utf8");
   if (byteLength > MAX_DOCK_CONFIG_BYTES) throw new DockConfigTooLargeError(byteLength);
   const filePath = resolveDockConfigPath(cwd);
+  const dockDir = path.dirname(filePath);
+  // The O_NOFOLLOW open below only protects filePath's own leaf component
+  // (dock.json) — it says nothing about `.crs/`, the one intermediate
+  // directory mkdirSync can create or walk into (issue #605). A symlink
+  // planted at `.crs` (e.g. `.crs -> /etc`) would make mkdirSync's
+  // recursive:true a silent no-op (the target already "exists" as a
+  // directory, symlink-followed) and then the O_NOFOLLOW open below would
+  // happily write dock.json into wherever `.crs` actually points, since
+  // O_NOFOLLOW never inspects any ancestor of the path it's opening. Same
+  // authenticated-access-plus-pre-planted-symlink threat model as
+  // resolveDockConfigPath's own containment check — refusing here closes it
+  // for the one directory this module ever creates.
+  if (isSymlinkPath(dockDir)) {
+    throw new DockConfigSymlinkError(dockDir);
+  }
   // Same dismissal, same reasoning, as readDockConfig's own two flagged
   // calls above — see that comment for the full trust-boundary argument.
   // Dismissed in GHAS as alert #187.
-  mkdirSync(path.dirname(filePath), { recursive: true });
+  mkdirSync(dockDir, { recursive: true });
   let fd: number;
   try {
     // Dismissed in GHAS as alert #185.

@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  symlinkSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -305,6 +313,36 @@ describe("dock-config service", () => {
       } finally {
         rmSync(outside, { recursive: true, force: true });
       }
+    });
+
+    // Issue #605 — O_NOFOLLOW on the destination-path test above only
+    // protects dock.json's own leaf component. This is the OTHER half: a
+    // symlinked `.crs/` itself, the one intermediate directory writeDockConfig
+    // creates. Before this fix, mkdirSync(dockDir, {recursive:true}) treated
+    // the symlink-to-a-real-directory as "already exists" and silently
+    // walked through it, then the O_NOFOLLOW open below happily wrote
+    // dock.json into wherever `.crs` actually pointed.
+    it("refuses to write through a symlinked .crs/ directory, without creating anything at the real target", () => {
+      const outside = mkdtempSync(path.join(os.tmpdir(), "mullion-dock-config-outside-dir-"));
+      symlinkSync(outside, path.join(projectCwd, ".crs"));
+      try {
+        expect(() =>
+          writeDockConfig(projectCwd, [{ id: "x", title: "X", command: "echo x" }]),
+        ).toThrow(DockConfigSymlinkError);
+        expect(existsSync(path.join(outside, "dock.json"))).toBe(false);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    // A dangling `.crs/` symlink (target doesn't exist) must be refused the
+    // same way — isSymlinkPath (lstat-based) doesn't care whether the link
+    // resolves, only that it's an existing directory ENTRY that's a symlink.
+    it("refuses to write through a DANGLING symlinked .crs/ directory", () => {
+      symlinkSync(path.join(projectCwd, "nonexistent-target"), path.join(projectCwd, ".crs"));
+      expect(() =>
+        writeDockConfig(projectCwd, [{ id: "x", title: "X", command: "echo x" }]),
+      ).toThrow(DockConfigSymlinkError);
     });
   });
 
