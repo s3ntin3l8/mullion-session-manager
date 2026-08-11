@@ -332,9 +332,42 @@ export function UnifiedBoard({
     };
   }, [widthDragging]);
 
+  // Independent review — the initial useState above only applies
+  // clampDrawerWidth's floor (maxW: Infinity), since the ceiling depends on
+  // a container width that isn't measurable yet at that point in render.
+  // The actual ceiling was previously enforced ONLY at the start of a drag
+  // (onResizeMouseDown), so a width persisted from a wide monitor stayed
+  // completely unclamped on a later, narrower mount or window resize —
+  // exactly the "columns squeezed to zero" failure mode this feature's own
+  // clamp exists to prevent, just not caught until the user next dragged
+  // the handle. Re-clamping here (mount + every window resize) closes that
+  // gap. Uses the functional setState form so this doesn't need
+  // `drawerWidth` in its own deps — recomputing the clamp on every
+  // unrelated resize is cheap and idempotent, so no debounce.
+  useEffect(() => {
+    const clampToContainer = () => {
+      // Falsy (0 or undefined), not just undefined — a genuinely unmeasured
+      // container (no ref yet, or read before the browser's first layout
+      // pass) reports 0 too, and clamping against that would floor the
+      // drawer to MIN_DRAWER_WIDTH on every mount rather than skip until a
+      // real measurement is available.
+      const containerWidth = mainRef.current?.clientWidth;
+      if (!containerWidth) return;
+      const maxW = Math.max(MIN_DRAWER_WIDTH, containerWidth - MIN_COLUMNS_WIDTH);
+      setDrawerWidth((w) => clampDrawerWidth(w, maxW));
+    };
+    clampToContainer();
+    window.addEventListener("resize", clampToContainer);
+    return () => window.removeEventListener("resize", clampToContainer);
+  }, []);
+
   // Persist on drag end only (Dock.tsx's own precedent) — skips the initial
   // mount so a user who never touches the handle doesn't get the
-  // localStorage-or-default width silently written back.
+  // localStorage-or-default width silently written back. The mount-time
+  // clamp above is deliberately NOT persisted here either — it's cheap to
+  // recompute from the raw localStorage value + a live measurement on
+  // every mount, so there's nothing to gain from writing the clamped
+  // result back over the user's actual last-dragged width.
   const widthMountedRef = useRef(false);
   useEffect(() => {
     if (!widthMountedRef.current) {
@@ -826,8 +859,10 @@ function TaskCard({
   // in_progress (still not started, or actively running), reviewingAt once
   // it's waiting on a look, completedAt once it's settled, createdAt
   // otherwise (backlog/ready, never yet claimed). Task's own timestamps are
-  // ISO strings (api.ts) but formatRelativeAge takes epoch ms, same
-  // Date.parse TaskDetail.tsx's own footer already does.
+  // ISO strings (api.ts) but formatRelativeAge takes epoch ms — converted
+  // via Date.parse here vs. TaskDetail.tsx's own footer's `new
+  // Date(x).getTime()`; same numeric result for an ISO string, just a
+  // shorter spelling, not the literal same call.
   //
   // Hermes review — a Failed task also falls into that createdAt bucket,
   // but "how long has this been sitting here" is the wrong story for it: a
@@ -936,10 +971,15 @@ function TaskCard({
             name of its own: the title attribute is a hover-only tooltip, so
             a screen reader announced an unnamed graphic. aria-label carries
             the same text as the tooltip; the icon itself is aria-hidden so
-            it isn't announced a second time as an unlabeled image. */}
+            it isn't announced a second time as an unlabeled image.
+            Independent review — role="img" is the conventional pairing for
+            an aria-label on an icon-conveying-status element like this
+            (vs. a plain span, which has no implicit role for
+            aria-label to attach meaning to on every screen reader). */}
         {task.githubSyncError && (
           <span
             className="task-card-sync-error"
+            role="img"
             title={`GitHub sync: ${task.githubSyncError}`}
             aria-label={`GitHub sync error: ${task.githubSyncError}`}
           >

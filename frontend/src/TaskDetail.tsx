@@ -281,6 +281,7 @@ function TaskActions({ task }: { task: Task }) {
     retryTask,
     giveUpTask,
     updateTask,
+    refreshTasks,
     tasks,
   } = useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
@@ -310,9 +311,22 @@ function TaskActions({ task }: { task: Task }) {
   // left it wherever orderTasksForColumn's (boardOrder, id) sort happened
   // to place it in the new column — often not the end, and inconsistent
   // with the drag path. Reusing computeTaskReorder with a target index of
-  // "one past the target column's last task" is exactly what
-  // UnifiedBoard.tsx's own applyDrop does for a drop, so this now genuinely
-  // appends and matches drag placement.
+  // "one past the target column's last task" is the same REORDER MATH
+  // UnifiedBoard.tsx's own applyDrop uses for a drop.
+  //
+  // Independent review — that parity claim didn't extend to failure
+  // handling, which is NOT identical: applyDrop fires its updates
+  // concurrently, each with its own resync-on-failure (a failed PATCH
+  // there still calls refreshTasks(), so the store recovers whatever the
+  // server actually persisted). This loop awaits sequentially inside one
+  // try/catch instead — appropriate here, since a click-triggered action
+  // wants one definitive success/failure outcome rather than N
+  // independently-racing writes — but that also means a failure partway
+  // through a multi-update reindex (rare: only when the target column
+  // already has tasks needing their own boardOrder shifted) left earlier,
+  // already-successful writes unreflected in the store until the next
+  // regular poll. refreshTasks() in the catch closes that gap the same way
+  // applyDrop's own per-update .catch does.
   const moveStatus = async (status: "backlog" | "ready") => {
     setSubmitting(true);
     setError(null);
@@ -330,6 +344,7 @@ function TaskActions({ task }: { task: Task }) {
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to move task");
+      void refreshTasks();
     } finally {
       setSubmitting(false);
     }

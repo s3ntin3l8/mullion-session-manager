@@ -495,6 +495,24 @@ describe("TaskDetail backlog/ready move actions", () => {
     await user.click(screen.getByRole("button", { name: "Move to Ready" }));
     expect(screen.getByText("Failed to move task")).toBeInTheDocument();
   });
+
+  // Independent review — UnifiedBoard.tsx's own applyDrop resyncs the store
+  // from the server on a failed patch (its own per-update .catch calls
+  // refreshTasks()); an earlier version of this action didn't, so a failed
+  // write here left the store's optimistic-free state stale until the next
+  // regular poll. Only refreshTasks itself is asserted (not updateTask's
+  // call count/args, already covered by "appends to the end..." above) —
+  // this test is specifically about the resync-on-failure behavior.
+  it("resyncs from the server (refreshTasks) when updateTask rejects, same as the drag path", async () => {
+    updateTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "backlog" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    refreshTasks.mockClear();
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(refreshTasks).toHaveBeenCalled();
+  });
 });
 
 // #483

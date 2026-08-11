@@ -1109,6 +1109,31 @@ describe("UnifiedBoard detail drawer resize", () => {
     expect(localStorage.getItem("crs.taskDrawerWidth")).toBe("430");
   });
 
+  // Independent review — the only assertion the drag test above makes on
+  // localStorage is its FINAL value after mouseup, which would still pass
+  // even if the persist effect's own dependency array were accidentally
+  // widened to write on every intermediate value during the drag (exactly
+  // what its `eslint-disable-next-line react-hooks/exhaustive-deps` exists
+  // to prevent). This asserts the width var updates live but nothing is
+  // written to localStorage until the drag actually ends.
+  it("does not write to localStorage mid-drag, only once the drag ends", () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    fireEvent.click(screen.getByText("Open me"));
+
+    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
+    Object.defineProperty(main, "clientWidth", { value: 1600, configurable: true });
+    const handle = document.querySelector(".kanban-detail-resize-handle") as HTMLElement;
+
+    fireEvent.mouseDown(handle, { clientX: 800 });
+    fireEvent.mouseMove(window, { clientX: 750 });
+    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("430px");
+    expect(localStorage.getItem("crs.taskDrawerWidth")).toBeNull();
+
+    fireEvent.mouseUp(window);
+    expect(localStorage.getItem("crs.taskDrawerWidth")).toBe("430");
+  });
+
   it("clamps the drawer width so at least one column stays visible", () => {
     tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
