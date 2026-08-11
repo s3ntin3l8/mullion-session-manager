@@ -1,63 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { columnForSession, computeKanbanReorder, orderSessionsForColumn } from "./kanban.js";
-import type { Session } from "./api.js";
-
-function makeSession(overrides: Partial<Session>): Session {
-  return {
-    id: 1,
-    parentSessionId: null,
-    projectId: 1,
-    name: null,
-    nameLocked: false,
-    command: "claude code",
-    cwd: null,
-    liveCwd: null,
-    previewBranch: null,
-    kind: "terminal",
-    status: "active",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    lastAttachedAt: null,
-    alive: true,
-    subscriberCount: 0,
-    activity: "working",
-    lastActivityAt: Date.now(),
-    attention: false,
-    attentionAt: null,
-    lastTitle: null,
-    gateState: "idle",
-    gatePrompt: null,
-    promoteState: "idle",
-    promoteSummary: null,
-    promoteSuggestedBaseRef: null,
-    permissionState: "idle",
-    planState: "idle",
-    errorState: "idle",
-    endedReason: null,
-    liveBranch: null,
-    // Rich statuses (issue: extend surfaced session statuses).
-    exitCode: null,
-    attentionKind: null,
-    errorDetail: null,
-    lastAssistantMessage: null,
-    compactState: "idle",
-    subagentCount: 0,
-    subagents: [],
-    elicitationState: "idle",
-    elicitationServer: null,
-    lastTurnEndedAt: null,
-    stateRestored: true,
-    staleHooks: false,
-    restoredVersion: null,
-    sessionStatus: "working",
-    sessionStatusSeverity: "busy",
-    sessionStatusDetail: null,
-    sessionStatusAttentionRequired: false,
-    hookEmits: [],
-    pendingDevServerPort: null,
-    outstandingBackgroundTasks: [],
-    ...overrides,
-  };
-}
+import { makeSession } from "./test/fixtures.js";
 
 describe("columnForSession", () => {
   // columnForSession now keys off the backend-derived sessionStatusSeverity

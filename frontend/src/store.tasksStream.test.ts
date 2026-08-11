@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useDashboardStore } from "./store.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // #488's /ws/tasks integration — mirrors store.events.test.ts's convention:
 // mock the platform WebSocket (not tasksClient.ts itself) so this exercises
@@ -53,13 +54,6 @@ class MockWebSocket {
 }
 
 let instances: MockWebSocket[] = [];
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(status === 204 ? null : JSON.stringify(body), {
-    status,
-    headers: status === 204 ? undefined : { "content-type": "application/json" },
-  });
-}
 
 describe("store /ws/tasks integration (#488)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;

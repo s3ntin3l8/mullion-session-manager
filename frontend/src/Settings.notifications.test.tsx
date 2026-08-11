@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
 import { useDashboardStore } from "./store.js";
 import { DEFAULT_SETTINGS } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // #95 — the push channel row delegates the actual subscribe/unsubscribe
 // side effects to pushClient.ts (its own dedicated test file exercises
@@ -27,13 +28,6 @@ vi.mock("./pushClient.js", () => pushClientMock);
 // "Browser notification" channel toggle, and the matrix itself writes
 // through the store. Mirrors Settings.sessions.test.tsx's fake-in-memory-
 // backend pattern.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 // The matrix only renders rows for statuses `isStatusReachable` for the
 // union of detected agents' `emits` (sessionStatus.ts) — a fully-capable

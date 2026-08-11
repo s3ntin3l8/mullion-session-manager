@@ -5,13 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { DockConfigPanel } from "./DockConfigPanel.js";
 import type { DockConfigResult, DockControlInput } from "./api.js";
 import { useDashboardStore } from "./store.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 function makeResult(
   controls: DockControlInput[] = [],

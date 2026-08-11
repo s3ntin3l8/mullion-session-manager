@@ -3,18 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Real timers throughout — the component's 2s poll interval collides with
 // fake timers (testing-library's own findBy/waitFor polling relies on
 // setTimeout too, so faking it starves those), so tests that need a poll
 // tick just accept the real ~2s wall-clock cost via a bumped waitFor timeout.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 const PENDING = {
   status: "pending",

@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PromoteDialog } from "./PromoteDialog.js";
 import type { Project, Session } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Issue #271 — PromoteDialog reads two store actions directly; everything
 // else it needs (project/session/onClose) comes via props.
@@ -13,13 +14,6 @@ vi.mock("./store.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({ promoteSession: promoteSessionMock, declinePromote: declinePromoteMock }),
 }));
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 const PROJECT: Project = {
   id: 1,

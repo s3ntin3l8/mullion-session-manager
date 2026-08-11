@@ -5,13 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { SavedUrlModal } from "./SavedUrlModal.js";
 import { useDashboardStore } from "./store.js";
 import type { ProjectUrl } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 const URLS: ProjectUrl[] = [
   {

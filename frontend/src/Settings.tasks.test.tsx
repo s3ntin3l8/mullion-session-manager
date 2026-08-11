@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
 import { useDashboardStore } from "./store.js";
 import { DEFAULT_SETTINGS } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Task Master Settings UI follow-up — mirrors Settings.sessions.test.tsx's
 // fake-in-memory-backend pattern: a fake server over global fetch, not a
@@ -12,13 +13,6 @@ import { DEFAULT_SETTINGS } from "./api.js";
 // The section always shows/writes EFFECTIVE values, never the -1/"inherit"
 // sentinels stored settings.taskMaster actually carries — every assertion
 // here checks the resolved (env-default-or-override) value.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 const TEST_ENV = {
   enabled: false,

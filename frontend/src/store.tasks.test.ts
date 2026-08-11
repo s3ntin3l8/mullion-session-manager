@@ -3,13 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store.js";
 import type { Task } from "./api.js";
 import { DEFAULT_SETTINGS } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(status === 204 ? null : JSON.stringify(body), {
-    status,
-    headers: status === 204 ? undefined : { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
+import { makeTask } from "./test/fixtures.js";
 
 const SERVER_INFO_BASE = {
   version: "0.1.0",
@@ -44,43 +39,15 @@ function taskMasterEnv(enabled: boolean) {
   };
 }
 
-function makeTask(overrides: Partial<Task> = {}): Task {
-  return {
-    id: 1,
-    projectId: 1,
-    projectName: "demo",
-    issueNumber: 42,
-    title: "Fix the thing",
-    body: "details",
-    htmlUrl: "https://github.com/o/r/issues/42",
-    status: "ready",
-    boardOrder: 0,
-    sessionId: null,
-    seedDelivered: null,
-    reviewSessionId: null,
-    reviewSeedDelivered: null,
-    reviewFindings: null,
-    reviewRounds: 0,
-    worktreePath: null,
-    branchName: null,
-    agentCommand: null,
-    prUrl: null,
-    prNumber: null,
-    assignee: null,
-    failureReason: null,
-    githubSyncError: null,
-    baseSha: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    claimedAt: null,
-    startedAt: null,
-    reviewingAt: null,
-    completedAt: null,
-    ...overrides,
-  };
-}
-
-const TASK = makeTask();
+// This file's own default TASK carries a non-null issueNumber/body/htmlUrl
+// (a synced-from-GitHub task) — test/fixtures.ts's makeTask defaults to a
+// local-only task (all three null) instead, so those three are pinned back
+// here rather than at every call site below.
+const TASK = makeTask({
+  issueNumber: 42,
+  body: "details",
+  htmlUrl: "https://github.com/o/r/issues/42",
+});
 
 describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;

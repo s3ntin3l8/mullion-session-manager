@@ -4,13 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SkillsPanel } from "./SkillsPanel.js";
 import type { SkillInfo } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 function makeSkill(overrides: Partial<SkillInfo> = {}): SkillInfo {
   return {

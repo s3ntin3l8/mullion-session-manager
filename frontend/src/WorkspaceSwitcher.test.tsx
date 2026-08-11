@@ -8,7 +8,17 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { useDashboardStore } from "./store.js";
 import { api } from "./api.js";
 import type { Group, Workspace, Session, Task } from "./api.js";
+import { resetStore } from "./test/resetStore.js";
 
+// Deliberately NOT using test/fixtures.ts's makeSession/makeWorkspace here:
+// this file's own defaults are tightly coupled to each other (the
+// workspace's `layout` references session id 7 by id, and the session
+// itself defaults to a specific already-attached/idle/dormant shape) in a
+// way fixtures.ts's general-purpose defaults aren't — forcing this onto the
+// shared builder would mean overriding most fields at every call site
+// instead of the current zero-arg `makeWorkspace()`/`makeSession()`, a net
+// readability loss for a shape that (per the file-duplication survey) isn't
+// actually repeated anywhere else.
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
     id: 1,
@@ -79,7 +89,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 
 describe("WorkspaceSwitcher", () => {
   beforeEach(() => {
-    useDashboardStore.setState({
+    resetStore({
       workspaces: [makeWorkspace()],
       groups: [],
       sessions: [makeSession()],

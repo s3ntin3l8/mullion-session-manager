@@ -4,13 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AgentRulesPanel } from "./AgentRulesPanel.js";
 import type { AgentRuleTarget } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 function makeTarget(overrides: Partial<AgentRuleTarget> = {}): AgentRuleTarget {
   return {
