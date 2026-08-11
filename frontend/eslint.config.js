@@ -3,6 +3,7 @@ import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import globals from "globals";
+import { sharedTypescriptRules } from "../eslint.shared.js";
 
 export default tseslint.config(
   { ignores: ["dist/", "node_modules/"] },
@@ -15,13 +16,7 @@ export default tseslint.config(
       ecmaVersion: 2022,
       globals: globals.browser,
     },
-    rules: {
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
-      ],
-      "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
-    },
+    rules: sharedTypescriptRules,
   },
   // Issue #95 — public/push-sw.js runs in a ServiceWorkerGlobalScope, not a
   // browser window: self/clients/registration aren't in globals.browser
