@@ -113,7 +113,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "home", cwd: homeCwd },
+      payload: { createDir: true, name: "home", cwd: homeCwd },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ name: "home", cwd: homeCwd });
@@ -138,22 +138,22 @@ describe("projects route", () => {
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "zeta", cwd: "/tmp/z" },
+      payload: { createDir: true, name: "zeta", cwd: "/tmp/z" },
     });
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "Alpha", cwd: "/tmp/a" },
+      payload: { createDir: true, name: "Alpha", cwd: "/tmp/a" },
     });
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "beta", cwd: "/tmp/b" },
+      payload: { createDir: true, name: "beta", cwd: "/tmp/b" },
     });
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "Gamma", cwd: "/tmp/g" },
+      payload: { createDir: true, name: "Gamma", cwd: "/tmp/g" },
     });
 
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
@@ -167,44 +167,172 @@ describe("projects route", () => {
     await app.close();
   });
 
-  it("expands a leading ~ in cwd on create", async () => {
+  it("expands a leading ~ in cwd before validating, on create", async () => {
     const app = await buildApp();
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "tilde", cwd: "~/code/my-project" },
+      payload: { name: "tilde", cwd: "~/definitely-not-here/my-project" },
     });
-    expect(created.statusCode).toBe(201);
-    expect(created.json().cwd).toBe(path.join(os.homedir(), "code/my-project"));
+    // Proves expandHome() still runs before directory validation, with zero
+    // filesystem side effects — the error message carries the *expanded*
+    // path, not the literal `~/...` one. Not `cwd: "~"` itself: that would
+    // register the developer's real $HOME and push it through
+    // maybeRegisterProjectWebhook (reads a git remote) — live-fire on a
+    // dev box.
+    expect(created.statusCode).toBe(400);
+    expect(created.json().code).toBe("PROJECT_PARENT_MISSING");
+    expect(created.json().message).toContain(path.join(os.homedir(), "definitely-not-here"));
     await app.close();
   });
 
-  it("creates the project directory on disk on create", async () => {
+  it("only creates the directory when createDir is set, on create", async () => {
     const app = await buildApp();
     const cwd = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-create-")), "project");
     expect(fs.existsSync(cwd)).toBe(false);
-    const created = await app.inject({
+
+    const withoutFlag = await app.inject({
       method: "POST",
       url: "/api/projects",
       payload: { name: "mkdir-test", cwd },
     });
-    expect(created.statusCode).toBe(201);
+    expect(withoutFlag.statusCode).toBe(400);
+    expect(withoutFlag.json().code).toBe("PROJECT_DIR_MISSING");
+    expect(fs.existsSync(cwd)).toBe(false);
+    // No orphan row from the rejected create.
+    const listedAfterReject = await app.inject({ method: "GET", url: "/api/projects" });
+    expect(listedAfterReject.json().some((p: { cwd: string }) => p.cwd === cwd)).toBe(false);
+
+    const withFlag = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "mkdir-test", cwd, createDir: true },
+    });
+    expect(withFlag.statusCode).toBe(201);
+    expect(withFlag.json()).toMatchObject({ dirCreated: true, gitInitialized: false });
     expect(fs.existsSync(cwd)).toBe(true);
     await app.close();
   });
 
-  it("succeeds even when mkdir fails on create", async () => {
+  it("400s when the path exists as a file, on create", async () => {
     const app = await buildApp();
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-fail-create-"));
     const cwd = path.join(parent, "project");
-    // Create a regular file so recursive mkdir fails with ENOTDIR
     fs.writeFileSync(cwd, "i am a file, not a directory", "utf-8");
-    const created = await app.inject({
+
+    const withoutFlag = await app.inject({
       method: "POST",
       url: "/api/projects",
       payload: { name: "mkdir-fail", cwd },
     });
+    expect(withoutFlag.statusCode).toBe(400);
+    expect(withoutFlag.json().code).toBe("PROJECT_PATH_NOT_A_DIRECTORY");
+
+    const withFlag = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "mkdir-fail", cwd, createDir: true },
+    });
+    expect(withFlag.statusCode).toBe(400);
+    expect(withFlag.json().code).toBe("PROJECT_PATH_NOT_A_DIRECTORY");
+    await app.close();
+  });
+
+  it("400s with PROJECT_PARENT_MISSING (not PROJECT_DIR_MISSING) when the parent is also missing, even with createDir — the leaf-only guarantee", async () => {
+    const app = await buildApp();
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "leaf-only-"));
+    const cwd = path.join(base, "a", "b");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "leaf-only", cwd, createDir: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("PROJECT_PARENT_MISSING");
+    // Only the leaf may ever be created — never an ancestor tree.
+    expect(fs.existsSync(path.join(base, "a"))).toBe(false);
+    await app.close();
+  });
+
+  it("createDir against an already-existing directory is idempotent (dirCreated: false), on create", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-existing-"));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "mkdir-existing", cwd, createDir: true },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().dirCreated).toBe(false);
+    await app.close();
+  });
+
+  it("400s PROJECT_PATH_IS_SYMLINK for a dangling symlink even with createDir, and never creates a directory at the symlink's target", async () => {
+    const app = await buildApp();
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "dangling-symlink-"));
+    const cwd = path.join(parent, "project");
+    const target = path.join(parent, "nonexistent-target");
+    fs.symlinkSync(target, cwd, "dir");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "dangling", cwd, createDir: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("PROJECT_PATH_IS_SYMLINK");
+    expect(fs.existsSync(target)).toBe(false);
+    await app.close();
+  });
+
+  it("createDir on a remote hostId 400s with PROJECT_DIR_REMOTE_UNSUPPORTED", async () => {
+    const app = await buildApp();
+    const host = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "remote-createdir", baseUrl: "http://127.0.0.1:59999", token: "t" },
+    });
+    const hostId = host.json().id as string;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "remote-createdir", cwd: "/remote/path", hostId, createDir: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("PROJECT_DIR_REMOTE_UNSUPPORTED");
+    await app.close();
+  });
+
+  it("gitInit runs git init only on a freshly-created directory, on create", async () => {
+    const app = await buildApp();
+    const cwd = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "git-init-")), "project");
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "git-init-fresh", cwd, createDir: true, gitInit: true },
+    });
     expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ dirCreated: true, gitInitialized: true });
+    expect(fs.existsSync(path.join(cwd, ".git"))).toBe(true);
+    await app.close();
+  });
+
+  it("gitInit does not run on an already-existing directory, on create", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "git-init-existing-"));
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "git-init-existing", cwd, createDir: true, gitInit: true },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ dirCreated: false, gitInitialized: false });
+    expect(fs.existsSync(path.join(cwd, ".git"))).toBe(false);
     await app.close();
   });
 
@@ -231,7 +359,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "throwaway", cwd: "/tmp" },
+      payload: { createDir: true, name: "throwaway", cwd: "/tmp" },
     });
     const { id } = created.json();
 
@@ -247,14 +375,14 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "before", cwd: "/tmp/before" },
+        payload: { createDir: true, name: "before", cwd: "/tmp/before" },
       });
       const { id } = created.json();
 
       const patched = await app.inject({
         method: "PATCH",
         url: `/api/projects/${id}`,
-        payload: { name: "after", cwd: "/tmp/after" },
+        payload: { createDir: true, name: "after", cwd: "/tmp/after" },
       });
       expect(patched.statusCode).toBe(200);
       expect(patched.json()).toMatchObject({ id, name: "after", cwd: "/tmp/after" });
@@ -262,54 +390,70 @@ describe("projects route", () => {
       await app.close();
     });
 
-    it("expands a leading ~ in cwd on update", async () => {
+    it("expands a leading ~ in cwd before validating, on update", async () => {
       const app = await buildApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "tilde-edit", cwd: "/tmp/tilde-edit" },
+        payload: { createDir: true, name: "tilde-edit", cwd: "/tmp/tilde-edit" },
       });
       const { id } = created.json();
 
       const patched = await app.inject({
         method: "PATCH",
         url: `/api/projects/${id}`,
-        payload: { cwd: "~/code/edited-project" },
+        payload: { cwd: "~/definitely-not-here-update/edited-project" },
       });
-      expect(patched.statusCode).toBe(200);
-      expect(patched.json().cwd).toBe(path.join(os.homedir(), "code/edited-project"));
+      // Same rationale as the create-side version of this test: proves
+      // expandHome() runs before validation, with zero filesystem side
+      // effects, rather than registering a directory under the real $HOME.
+      expect(patched.statusCode).toBe(400);
+      expect(patched.json().code).toBe("PROJECT_PARENT_MISSING");
+      expect(patched.json().message).toContain(
+        path.join(os.homedir(), "definitely-not-here-update"),
+      );
 
       await app.close();
     });
 
-    it("creates the project directory on disk on update", async () => {
+    it("only creates the directory when createDir is set, on update", async () => {
       const app = await buildApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "mkdir-update", cwd: "/tmp/mkdir-update-init" },
+        payload: { createDir: true, name: "mkdir-update", cwd: "/tmp/mkdir-update-init" },
       });
       const { id } = created.json();
       const newCwd = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-update-")), "project");
       expect(fs.existsSync(newCwd)).toBe(false);
 
-      const patched = await app.inject({
+      const withoutFlag = await app.inject({
         method: "PATCH",
         url: `/api/projects/${id}`,
         payload: { cwd: newCwd },
       });
-      expect(patched.statusCode).toBe(200);
+      expect(withoutFlag.statusCode).toBe(400);
+      expect(withoutFlag.json().code).toBe("PROJECT_DIR_MISSING");
+      expect(fs.existsSync(newCwd)).toBe(false);
+
+      const withFlag = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { cwd: newCwd, createDir: true },
+      });
+      expect(withFlag.statusCode).toBe(200);
+      expect(withFlag.json()).toMatchObject({ dirCreated: true, gitInitialized: false });
       expect(fs.existsSync(newCwd)).toBe(true);
 
       await app.close();
     });
 
-    it("succeeds even when mkdir fails on update", async () => {
+    it("400s when the path exists as a file, on update", async () => {
       const app = await buildApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "mkdir-fail-update", cwd: "/tmp/mkdir-fail-update-init" },
+        payload: { createDir: true, name: "mkdir-fail-update", cwd: "/tmp/mkdir-fail-update-init" },
       });
       const { id } = created.json();
       const parent = fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-fail-update-"));
@@ -319,9 +463,52 @@ describe("projects route", () => {
       const patched = await app.inject({
         method: "PATCH",
         url: `/api/projects/${id}`,
-        payload: { cwd: newCwd },
+        payload: { cwd: newCwd, createDir: true },
+      });
+      expect(patched.statusCode).toBe(400);
+      expect(patched.json().code).toBe("PROJECT_PATH_NOT_A_DIRECTORY");
+
+      await app.close();
+    });
+
+    it("createDir without cwd 400s with PROJECT_DIR_FLAG_WITHOUT_CWD", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "flag-without-cwd", cwd: "/tmp/flag-without-cwd" },
+      });
+      const { id } = created.json();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { createDir: true },
+      });
+      expect(patched.statusCode).toBe(400);
+      expect(patched.json().code).toBe("PROJECT_DIR_FLAG_WITHOUT_CWD");
+
+      await app.close();
+    });
+
+    it("does not re-validate cwd when it's unchanged, so a project whose directory was since deleted can still be renamed", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "unchanged-cwd-"));
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "rename-me", cwd },
+      });
+      const { id } = created.json();
+      fs.rmSync(cwd, { recursive: true, force: true });
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { name: "renamed", cwd },
       });
       expect(patched.statusCode).toBe(200);
+      expect(patched.json()).toMatchObject({ id, name: "renamed", cwd });
 
       await app.close();
     });
@@ -331,7 +518,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "partial-before", cwd: "/tmp/partial" },
+        payload: { createDir: true, name: "partial-before", cwd: "/tmp/partial" },
       });
       const { id } = created.json();
 
@@ -351,7 +538,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "dev-server", cwd: "/tmp/dev-server" },
+        payload: { createDir: true, name: "dev-server", cwd: "/tmp/dev-server" },
       });
       const { id } = created.json();
 
@@ -387,7 +574,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "agent-defaults", cwd: "/tmp/agent-defaults" },
+        payload: { createDir: true, name: "agent-defaults", cwd: "/tmp/agent-defaults" },
       });
       const { id } = created.json();
       expect(created.json().defaultAgent).toBeNull();
@@ -418,7 +605,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "bad-agent-default", cwd: "/tmp/bad-agent-default" },
+        payload: { createDir: true, name: "bad-agent-default", cwd: "/tmp/bad-agent-default" },
       });
       const { id } = created.json();
 
@@ -437,7 +624,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "bad-dev-server", cwd: "/tmp/bad-dev-server" },
+        payload: { createDir: true, name: "bad-dev-server", cwd: "/tmp/bad-dev-server" },
       });
       const { id } = created.json();
 
@@ -474,7 +661,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "empty-body", cwd: "/tmp/empty-body" },
+        payload: { createDir: true, name: "empty-body", cwd: "/tmp/empty-body" },
       });
       const { id } = created.json();
 
@@ -522,7 +709,7 @@ describe("projects route", () => {
       await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "git-repo", cwd: path.join(root, "git-repo") },
+        payload: { createDir: true, name: "git-repo", cwd: path.join(root, "git-repo") },
       });
 
       const res = await app.inject({ method: "GET", url: "/api/projects/discover" });
@@ -594,7 +781,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "no-dock", cwd: projectCwd },
+        payload: { createDir: true, name: "no-dock", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -624,7 +811,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "with-dock", cwd: projectCwd },
+        payload: { createDir: true, name: "with-dock", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -674,7 +861,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "no-remote", cwd: projectCwd },
+        payload: { createDir: true, name: "no-remote", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -698,7 +885,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "no-token", cwd: projectCwd },
+        payload: { createDir: true, name: "no-token", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -757,7 +944,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "connected", cwd: projectCwd },
+        payload: { createDir: true, name: "connected", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -833,7 +1020,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "no-remote", cwd: projectCwd },
+        payload: { createDir: true, name: "no-remote", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -857,7 +1044,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "no-cache", cwd: projectCwd },
+        payload: { createDir: true, name: "no-cache", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -896,7 +1083,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "empty-prs", cwd: projectCwd },
+        payload: { createDir: true, name: "empty-prs", cwd: projectCwd },
       });
 
       // Prime the cache as the poller would.
@@ -942,7 +1129,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "cached-prs", cwd: projectCwd },
+        payload: { createDir: true, name: "cached-prs", cwd: projectCwd },
       });
 
       const { setRepoPRsStatus } = await import("../../src/services/github.js");
@@ -1012,7 +1199,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "branch-filter-prs", cwd: projectCwd },
+        payload: { createDir: true, name: "branch-filter-prs", cwd: projectCwd },
       });
 
       const { setRepoPRsStatus } = await import("../../src/services/github.js");
@@ -1285,7 +1472,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "jobs-connected", cwd: projectCwd },
+        payload: { createDir: true, name: "jobs-connected", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -1355,7 +1542,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-real-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-real-repo", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
 
@@ -1381,7 +1568,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-not-a-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-not-a-repo", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
 
@@ -1428,7 +1615,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-transiently-broken", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-transiently-broken", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
 
@@ -1497,12 +1684,12 @@ describe("projects route", () => {
       const repo = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-mix-repo", cwd: repoDir },
+        payload: { createDir: true, name: "batch-mix-repo", cwd: repoDir },
       });
       const nonRepo = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-mix-nonrepo", cwd: nonRepoDir },
+        payload: { createDir: true, name: "batch-mix-nonrepo", cwd: nonRepoDir },
       });
       const repoId = repo.json().id as number;
       const nonRepoId = nonRepo.json().id as number;
@@ -1568,7 +1755,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-session-project", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-session-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
 
@@ -1651,7 +1838,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-session-livecwd-project", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-session-livecwd-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
 
@@ -1721,7 +1908,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-session-badlive-project", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-session-badlive-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -1757,7 +1944,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-session-nonrepo", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-session-nonrepo", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -1843,7 +2030,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-session-foreign-project", cwd: projectCwd },
+        payload: { createDir: true, name: "batch-session-foreign-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -1898,7 +2085,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "not-a-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "not-a-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -1941,7 +2128,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "real-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "real-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -1990,7 +2177,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "fresh-status-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "fresh-status-repo", cwd: projectCwd },
       });
       const projectId = created.json().id;
 
@@ -2080,7 +2267,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "transiently-broken-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "transiently-broken-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2108,7 +2295,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "not-a-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "not-a-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2156,7 +2343,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "real-repo-branches", cwd: projectCwd },
+        payload: { createDir: true, name: "real-repo-branches", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2211,7 +2398,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "detail-repo-branches", cwd: projectCwd },
+        payload: { createDir: true, name: "detail-repo-branches", cwd: projectCwd },
       });
 
       const withoutDetail = await app.inject({
@@ -2282,7 +2469,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "fetch-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "fetch-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2338,7 +2525,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "branch-delete-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "branch-delete-repo", cwd: projectCwd },
       });
       return { projectCwd, projectId: created.json().id as number };
     }
@@ -2547,7 +2734,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "worktree-remove-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "worktree-remove-repo", cwd: projectCwd },
       });
       return { projectCwd, worktreePath, projectId: created.json().id as number };
     }
@@ -2746,7 +2933,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "worktree-prune-repo", cwd: projectCwd },
+        payload: { createDir: true, name: "worktree-prune-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2823,7 +3010,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "diff-stats-project", cwd: projectCwd },
+        payload: { createDir: true, name: "diff-stats-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -2855,7 +3042,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "diff-stats-nonrepo", cwd: projectCwd },
+        payload: { createDir: true, name: "diff-stats-nonrepo", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -2906,7 +3093,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "diff-stats-clean", cwd: projectCwd },
+        payload: { createDir: true, name: "diff-stats-clean", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -3010,7 +3197,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "diff-stats-base-project", cwd: projectCwd },
+        payload: { createDir: true, name: "diff-stats-base-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -3113,7 +3300,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "diff-stats-auto-project", cwd: projectCwd },
+        payload: { createDir: true, name: "diff-stats-auto-project", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -3173,7 +3360,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name, cwd: projectCwd },
+        payload: { createDir: true, name, cwd: projectCwd },
       });
       return { projectId: created.json().id as number, projectCwd };
     }
@@ -3243,7 +3430,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "git-file-diff-nonrepo", cwd: projectCwd },
+        payload: { createDir: true, name: "git-file-diff-nonrepo", cwd: projectCwd },
       });
       const projectId = created.json().id as number;
 
@@ -3269,7 +3456,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "branchy", cwd: projectCwd },
+        payload: { createDir: true, name: "branchy", cwd: projectCwd },
       });
 
       const listed = await app.inject({ method: "GET", url: "/api/projects" });
@@ -3330,6 +3517,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          createDir: true,
           name: "still-fine-local",
           cwd: fs.mkdtempSync(path.join(os.tmpdir(), "dangling-hostid-sibling-")),
         },
@@ -3403,7 +3591,7 @@ describe("projects route", () => {
       await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "same-path-local", cwd: "/shared/path" },
+        payload: { createDir: true, name: "same-path-local", cwd: "/shared/path" },
       });
 
       const res = await app.inject({
@@ -3459,7 +3647,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "untracked-dock", cwd: "/tmp" },
+        payload: { createDir: true, name: "untracked-dock", cwd: "/tmp" },
       });
       const projectId = created.json().id as number;
 
@@ -3506,7 +3694,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "mixed-sessions", cwd: "/tmp" },
+        payload: { createDir: true, name: "mixed-sessions", cwd: "/tmp" },
       });
       const projectId = created.json().id as number;
 
@@ -3704,7 +3892,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "wiring-create", cwd },
+        payload: { createDir: true, name: "wiring-create", cwd },
       });
       expect(created.statusCode).toBe(201);
       const projectId = created.json().id as number;
@@ -3730,7 +3918,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "wiring-disabled", cwd },
+        payload: { createDir: true, name: "wiring-disabled", cwd },
       });
       expect(created.statusCode).toBe(201);
       expect(fetchMock).not.toHaveBeenCalled();
@@ -3755,7 +3943,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "wiring-patch", cwd: originalCwd },
+        payload: { createDir: true, name: "wiring-patch", cwd: originalCwd },
       });
       const projectId = created.json().id as number;
       fetchMock.mockClear();
@@ -3763,7 +3951,7 @@ describe("projects route", () => {
       const patched = await app.inject({
         method: "PATCH",
         url: `/api/projects/${projectId}`,
-        payload: { cwd: newCwd },
+        payload: { createDir: true, cwd: newCwd },
       });
       expect(patched.statusCode).toBe(200);
       expect(fetchMock).toHaveBeenCalled();
@@ -3823,14 +4011,14 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "wiring-move", cwd: originalCwd },
+        payload: { createDir: true, name: "wiring-move", cwd: originalCwd },
       });
       const projectId = created.json().id as number;
 
       const patched = await app.inject({
         method: "PATCH",
         url: `/api/projects/${projectId}`,
-        payload: { cwd: newCwd },
+        payload: { createDir: true, cwd: newCwd },
       });
       expect(patched.statusCode).toBe(200);
 
@@ -3871,7 +4059,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "wiring-delete", cwd },
+        payload: { createDir: true, name: "wiring-delete", cwd },
       });
       const projectId = created.json().id as number;
       fetchMock.mockClear();

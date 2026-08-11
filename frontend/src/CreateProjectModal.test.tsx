@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CreateProjectModal } from "./CreateProjectModal.js";
-import { api } from "./api.js";
+import { api, ApiError } from "./api.js";
 import type { Launcher } from "./api.js";
 import type * as ApiModule from "./api.js";
 
@@ -268,13 +268,209 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     await user.selectOptions(select, "claude");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(onCreate).toHaveBeenCalledWith(
-      "mullion",
-      "/home/x/mullion",
-      undefined,
-      null,
-      "claude",
-      null,
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "mullion",
+      cwd: "/home/x/mullion",
+      hostId: undefined,
+      devServerUrl: null,
+      defaultAgent: "claude",
+      defaultReviewAgent: null,
+    });
+  });
+});
+
+describe("CreateProjectModal — confirm-first directory creation and error handling", () => {
+  it("renders the ApiError message on failure and does not call onClose", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError("Cannot access /x: permission denied.", 400, "PROJECT_DIR_UNREADABLE"),
+      );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/x" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+
+    expect(await screen.findByText("Cannot access /x: permission denied.")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Create folder and add project" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers Create folder for PROJECT_DIR_MISSING", async () => {
+    const onCreate = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError("Directory /new does not exist.", 400, "PROJECT_DIR_MISSING"),
+      );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/new" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Create folder and add project" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not offer Create folder for PROJECT_PARENT_MISSING — the typo case", async () => {
+    const onCreate = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError("Parent directory /nope does not exist.", 400, "PROJECT_PARENT_MISSING"),
+      );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/nope/x" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+
+    await screen.findByText("Parent directory /nope does not exist.");
+    expect(
+      screen.queryByRole("button", { name: "Create folder and add project" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Create folder re-invokes onCreate with createDir: true and closes on success", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError("Directory /new does not exist.", 400, "PROJECT_DIR_MISSING"),
+      )
+      .mockResolvedValueOnce({ dirCreated: true, gitInitialized: false });
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/new" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(await screen.findByRole("button", { name: "Create folder and add project" }));
+
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ createDir: true, gitInit: false }),
     );
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("forwards gitInit: true only when the checkbox is checked", async () => {
+    const onCreate = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError("Directory /new does not exist.", 400, "PROJECT_DIR_MISSING"),
+      )
+      .mockResolvedValueOnce({ dirCreated: true, gitInitialized: true });
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/new" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(await screen.findByRole("checkbox", { name: /initialize a git repository/i }));
+    await user.click(screen.getByRole("button", { name: "Create folder and add project" }));
+
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ createDir: true, gitInit: true }),
+    );
+  });
+
+  it("shows a non-blocking warning and does not close when git init fails", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError("Directory /new does not exist.", 400, "PROJECT_DIR_MISSING"),
+      )
+      .mockResolvedValueOnce({ dirCreated: true, gitInitialized: false });
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/new" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(await screen.findByRole("checkbox", { name: /initialize a git repository/i }));
+    await user.click(screen.getByRole("button", { name: "Create folder and add project" }));
+
+    expect(await screen.findByText(/git init.*failed/i)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("disables the submit button while the request is in flight", async () => {
+    let resolveCreate: (
+      v: { dirCreated?: boolean; gitInitialized?: boolean } | undefined,
+    ) => void = () => {};
+    const onCreate = vi.fn(
+      () =>
+        new Promise<{ dirCreated?: boolean; gitInitialized?: boolean } | undefined>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/x" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+
+    expect(screen.getByRole("button", { name: "Adding…" })).toBeDisabled();
+    resolveCreate(undefined);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Adding…" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("editing the path clears the error and hides the affordance", async () => {
+    const onCreate = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError("Directory /new does not exist.", 400, "PROJECT_DIR_MISSING"),
+      );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/new" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await screen.findByRole("button", { name: "Create folder and add project" });
+
+    await user.type(screen.getByPlaceholderText("~/code/my-project"), "x");
+
+    expect(
+      screen.queryByRole("button", { name: "Create folder and add project" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Directory /new does not exist.")).not.toBeInTheDocument();
+  });
+
+  it("calls onClose on a plain successful create (no createDir involved)", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/x" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("edit mode still submits name/cwd/devServerUrl unchanged (guards the object refactor)", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        initialDevServerUrl="3000"
+        onClose={onClose}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "mullion",
+      cwd: "/home/x/mullion",
+      hostId: undefined,
+      devServerUrl: "3000",
+      defaultAgent: null,
+      defaultReviewAgent: null,
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

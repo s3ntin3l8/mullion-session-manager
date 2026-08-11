@@ -99,9 +99,13 @@ Backend API smoke test:
 curl localhost:3000/health
 curl localhost:3000/ready
 curl -X POST localhost:3000/api/projects -H 'content-type: application/json' \
-  -d '{"name":"my-project","cwd":"/home/me/projects/my-project"}'
+  -d '{"name":"my-project","cwd":"/home/me/projects/my-project","createDir":true}'
 curl localhost:3000/api/projects
 ```
+
+`cwd` must already exist unless `createDir: true` is set, in which case only
+the final path component is created (the parent directory must already
+exist).
 
 ## 📁 Structure
 

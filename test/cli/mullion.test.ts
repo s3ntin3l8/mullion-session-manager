@@ -175,7 +175,7 @@ describe("mullion.mjs (Phase 4, #134 PR6, spawned entry point)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/tmp" },
+      payload: { createDir: true, name: "p", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
 
@@ -228,7 +228,7 @@ describe("mullion.mjs (Phase 4, #134 PR6, spawned entry point)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/tmp" },
+      payload: { createDir: true, name: "p", cwd: "/tmp" },
     });
     const before = fakePtyChildren.length;
     const created = await app.inject({

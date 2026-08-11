@@ -3,6 +3,8 @@ import { api, DEFAULT_SETTINGS } from "./api.js";
 import type {
   AppSettings,
   CodexHookTrust,
+  CreateProjectDirOptions,
+  CreateProjectResult,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -509,13 +511,19 @@ interface DashboardState {
   refreshWorkspaces: () => Promise<void>;
   refreshGroups: () => Promise<void>;
   refreshHosts: () => Promise<void>;
-  createProject: (name: string, cwd: string, hostId?: string) => Promise<Project>;
+  createProject: (
+    name: string,
+    cwd: string,
+    hostId?: string,
+    opts?: CreateProjectDirOptions,
+  ) => Promise<CreateProjectResult>;
   updateProject: (
     id: number,
     patch: Partial<
       Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
-    >,
-  ) => Promise<void>;
+    > &
+      CreateProjectDirOptions,
+  ) => Promise<CreateProjectResult>;
   deleteProject: (id: number) => Promise<void>;
   refreshProjectUrls: (projectId: number) => Promise<void>;
   addProjectUrl: (
@@ -1152,15 +1160,20 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       return task;
     },
 
-    createProject: async (name, cwd, hostId) => {
-      const project = await api.createProject(name, cwd, hostId);
+    createProject: async (name, cwd, hostId, opts) => {
+      const project = await api.createProject(name, cwd, hostId, opts);
+      // Errors from either call propagate to the caller (the modal owns
+      // presenting them) — including a refreshProjects() failure after a
+      // successful create, which the caller will see as if the create
+      // itself failed. A known wart, not worth a separate error channel.
       await get().refreshProjects();
       return project;
     },
 
     updateProject: async (id, patch) => {
-      await api.updateProject(id, patch);
+      const project = await api.updateProject(id, patch);
       await get().refreshProjects();
+      return project;
     },
 
     deleteProject: async (id) => {

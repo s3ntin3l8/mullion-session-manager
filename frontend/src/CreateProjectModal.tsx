@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./icons.js";
-import { api, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
+import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type { Host, Launcher } from "./api.js";
 import { Dropdown } from "./settings/primitives.js";
 
@@ -8,6 +8,14 @@ import { Dropdown } from "./settings/primitives.js";
 // tier) in the Dropdown below, which is string-only — converted to/from
 // `null` at the CreateProjectModal boundary.
 const UNSET_AGENT = "";
+
+// The one 400 `code` (see project-dir.ts / projects.ts) that unlocks the
+// "Create folder" affordance below — every other code (parent missing, path
+// is a file, symlink, permission denied, remote-host-unsupported) is a dead
+// end shown as plain error text, deliberately: offering to build a
+// directory tree for a typo'd path is exactly what leaf-only creation is
+// meant to prevent.
+const CREATE_DIR_CODE = "PROJECT_DIR_MISSING";
 
 interface CreateProjectModalProps {
   onClose: () => void;
@@ -17,18 +25,27 @@ interface CreateProjectModalProps {
   // `devServerUrl` is the reverse: only ever meaningful in "edit" mode (see
   // the field below) — `null` clears a previously-set value, `undefined`
   // (create mode) means "not applicable, ignore this argument".
-  onCreate: (
-    name: string,
-    cwd: string,
-    hostId?: string,
-    devServerUrl?: string | null,
+  //
+  // A single options object rather than positional params: `createDir`/
+  // `gitInit` (confirm-first directory creation) made an already-six-deep
+  // positional list untenable.
+  onCreate: (values: {
+    name: string;
+    cwd: string;
+    hostId?: string;
+    devServerUrl?: string | null;
     // Phase 6 Task Master (6.5/#218) — agent-selection precedence tiers 2
     // (defaultAgent) and the review agent's only tier (defaultReviewAgent).
     // Edit mode only, same "not applicable in create mode" framing as
     // devServerUrl above.
-    defaultAgent?: string | null,
-    defaultReviewAgent?: string | null,
-  ) => Promise<unknown>;
+    defaultAgent?: string | null;
+    defaultReviewAgent?: string | null;
+    // Confirm-first directory creation — only ever sent once the user has
+    // clicked "Create folder" below, in response to a PROJECT_DIR_MISSING
+    // rejection. `gitInit` only has an effect when `createDir` is also set.
+    createDir?: boolean;
+    gitInit?: boolean;
+  }) => Promise<{ dirCreated?: boolean; gitInitialized?: boolean } | undefined>;
   // Phase 4d: this same modal doubles as "Edit project" (kebab menu on a
   // project row), pre-filled with the project's current name/cwd — a
   // project has no edit surface otherwise. `onCreate` still fires with
@@ -91,6 +108,16 @@ export function CreateProjectModal({
     initialDefaultReviewAgent ?? UNSET_AGENT,
   );
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<{ message: string; code?: string } | null>(null);
+  // Only rendered inside the PROJECT_DIR_MISSING confirm block below — it's
+  // the only moment it has any effect, and a permanently-visible checkbox
+  // that usually does nothing invites "why didn't it init?" reports.
+  const [gitInit, setGitInit] = useState(false);
+  // Distinct from `error`: the project WAS created successfully, but the
+  // git-init the user asked for as part of that failed — a non-blocking
+  // notice, not a rejected submit.
+  const [gitInitFailed, setGitInitFailed] = useState(false);
   // Hermes review, PR #477 — a failed fetch used to leave both dropdowns
   // silently showing only "Use global default"/"None" with no indication
   // anything went wrong, and (independently) a saved defaultAgent that
@@ -151,6 +178,11 @@ export function CreateProjectModal({
   const handlePathInput = (value: string) => {
     setPath(value);
     setNamePlaceholder(trailingSegment(value));
+    // A stale "Create folder" affordance (or git-init-failed notice) must
+    // never apply to a newly typed path.
+    setError(null);
+    setGitInitFailed(false);
+    setGitInit(false);
   };
 
   const browse = () => {
@@ -160,7 +192,8 @@ export function CreateProjectModal({
     }
   };
 
-  const confirm = () => {
+  const confirm = async (opts?: { createDir?: boolean }) => {
+    if (submitting) return;
     const trimmedPath = path.trim();
     if (!trimmedPath) {
       pathInputRef.current?.focus();
@@ -168,14 +201,43 @@ export function CreateProjectModal({
     }
     const finalName = name.trim() || trailingSegment(trimmedPath);
     const trimmedDevServerUrl = devServerUrl.trim();
-    void onCreate(
-      finalName,
-      trimmedPath,
-      isEdit ? undefined : hostId,
-      isEdit ? (trimmedDevServerUrl === "" ? null : trimmedDevServerUrl) : undefined,
-      isEdit ? (defaultAgent === UNSET_AGENT ? null : defaultAgent) : undefined,
-      isEdit ? (defaultReviewAgent === UNSET_AGENT ? null : defaultReviewAgent) : undefined,
-    ).then(onClose);
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await onCreate({
+        name: finalName,
+        cwd: trimmedPath,
+        hostId: isEdit ? undefined : hostId,
+        devServerUrl: isEdit
+          ? trimmedDevServerUrl === ""
+            ? null
+            : trimmedDevServerUrl
+          : undefined,
+        defaultAgent: isEdit ? (defaultAgent === UNSET_AGENT ? null : defaultAgent) : undefined,
+        defaultReviewAgent: isEdit
+          ? defaultReviewAgent === UNSET_AGENT
+            ? null
+            : defaultReviewAgent
+          : undefined,
+        ...(opts?.createDir ? { createDir: true, gitInit } : {}),
+      });
+      if (opts?.createDir && gitInit && result?.gitInitialized === false) {
+        setSubmitting(false);
+        setGitInitFailed(true);
+        return;
+      }
+      // Reset before onClose rather than relying on the parent to unmount
+      // this component synchronously — it usually does, but nothing here
+      // should depend on that to avoid a stuck disabled button.
+      setSubmitting(false);
+      onClose();
+    } catch (err) {
+      setSubmitting(false);
+      setError({
+        message: err instanceof ApiError ? err.message : "Could not add project",
+        code: err instanceof ApiError ? err.code : undefined,
+      });
+    }
   };
 
   return (
@@ -230,7 +292,7 @@ export function CreateProjectModal({
                 onChange={(e) => handlePathInput(e.target.value)}
                 placeholder="~/code/my-project"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") confirm();
+                  if (e.key === "Enter") void confirm();
                 }}
               />
               <button type="button" className="create-modal-browse-btn" onClick={browse}>
@@ -238,6 +300,38 @@ export function CreateProjectModal({
               </button>
             </span>
           </label>
+
+          {error && (
+            <div className="create-modal-dir-confirm">
+              <span className="create-modal-field-hint error">{error.message}</span>
+              {error.code === CREATE_DIR_CODE && (
+                <>
+                  <label className="create-modal-dir-confirm-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={gitInit}
+                      onChange={(e) => setGitInit(e.target.checked)}
+                    />
+                    Initialize a git repository
+                  </label>
+                  <button
+                    type="button"
+                    className="create-modal-dir-confirm-btn"
+                    disabled={submitting}
+                    onClick={() => void confirm({ createDir: true })}
+                  >
+                    Create folder and add project
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {gitInitFailed && (
+            <span className="create-modal-field-hint error">
+              Project added, but `git init` failed — you can initialize it manually later.
+            </span>
+          )}
 
           <label className="create-modal-field">
             <span className="create-modal-field-label">Display name</span>
@@ -247,7 +341,7 @@ export function CreateProjectModal({
                 onChange={(e) => setName(e.target.value)}
                 placeholder={namePlaceholder}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") confirm();
+                  if (e.key === "Enter") void confirm();
                 }}
               />
             </span>
@@ -267,7 +361,7 @@ export function CreateProjectModal({
                   onChange={(e) => setDevServerUrl(e.target.value)}
                   placeholder="5173"
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") confirm();
+                    if (e.key === "Enter") void confirm();
                   }}
                 />
               </span>
@@ -354,12 +448,30 @@ export function CreateProjectModal({
               ? "Already-open sessions keep their current directory until restarted."
               : "Mullion will scan for launchers & tasks after adding."}
           </span>
-          <button className="create-modal-cancel" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="create-modal-submit" onClick={confirm}>
-            {isEdit ? "Save changes" : "Add project"}
-          </button>
+          {gitInitFailed ? (
+            <button className="create-modal-submit" onClick={onClose}>
+              Close
+            </button>
+          ) : (
+            <>
+              <button className="create-modal-cancel" disabled={submitting} onClick={onClose}>
+                Cancel
+              </button>
+              <button
+                className="create-modal-submit"
+                disabled={submitting}
+                onClick={() => void confirm()}
+              >
+                {submitting
+                  ? isEdit
+                    ? "Saving…"
+                    : "Adding…"
+                  : isEdit
+                    ? "Save changes"
+                    : "Add project"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

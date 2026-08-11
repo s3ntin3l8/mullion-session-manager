@@ -1346,6 +1346,11 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly statusCode: number,
+    // Machine-readable discriminator (e.g. "PROJECT_DIR_MISSING") — present
+    // on the hand-built 4xx bodies that need one, undefined for plain
+    // @fastify/sensible errors and successful-request paths. Lets a caller
+    // branch on the actual failure instead of substring-matching `message`.
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -1366,7 +1371,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(body.message || `${path} failed with ${res.status}`, res.status);
+    throw new ApiError(body.message || `${path} failed with ${res.status}`, res.status, body.code);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -1376,22 +1381,42 @@ export function normalizeAgentId(id: string): string {
   return id.startsWith("agent:") ? id.slice(6) : id;
 }
 
+export interface CreateProjectDirOptions {
+  // Confirm-first directory creation — see CreateProjectModal.tsx. Leaf-only
+  // on the backend (project-dir.ts): the parent must already exist.
+  createDir?: boolean;
+  // Only takes effect when this request actually creates the directory.
+  gitInit?: boolean;
+}
+
+// Extra fields the backend only includes when `createDir` was requested —
+// see projects.ts's POST/PATCH handlers. Kept off `Project` itself so every
+// other GET /api/projects consumer doesn't inherit two fields that are
+// never present there.
+export type CreateProjectResult = Project & { dirCreated?: boolean; gitInitialized?: boolean };
+
 export const api = {
   listProjects: () => request<Project[]>("/api/projects"),
 
-  createProject: (name: string, cwd: string, hostId?: string) =>
-    request<Project>("/api/projects", {
+  createProject: (name: string, cwd: string, hostId?: string, opts?: CreateProjectDirOptions) =>
+    request<CreateProjectResult>("/api/projects", {
       method: "POST",
-      body: JSON.stringify(hostId ? { name, cwd, hostId } : { name, cwd }),
+      body: JSON.stringify({
+        name,
+        cwd,
+        ...(hostId ? { hostId } : {}),
+        ...(opts?.createDir ? { createDir: true } : {}),
+        ...(opts?.gitInit ? { gitInit: true } : {}),
+      }),
     }),
 
   updateProject: (
     id: number,
     patch: Partial<
       Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
-    > & { autoFetch?: boolean | null },
+    > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>
-    request<Project>(`/api/projects/${id}`, {
+    request<CreateProjectResult>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),

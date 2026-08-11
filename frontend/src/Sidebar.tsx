@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ConfirmButton } from "./ConfirmButton.js";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./KebabMenu.js";
-import { api, LOCAL_HOST_ID } from "./api.js";
+import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
 import type {
   BackgroundTask,
   DiscoveredProject,
@@ -509,8 +509,8 @@ export function Sidebar({
           hosts={hosts}
           initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
           onClose={() => setAddProjectOpen(false)}
-          onCreate={(name, cwd, hostId) =>
-            useDashboardStore.getState().createProject(name, cwd, hostId)
+          onCreate={({ name, cwd, hostId, createDir, gitInit }) =>
+            useDashboardStore.getState().createProject(name, cwd, hostId, { createDir, gitInit })
           }
         />
       )}
@@ -852,13 +852,23 @@ function ProjectHeader({
               initialDefaultAgent={project.defaultAgent}
               initialDefaultReviewAgent={project.defaultReviewAgent}
               onClose={() => setEditOpen(false)}
-              onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
+              onCreate={({
+                name,
+                cwd,
+                devServerUrl,
+                defaultAgent,
+                defaultReviewAgent,
+                createDir,
+                gitInit,
+              }) =>
                 useDashboardStore.getState().updateProject(project.id, {
                   name,
                   cwd,
                   devServerUrl,
                   defaultAgent,
                   defaultReviewAgent,
+                  createDir,
+                  gitInit,
                 })
               }
             />
@@ -2098,6 +2108,10 @@ function DiscoverProjects({
   // same reasoning as ProjectSection's own header comment above.
   const [candidates, setCandidates] = useState<DiscoveredProject[] | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
+  // Keyed by cwd — a discovered candidate's own create can fail (e.g. it
+  // vanished from disk between scan and click) and previously failed
+  // silently (an unhandled rejection, no UI feedback at all).
+  const [addErrors, setAddErrors] = useState<Map<string, string>>(new Map());
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
   // Distinguishes "discovery ran, found nothing" from "discovery failed" —
   // both otherwise render as an identical "0 found" empty state, which
@@ -2216,14 +2230,40 @@ function DiscoverProjects({
                 className="discover-add"
                 onClick={() => {
                   const store = useDashboardStore.getState();
-                  void store.createProject(c.name, c.cwd, selectedHostId).then(() => {
-                    setAdded((prev) => new Set(prev).add(c.cwd));
-                    void store.refreshProjects();
+                  setAddErrors((prev) => {
+                    if (!prev.has(c.cwd)) return prev;
+                    const next = new Map(prev);
+                    next.delete(c.cwd);
+                    return next;
                   });
+                  store
+                    .createProject(c.name, c.cwd, selectedHostId)
+                    .then(() => {
+                      setAdded((prev) => new Set(prev).add(c.cwd));
+                      void store.refreshProjects();
+                    })
+                    .catch((err: unknown) => {
+                      // Discover only lists directories a scan already
+                      // found on disk, so a missing-directory 400 here is
+                      // near-impossible — but this used to be a silent
+                      // unhandled rejection either way (issue: same bug as
+                      // CreateProjectModal's own pre-fix confirm()).
+                      setAddErrors((prev) =>
+                        new Map(prev).set(
+                          c.cwd,
+                          err instanceof ApiError ? err.message : "Could not add project",
+                        ),
+                      );
+                    });
                 }}
               >
                 Add
               </button>
+              {addErrors.has(c.cwd) && (
+                <div className="project-row-error" title={addErrors.get(c.cwd)}>
+                  {addErrors.get(c.cwd)}
+                </div>
+              )}
             </div>
           ))}
         </div>

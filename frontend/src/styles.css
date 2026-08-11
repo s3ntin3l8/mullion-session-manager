@@ -5470,6 +5470,43 @@ body {
   color: var(--fg);
   border-color: var(--muted);
 }
+.create-modal-dir-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+}
+.create-modal-dir-confirm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.create-modal-dir-confirm-btn {
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  background: var(--accent-solid);
+  color: #fff;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.create-modal-dir-confirm-btn:hover {
+  filter: brightness(1.08);
+}
+.create-modal-dir-confirm-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .create-modal-detected-devserver {
   align-self: flex-start;
   font-size: 11px;
@@ -5543,6 +5580,11 @@ body {
 }
 .create-modal-submit:hover {
   filter: brightness(1.08);
+}
+.create-modal-cancel:disabled,
+.create-modal-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 /* GitHub device-flow code (GitHubDeviceFlowModal.tsx, issue #27 phase 4) —
    the user_code GitHub asks for at the verification_uri. */

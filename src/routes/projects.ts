@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -30,6 +29,13 @@ import {
   type GitDiffStats,
 } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { runGitInit } from "../services/git-init.js";
+import {
+  assertProjectDir,
+  createProjectDir,
+  ProjectDirError,
+  type ProjectDirIssue,
+} from "../services/project-dir.js";
 import {
   listBranches,
   listRemoteBranches,
@@ -70,6 +76,14 @@ interface CreateProjectBody {
   name: string;
   cwd: string;
   hostId?: string;
+  // Confirm-first directory creation (leaf-only — see project-dir.ts):
+  // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
+  // when `cwd` doesn't exist yet; the modal re-submits with `createDir:
+  // true` once the user confirms.
+  createDir?: boolean;
+  // Only applied when this request actually created the directory
+  // (createDir + a fresh dir, not an already-existing one).
+  gitInit?: boolean;
 }
 
 interface UpdateProjectBody {
@@ -88,6 +102,9 @@ interface UpdateProjectBody {
   // tier — see task-agent-resolve.ts).
   defaultAgent?: string | null;
   defaultReviewAgent?: string | null;
+  // Same confirm-first contract as CreateProjectBody, above.
+  createDir?: boolean;
+  gitInit?: boolean;
 }
 
 interface DiscoveredProject extends DiscoveredCandidate {
@@ -103,6 +120,8 @@ const createProjectSchema = {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
       hostId: { type: "string", minLength: 1 },
+      createDir: { type: "boolean" },
+      gitInit: { type: "boolean" },
     },
   },
 };
@@ -119,9 +138,34 @@ const updateProjectSchema = {
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
       defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      createDir: { type: "boolean" },
+      gitInit: { type: "boolean" },
     },
   },
 };
+
+// Maps a ProjectDirError's discriminator to the 400 body's machine-readable
+// `code` — the frontend keys its "Create folder" affordance off exactly
+// PROJECT_DIR_MISSING (see CreateProjectModal.tsx) so a parent-missing typo
+// is a dead end in the UI rather than offering to build a directory tree.
+const PROJECT_DIR_ISSUE_CODES: Record<ProjectDirIssue, string> = {
+  missing: "PROJECT_DIR_MISSING",
+  "parent-missing": "PROJECT_PARENT_MISSING",
+  "not-a-directory": "PROJECT_PATH_NOT_A_DIRECTORY",
+  "parent-not-a-directory": "PROJECT_PARENT_NOT_A_DIRECTORY",
+  symlink: "PROJECT_PATH_IS_SYMLINK",
+  unreadable: "PROJECT_DIR_UNREADABLE",
+  "create-failed": "PROJECT_DIR_CREATE_FAILED",
+};
+
+function projectDirErrorBody(err: ProjectDirError) {
+  return {
+    statusCode: 400,
+    error: "Bad Request",
+    message: err.message,
+    code: PROJECT_DIR_ISSUE_CODES[err.issue],
+  };
+}
 
 // Issue #28's per-project dev-server field — the authoritative, manually-set
 // fallback the preview proxy resolves against (auto-discovery, a later
@@ -1871,10 +1915,22 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const { name, cwd } = request.body;
+      const { name, cwd, createDir, gitInit } = request.body;
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
       if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
+      }
+      // A remote project's directory lives on the agent's own filesystem,
+      // not this process's — validating/creating it here against the
+      // *primary's* disk would be actively wrong. Out of scope until a
+      // dedicated /internal/* agent endpoint exists.
+      if (createDir && hostId !== LOCAL_HOST_ID) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: `Mullion can't create a directory on host ${hostId} — create it there and try again.`,
+          code: "PROJECT_DIR_REMOTE_UNSUPPORTED",
+        });
       }
       // The create-project modal's own placeholder is a literal `~/...`
       // path (ported from the design) — expand it the same way
@@ -1884,28 +1940,52 @@ export async function projectsRoute(app: FastifyInstance) {
       // home dir, not this process's — see host-registry.ts/issue #26's
       // landmine #3 — so it's stored/forwarded raw instead.
       const resolvedCwd = hostId === LOCAL_HOST_ID ? path.resolve(expandHome(cwd)) : cwd;
+
+      // Validate (and, if confirmed, create) the directory BEFORE the row
+      // is inserted, so a rejected/failed create never leaves an orphan
+      // project row. CodeQL flags the mkdir this feeds as js/path-injection
+      // since resolvedCwd derives from request.body.cwd — dismissed as a
+      // false positive at this boundary, same as before: /api/projects is
+      // the authenticated-primary boundary, and a caller who can reach it
+      // can already spawn a session against an arbitrary cwd (full code
+      // execution), which is strictly more powerful than mkdir on the same
+      // path. Same trust model as internal.ts's resolveWithinRoots
+      // docstring for session-spawn cwd. What's new is leaf-only creation
+      // and pre-planted-symlink hardening — see project-dir.ts.
+      let dirCreated = false;
+      let gitInitialized = false;
+      if (hostId === LOCAL_HOST_ID) {
+        try {
+          assertProjectDir(resolvedCwd);
+        } catch (err) {
+          if (!(err instanceof ProjectDirError)) throw err;
+          if (err.issue !== "missing" || !createDir) {
+            return reply.code(400).send(projectDirErrorBody(err));
+          }
+          try {
+            dirCreated = createProjectDir(resolvedCwd);
+          } catch (createErr) {
+            if (!(createErr instanceof ProjectDirError)) throw createErr;
+            return reply.code(400).send(projectDirErrorBody(createErr));
+          }
+          if (gitInit && dirCreated) {
+            const result = await runGitInit(resolvedCwd);
+            gitInitialized = result.success;
+            if (!result.success) {
+              app.log.warn({ cwd: resolvedCwd, err: result.error }, "git init failed");
+            }
+          }
+        }
+      }
+
       const [created] = app.db
         .insert(projects)
         .values({ name, cwd: resolvedCwd, hostId })
         .returning()
         .all();
-      // Best-effort: create the directory so a session spawned against this
-      // cwd doesn't fail. CodeQL flags this as js/path-injection since
-      // resolvedCwd derives from request.body.cwd — that's a false positive
-      // at this boundary: /api/projects is the authenticated-primary
-      // boundary, and a caller who can reach it can already spawn a session
-      // against an arbitrary cwd (full code execution), which is strictly
-      // more powerful than mkdir on the same path. Same trust model as
-      // internal.ts's resolveWithinRoots docstring for session-spawn cwd.
-      // The alert is dismissed as a false positive rather than suppressed.
-      if (hostId === LOCAL_HOST_ID) {
-        await fs.promises.mkdir(resolvedCwd, { recursive: true }).catch((err) => {
-          app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
-        });
-      }
       await maybeRegisterProjectWebhook(app, created);
       reply.code(201);
-      return created;
+      return createDir ? { ...created, dirCreated, gitInitialized } : created;
     },
   );
 
@@ -1924,7 +2004,16 @@ export async function projectsRoute(app: FastifyInstance) {
       const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!existing) return reply.notFound();
 
-      const { name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent } = request.body;
+      const {
+        name,
+        cwd,
+        devServerUrl,
+        autoFetch,
+        defaultAgent,
+        defaultReviewAgent,
+        createDir,
+        gitInit,
+      } = request.body;
       if (
         devServerUrl !== undefined &&
         devServerUrl !== null &&
@@ -1932,11 +2021,64 @@ export async function projectsRoute(app: FastifyInstance) {
       ) {
         return reply.badRequest("devServerUrl must be a 1-65535 port or a valid http(s) URL");
       }
+      if (createDir && cwd === undefined) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: "createDir requires cwd.",
+          code: "PROJECT_DIR_FLAG_WITHOUT_CWD",
+        });
+      }
+      if (createDir && existing.hostId !== LOCAL_HOST_ID) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: `Mullion can't create a directory on host ${existing.hostId} — create it there and try again.`,
+          code: "PROJECT_DIR_REMOTE_UNSUPPORTED",
+        });
+      }
 
       const resolvedCwd =
         cwd !== undefined && existing.hostId === LOCAL_HOST_ID
           ? path.resolve(expandHome(cwd))
           : cwd;
+
+      // Validate/create BEFORE the row is updated — same ordering rationale
+      // as POST. Skipped entirely when the cwd isn't actually changing: the
+      // Edit modal always sends `cwd`, even when only the name changed, and
+      // a project whose directory was since deleted must still be
+      // renamable rather than getting stuck unable to save any edit.
+      let dirCreated = false;
+      let gitInitialized = false;
+      if (
+        cwd !== undefined &&
+        existing.hostId === LOCAL_HOST_ID &&
+        resolvedCwd !== undefined &&
+        resolvedCwd !== existing.cwd
+      ) {
+        try {
+          assertProjectDir(resolvedCwd);
+        } catch (err) {
+          if (!(err instanceof ProjectDirError)) throw err;
+          if (err.issue !== "missing" || !createDir) {
+            return reply.code(400).send(projectDirErrorBody(err));
+          }
+          try {
+            dirCreated = createProjectDir(resolvedCwd);
+          } catch (createErr) {
+            if (!(createErr instanceof ProjectDirError)) throw createErr;
+            return reply.code(400).send(projectDirErrorBody(createErr));
+          }
+          if (gitInit && dirCreated) {
+            const result = await runGitInit(resolvedCwd);
+            gitInitialized = result.success;
+            if (!result.success) {
+              app.log.warn({ cwd: resolvedCwd, err: result.error }, "git init failed");
+            }
+          }
+        }
+      }
+
       const updated = app.db
         .update(projects)
         .set({
@@ -1951,22 +2093,13 @@ export async function projectsRoute(app: FastifyInstance) {
         .returning()
         .all();
       if (updated.length === 0) return reply.notFound();
-      // Best-effort, same false-positive rationale as the POST handler
-      // above: /api/projects is the authenticated-primary boundary, so
-      // mkdir on this cwd is no more powerful than the session-spawn cwd
-      // this same caller can already reach.
-      if (cwd !== undefined && existing.hostId === LOCAL_HOST_ID && resolvedCwd !== undefined) {
-        await fs.promises.mkdir(resolvedCwd, { recursive: true }).catch((err) => {
-          app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
-        });
-      }
       // #490b — a cwd change can point this project at a different repo
       // (or a repo for the first time), so re-run registration the same
       // way create does. `registerProjectWebhook`'s own PATCH-on-conflict
       // behavior (github-webhook.ts) means re-registering an unchanged
       // repo is a harmless no-op, not a duplicate hook.
       if (cwd !== undefined) await maybeRegisterProjectWebhook(app, updated[0]);
-      return updated[0];
+      return createDir ? { ...updated[0], dirCreated, gitInitialized } : updated[0];
     },
   );
 
