@@ -427,10 +427,6 @@ function prsCacheSet(key: string, entry: PRsCacheEntry): void {
   prsCache.set(key, entry);
 }
 
-export function getPRsCacheSizeForTests(): number {
-  return prsCache.size;
-}
-
 interface GitHubWorkflowRunItem {
   name: string | null;
   status: string;
@@ -575,7 +571,7 @@ export async function getRepoPRsStatus(
 }
 
 /** Cache key for the per-PR status data. */
-export function prsCacheKey(owner: string, repo: string): string {
+function prsCacheKey(owner: string, repo: string): string {
   return `${owner}/${repo}/prs`;
 }
 

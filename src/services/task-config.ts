@@ -55,7 +55,7 @@ export function resolveTaskMaster(
   };
 }
 
-export function envDefaultsFromConfig(app: FastifyInstance): TaskMasterEnvDefaults {
+function envDefaultsFromConfig(app: FastifyInstance): TaskMasterEnvDefaults {
   return {
     enabled: app.config.MULLION_TASK_MASTER_ENABLED,
     maxConcurrent: app.config.MULLION_TASK_MAX_CONCURRENT,

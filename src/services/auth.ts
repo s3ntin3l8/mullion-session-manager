@@ -22,7 +22,7 @@ export const SESSION_COOKIE_NAME = "mullion_session";
 // name/groups) and never the raw id_token/access_token from the provider —
 // see services/oidc.ts's completeOidcLogin, which discards those tokens the
 // moment it extracts claims from them.
-export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const SESSION_MAX_AGE_SECONDS = SESSION_MAX_AGE_MS / 1000;
 
 interface SessionPayload {

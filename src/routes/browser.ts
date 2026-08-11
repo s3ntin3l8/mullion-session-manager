@@ -324,7 +324,7 @@ export async function attachSocketToBrowser(
   });
 }
 
-export function proxyToRemoteBrowser(
+function proxyToRemoteBrowser(
   app: FastifyInstance,
   browserSocket: WebSocket,
   hostId: string,
