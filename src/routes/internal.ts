@@ -571,6 +571,18 @@ const toggleSkillBodySchema = {
  * behavior of Python's `os.path.realpath(strict=False)`, applied one
  * component at a time so each step's containment check sees the FULLY
  * resolved parent, not a lexical guess (issue #604).
+ *
+ * Only ENOENT is treated as "doesn't exist yet, fall back to lexical" —
+ * every other errno (EACCES, ELOOP on a symlink cycle, ENOTDIR, ...)
+ * propagates instead (Hermes review, PR #612). The original catch-all here
+ * would have silently reused the lexical fallback for those too, which is
+ * wrong in a different way than the ENOENT case: those errors mean "this
+ * component's real target is unknown or unreachable," not "there's nothing
+ * here yet" — treating them the same could pass containment on a value that
+ * was never actually verified, only guessed at. The caller
+ * (resolveWithinRoots) turns any such throw into a clean 400 rather than
+ * this silently returning something that happens to pass, or an uncaught
+ * exception surfacing as a 500 at the sink.
  */
 function realpathExistingPrefix(absPath: string): string {
   const root = path.parse(absPath).root;
@@ -580,10 +592,11 @@ function realpathExistingPrefix(absPath: string): string {
     const candidate = path.join(real, segments[i]);
     try {
       real = realpathSync(candidate);
-    } catch {
-      // candidate doesn't exist (or isn't accessible) — every remaining
-      // segment is a path we'd be creating, not one that could already be a
-      // pre-planted symlink, so append the rest lexically and stop walking.
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      // candidate doesn't exist — every remaining segment is a path we'd be
+      // creating, not one that could already be a pre-planted symlink, so
+      // append the rest lexically and stop walking.
       return path.join(real, ...segments.slice(i));
     }
   }
@@ -628,10 +641,22 @@ function realpathExistingPrefix(absPath: string): string {
  */
 function resolveWithinRoots(app: FastifyInstance, cwd: string): string | null {
   const resolved = path.resolve(expandHome(cwd));
-  const realResolved = realpathExistingPrefix(resolved);
-  const roots = parseProjectsRootsEnv(app.config.PROJECTS_ROOTS).map((root) =>
-    realpathExistingPrefix(path.resolve(root)),
-  );
+  let realResolved: string;
+  let roots: string[];
+  try {
+    realResolved = realpathExistingPrefix(resolved);
+    roots = parseProjectsRootsEnv(app.config.PROJECTS_ROOTS).map((root) =>
+      realpathExistingPrefix(path.resolve(root)),
+    );
+  } catch {
+    // A non-ENOENT failure mid-walk (EACCES, ELOOP on a symlink cycle, ...)
+    // means realpathExistingPrefix couldn't reliably determine the real
+    // location of `cwd` or a configured root — fail closed the same as
+    // "outside every root" (every call site already treats null as a clean
+    // 400) rather than letting the exception surface as an uncaught 500 at
+    // whatever sink calls in here (Hermes review, PR #612).
+    return null;
+  }
   const withinRoots = roots.some(
     (root) => realResolved === root || realResolved.startsWith(root + path.sep),
   );

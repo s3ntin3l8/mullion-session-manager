@@ -443,6 +443,41 @@ describe("internal routes (agent role, issue #26)", () => {
     }
   });
 
+  // Hermes review, PR #612: a DANGLING cwd symlink (the link exists, its
+  // target doesn't) is the trickiest case realpathExistingPrefix's ENOENT
+  // fallback handles — fs.realpathSync itself throws ENOENT resolving a
+  // dangling link (not just a genuinely missing path), so this hits the
+  // exact same "doesn't exist yet, fall back to lexical" branch a brand-new
+  // project would. Containment passes on the lexical value (same as before
+  // this fix, since there's nothing to realpath through), but every
+  // downstream sink fails closed reading a target that doesn't exist —
+  // nothing escapes, this just pins that no request-shaped input here
+  // crashes with a 500.
+  it("handles a DANGLING cwd symlink inside PROJECTS_ROOTS without erroring or leaking anything", async () => {
+    const app = await buildApp();
+    const danglingLink = path.join(projectsRoot, "dangling-link");
+    fs.symlinkSync(path.join(projectsRoot, "nonexistent-target"), danglingLink);
+
+    try {
+      const actions = await app.inject({
+        method: "GET",
+        url: `/internal/actions?cwd=${encodeURIComponent(danglingLink)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(actions.statusCode).not.toBe(500);
+
+      const dock = await app.inject({
+        method: "GET",
+        url: `/internal/dock?cwd=${encodeURIComponent(danglingLink)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(dock.statusCode).not.toBe(500);
+    } finally {
+      fs.rmSync(danglingLink, { force: true });
+      await app.close();
+    }
+  });
+
   // U4 — the agent-side half of the dock-config write triple
   // (routes/dock-config.ts is the primary side). Same
   // resolveWithinRoots-containment shape as /internal/actions and

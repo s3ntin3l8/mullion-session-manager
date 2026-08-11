@@ -394,6 +394,22 @@ export function writeDockConfig(cwd: string, controls: DockControl[]): void {
   // calls above — see that comment for the full trust-boundary argument.
   // Dismissed in GHAS as alert #187.
   mkdirSync(dockDir, { recursive: true });
+  // Re-check after mkdirSync (Hermes review, PR #612): the lstat above and
+  // this mkdirSync are two separate syscalls with a window between them —
+  // `.crs` swapped from a real directory to a symlink in that window would
+  // make mkdirSync's recursive:true a silent no-op (the symlink's target
+  // already "exists" as a directory) and this second check catches that
+  // before the O_NOFOLLOW open below ever runs. This narrows the race, it
+  // doesn't eliminate it: `.crs` could still be swapped between THIS check
+  // and the open, and O_NOFOLLOW only guards dock.json's own leaf, not the
+  // `.crs` component it's nested under — a fully race-free fix would need
+  // an `openat`-style "open relative to an already-open directory fd" API,
+  // which Node's fs module doesn't expose. Same authenticated-access-plus-
+  // pre-planted-symlink threat model as everywhere else in this file; a
+  // narrow, race-perfect timing on top of that is out of scope here.
+  if (isSymlinkPath(dockDir)) {
+    throw new DockConfigSymlinkError(dockDir);
+  }
   let fd: number;
   try {
     // Dismissed in GHAS as alert #185.
