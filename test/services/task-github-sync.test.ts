@@ -105,7 +105,7 @@ describe("task-github-sync", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "sync-test-project", cwd },
+      payload: { createDir: true, name: "sync-test-project", cwd },
     });
     projectId = res.json().id;
   });

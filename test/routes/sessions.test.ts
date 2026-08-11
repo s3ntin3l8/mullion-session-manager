@@ -76,7 +76,7 @@ describe("sessions route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/tmp" },
+      payload: { createDir: true, name: "p", cwd: "/tmp" },
     });
     return res.json().id as number;
   }
@@ -722,7 +722,7 @@ describe("sessions route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "upload-p", cwd },
+        payload: { createDir: true, name: "upload-p", cwd },
       });
       return res.json().id as number;
     }
@@ -1324,7 +1324,7 @@ describe("sessions route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "worktree-p", cwd },
+        payload: { createDir: true, name: "worktree-p", cwd },
       });
       return res.json().id as number;
     }

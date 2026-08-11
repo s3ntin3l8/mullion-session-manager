@@ -41,7 +41,7 @@ describe("browser-cookies", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/tmp" },
+      payload: { createDir: true, name: "p", cwd: "/tmp" },
     });
     return res.json().id as number;
   }

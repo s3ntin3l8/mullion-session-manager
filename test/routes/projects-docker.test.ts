@@ -5,6 +5,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { projects } from "../../src/db/schema.js";
 
 // Issue #73 — GET /api/projects/:id/dock merging in discovered Compose
 // services, and the two docker/check-update + docker/update routes.
@@ -131,20 +132,27 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
     delete process.env.DATABASE_URL;
   });
 
-  async function createProject(
+  // Inserted directly into the DB rather than via POST /api/projects: this
+  // file's own default cwd ("/home/user/sanctuary") is a fictional path that
+  // matches fixtureService()'s default workingDir for the mocked
+  // docker-service-detect module — it was never meant to exist on disk (this
+  // file mocks that whole module, see the header comment), and POST
+  // /api/projects now requires a real, existing directory. Matches the
+  // direct-insert precedent in webhooks.test.ts for the same reason.
+  function createProject(
     app: Awaited<ReturnType<typeof buildApp>>,
     overrides: { cwd?: string; hostId?: string } = {},
-  ): Promise<number> {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/projects",
-      payload: {
+  ): number {
+    const [row] = app.db
+      .insert(projects)
+      .values({
         name: "p",
         cwd: overrides.cwd ?? "/home/user/sanctuary",
-        hostId: overrides.hostId,
-      },
-    });
-    return res.json().id as number;
+        ...(overrides.hostId ? { hostId: overrides.hostId } : {}),
+      })
+      .returning()
+      .all();
+    return row.id;
   }
 
   describe("GET /api/projects/:id/dock", () => {
