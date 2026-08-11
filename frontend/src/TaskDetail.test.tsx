@@ -443,13 +443,13 @@ describe("TaskDetail claim action", () => {
 // change (backlog<->ready) — drag is otherwise the sole way to reach it, and
 // HTML5 drag-and-drop never fires on a touch device.
 describe("TaskDetail backlog/ready move actions", () => {
-  it("shows a Move to Ready button for a backlog task and calls updateTask", async () => {
+  it("shows a Move to Ready button for a backlog task and calls updateTask with status and boardOrder", async () => {
     tasks = [makeTask({ id: 1, status: "backlog" })];
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "Move to Ready" }));
-    expect(updateTask).toHaveBeenCalledWith(1, { status: "ready" });
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "ready", boardOrder: 0 });
   });
 
   it("shows a Move to Backlog button alongside Claim for a ready task, unaffected by taskMasterEnabled", async () => {
@@ -461,7 +461,29 @@ describe("TaskDetail backlog/ready move actions", () => {
     const moveBtn = screen.getByRole("button", { name: "Move to Backlog" });
     expect(moveBtn).not.toBeDisabled();
     await user.click(moveBtn);
-    expect(updateTask).toHaveBeenCalledWith(1, { status: "backlog" });
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "backlog", boardOrder: 0 });
+  });
+
+  // Hermes review — an earlier version sent a bare `{ status }` patch and
+  // claimed this "always appends," which doesn't hold: routes/tasks.ts's
+  // PATCH endpoint never reindexes, so without an explicit boardOrder the
+  // task would keep its previous one and land wherever the target column's
+  // (boardOrder, id) sort happened to put it — often not the end. This
+  // proves the fix: with two existing ready tasks at boardOrder 0 and 1,
+  // moving the backlog task there must append it at boardOrder 2, not
+  // collide with or precede either of them.
+  it("appends to the end of the target column's existing boardOrder sequence, not just a bare status patch", async () => {
+    tasks = [
+      makeTask({ id: 1, status: "backlog", boardOrder: 0 }),
+      makeTask({ id: 2, status: "ready", boardOrder: 0 }),
+      makeTask({ id: 3, status: "ready", boardOrder: 1 }),
+    ];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "ready", boardOrder: 2 });
+    expect(updateTask).toHaveBeenCalledTimes(1);
   });
 
   it("shows an error when updateTask rejects", async () => {

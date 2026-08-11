@@ -276,6 +276,11 @@ beforeEach(() => {
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
+  // The detail drawer's width (UnifiedBoard.tsx) reads/writes
+  // crs.taskDrawerWidth — same precedent as Dock.test.tsx's own
+  // localStorage.clear(), so a resize left over from one test can't leak
+  // its width into the next.
+  localStorage.clear();
 });
 
 describe("UnifiedBoard task columns", () => {
@@ -492,10 +497,38 @@ describe("UnifiedBoard task columns", () => {
     vi.useRealTimers();
   });
 
-  it("shows a warning glyph for a task with a GitHub sync error", () => {
+  // Hermes review — a Failed task falls into the same createdAt fallback
+  // as backlog/ready, but "how long has this been sitting here" isn't the
+  // right story for it: a task can run for weeks and fail yesterday, and a
+  // bare age would misleadingly read as if it just failed. There's no
+  // failedAt column to read instead, so the label is qualified rather than
+  // the timestamp source changed.
+  it("qualifies the age as 'created' rather than a bare duration on a failed card", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-08T00:00:00.000Z"));
+    tasks = [makeTask({ id: 1, status: "failed", createdAt: "2025-12-18T00:00:00.000Z" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("created 21d ago")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("shows a bare duration (not 'created') for a non-failed card using the same createdAt fallback", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-08T00:00:00.000Z"));
+    tasks = [makeTask({ id: 1, status: "backlog", createdAt: "2025-12-18T00:00:00.000Z" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("21d ago")).toBeInTheDocument();
+    expect(screen.queryByText("created 21d ago")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("shows a warning glyph with an accessible name for a task with a GitHub sync error", () => {
     tasks = [makeTask({ id: 1, githubSyncError: "401 Unauthorized" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByTitle("GitHub sync: 401 Unauthorized")).toBeInTheDocument();
+    // Hermes review — this was an icon-only span with no accessible name;
+    // the title tooltip alone doesn't reach screen readers.
+    expect(screen.getByLabelText("GitHub sync error: 401 Unauthorized")).toBeInTheDocument();
   });
 
   it("shows the failure reason on a failed card", () => {
@@ -1033,6 +1066,76 @@ describe("UnifiedBoard detail drawer", () => {
 
     await user.click(screen.getByLabelText("Close task detail"));
     expect(secondCard).toHaveFocus();
+  });
+});
+
+// Hermes review — a first version of this PR claimed the drawer was
+// "resizable via a drag handle ... clamped against the measured board
+// width" with no implementation to back it up: no handle, no width state,
+// no clamp, no test. This suite covers the actual implementation.
+describe("UnifiedBoard detail drawer resize", () => {
+  it("renders the resize handle only while the drawer is open", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(document.querySelector(".kanban-detail-resize-handle")).toBeNull();
+    await user.click(screen.getByText("Open me"));
+    expect(document.querySelector(".kanban-detail-resize-handle")).toBeInTheDocument();
+  });
+
+  it("grows the drawer on a leftward drag and persists the width to localStorage", () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    fireEvent.click(screen.getByText("Open me"));
+
+    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
+    // jsdom does no layout, so clientWidth is 0 by default — mocked here to
+    // a realistic board width so the clamp (container width - 240px column
+    // reserve) doesn't immediately floor every resize to MIN_DRAWER_WIDTH.
+    Object.defineProperty(main, "clientWidth", { value: 1600, configurable: true });
+    const handle = document.querySelector(".kanban-detail-resize-handle") as HTMLElement;
+
+    fireEvent.mouseDown(handle, { clientX: 800 });
+    expect(document.body.style.cursor).toBe("col-resize");
+    // Handle sits on the drawer's LEFT border — dragging left (clientX
+    // decreases) grows the drawer, same direction Dock.tsx's own height
+    // handle uses on its own axis.
+    fireEvent.mouseMove(window, { clientX: 750 });
+    fireEvent.mouseUp(window);
+
+    expect(document.body.style.cursor).toBe("");
+    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("430px");
+    expect(localStorage.getItem("crs.taskDrawerWidth")).toBe("430");
+  });
+
+  it("clamps the drawer width so at least one column stays visible", () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    fireEvent.click(screen.getByText("Open me"));
+
+    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
+    // A narrow board (500px) reserves 240px for columns, capping the
+    // drawer at 260px — below MIN_DRAWER_WIDTH (300), so the floor wins.
+    Object.defineProperty(main, "clientWidth", { value: 500, configurable: true });
+    const handle = document.querySelector(".kanban-detail-resize-handle") as HTMLElement;
+
+    fireEvent.mouseDown(handle, { clientX: 800 });
+    fireEvent.mouseMove(window, { clientX: 0 });
+    fireEvent.mouseUp(window);
+
+    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("300px");
+  });
+
+  it("restores a persisted width on mount", async () => {
+    localStorage.setItem("crs.taskDrawerWidth", "500");
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open me"));
+    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
+    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("500px");
   });
 });
 

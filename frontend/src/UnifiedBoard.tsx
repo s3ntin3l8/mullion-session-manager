@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type {
+  CSSProperties,
+  DragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import { useDashboardStore } from "./store.js";
 import type { Theme } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
@@ -40,6 +45,21 @@ import { ApiError } from "./api.js";
 import { formatRelativeAge } from "./relativeTime.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
+
+// Detail drawer resize (see the drag-handle logic in UnifiedBoard below) —
+// same localStorage-key naming convention as store.ts's SIDEBAR_WIDTH_KEY.
+const TASK_DRAWER_WIDTH_KEY = "crs.taskDrawerWidth";
+const DEFAULT_DRAWER_WIDTH = 380; // .kanban-detail-drawer's own prior fixed width
+const MIN_DRAWER_WIDTH = 300;
+// Reserves at least this much width for the columns behind the drawer —
+// .kanban-unified-columns .kanban-column's own min-width (200px) plus a
+// sliver of the next column, so dragging the drawer wide never collapses
+// the board down to zero visible columns.
+const MIN_COLUMNS_WIDTH = 240;
+
+function clampDrawerWidth(n: number, maxW: number): number {
+  return Math.min(Math.max(n, MIN_DRAWER_WIDTH), Math.max(MIN_DRAWER_WIDTH, maxW));
+}
 
 // Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
 // as Sidebar.tsx's sessionPrDotClass/GitHubPanel.tsx's ciDotClass —
@@ -259,9 +279,79 @@ export function UnifiedBoard({
     }
   };
 
+  // ---- Detail drawer width (drag handle on the drawer's left border) ----
+  // Same self-contained localStorage + mousedown/mousemove/mouseup pattern
+  // as Dock.tsx's own height handle — deliberately NOT threaded through the
+  // store, since nothing outside this component reads it. Unlike Dock's
+  // resize (which clamps against a fixed floor and the grid's own min
+  // height), the drawer's neighbor here is seven columns with no natural
+  // ceiling of their own (.kanban-unified-tasks is `overflow-x: auto`), so
+  // dragging without an upper clamp could push the drawer wide enough to
+  // scroll every column out of view. mainRef measures the actual rendered
+  // width of .kanban-unified-main at drag start so the clamp adapts to
+  // whatever window size the drag happens to start at.
+  const mainRef = useRef<HTMLDivElement>(null);
+  const [drawerWidth, setDrawerWidth] = useState(() => {
+    const n = Number(localStorage.getItem(TASK_DRAWER_WIDTH_KEY));
+    return Number.isFinite(n) && n > 0 ? clampDrawerWidth(n, Infinity) : DEFAULT_DRAWER_WIDTH;
+  });
+  const widthDragRef = useRef<{ startX: number; startW: number; maxW: number } | null>(null);
+  const [widthDragging, setWidthDragging] = useState(false);
+
+  const onResizeMouseDown = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const containerWidth = mainRef.current?.clientWidth ?? Infinity;
+    widthDragRef.current = {
+      startX: e.clientX,
+      startW: drawerWidth,
+      maxW: Math.max(MIN_DRAWER_WIDTH, containerWidth - MIN_COLUMNS_WIDTH),
+    };
+    setWidthDragging(true);
+  };
+
+  useEffect(() => {
+    if (!widthDragging) return;
+    const onMove = (e: MouseEvent) => {
+      const d = widthDragRef.current;
+      if (!d) return;
+      // Handle sits on the drawer's LEFT border: dragging left (clientX
+      // decreases) grows the drawer, matching the direction the border
+      // itself moves.
+      setDrawerWidth(clampDrawerWidth(d.startW + (d.startX - e.clientX), d.maxW));
+    };
+    const onUp = () => setWidthDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [widthDragging]);
+
+  // Persist on drag end only (Dock.tsx's own precedent) — skips the initial
+  // mount so a user who never touches the handle doesn't get the
+  // localStorage-or-default width silently written back.
+  const widthMountedRef = useRef(false);
+  useEffect(() => {
+    if (!widthMountedRef.current) {
+      widthMountedRef.current = true;
+      return;
+    }
+    if (!widthDragging) localStorage.setItem(TASK_DRAWER_WIDTH_KEY, String(drawerWidth));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- persist-on-drag-end, drawerWidth read intentionally
+  }, [widthDragging]);
+
   return (
     <div className="kanban-unified">
-      <div className="kanban-unified-main">
+      <div
+        className="kanban-unified-main"
+        ref={mainRef}
+        style={{ "--task-drawer-width": `${drawerWidth}px` } as CSSProperties}
+      >
         <div className="kanban-unified-tasks">
           <TasksToolbar
             creating={creating}
@@ -322,38 +412,49 @@ export function UnifiedBoard({
           </div>
         </div>
         {detailTaskId !== null && (
-          <aside
-            ref={drawerRef}
-            className="kanban-detail-drawer"
-            role="dialog"
-            aria-label="Task detail"
-            onKeyDown={onDrawerKeyDown}
-          >
-            {/* A fixed header bar rather than the close button floating
-                absolutely over TaskDetail's own content — it used to sit
-                directly on top of TaskDetail's status badge (see
-                .task-detail-header's own padding-right comment in
-                styles.css) and was a 22px target, well under the 44px
-                mobile minimum where it's the drawer's only way out. Must
-                stay the drawer's first child, with the close button its
-                first (and only) focusable — the Tab focus-trap test
-                (UnifiedBoard.test.tsx) asserts shift-Tab from this button
-                wraps to the LAST focusable inside the aside, which only
-                holds if nothing focusable sits before it. */}
-            <div className="kanban-detail-drawer-header">
-              <span className="kanban-detail-drawer-header-label">Task</span>
-              <button
-                ref={drawerCloseButtonRef}
-                type="button"
-                className="kanban-detail-drawer-close"
-                aria-label="Close task detail"
-                onClick={() => setDetailTaskId(null)}
-              >
-                <CloseIcon size={14} />
-              </button>
-            </div>
-            <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={openSession} />
-          </aside>
+          <>
+            {/* Sibling BEFORE the aside, not inside it — the Tab focus-trap
+                (onDrawerKeyDown below) only queries drawerRef.current's own
+                subtree, and this is deliberately not a tab stop (mouse-only,
+                matching Dock.tsx's own resize handle), so keeping it outside
+                the aside is what keeps it from ever being counted as a
+                focusable inside the trap. Hidden on mobile (styles.css) —
+                the drawer there is a full-bleed fixed sheet with nothing to
+                resize. */}
+            <div className="kanban-detail-resize-handle" onMouseDown={onResizeMouseDown} />
+            <aside
+              ref={drawerRef}
+              className="kanban-detail-drawer"
+              role="dialog"
+              aria-label="Task detail"
+              onKeyDown={onDrawerKeyDown}
+            >
+              {/* A fixed header bar rather than the close button floating
+                  absolutely over TaskDetail's own content — it used to sit
+                  directly on top of TaskDetail's status badge (see
+                  .task-detail-header's own padding-right comment in
+                  styles.css) and was a 22px target, well under the 44px
+                  mobile minimum where it's the drawer's only way out. Must
+                  stay the drawer's first child, with the close button its
+                  first (and only) focusable — the Tab focus-trap test
+                  (UnifiedBoard.test.tsx) asserts shift-Tab from this button
+                  wraps to the LAST focusable inside the aside, which only
+                  holds if nothing focusable sits before it. */}
+              <div className="kanban-detail-drawer-header">
+                <span className="kanban-detail-drawer-header-label">Task</span>
+                <button
+                  ref={drawerCloseButtonRef}
+                  type="button"
+                  className="kanban-detail-drawer-close"
+                  aria-label="Close task detail"
+                  onClick={() => setDetailTaskId(null)}
+                >
+                  <CloseIcon size={14} />
+                </button>
+              </div>
+              <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={openSession} />
+            </aside>
+          </>
         )}
       </div>
       <div className="kanban-unified-lane">
@@ -727,6 +828,14 @@ function TaskCard({
   // otherwise (backlog/ready, never yet claimed). Task's own timestamps are
   // ISO strings (api.ts) but formatRelativeAge takes epoch ms, same
   // Date.parse TaskDetail.tsx's own footer already does.
+  //
+  // Hermes review — a Failed task also falls into that createdAt bucket,
+  // but "how long has this been sitting here" is the wrong story for it: a
+  // task can be claimed, run for weeks, and fail yesterday, and would still
+  // read "3w ago" — time since creation, not time in Failed. There's no
+  // failedAt column to read instead (schema.ts), so createdAt stays the
+  // best available timestamp, but the label is honest about what it means
+  // only for Failed rather than implying it's freshness of the failure.
   const statusTimestamp =
     task.status === "claimed" || task.status === "in_progress"
       ? task.claimedAt
@@ -736,6 +845,7 @@ function TaskCard({
           ? task.completedAt
           : task.createdAt;
   const statusAge = statusTimestamp ? formatRelativeAge(Date.parse(statusTimestamp)) : null;
+  const statusAgeLabel = statusAge && task.status === "failed" ? `created ${statusAge}` : statusAge;
 
   return (
     <div
@@ -817,14 +927,23 @@ function TaskCard({
             {agentName}
           </span>
         )}
-        {statusAge && <span className="task-card-age">{statusAge}</span>}
+        {statusAgeLabel && <span className="task-card-age">{statusAgeLabel}</span>}
         {/* D4 — #485's own drawer-only sync-error banner (TaskDetail.tsx)
             defeats its own stated motivation if a task can be happily
             in_progress while its GitHub sync is silently broken and nothing
-            on the board says so. */}
+            on the board says so.
+            Hermes review — this was an icon-only span with no accessible
+            name of its own: the title attribute is a hover-only tooltip, so
+            a screen reader announced an unnamed graphic. aria-label carries
+            the same text as the tooltip; the icon itself is aria-hidden so
+            it isn't announced a second time as an unlabeled image. */}
         {task.githubSyncError && (
-          <span className="task-card-sync-error" title={`GitHub sync: ${task.githubSyncError}`}>
-            <WarningTriangleIcon size={11} />
+          <span
+            className="task-card-sync-error"
+            title={`GitHub sync: ${task.githubSyncError}`}
+            aria-label={`GitHub sync error: ${task.githubSyncError}`}
+          >
+            <WarningTriangleIcon size={11} aria-hidden="true" />
           </span>
         )}
       </div>

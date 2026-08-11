@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store.js";
-import { statusLabel } from "./tasksBoard.js";
+import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import { ApiError } from "./api.js";
 import type { GitHubCiStatus, Session, Task } from "./api.js";
@@ -281,6 +281,7 @@ function TaskActions({ task }: { task: Task }) {
     retryTask,
     giveUpTask,
     updateTask,
+    tasks,
   } = useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
   // Which free-text-reason-then-confirm flow is open, if any — reject and
@@ -298,16 +299,35 @@ function TaskActions({ task }: { task: Task }) {
   // Backlog<->Ready is the board's only user-driven, non-terminal drag
   // (UnifiedBoard.tsx's DRAG_EDITABLE_STATUSES) — and drag is the ONLY way
   // to reach it, which HTML5 drag-and-drop never fires on a touch device.
-  // Same request shape UnifiedBoard.tsx's own applyDrop sends on a drop
-  // (status patch, no boardOrder change needed here since this always
-  // appends), and not gated on taskMasterEnabled — it's local board CRUD,
-  // same posture as DeleteTaskAction above, not one of the
-  // spawn/promote-an-agent actions that flag actually guards.
+  // Not gated on taskMasterEnabled — it's local board CRUD, same posture as
+  // DeleteTaskAction above, not one of the spawn/promote-an-agent actions
+  // that flag actually guards.
+  //
+  // Hermes review — an earlier version sent a bare `{ status }` patch and
+  // claimed (wrongly) that this "always appends". PATCH /api/tasks/:id
+  // (routes/tasks.ts) only writes the fields given and never reindexes, so
+  // a status-only patch would have kept the task's PREVIOUS boardOrder and
+  // left it wherever orderTasksForColumn's (boardOrder, id) sort happened
+  // to place it in the new column — often not the end, and inconsistent
+  // with the drag path. Reusing computeTaskReorder with a target index of
+  // "one past the target column's last task" is exactly what
+  // UnifiedBoard.tsx's own applyDrop does for a drop, so this now genuinely
+  // appends and matches drag placement.
   const moveStatus = async (status: "backlog" | "ready") => {
     setSubmitting(true);
     setError(null);
     try {
-      await updateTask(task.id, { status });
+      const targetIndex = orderTasksForColumn(tasks, status).length;
+      const updates = computeTaskReorder(tasks, task.id, status, targetIndex);
+      for (const update of updates) {
+        const patch: { status?: "backlog" | "ready"; boardOrder: number } = {
+          boardOrder: update.boardOrder,
+        };
+        if (update.id === task.id && update.status !== task.status) {
+          patch.status = update.status as "backlog" | "ready";
+        }
+        await updateTask(update.id, patch);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to move task");
     } finally {

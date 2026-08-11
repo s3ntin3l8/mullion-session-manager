@@ -3638,7 +3638,11 @@ body {
 }
 .kanban-detail-drawer {
   position: relative;
-  flex: 0 0 380px;
+  /* --task-drawer-width is set inline on .kanban-unified-main
+     (UnifiedBoard.tsx) from its own drag-resizable state — the fallback is
+     this rule's own prior fixed value, so a stale/absent localStorage read
+     degrades to exactly the old behavior. */
+  flex: 0 0 var(--task-drawer-width, 380px);
   min-width: 0;
   border-left: 1px solid var(--border-soft);
   /* A fixed header (.kanban-detail-drawer-header) plus TaskDetail's own
@@ -3683,6 +3687,29 @@ body {
 .kanban-detail-drawer-close:hover {
   color: var(--fg);
   background: var(--track);
+}
+/* UnifiedBoard.tsx's own drag-to-resize handle for the drawer — hover-
+   revealed, same shape as .dock-resize-handle above, just on the vertical
+   axis (the drawer's LEFT border, not the dock's top one). Rendered as a
+   sibling immediately before the <aside>, so this sits right on that
+   border without needing to know the drawer's own width. */
+.kanban-detail-resize-handle {
+  flex: 0 0 0;
+  position: relative;
+  width: 0;
+  cursor: col-resize;
+  z-index: 2;
+}
+.kanban-detail-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+}
+.kanban-detail-resize-handle:hover::after {
+  background: var(--ring, var(--muted));
 }
 .kanban-unified-lane {
   flex: 0 0 auto;
@@ -6618,6 +6645,12 @@ button.danger.armed {
   .kanban-detail-drawer-close {
     width: 44px;
     height: 44px;
+  }
+  /* The mobile drawer is a full-bleed fixed sheet (above) with no columns
+     visible behind it to resize against, and mouse drag events don't fire
+     on touch anyway. */
+  .kanban-detail-resize-handle {
+    display: none;
   }
   .kanban-lane-body {
     /* Was a horizontally-scrolling strip of fixed-width cards nested inside
