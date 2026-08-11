@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../src/app.js";
+import { buildTestApp } from "./helpers/app.js";
 
 // Multi-host support (issue #26) role branch — see src/app.ts and
 // src/plugins/env.ts. This PR only wires the role flag, the fail-closed boot
@@ -12,7 +13,7 @@ describe("buildApp role branch (issue #26)", () => {
   });
 
   it("defaults to primary and keeps every existing route registered", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     expect(app.config.MULLION_ROLE).toBe("primary");
     expect(app.config.MULLION_AGENT_TOKEN).toBe("");
     expect(app.hasDecorator("db")).toBe(true);
@@ -20,7 +21,6 @@ describe("buildApp role branch (issue #26)", () => {
 
     const res = await app.inject({ method: "GET", url: "/api/projects" });
     expect(res.statusCode).toBe(200);
-    await app.close();
   });
 
   it("refuses to boot as agent with no shared token", async () => {
@@ -39,7 +39,7 @@ describe("buildApp role branch (issue #26)", () => {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_AGENT_TOKEN = "test-token";
 
-    const app = await buildApp();
+    const app = await buildTestApp();
     expect(app.config.MULLION_ROLE).toBe("agent");
     // No app.db/app.encryption — dbPlugin is never registered for an agent.
     expect(app.hasDecorator("db")).toBe(false);
@@ -58,7 +58,5 @@ describe("buildApp role branch (issue #26)", () => {
     expect(projects.statusCode).toBe(404);
     const terminal = await app.inject({ method: "GET", url: "/ws/terminal?sessionId=1" });
     expect(terminal.statusCode).toBe(404);
-
-    await app.close();
   });
 });

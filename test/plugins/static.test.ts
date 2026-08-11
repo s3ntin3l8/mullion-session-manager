@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { buildApp } from "../../src/app.js";
+import { buildTestApp } from "../helpers/app.js";
 
 describe("staticPlugin", () => {
   const originalFrontendDist = process.env.FRONTEND_DIST;
@@ -19,13 +19,11 @@ describe("staticPlugin", () => {
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
     process.env.FRONTEND_DIST = tmpDist;
 
-    const app = await buildApp();
+    const app = await buildTestApp();
 
     const response = await app.inject({ method: "GET", url: "/" });
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain("the real frontend");
-
-    await app.close();
   });
 
   // Perf audit finding A4 — content-hashed /assets/* files are safe to
@@ -41,7 +39,7 @@ describe("staticPlugin", () => {
     fs.writeFileSync(path.join(tmpDist, "assets", "index-abc123.js"), "console.log('hi')");
     process.env.FRONTEND_DIST = tmpDist;
 
-    const app = await buildApp();
+    const app = await buildTestApp();
 
     const asset = await app.inject({ method: "GET", url: "/assets/index-abc123.js" });
     expect(asset.statusCode).toBe(200);
@@ -56,8 +54,6 @@ describe("staticPlugin", () => {
     expect(sw.statusCode).toBe(200);
     expect(sw.headers["cache-control"]).not.toContain("immutable");
     expect(sw.headers["cache-control"]).toContain("max-age=0");
-
-    await app.close();
   });
 
   // Regression for a substring-match bug caught in review: an earlier
@@ -73,14 +69,12 @@ describe("staticPlugin", () => {
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
     process.env.FRONTEND_DIST = tmpDist;
 
-    const app = await buildApp();
+    const app = await buildTestApp();
 
     const index = await app.inject({ method: "GET", url: "/" });
     expect(index.statusCode).toBe(200);
     expect(index.headers["cache-control"]).not.toContain("immutable");
     expect(index.headers["cache-control"]).toContain("max-age=0");
-
-    await app.close();
     fs.rmSync(assetsParent, { recursive: true, force: true });
   });
 
@@ -103,7 +97,7 @@ describe("staticPlugin", () => {
     );
     process.env.FRONTEND_DIST = tmpDist;
 
-    const app = await buildApp();
+    const app = await buildTestApp();
 
     const rootAsset = await app.inject({ method: "GET", url: "/assets/index-abc123.js" });
     expect(rootAsset.statusCode).toBe(200);
@@ -116,8 +110,6 @@ describe("staticPlugin", () => {
     expect(nestedAsset.statusCode).toBe(200);
     expect(nestedAsset.headers["cache-control"]).not.toContain("immutable");
     expect(nestedAsset.headers["cache-control"]).toContain("max-age=0");
-
-    await app.close();
   });
 
   // Perf audit finding A4 — @fastify/compress must actually apply to
@@ -133,7 +125,7 @@ describe("staticPlugin", () => {
     fs.writeFileSync(path.join(tmpDist, "assets", "big-abc123.js"), "x".repeat(5000));
     process.env.FRONTEND_DIST = tmpDist;
 
-    const app = await buildApp();
+    const app = await buildTestApp();
 
     const response = await app.inject({
       method: "GET",
@@ -142,7 +134,5 @@ describe("staticPlugin", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-encoding"]).toBe("gzip");
-
-    await app.close();
   });
 });

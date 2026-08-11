@@ -1,8 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+// These three helper imports must come before any import of "node-pty" or
+// "node:child_process" below (including transitively, e.g. via
+// "node:child_process"'s own `execFileSync` import) — Vitest intercepts a
+// mocked module at the position of its FIRST static import in the file's
+// (transformed, sequential) evaluation order, and the mock factories below
+// close over these helpers. If a "node:child_process" import appeared
+// first, the factory would run before this binding was initialized
+// (`ReferenceError: Cannot access '...' before initialization` — verified
+// empirically while writing this).
+import { buildTestApp } from "../helpers/app.js";
+import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -10,27 +21,11 @@ import { gitEnv } from "../../src/services/git-env.js";
 // Real integration test against a genuine listening server, same harness
 // shape as test/routes/events.test.ts — app.inject() can't drive a full
 // WebSocket upgrade.
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => ({
-    onData: () => ({ dispose: () => {} }),
-    onExit: () => ({ dispose: () => {} }),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-  })),
-}));
+vi.mock("node-pty", () => plainNodePtyMock());
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
-  return {
-    ...actual,
-    spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
-      if (command === "git") return actual.spawn(command, args, options);
-      const ee = new EventEmitter();
-      setImmediate(() => ee.emit("exit", 0));
-      return ee;
-    }),
-  };
+  return mockChildProcessSpawn(actual, { passthrough: ["git"] });
 });
 
 const mockSyncTaskTransition = vi.fn().mockResolvedValue(undefined);
@@ -39,7 +34,6 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
   computeTaskDiffStat: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks } = await import("../../src/db/schema.js");
 
@@ -110,7 +104,7 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
   });
 
   async function buildAndListen() {
-    const app = await buildApp();
+    const app = await buildTestApp();
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();
     if (address === null || typeof address === "string") {
@@ -162,7 +156,6 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
     ws1.close();
     ws2.close();
     fs.rmSync(cwd, { recursive: true, force: true });
-    await app.close();
   });
 
   it("does not broadcast a boardOrder-only PATCH (no status change)", async () => {
@@ -196,7 +189,6 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
     expect(messages).toHaveLength(0);
 
     ws.close();
-    await app.close();
   });
 
   it("broadcasts a status-changing PATCH (backlog -> ready)", async () => {
@@ -233,6 +225,5 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
     });
 
     ws.close();
-    await app.close();
   });
 });

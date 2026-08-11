@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
-import { buildApp } from "../../src/app.js";
+import { buildTestApp } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { pushKeys, pushSubscriptions } from "../../src/db/schema.js";
 import {
@@ -30,7 +30,7 @@ describe("push-store (issue #95 prerequisite)", () => {
   });
 
   it("getOrCreateVapidKeys generates once and is idempotent across calls", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     const first = getOrCreateVapidKeys(app);
     const second = getOrCreateVapidKeys(app);
     expect(first.publicKey).toBe(second.publicKey);
@@ -38,7 +38,6 @@ describe("push-store (issue #95 prerequisite)", () => {
 
     const rows = app.db.select().from(pushKeys).all();
     expect(rows).toHaveLength(1);
-    await app.close();
   });
 
   describe("with DB_ENCRYPTION_KEY set", () => {
@@ -67,18 +66,17 @@ describe("push-store (issue #95 prerequisite)", () => {
     });
 
     it("stores the VAPID private key encrypted, not in plaintext", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { privateKey } = getOrCreateVapidKeys(app);
 
       const [row] = app.db.select().from(pushKeys).where(eq(pushKeys.id, 1)).all();
       expect(row).toBeDefined();
       expect(row!.privateKeyEnc).not.toBe(privateKey);
       expect(row!.privateKeyEnc.startsWith("enc:")).toBe(true);
-      await app.close();
     });
 
     it("stores a subscription's auth key encrypted, not in plaintext", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       upsertSubscription(app, {
         endpoint: "https://push.example.com/encryption-test",
         p256dh: "p256dh-plain",
@@ -95,11 +93,10 @@ describe("push-store (issue #95 prerequisite)", () => {
       expect(row!.p256dhKey).toBe("p256dh-plain");
       expect(row!.authKeyEnc).not.toBe("auth-secret-plain");
       expect(row!.authKeyEnc.startsWith("enc:")).toBe(true);
-      await app.close();
     });
 
     it("getSubscriptionsForSend skips an undecryptable row instead of aborting the whole batch", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       // This describe block shares one DB across tests — clear it first so
       // an earlier test's still-present, validly-encrypted row doesn't
       // count toward this test's own length assertions.
@@ -142,12 +139,11 @@ describe("push-store (issue #95 prerequisite)", () => {
       expect(results).toHaveLength(1);
       expect(results[0].endpoint).toBe("https://push.example.com/valid");
       expect(results[0].auth).toBe("auth-valid");
-      await app.close();
     });
   });
 
   it("recordSendSuccess clears a stale lastFailureAt", async () => {
-    const app = await buildApp();
+    const app = await buildTestApp();
     upsertSubscription(app, {
       endpoint: "https://push.example.com/recovers",
       p256dh: "p256dh",
@@ -171,6 +167,5 @@ describe("push-store (issue #95 prerequisite)", () => {
       .all();
     expect(afterRow!.lastFailureAt).toBeNull();
     expect(afterRow!.lastSuccessAt).not.toBeNull();
-    await app.close();
   });
 });

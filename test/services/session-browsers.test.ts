@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { eq } from "drizzle-orm";
+import { buildTestApp } from "../helpers/app.js";
 
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { sessionBrowsers, sessions } = await import("../../src/db/schema.js");
 const { recordSessionBrowserBinding, listSessionBrowserBindings, closeSessionBrowserBindings } =
@@ -29,7 +29,7 @@ describe("session-browsers", () => {
   });
 
   async function createProjectAndSessions(
-    app: Awaited<ReturnType<typeof buildApp>>,
+    app: Awaited<ReturnType<typeof buildTestApp>>,
     count = 1,
   ): Promise<{ projectId: number; sessionIds: number[] }> {
     const project = await app.inject({
@@ -52,7 +52,7 @@ describe("session-browsers", () => {
 
   describe("recordSessionBrowserBinding", () => {
     it("creates a binding row for a session", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { projectId, sessionIds } = await createProjectAndSessions(app);
 
       recordSessionBrowserBinding(app, sessionIds[0], projectId);
@@ -60,12 +60,10 @@ describe("session-browsers", () => {
       const rows = listSessionBrowserBindings(app, sessionIds[0]);
       expect(rows).toHaveLength(1);
       expect(rows[0].projectId).toBe(projectId);
-
-      await app.close();
     });
 
     it("upserts rather than accumulating a new row per reconnect", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { projectId, sessionIds } = await createProjectAndSessions(app);
 
       recordSessionBrowserBinding(app, sessionIds[0], projectId);
@@ -79,25 +77,21 @@ describe("session-browsers", () => {
       expect(rows[0].lastAttachedAt.getTime()).toBeGreaterThanOrEqual(
         firstRows[0].lastAttachedAt.getTime(),
       );
-
-      await app.close();
     });
   });
 
   describe("listSessionBrowserBindings", () => {
     it("returns an empty array for a session with no binding", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { sessionIds } = await createProjectAndSessions(app);
 
       expect(listSessionBrowserBindings(app, sessionIds[0])).toEqual([]);
-
-      await app.close();
     });
   });
 
   describe("closeSessionBrowserBindings", () => {
     it("is a no-op for a session with no binding", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { sessionIds } = await createProjectAndSessions(app);
       const closeForProjectSpy = vi
         .spyOn(app.browser, "closeForProject")
@@ -106,12 +100,10 @@ describe("session-browsers", () => {
       closeSessionBrowserBindings(app, sessionIds[0]);
 
       expect(closeForProjectSpy).not.toHaveBeenCalled();
-
-      await app.close();
     });
 
     it("deletes the binding row and closes the project browser when no sibling session uses it", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { projectId, sessionIds } = await createProjectAndSessions(app);
       const closeForProjectSpy = vi
         .spyOn(app.browser, "closeForProject")
@@ -122,12 +114,10 @@ describe("session-browsers", () => {
 
       expect(listSessionBrowserBindings(app, sessionIds[0])).toEqual([]);
       expect(closeForProjectSpy).toHaveBeenCalledWith(projectId);
-
-      await app.close();
     });
 
     it("does NOT close the project browser while a sibling session still holds a binding to it", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { projectId, sessionIds } = await createProjectAndSessions(app, 2);
       const closeForProjectSpy = vi
         .spyOn(app.browser, "closeForProject")
@@ -146,12 +136,10 @@ describe("session-browsers", () => {
       // Closing the last remaining session's binding now does close it.
       closeSessionBrowserBindings(app, sessionIds[1]);
       expect(closeForProjectSpy).toHaveBeenCalledWith(projectId);
-
-      await app.close();
     });
 
     it("cascade-deletes a session's binding row when the session row itself is deleted", async () => {
-      const app = await buildApp();
+      const app = await buildTestApp();
       const { projectId, sessionIds } = await createProjectAndSessions(app);
       recordSessionBrowserBinding(app, sessionIds[0], projectId);
 
@@ -163,8 +151,6 @@ describe("session-browsers", () => {
         .where(eq(sessionBrowsers.sessionId, sessionIds[0]))
         .all();
       expect(remaining).toEqual([]);
-
-      await app.close();
     });
   });
 });

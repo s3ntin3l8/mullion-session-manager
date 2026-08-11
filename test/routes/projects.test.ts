@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" — see mock-pty.ts's header comment for
+// the empirically confirmed hoisting/ordering failure mode.
+import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 
@@ -30,27 +34,11 @@ import { gitEnv } from "../../src/services/git-env.js";
 // (pty-manager.ts's stopScope/isMasterAlive — never actually reaches a
 // real scope once systemd-run is faked, and doesn't `.kill()` its child)
 // and everything else passes through to the real `spawn`.
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => ({
-    onData: () => ({ dispose: () => {} }),
-    onExit: () => ({ dispose: () => {} }),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-  })),
-}));
+vi.mock("node-pty", () => plainNodePtyMock());
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
-  return {
-    ...actual,
-    spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
-      if (command !== "systemd-run") return actual.spawn(command, args, options);
-      const ee = new EventEmitter();
-      setImmediate(() => ee.emit("exit", 0));
-      return ee;
-    }),
-  };
+  return mockChildProcessSpawn(actual, { fake: ["systemd-run"] });
 });
 
 const { buildApp } = await import("../../src/app.js");
