@@ -76,6 +76,12 @@ export function mockFetch(routes: RouteTable): MockFetchResult {
   const compiled = Object.entries(routes).map(([key, handler]) => compileRoute(key, handler));
   const unexpectedCalls: string[] = [];
 
+  // `input` is assumed to be a string or URL, per this suite's actual call
+  // sites (api.ts's `request<T>` always calls `fetch` with a relative
+  // string path, never a Request object) — a Request input would stringify
+  // to "[object Request]" and fail to match any route, landing in
+  // `unexpectedCalls` with a useless key rather than a hard crash. Pin this
+  // contract before extending mockFetch to a caller that might not hold it.
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -88,9 +94,19 @@ export function mockFetch(routes: RouteTable): MockFetchResult {
       const match = route.regex.exec(path);
       if (!match) continue;
       const params: Record<string, string> = {};
-      route.paramNames.forEach((name, i) => {
-        params[name] = decodeURIComponent(match[i + 1]);
-      });
+      try {
+        route.paramNames.forEach((name, i) => {
+          params[name] = decodeURIComponent(match[i + 1]);
+        });
+      } catch {
+        // A malformed percent-encoded segment (e.g. a literal "%" in a
+        // path param) throws URIError — route through the same
+        // unexpectedCalls path as a genuinely unmatched route rather than
+        // letting the exception escape the mock and fail the test with an
+        // unrelated-looking stack trace.
+        unexpectedCalls.push(`${method} ${url}`);
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      }
       return Promise.resolve(route.handler({ method, url, path, params, query, init }));
     }
 

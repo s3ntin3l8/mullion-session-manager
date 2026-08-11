@@ -30,6 +30,14 @@ type DashboardState = ReturnType<typeof useDashboardStore.getState>;
 // field) so it can never drift out of sync with a field store.ts adds,
 // renames, or removes later — the same "typed against the real shape"
 // reasoning fixtures.ts's builders follow.
+//
+// This is a SHALLOW capture — PRISTINE_STATE holds references to the same
+// nested objects/arrays the live store starts with, not deep clones. Safe
+// as long as every mutation goes through `setState` (which always installs
+// fresh nested values, per zustand convention and this codebase's own
+// store.ts actions) rather than mutating a value in place
+// (`getState().sessions[0].x = ...`) — an in-place mutation before any
+// `setState` would corrupt this snapshot for every later test in the file.
 const PRISTINE_STATE: DashboardState = useDashboardStore.getState();
 
 /**
