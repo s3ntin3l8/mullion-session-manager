@@ -17,6 +17,13 @@ updates:
       npm-deps:
         patterns:
           - "*"
+    ignore:
+      # typescript-eslint's peer range is `>=4.8.4 <6.1.0` as of 8.67.0 and
+      # there is no v9 line yet, so TS 7 hard-fails `npm ci` with ERESOLVE and
+      # takes the whole grouped PR down with it (PRs #565/#595). Drop this
+      # block the moment typescript-eslint peer-allows TS 7.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
 
   - package-ecosystem: "npm"
     directory: "/frontend"
@@ -26,3 +33,7 @@ updates:
       npm-deps-frontend:
         patterns:
           - "*"
+    ignore:
+      # Same conflict as the root manifest — see the comment there.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
