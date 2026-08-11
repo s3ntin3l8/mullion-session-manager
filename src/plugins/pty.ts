@@ -225,22 +225,40 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // comment), so this piggybacks on the same primary-role, same-interval
       // timer as the exited-session reconciliation above rather than
       // needing its own.
-      const staleErrorMs = readStaleErrorMs(app);
-      const clearedErrors = manager.sweepStaleErrors(staleErrorMs);
-      if (clearedErrors.length > 0) {
-        app.log.info({ sessionIds: clearedErrors }, "cleared stale errorState past its TTL");
-      }
-      // Issue #320 — the general blocked/busy-state staleness sweep: blocked
-      // latches (permission/plan/gate/promote/elicitation) use staleErrorMs,
-      // busy latches (compact/subagent) use their own, longer staleBusyMs —
-      // see readStaleBusyMs's doc comment for why they need different TTLs.
-      const staleBusyMs = readStaleBusyMs(app);
-      const clearedBlocked = manager.sweepStaleStates(staleErrorMs, staleBusyMs);
-      if (clearedBlocked.length > 0) {
-        app.log.info(
-          { sessionIds: clearedBlocked },
-          "cleared stale blocked/busy states past their TTL",
-        );
+      //
+      // Unlike the two reconcilers above (which are async and already
+      // `.catch()`-guarded), these reads/sweeps are synchronous — a bare
+      // throw here (e.g. `readStaleErrorMs`'s `app.db` query landing after
+      // the DB has closed: onClose hooks fire in reverse registration
+      // order, so a normal app.close() always clears this timer before
+      // dbPlugin's own onClose runs, but an app whose boot failed after
+      // this plugin registered — e.g. a later plugin's register() rejecting
+      // — never gets a close() call at all, leaving this same interval
+      // armed against a since-recycled db) would otherwise become an
+      // uncaught exception straight out of a bare Timeout callback, with no
+      // promise chain to catch it. Same defensive wrapping as
+      // devServerDetectTimer's own sweep just below — one missed tick is
+      // harmless opportunistic housekeeping either way.
+      try {
+        const staleErrorMs = readStaleErrorMs(app);
+        const clearedErrors = manager.sweepStaleErrors(staleErrorMs);
+        if (clearedErrors.length > 0) {
+          app.log.info({ sessionIds: clearedErrors }, "cleared stale errorState past its TTL");
+        }
+        // Issue #320 — the general blocked/busy-state staleness sweep: blocked
+        // latches (permission/plan/gate/promote/elicitation) use staleErrorMs,
+        // busy latches (compact/subagent) use their own, longer staleBusyMs —
+        // see readStaleBusyMs's doc comment for why they need different TTLs.
+        const staleBusyMs = readStaleBusyMs(app);
+        const clearedBlocked = manager.sweepStaleStates(staleErrorMs, staleBusyMs);
+        if (clearedBlocked.length > 0) {
+          app.log.info(
+            { sessionIds: clearedBlocked },
+            "cleared stale blocked/busy states past their TTL",
+          );
+        }
+      } catch (err) {
+        app.log.error({ err }, "stale-state sweep failed");
       }
     }, safeIntervalMs);
     reconcileTimer.unref();
