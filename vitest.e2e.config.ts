@@ -24,7 +24,20 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./test/setup.ts"],
     include: ["test/e2e/**/*.e2e.test.ts"],
-    exclude: [...configDefaults.exclude, "frontend/**", ".wt/**"],
+    // `include` is unanchored, so without these excludes a live worktree
+    // checked out under one of these paths (a `.wt/` dev workspace, a
+    // `.claude/worktrees/` agent-isolation worktree, or Task Master's own
+    // `.mullion-worktrees/mullion-task-<id>` — see vitest.config.ts's own
+    // `exclude` entry, which this list must stay in sync with) carries its
+    // own full `test/e2e/**` tree and gets swept into this run too, launching
+    // a second, duplicate real Chromium instance.
+    exclude: [
+      ...configDefaults.exclude,
+      "frontend/**",
+      ".wt/**",
+      ".claude/worktrees/**",
+      ".mullion-worktrees/**",
+    ],
     // A cold `chromium.launch()` (browser-actions.e2e.test.ts,
     // multi-host.e2e.test.ts) and a real spawned CLI child process
     // round-trip (cli.e2e.test.ts) both comfortably blow past Vitest's

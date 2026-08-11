@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev test test-coverage test-e2e lint typecheck format format-check build clean
+.PHONY: help install install-hooks dev test test-backend test-coverage test-e2e lint typecheck format format-check build clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -15,7 +15,10 @@ install-hooks: ## Install pre-commit hooks (requires pre-commit installed)
 dev: ## Start dev server
 	npm run dev
 
-test: ## Run tests
+test: ## Run tests (backend + frontend)
+	npm run test:all
+
+test-backend: ## Run backend tests only (fast inner loop)
 	npm run test
 
 test-coverage: ## Run tests with coverage
@@ -24,11 +27,11 @@ test-coverage: ## Run tests with coverage
 test-e2e: ## Run the opt-in Phase 4 socket API e2e suite (real browser/sockets, not part of `make test`)
 	npm run test:e2e
 
-lint: ## Run linter
-	npm run lint
+lint: ## Run linter (backend + frontend)
+	npm run lint:all
 
-typecheck: ## Run type checking
-	npm run typecheck
+typecheck: ## Run type checking (backend + frontend)
+	npm run typecheck:all
 
 format: ## Format code with Prettier
 	npm run format
