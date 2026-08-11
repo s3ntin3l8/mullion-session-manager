@@ -284,6 +284,37 @@ export function Settings({
     setMobileNavOpen(false);
   };
 
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Hermes review, PR #621 — on mobile, both drill-down pane swaps hide
+  // whatever held focus (the nav goes `display: none`; the back chevron
+  // unmounts on forward nav), dropping focus to <body> with no announcement
+  // of the view change. Moves focus to the new pane's own entry point:
+  // forward → the back chevron (the first thing in the now-visible content
+  // pane), back → the nav item for the still-current `section` (so a
+  // keyboard/screen-reader user lands back where they started, not at the
+  // top of the list). Skips the very first render deliberately — that
+  // initial focus-in is `useFocusTrap`'s job (P11, below), not this
+  // effect's; running on mount too would fight it for the first focused
+  // element. `.focus()` on the back button while it's the mobile block's
+  // own `display: none` (desktop, or any width ≥700px) is a no-op per spec
+  // — elements outside the flat tree aren't focusable — so this never steals
+  // focus outside the mobile breakpoint despite `mobileNavOpen` itself being
+  // viewport-agnostic state.
+  const isFirstRenderRef = useRef(true);
+  const backBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      return;
+    }
+    if (mobileNavOpen) {
+      modalRef.current?.querySelector<HTMLElement>(".settings-nav-item.active")?.focus();
+    } else {
+      backBtnRef.current?.focus();
+    }
+  }, [mobileNavOpen]);
+
   // P11 — this modal previously had none of UnifiedBoard.tsx's task-detail
   // drawer's focus management (focus-in, Tab trap, focus-restore). App.tsx
   // only mounts this component while `settingsOpen` is true (a fresh mount
@@ -301,7 +332,6 @@ export function Settings({
   // including outside this modal's own subtree, which is exactly what U9
   // exists to fix for the command palette. Adding a second, redundant local
   // handler would just call `onClose` twice for the same keypress.
-  const modalRef = useRef<HTMLDivElement>(null);
   const { onKeyDown: onTrapKeyDown } = useFocusTrap({ active: true, containerRef: modalRef });
 
   return (
@@ -322,6 +352,7 @@ export function Settings({
               on desktop via its own logic, just via the media query. */}
           {!mobileNavOpen && (
             <button
+              ref={backBtnRef}
               className="settings-back-btn"
               onClick={() => setMobileNavOpen(true)}
               aria-label="Back to settings list"
@@ -374,7 +405,14 @@ export function Settings({
           </div>
           <div className="settings-content">
             <div className="settings-content-header">
-              <div className="settings-content-title">{meta.title}</div>
+              {/* Hermes review, PR #621 (suggestion) — a plain div gave
+                  screen readers nothing to announce on a mobile pane swap;
+                  real heading semantics without touching its layout (a `h2`
+                  here would also need `.settings-content-title`'s own CSS
+                  reset for browser default heading margins). */}
+              <div className="settings-content-title" role="heading" aria-level={2}>
+                {meta.title}
+              </div>
               <div className="settings-content-desc">{meta.desc}</div>
             </div>
             <div className="cmux-scroll settings-content-body">

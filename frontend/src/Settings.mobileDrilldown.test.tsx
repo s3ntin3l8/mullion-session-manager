@@ -76,6 +76,36 @@ describe("Settings mobile drill-down", () => {
     expect(screen.queryByLabelText("Back to settings list")).not.toBeInTheDocument();
   });
 
+  // Hermes review, PR #621 — both drill-down pane swaps used to hide
+  // whatever held focus (the nav goes `display: none`; the back chevron
+  // unmounts), dropping focus to <body> with nothing announced to a
+  // screen-reader user.
+  it("moves focus to the back chevron on forward nav", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+
+    expect(screen.getByLabelText("Back to settings list")).toHaveFocus();
+  });
+
+  it("restores focus to the active nav item on back nav", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /terminal behavior/i }));
+    await user.click(screen.getByLabelText("Back to settings list"));
+
+    expect(screen.getByRole("button", { name: /terminal behavior/i })).toHaveFocus();
+  });
+
+  it("does not steal focus on initial mount — the focus trap owns that", () => {
+    const { container } = render(<Settings onClose={vi.fn()} />);
+
+    const closeBtn = container.querySelector(".settings-modal-close");
+    expect(closeBtn).toHaveFocus();
+  });
+
   it("an explicit deep link (initialSection) opens straight into that section's content", () => {
     render(<Settings onClose={vi.fn()} initialSection="server" />);
 
