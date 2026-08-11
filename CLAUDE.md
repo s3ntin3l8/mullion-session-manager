@@ -5,9 +5,9 @@ A self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals
 (SQLite via Drizzle, encryption-at-rest, security middleware) wired to the
 centralized CI/CD in [`s3ntin3l8/.github`](https://github.com/s3ntin3l8/.github).
 If you are an AI agent or developer working in this repo, read this first —
-and read the full design in
-[`.claude/plans/ok-i-m-thinking-of-merry-corbato.md`](.claude/plans/ok-i-m-thinking-of-merry-corbato.md)
-before touching `src/services/pty-manager.ts` or the terminal WS protocol.
+and read [`docs/architecture.md`](docs/architecture.md), plus the
+"non-obvious model" bullet below, before touching
+`src/services/pty-manager.ts` or the terminal WS protocol.
 
 ## Commands (Makefile)
 
@@ -22,15 +22,19 @@ before touching `src/services/pty-manager.ts` or the terminal WS protocol.
 | `make typecheck`     | Type-check with `tsc --noEmit`.                                                 |
 | `make format`        | Format the whole repo with Prettier (`--write`, includes `frontend/`).          |
 | `make format-check`  | Check formatting without writing — the pre-push gate.                           |
+| `make test-e2e`      | Opt-in socket-API e2e suite (real sockets/CLI/Chromium); see `test/e2e/`.       |
 | `make build`         | Production build → `dist/`.                                                     |
 | `make clean`         | Remove `node_modules`, `dist`, and caches.                                      |
+| `make help`          | List every target (the `.DEFAULT_GOAL`).                                        |
 
-`make dev`/`test`/`lint`/`typecheck` cover the backend only; `format`/
-`format-check` run repo-wide (they resolve `.prettierrc` from the root and
-cover `frontend/` too — see `.prettierignore` for excluded generated/vendored
-paths). The frontend is a separate npm workspace with its own `dev`/`build`/
-`lint`/`typecheck` scripts — run them from `frontend/` (or see `README.md`'s
-Quick Start). Direct npm equivalents also exist for the backend: `npm run
+`make dev` starts **both** workspaces (backend `tsx watch` + frontend Vite)
+via `concurrently`. `make test`/`lint`/`typecheck` cover the **backend
+only**; `format`/`format-check` run repo-wide (they resolve `.prettierrc`
+from the root and cover `frontend/` too — see `.prettierignore` for excluded
+generated/vendored paths). The frontend is a separate npm workspace with its
+own `dev`/`build`/`lint`/`typecheck` scripts — run them from `frontend/`, or
+use the root `npm run lint:all`/`typecheck:all`/`test:all` to cover both at
+once. Direct npm equivalents also exist for the backend: `npm run
 db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 
 ## Architecture / Layout
@@ -94,9 +98,9 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 
 Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 
-- `ci-cd.yml` (test-node + test-frontend only — no Docker image is built)
+- `ci-cd.yml` (test-node + test-frontend + test-e2e — no Docker image is built)
 - `codeql.yml`, `dependency-review.yml`, `release-please.yml`
-- **Exception:** `build-tarball` job in `release-please.yml` is a custom multi-step job that assembles/uploads the versioned-release tarball (no upstream reusable workflow exists).
+- **Exceptions (custom multi-step jobs, no upstream reusable workflow exists):** `build-tarball` in `release-please.yml`, which assembles/uploads the versioned-release tarball; and `test-e2e` in `ci-cd.yml`, which needs to `npx playwright install` a real Chromium before its test step — something `ci-node.yml` has no hook for.
 
 ### Reusable Workflows Rule
 
@@ -109,7 +113,8 @@ Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 ### ci-cd.yml structure
 
 - **`test-node` (backend)**: Runs at root. Script: `test:coverage`, `coverage-fail-under: 80`. Runs `npm ci`, lint, typecheck, format-check, and tests.
-- **`test-frontend`**: Runs under `frontend/`. No coverage floor (no `test:coverage` script). Skips format-check in CI (root-level `make format-check` hook covers it).
+- **`test-frontend`**: Runs under `frontend/`. Script: `test:coverage`, `coverage-fail-under: 70`. Skips format-check in CI (root-level `make format-check` hook covers it).
+- **`test-e2e`**: Custom job — checkout, `npm ci`, `npx playwright install --with-deps chromium`, `npm run test:e2e`. Deliberately **not** a required status check yet; see `test/e2e/README.md`.
 - **Codecov**: Uploads coverage using `CODECOV_TOKEN`. Target patch coverage is 75% (configured via `codecov.yml` to prevent failures on minor, well-tested diffs).
 - **Test Sharding (`test-shards: "2"`)**:
   - Node tests shard into `shard-plan` → 2×`test-shard` → `test-merge`.

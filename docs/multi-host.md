@@ -316,8 +316,6 @@ to "pending" until the next sweep, same as a fresh boot.
   credential (plus, for a session credential, the signature described
   below); put it behind the same network/VPN boundary you'd use for
   anything else with shell access.
-- Connection-time IP pinning (full DNS-rebinding protection) is not yet
-  implemented — see "What this does and doesn't protect against" above.
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it
