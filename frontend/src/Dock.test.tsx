@@ -5,7 +5,11 @@ import userEvent from "@testing-library/user-event";
 import { Dock } from "./Dock.js";
 import { useDashboardStore } from "./store.js";
 import { DEFAULT_SETTINGS } from "./api.js";
-import type { GitHubStatus, GitBranchesResult, Project, Session } from "./api.js";
+import type { GitHubStatus, GitBranchesResult, Session } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
+import { makeProject, makeSession } from "./test/fixtures.js";
+import { mockFetch } from "./test/mockFetch.js";
+import { resetStore } from "./test/resetStore.js";
 
 // xterm.js's Terminal.open() reaches for browser APIs jsdom doesn't
 // implement (e.g. matchMedia on the owner window) — TerminalPane itself is
@@ -20,42 +24,9 @@ vi.mock("./TerminalPane.js", () => ({
 // Mirrors Settings.hosts.test.tsx's fake-in-memory-backend pattern — a
 // mocked global fetch driving the real request()/store wiring (issue #27).
 
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+const PROJECT = makeProject({ id: 1, name: "mullion", cwd: "/home/x/mullion" });
 
-const PROJECT: Project = {
-  id: 1,
-  name: "mullion",
-  cwd: "/home/x/mullion",
-  hostId: "local",
-  devServerUrl: null,
-  detectedDevServerPort: null,
-  currentBranch: null,
-  autoFetch: null,
-  ruleFiles: [],
-  defaultAgent: null,
-  defaultReviewAgent: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-};
-
-const PROJECT_2: Project = {
-  id: 2,
-  name: "widgets",
-  cwd: "/home/x/widgets",
-  hostId: "local",
-  devServerUrl: null,
-  detectedDevServerPort: null,
-  currentBranch: null,
-  autoFetch: null,
-  ruleFiles: [],
-  defaultAgent: null,
-  defaultReviewAgent: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-};
+const PROJECT_2 = makeProject({ id: 2, name: "widgets", cwd: "/home/x/widgets" });
 
 const STATUS: GitHubStatus = {
   repo: { owner: "acme", repo: "widgets", htmlUrl: "https://github.com/acme/widgets" },
@@ -97,41 +68,30 @@ describe("Dock", () => {
     checkUpdateByProject = {};
     updateByProject = {};
     githubPrsByProject = {};
-    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const method = init?.method ?? "GET";
-      // P12 — matched (and defaulted to 204, same as the plain /github route
-      // below) BEFORE the general getMatch below, which would otherwise miss
-      // this URL's extra /prs segment and fall through to the final
-      // "unhandled fetch" rejection — harmless (DockColumn's own .catch
-      // swallows it into `prsStatus: null`, same net effect as this 204
-      // default), but explicit is clearer for the refetch test that actually
-      // populates githubPrsByProject.
-      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
-      if (prsMatch && method === "GET") {
-        const respond = githubPrsByProject[Number(prsMatch[1])];
-        return Promise.resolve(respond ? respond() : new Response(null, { status: 204 }));
-      }
-      const getMatch = /^\/api\/projects\/(\d+)\/(dock|github)$/.exec(url);
-      if (getMatch && method === "GET") {
-        const id = Number(getMatch[1]);
-        if (getMatch[2] === "dock") {
-          return Promise.resolve(jsonResponse(200, dockByProject[id] ?? []));
-        }
-        const respond = githubByProject[id];
-        return Promise.resolve(respond ? respond() : new Response(null, { status: 204 }));
-      }
-      const dockerMatch = /^\/api\/projects\/(\d+)\/docker\/(check-update|update)$/.exec(url);
-      if (dockerMatch && method === "POST") {
-        const id = Number(dockerMatch[1]);
-        const body =
-          dockerMatch[2] === "check-update" ? checkUpdateByProject[id] : updateByProject[id];
-        return Promise.resolve(jsonResponse(dockerMatch[2] === "update" ? 201 : 200, body ?? {}));
-      }
-      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
-    });
+    // P12 — /api/projects/:id/github/prs is matched as its own route (rather
+    // than folded into the plain /github route below) since the two need
+    // independent per-id fixtures/defaults; both still default to a 204
+    // ("no remote/no token configured") when a test hasn't populated the
+    // relevant map for that id, same "DockColumn's own .catch swallows it
+    // into prsStatus/prStatus staying null" outcome either way.
+    ({ fetchMock } = mockFetch({
+      "GET /api/projects/:id/github/prs": ({ params }) => {
+        const respond = githubPrsByProject[Number(params.id)];
+        return respond ? respond() : jsonResponse(204);
+      },
+      "GET /api/projects/:id/dock": ({ params }) =>
+        jsonResponse(200, dockByProject[Number(params.id)] ?? []),
+      "GET /api/projects/:id/github": ({ params }) => {
+        const respond = githubByProject[Number(params.id)];
+        return respond ? respond() : jsonResponse(204);
+      },
+      "POST /api/projects/:id/docker/check-update": ({ params }) =>
+        jsonResponse(200, checkUpdateByProject[Number(params.id)] ?? {}),
+      "POST /api/projects/:id/docker/update": ({ params }) =>
+        jsonResponse(201, updateByProject[Number(params.id)] ?? {}),
+    }));
     vi.stubGlobal("fetch", fetchMock);
-    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    resetStore({ projects: [PROJECT], sessions: [] });
   });
 
   afterEach(() => {
@@ -364,58 +324,15 @@ describe("Dock", () => {
         kind: "dock",
       });
 
-      const runningSession: Session = {
+      const runningSession: Session = makeSession({
         id: 99,
-        projectId: 1,
-        parentSessionId: null,
-        name: null,
-        nameLocked: false,
         command: "npm run dev",
         cwd: null,
-        liveCwd: null,
-        previewBranch: null,
         kind: "dock",
-        status: "active",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        lastAttachedAt: null,
-        alive: true,
-        subscriberCount: 0,
         activity: "idle",
-        lastActivityAt: null,
-        attention: false,
-        attentionAt: null,
-        lastTitle: null,
-        gateState: "idle",
-        gatePrompt: null,
-        promoteState: "idle",
-        promoteSummary: null,
-        promoteSuggestedBaseRef: null,
-        permissionState: "idle",
-        planState: "idle",
-        errorState: "idle",
-        endedReason: null,
-        liveBranch: null,
-        exitCode: null,
-        attentionKind: null,
-        errorDetail: null,
-        lastAssistantMessage: null,
-        compactState: "idle",
-        subagentCount: 0,
-        subagents: [],
-        elicitationState: "idle",
-        elicitationServer: null,
-        lastTurnEndedAt: null,
-        stateRestored: true,
-        staleHooks: false,
-        restoredVersion: null,
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
-        sessionStatusDetail: null,
-        hookEmits: [],
-        pendingDevServerPort: null,
-        outstandingBackgroundTasks: [],
-        sessionStatusAttentionRequired: false,
-      };
+      });
       useDashboardStore.setState({
         projects: [PROJECT],
         sessions: [runningSession],
@@ -801,58 +718,15 @@ describe("Dock", () => {
 
       await screen.findByText("Dev server");
 
-      const runningSession: Session = {
+      const runningSession: Session = makeSession({
         id: 99,
-        projectId: 1,
-        parentSessionId: null,
-        name: null,
-        nameLocked: false,
         command: "npm run dev",
         cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
-        liveCwd: null,
-        previewBranch: null,
         kind: "dock",
-        status: "active",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        lastAttachedAt: null,
-        alive: true,
-        subscriberCount: 0,
         activity: "idle",
-        lastActivityAt: null,
-        attention: false,
-        attentionAt: null,
-        lastTitle: null,
-        gateState: "idle",
-        gatePrompt: null,
-        promoteState: "idle",
-        promoteSummary: null,
-        promoteSuggestedBaseRef: null,
-        permissionState: "idle",
-        planState: "idle",
-        errorState: "idle",
-        endedReason: null,
-        liveBranch: null,
-        exitCode: null,
-        attentionKind: null,
-        errorDetail: null,
-        lastAssistantMessage: null,
-        compactState: "idle",
-        subagentCount: 0,
-        subagents: [],
-        elicitationState: "idle",
-        elicitationServer: null,
-        lastTurnEndedAt: null,
-        stateRestored: true,
-        staleHooks: false,
-        restoredVersion: null,
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
-        sessionStatusDetail: null,
-        hookEmits: [],
-        pendingDevServerPort: null,
-        outstandingBackgroundTasks: [],
-        sessionStatusAttentionRequired: false,
-      };
+      });
       useDashboardStore.setState({
         sessions: [runningSession],
         gitBranchesByProject: { 1: MULTI_WORKTREE },
@@ -881,58 +755,15 @@ describe("Dock", () => {
 
       await screen.findByText("Dev server");
 
-      const runningSession: Session = {
+      const runningSession: Session = makeSession({
         id: 99,
-        projectId: 1,
-        parentSessionId: null,
-        name: null,
-        nameLocked: false,
         command: "npm run dev",
         cwd: "/home/x/mullion",
-        liveCwd: null,
-        previewBranch: null,
         kind: "dock",
-        status: "active",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        lastAttachedAt: null,
-        alive: true,
-        subscriberCount: 0,
         activity: "idle",
-        lastActivityAt: null,
-        attention: false,
-        attentionAt: null,
-        lastTitle: null,
-        gateState: "idle",
-        gatePrompt: null,
-        promoteState: "idle",
-        promoteSummary: null,
-        promoteSuggestedBaseRef: null,
-        permissionState: "idle",
-        planState: "idle",
-        errorState: "idle",
-        endedReason: null,
-        liveBranch: null,
-        exitCode: null,
-        attentionKind: null,
-        errorDetail: null,
-        lastAssistantMessage: null,
-        compactState: "idle",
-        subagentCount: 0,
-        subagents: [],
-        elicitationState: "idle",
-        elicitationServer: null,
-        lastTurnEndedAt: null,
-        stateRestored: true,
-        staleHooks: false,
-        restoredVersion: null,
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
-        sessionStatusDetail: null,
-        hookEmits: [],
-        pendingDevServerPort: null,
-        outstandingBackgroundTasks: [],
-        sessionStatusAttentionRequired: false,
-      };
+      });
       useDashboardStore.setState({
         sessions: [runningSession],
         gitBranchesByProject: { 1: MULTI_WORKTREE },
@@ -1567,61 +1398,22 @@ describe("Dock", () => {
   // dev server" finding. Same role="button"/tabIndex/Enter-Space pattern as
   // Sidebar.tsx's SessionRow/ProjectHeader.
   describe("P10 — keyboard accessibility", () => {
-    function makeRunningSession(overrides: Partial<Session> = {}): Session {
-      return {
-        id: 99,
-        projectId: 1,
-        parentSessionId: null,
-        name: null,
-        nameLocked: false,
-        command: "npm run dev",
-        cwd: "/home/x/mullion",
-        liveCwd: null,
-        previewBranch: null,
-        kind: "dock",
-        status: "active",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        lastAttachedAt: null,
-        alive: true,
-        subscriberCount: 0,
-        activity: "idle",
-        lastActivityAt: null,
-        attention: false,
-        attentionAt: null,
-        lastTitle: null,
-        gateState: "idle",
-        gatePrompt: null,
-        promoteState: "idle",
-        promoteSummary: null,
-        promoteSuggestedBaseRef: null,
-        permissionState: "idle",
-        planState: "idle",
-        errorState: "idle",
-        endedReason: null,
-        liveBranch: null,
-        exitCode: null,
-        attentionKind: null,
-        errorDetail: null,
-        lastAssistantMessage: null,
-        compactState: "idle",
-        subagentCount: 0,
-        subagents: [],
-        elicitationState: "idle",
-        elicitationServer: null,
-        lastTurnEndedAt: null,
-        stateRestored: true,
-        staleHooks: false,
-        restoredVersion: null,
-        sessionStatus: "idle",
-        sessionStatusSeverity: "dormant",
-        sessionStatusDetail: null,
-        hookEmits: [],
-        pendingDevServerPort: null,
-        outstandingBackgroundTasks: [],
-        sessionStatusAttentionRequired: false,
-        ...overrides,
-      };
-    }
+    // The single-worktree shape `resolveSelectedValue`'s `mainCheckout`
+    // needs to resolve `control.cwd`-less launches against the project's
+    // own checkout path — without it, `gitBranchesByProject` has no entry
+    // for this project (the "not yet fetched" state) and the launched
+    // session's cwd falls back to `control.cwd` (unset for these fixtures),
+    // i.e. no `cwd` key at all. Explicit here (rather than relying on the
+    // "worktree selector" describe block's own MULTI_WORKTREE/MAIN_WORKTREE
+    // consts, out of scope from this describe block) since a previous
+    // version of this suite let this leak in from whichever earlier test
+    // happened to run first — a real cross-test isolation bug resetStore()
+    // (test/resetStore.ts) now catches instead of silently passing.
+    const SINGLE_WORKTREE: GitBranchesResult = {
+      branches: [{ name: "main", isCurrent: true }],
+      worktrees: [{ path: "/home/x/mullion", branch: "main", isMain: true }],
+      remoteBranches: [],
+    };
 
     it("is a focusable role=button that starts a monitor on Enter", async () => {
       dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
@@ -1631,6 +1423,7 @@ describe("Dock", () => {
         sessions: [],
         createSession,
         deleteSession: vi.fn().mockResolvedValue(undefined),
+        gitBranchesByProject: { 1: SINGLE_WORKTREE },
         settings: {
           ...DEFAULT_SETTINGS,
           sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
@@ -1662,6 +1455,7 @@ describe("Dock", () => {
         sessions: [],
         createSession,
         deleteSession: vi.fn().mockResolvedValue(undefined),
+        gitBranchesByProject: { 1: SINGLE_WORKTREE },
         settings: {
           ...DEFAULT_SETTINGS,
           sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
@@ -1704,7 +1498,17 @@ describe("Dock", () => {
       };
       useDashboardStore.setState({
         projects: [PROJECT],
-        sessions: [makeRunningSession()],
+        sessions: [
+          makeSession({
+            id: 99,
+            command: "npm run dev",
+            cwd: "/home/x/mullion",
+            kind: "dock",
+            activity: "idle",
+            sessionStatus: "idle",
+            sessionStatusSeverity: "dormant",
+          }),
+        ],
         createSession,
         deleteSession,
         gitBranchesByProject: { 1: MULTI },

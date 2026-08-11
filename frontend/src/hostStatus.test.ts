@@ -1,21 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { deriveHostStatus, type PingState } from "./hostStatus.js";
-import type { Host } from "./api.js";
-
-function makeHost(overrides: Partial<Host> = {}): Host {
-  return {
-    id: "h1",
-    name: "test-host",
-    baseUrl: "http://127.0.0.1:4000",
-    isLocal: false,
-    hasToken: true,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    health: "pending",
-    lastSeenAt: null,
-    lastCheckedAt: null,
-    ...overrides,
-  };
-}
+import { makeHost } from "./test/fixtures.js";
 
 const NO_CLICK: PingState = { status: "unknown", lastCheckedAtSnapshot: null };
 

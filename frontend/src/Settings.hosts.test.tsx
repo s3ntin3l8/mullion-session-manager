@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
-import { useDashboardStore } from "./store.js";
 import type { Host } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
+import { mockFetch } from "./test/mockFetch.js";
+import { resetStore } from "./test/resetStore.js";
 
 // Closes the gap Hermes flagged on PR #35 (issue #26, phase 4): "the
 // non-trivial 409 -> cascade retry path is entirely unverified." Exercises
@@ -12,13 +14,6 @@ import type { Host } from "./api.js";
 // server — mirrors backend tests' own fake-server pattern, just over
 // global fetch instead of node:http) rather than mocking the store, so the
 // real request()/store wiring is what's under test.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 describe("Settings -> Hosts", () => {
   let hostsDb: Array<Host & { hasProjects: boolean }>;
@@ -44,62 +39,37 @@ describe("Settings -> Hosts", () => {
         hasProjects: true,
       },
     ];
-    unexpectedCalls = [];
 
-    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const method = init?.method ?? "GET";
-
-      if (url === "/api/hosts" && method === "GET") {
-        return Promise.resolve(jsonResponse(200, hostsDb));
-      }
-      if (url === "/api/projects" && method === "GET") {
-        return Promise.resolve(jsonResponse(200, []));
-      }
-      if (url === "/api/sessions" && method === "GET") {
-        return Promise.resolve(jsonResponse(200, []));
-      }
-      const deleteMatch = url.match(/^\/api\/hosts\/([^/?]+)(\?cascade=true)?$/);
-      if (deleteMatch && method === "DELETE") {
-        const [, id, cascade] = deleteMatch;
-        const host = hostsDb.find((h) => h.id === id);
-        if (!host) return Promise.resolve(jsonResponse(404, { message: "not found" }));
-        if (host.hasProjects && !cascade) {
-          return Promise.resolve(
-            jsonResponse(409, { message: "host still has 2 project(s) — pass ?cascade=true" }),
-          );
+    ({ fetchMock, unexpectedCalls } = mockFetch({
+      "GET /api/hosts": () => jsonResponse(200, hostsDb),
+      "GET /api/projects": () => jsonResponse(200, []),
+      "GET /api/sessions": () => jsonResponse(200, []),
+      "DELETE /api/hosts/:id": ({ params, query }) => {
+        const host = hostsDb.find((h) => h.id === params.id);
+        if (!host) return jsonResponse(404, { message: "not found" });
+        if (host.hasProjects && query.get("cascade") !== "true") {
+          return jsonResponse(409, { message: "host still has 2 project(s) — pass ?cascade=true" });
         }
-        hostsDb = hostsDb.filter((h) => h.id !== id);
-        return Promise.resolve(new Response(null, { status: 204 }));
-      }
-      const pingMatch = url.match(/^\/api\/hosts\/([^/]+)\/ping$/);
-      if (pingMatch && method === "POST") {
-        return Promise.resolve(jsonResponse(200, { online: false }));
-      }
-      const configMatch = url.match(/^\/api\/hosts\/([^/]+)\/config$/);
-      if (configMatch && method === "GET") {
-        const [, id] = configMatch;
-        return Promise.resolve(
-          jsonResponse(200, {
-            role: id === "local" ? "primary" : "agent",
-            version: "0.2.20",
-            projectsRoots: id === "local" ? ["/home/me/projects"] : ["/remote/projects"],
-            sessionsDir:
-              id === "local" ? "/home/me/.local/state/mullion/sessions" : "/remote/sessions",
-            crsConfigDir: id === "local" ? "/home/me/.config/crs" : "/remote/.config/crs",
-            browserEnabled: false,
-          }),
-        );
-      }
-
-      unexpectedCalls.push(`${method} ${url}`);
-      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
-    });
+        hostsDb = hostsDb.filter((h) => h.id !== params.id);
+        return jsonResponse(204);
+      },
+      "POST /api/hosts/:id/ping": () => jsonResponse(200, { online: false }),
+      "GET /api/hosts/:id/config": ({ params }) =>
+        jsonResponse(200, {
+          role: params.id === "local" ? "primary" : "agent",
+          version: "0.2.20",
+          projectsRoots: params.id === "local" ? ["/home/me/projects"] : ["/remote/projects"],
+          sessionsDir:
+            params.id === "local" ? "/home/me/.local/state/mullion/sessions" : "/remote/sessions",
+          crsConfigDir: params.id === "local" ? "/home/me/.config/crs" : "/remote/.config/crs",
+          browserEnabled: false,
+        }),
+    }));
     vi.stubGlobal("fetch", fetchMock);
 
-    // The store is a module-level singleton — reset the slice this test
-    // touches so a previous test's DELETE doesn't leak into this one.
-    useDashboardStore.setState({ hosts: [] });
+    // The store is a module-level singleton — reset it so a previous
+    // test's DELETE doesn't leak into this one.
+    resetStore({ hosts: [] });
   });
 
   afterEach(() => {

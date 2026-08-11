@@ -13,6 +13,7 @@ import type {
   Session,
   Task,
 } from "./api.js";
+import { makeSession, makeProject, makeTask } from "./test/fixtures.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -110,116 +111,6 @@ vi.mock("./TaskDetail.js", () => ({
     </div>
   ),
 }));
-
-function makeSession(overrides: Partial<Session>): Session {
-  return {
-    id: 1,
-    projectId: 1,
-    parentSessionId: null,
-    name: null,
-    nameLocked: false,
-    command: "claude code",
-    cwd: null,
-    liveCwd: null,
-    previewBranch: null,
-    kind: "terminal",
-    status: "active",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    lastAttachedAt: null,
-    alive: true,
-    subscriberCount: 0,
-    activity: "working",
-    lastActivityAt: Date.now(),
-    attention: false,
-    attentionAt: null,
-    lastTitle: null,
-    gateState: "idle",
-    gatePrompt: null,
-    promoteState: "idle",
-    promoteSummary: null,
-    promoteSuggestedBaseRef: null,
-    permissionState: "idle",
-    planState: "idle",
-    errorState: "idle",
-    endedReason: null,
-    liveBranch: null,
-    exitCode: null,
-    attentionKind: null,
-    errorDetail: null,
-    lastAssistantMessage: null,
-    compactState: "idle",
-    subagentCount: 0,
-    subagents: [],
-    elicitationState: "idle",
-    elicitationServer: null,
-    lastTurnEndedAt: null,
-    stateRestored: true,
-    staleHooks: false,
-    restoredVersion: null,
-    sessionStatus: "working",
-    sessionStatusSeverity: "busy",
-    sessionStatusDetail: null,
-    sessionStatusAttentionRequired: false,
-    hookEmits: [],
-    pendingDevServerPort: null,
-    outstandingBackgroundTasks: [],
-    ...overrides,
-  };
-}
-
-function makeProject(overrides: Partial<Project>): Project {
-  return {
-    id: 1,
-    name: "demo",
-    cwd: "/home/x/demo",
-    hostId: "local",
-    devServerUrl: null,
-    detectedDevServerPort: null,
-    currentBranch: null,
-    autoFetch: null,
-    ruleFiles: [],
-    defaultAgent: null,
-    defaultReviewAgent: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
-function makeTask(overrides: Partial<Task>): Task {
-  return {
-    id: 1,
-    projectId: 1,
-    projectName: "demo",
-    issueNumber: null,
-    title: "Fix the thing",
-    body: null,
-    htmlUrl: null,
-    status: "ready",
-    boardOrder: 0,
-    sessionId: null,
-    seedDelivered: null,
-    reviewSessionId: null,
-    reviewSeedDelivered: null,
-    reviewFindings: null,
-    reviewRounds: 0,
-    worktreePath: null,
-    branchName: null,
-    agentCommand: null,
-    prUrl: null,
-    prNumber: null,
-    assignee: null,
-    failureReason: null,
-    githubSyncError: null,
-    baseSha: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    claimedAt: null,
-    startedAt: null,
-    reviewingAt: null,
-    completedAt: null,
-    ...overrides,
-  };
-}
 
 // jsdom doesn't implement DataTransfer/DragEvent — mirrors KanbanBoard.test.tsx's
 // and TasksPanel.test.tsx's own stub.

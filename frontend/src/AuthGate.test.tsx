@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AuthGate } from "./AuthGate.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // App itself is heavy (workspaces/sessions/settings all fetched on mount) and
 // already out of scope for this test — AuthGate's own job is deciding
@@ -11,13 +12,6 @@ import { AuthGate } from "./AuthGate.js";
 vi.mock("./App.js", () => ({
   App: () => <div data-testid="dashboard">dashboard</div>,
 }));
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 const METHODS_NONE = { token: false, oidc: false };
 const METHODS_TOKEN = { token: true, oidc: false };

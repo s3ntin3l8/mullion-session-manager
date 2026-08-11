@@ -3,13 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Settings } from "./Settings.js";
 import type { SkillInfo } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 function mockFetch(list: () => Response | Promise<Response>) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

@@ -5,18 +5,12 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
 import { useDashboardStore } from "./store.js";
 import type { BrowserCookieProfile, GitHubIntegration, Project } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Mirrors Settings.integrations.test.tsx / Settings.hosts.test.tsx's
 // fake-in-memory-backend pattern (issue #184) — a fake server over global
 // fetch, not a mocked store, so the real request()/store wiring is what's
 // under test.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 const DISCONNECTED_GITHUB: GitHubIntegration = {
   connected: false,

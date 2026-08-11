@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { EventHistoryPage, NotificationEvent, Session, StoredEventRow } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Issue #213 (roadmap 4.7) — covers the persisted-history data source added
 // to SessionTimeline.tsx: fetching GET /api/events, merging with the live
@@ -93,20 +94,13 @@ function makeRow(overrides: Partial<StoredEventRow> = {}): StoredEventRow {
   };
 }
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 // Route by URL, unhandled requests reject loudly — same convention as
 // SkillsPanel.test.tsx's own mockFetch.
 function mockFetch(handler: (url: URL) => EventHistoryPage | Promise<EventHistoryPage>) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/events") {
-      return Promise.resolve(handler(url)).then(jsonResponse);
+      return Promise.resolve(handler(url)).then((page) => jsonResponse(200, page));
     }
     return Promise.reject(new Error(`unhandled fetch in test: ${url.pathname}`));
   });
@@ -380,7 +374,7 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
         calls += 1;
         if (calls === 1) return Promise.resolve(errorResponse());
         return Promise.resolve(
-          jsonResponse({
+          jsonResponse(200, {
             persistenceEnabled: true,
             events: [makeRow({ id: 1 })],
             nextCursor: null,
@@ -408,7 +402,7 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
         calls += 1;
         if (calls === 1) {
           return Promise.resolve(
-            jsonResponse({
+            jsonResponse(200, {
               persistenceEnabled: true,
               events: [makeRow({ id: 1 })],
               nextCursor: 1,

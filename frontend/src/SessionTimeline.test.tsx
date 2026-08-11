@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { EventHistoryPage, NotificationEvent, Session } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
@@ -98,13 +99,6 @@ let fetchImpl: (url: string) => EventHistoryPage = () => ({
   nextCursor: null,
 });
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 beforeEach(() => {
   sessions = [makeSession()];
   events = {};
@@ -115,7 +109,7 @@ beforeEach(() => {
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/events")) return Promise.resolve(jsonResponse(fetchImpl(url)));
+      if (url.startsWith("/api/events")) return Promise.resolve(jsonResponse(200, fetchImpl(url)));
       return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
     }),
   );

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
 import { useDashboardStore } from "./store.js";
 import { DEFAULT_SETTINGS } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // P11 — the settings modal previously had none of UnifiedBoard.tsx's
 // task-detail drawer's focus management: no role="dialog", no focus-in on
@@ -12,12 +13,6 @@ import { DEFAULT_SETTINGS } from "./api.js";
 // useFocusTrap.ts hook (see that file's own doc comment for the extraction
 // rationale) — this suite exercises the hook AS WIRED into Settings.tsx,
 // not the hook's own mechanics (covered by useFocusTrap.test.tsx).
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 function focusableDescendants(container: HTMLElement): HTMLElement[] {
   return Array.from(

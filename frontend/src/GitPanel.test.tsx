@@ -6,13 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { GitPanel } from "./GitPanel.js";
 import type { GitBranchesResult, GitStatus } from "./api.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 const CLEAN_STATUS: GitStatus = {
   branch: "main",

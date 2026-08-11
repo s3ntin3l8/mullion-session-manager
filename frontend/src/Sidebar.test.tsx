@@ -6,6 +6,7 @@ import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import type * as ApiModule from "./api.js";
 import type { Host, Project, Session } from "./api.js";
+import { makeSession, makeProject, makeHost } from "./test/fixtures.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
 // covers the sidebar's new search/chip filter, persisted project collapse
@@ -91,76 +92,7 @@ vi.mock("./api.js", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, discoverProjects: vi.fn().mockResolvedValue([]) } };
 });
 
-function makeSession(overrides: Partial<Session>): Session {
-  return {
-    id: 1,
-    projectId: 1,
-    parentSessionId: null,
-    name: null,
-    nameLocked: false,
-    command: "claude code",
-    cwd: null,
-    kind: "terminal",
-    status: "active",
-    createdAt: "",
-    lastAttachedAt: null,
-    alive: true,
-    subscriberCount: 0,
-    activity: "working",
-    lastActivityAt: Date.now(),
-    liveCwd: null,
-    previewBranch: null,
-    attention: false,
-    attentionAt: null,
-    lastTitle: null,
-    gateState: "idle",
-    gatePrompt: null,
-    promoteState: "idle",
-    promoteSummary: null,
-    promoteSuggestedBaseRef: null,
-    permissionState: "idle",
-    planState: "idle",
-    errorState: "idle",
-    endedReason: null,
-    liveBranch: null,
-    exitCode: null,
-    attentionKind: null,
-    errorDetail: null,
-    lastAssistantMessage: null,
-    compactState: "idle",
-    subagentCount: 0,
-    subagents: [],
-    elicitationState: "idle",
-    elicitationServer: null,
-    lastTurnEndedAt: null,
-    stateRestored: true,
-    staleHooks: false,
-    restoredVersion: null,
-    sessionStatus: "working",
-    sessionStatusSeverity: "busy",
-    sessionStatusDetail: null,
-    sessionStatusAttentionRequired: false,
-    hookEmits: [],
-    pendingDevServerPort: null,
-    outstandingBackgroundTasks: [],
-    ...overrides,
-  };
-}
-
-const PROJECT: Project = {
-  id: 1,
-  name: "demo",
-  cwd: "/home/x/demo",
-  hostId: "local",
-  devServerUrl: null,
-  detectedDevServerPort: null,
-  currentBranch: null,
-  autoFetch: null,
-  ruleFiles: [],
-  defaultAgent: null,
-  defaultReviewAgent: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-};
+const PROJECT: Project = makeProject();
 
 const NOOP_PROPS = {
   onOpenSession: vi.fn(),
@@ -550,17 +482,14 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     const remoteProject: Project = { ...PROJECT, hostId: "remote-1" };
     projects = [remoteProject];
     hosts = [
-      {
+      makeHost({
         id: "remote-1",
         name: "build-box",
         baseUrl: null,
         isLocal: false,
         hasToken: true,
-        createdAt: "",
         health: "online",
-        lastSeenAt: null,
-        lastCheckedAt: null,
-      },
+      }),
     ];
     sessions = Array.from({ length: 25 }, (_, i) =>
       makeSession({ id: 2000 + i, projectId: remoteProject.id, command: `session-${i}` }),

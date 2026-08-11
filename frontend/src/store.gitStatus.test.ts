@@ -2,17 +2,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useDashboardStore } from "./store.js";
 import type { GitStatus, Project } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Mirrors Dock.test.tsx's fake-in-memory-backend pattern: a mocked global
 // fetch driving the real store method under test (refreshGitStatuses),
 // rather than mocking api.ts itself.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 const PROJECT_1: Project = {
   id: 1,

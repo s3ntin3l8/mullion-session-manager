@@ -8,13 +8,7 @@ import { BrowserPanel } from "./BrowserPanel.js";
 import { useDashboardStore } from "./store.js";
 import { api } from "./api.js";
 import type { Project, ServerInfo } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 const PROJECT: Project = {
   id: 1,

@@ -3,13 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { GitHubPanel } from "./GitHubPanel.js";
 import type { GitHubPRsStatus, GitHubStatus } from "./api.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 const STATUS: GitHubStatus = {
   repo: { owner: "acme", repo: "widgets", htmlUrl: "https://github.com/acme/widgets" },

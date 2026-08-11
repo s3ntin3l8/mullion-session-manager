@@ -3,19 +3,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { Settings } from "./Settings.js";
 import type { Agent } from "./api.js";
+import { jsonResponse } from "./test/jsonResponse.js";
 
 // Guards against the misalignment fixed here: shell rows (no icon, no
 // toggles) and agent rows (icon, conditional skip-perms toggle) used to
 // render through variable-width flex, so "available" landed at a different
 // x position depending on which cells a given row happened to populate.
 // Every row now emits all seven grid cells unconditionally.
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 describe("Settings -> Launchers", () => {
   let agentsDb: Agent[];

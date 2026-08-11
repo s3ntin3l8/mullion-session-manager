@@ -7,13 +7,7 @@ import {
   isPushSupported,
   urlBase64ToUint8Array,
 } from "./pushClient.js";
-
-function jsonResponse(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
+import { jsonResponse } from "./test/jsonResponse.js";
 
 function emptyResponse(status: number) {
   return new Response(null, { status });

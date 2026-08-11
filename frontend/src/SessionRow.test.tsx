@@ -15,6 +15,7 @@ import {
   type GitFileDiffResponse,
 } from "./api.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
+import { makeSession, makeProject } from "./test/fixtures.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -57,83 +58,7 @@ vi.mock("./store.js", () => ({
     }),
 }));
 
-function makeSession(overrides: Partial<Session>): Session {
-  return {
-    id: 1,
-    projectId: 1,
-    parentSessionId: null,
-    name: null,
-    nameLocked: false,
-    command: "claude code",
-    cwd: null,
-    kind: "terminal",
-    status: "active",
-    createdAt: "",
-    lastAttachedAt: null,
-    alive: true,
-    subscriberCount: 0,
-    activity: "working",
-    lastActivityAt: Date.now(),
-    liveCwd: null,
-    previewBranch: null,
-    attention: false,
-    attentionAt: null,
-    lastTitle: null,
-    gateState: "idle",
-    gatePrompt: null,
-    promoteState: "idle",
-    promoteSummary: null,
-    promoteSuggestedBaseRef: null,
-    permissionState: "idle",
-    planState: "idle",
-    errorState: "idle",
-    endedReason: null,
-    liveBranch: null,
-    // Rich statuses (issue: extend surfaced session statuses) — matches the
-    // `activity: "working"` default above. Sidebar.tsx's status dot/label
-    // now renders off sessionStatus/sessionStatusSeverity/
-    // sessionStatusDetail directly, not the raw permissionState/planState/
-    // errorState/endedReason fields above — tests exercising that rendering
-    // override these too (see the "promote to worktree" describe block
-    // below).
-    exitCode: null,
-    attentionKind: null,
-    errorDetail: null,
-    lastAssistantMessage: null,
-    compactState: "idle",
-    subagentCount: 0,
-    subagents: [],
-    elicitationState: "idle",
-    elicitationServer: null,
-    lastTurnEndedAt: null,
-    stateRestored: true,
-    staleHooks: false,
-    restoredVersion: null,
-    sessionStatus: "working",
-    sessionStatusSeverity: "busy",
-    sessionStatusDetail: null,
-    sessionStatusAttentionRequired: false,
-    hookEmits: [],
-    pendingDevServerPort: null,
-    outstandingBackgroundTasks: [],
-    ...overrides,
-  };
-}
-
-const PROJECT: Project = {
-  id: 1,
-  name: "demo",
-  cwd: "/home/x/demo",
-  hostId: "local",
-  devServerUrl: null,
-  detectedDevServerPort: null,
-  currentBranch: null,
-  autoFetch: null,
-  ruleFiles: [],
-  defaultAgent: null,
-  defaultReviewAgent: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-};
+const PROJECT: Project = makeProject();
 
 const CLEAN_STATUS: GitStatus = {
   branch: "main",
