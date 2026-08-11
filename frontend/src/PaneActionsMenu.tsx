@@ -306,7 +306,14 @@ export function PaneActionsMenu({
                 an input whose commit silently discarded the typed name
                 (commitMobileRename's own `sessionId === undefined` guard),
                 and Kill was a no-op button that looked destructive but did
-                nothing (armOrKill's `if (!session) return`). */}
+                nothing (armOrKill's `if (!session) return`). Keyed on the
+                `session` store lookup, not the stable `sessionId` prop
+                childCount above deliberately uses — intentional: a pane
+                restored before its session row lands in the store briefly
+                renders without Rename/Kill, which is the correct fail-safe
+                direction (matches the non-terminal-panel case above) rather
+                than offering actions against a session that doesn't exist
+                in the store yet. */}
             {session && (
               <button
                 className="pane-tab-overflow-item"
