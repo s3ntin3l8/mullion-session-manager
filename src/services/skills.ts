@@ -111,7 +111,7 @@ export type SkillScope = "builtin" | "global" | "project";
 // presence here means "some of its skills are toggleable," not all —
 // attachEnabledByAgent/resolveSkillForToggle still gate individual skills
 // out (builtin scope, basename collisions) below.
-export const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode", "claude-code"];
+const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode", "claude-code"];
 
 export interface SkillInfo {
   name: string;
