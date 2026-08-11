@@ -1,40 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { createPortal } from "react-dom";
-import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
+import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { eventKey, useDashboardStore } from "./store.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { formatBranchLabel } from "./paneTitle.js";
-import {
-  BellIcon,
-  CheckIcon,
-  CloseIcon,
-  GitBranchIcon,
-  KillIcon,
-  ListIcon,
-  MoveIcon,
-  OverflowIcon,
-  RenameIcon,
-  BotIcon,
-} from "./icons.js";
+import { BellIcon, CheckIcon, CloseIcon } from "./icons.js";
 import { notifyKind } from "./eventDescriptions.js";
-import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
-import { liveChildCount } from "./sidebarHierarchy.js";
-import { PromoteDialog } from "./PromoteDialog.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
-import { useFocusTrap } from "./useFocusTrap.js";
-
-// The one distinction the design's States doc (section 1) stresses above
-// everything else: closing a pane only detaches the browser's view — the
-// session keeps running on the host — while killing ends the actual
-// program and is not reversible. They must never look like the same
-// action: close is a plain × always visible on the tab; kill lives inside
-// the overflow menu, and is armed by a first click before a second click
-// actually fires it (matching the design's 3s arm window), so it can't
-// happen by reflex the way a single-click × could.
-const KILL_ARM_MS = 3000;
-const KILL_ARM_SECONDS = KILL_ARM_MS / 1000;
+import { PaneActionsMenu } from "./PaneActionsMenu.js";
+import { panelSessionId } from "./panelUtils.js";
 
 // Below this tab width the status badge ("Working"/"Idle"/"Attention") no
 // longer fits alongside the dot, name, and the two action buttons, and would
@@ -57,31 +31,12 @@ const JUST_FIRED_ATTENTION_MS = 1800;
 // needed the identical classification for the notification panel's own
 // unread count — see that module's own doc comment.
 
-// A dockview panel's `params` is untyped (Parameters = Record<string,
-// unknown> | undefined) from the group's point of view — this tab only
-// knows its OWN params are TerminalPaneParams (see props.params above); a
-// sibling panel in the same group could in principle be a GitHubPanel/
-// GitPanel/BrowserPanel with no sessionId at all, so this must guard rather
-// than assume.
-function panelSessionId(panel: IDockviewPanel): number | undefined {
-  const id = panel.params?.sessionId;
-  return typeof id === "number" ? id : undefined;
-}
-
 export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const sessionId = props.params.sessionId;
   const session = useDashboardStore((s) => s.sessions.find((sess) => sess.id === sessionId));
   const renameSession = useDashboardStore((s) => s.renameSession);
-  const deleteSession = useDashboardStore((s) => s.deleteSession);
   const theme = useDashboardStore((s) => s.theme);
   const agentLogo = session ? resolveAgentLogo(session.command, theme) : null;
-  const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
-  // Phase 5 (Track B, issue #196 5.6) — same "make the detach consequence
-  // visible" reasoning as Sidebar.tsx's SessionRow ConfirmButton. Against
-  // the stable `sessionId` prop directly (independent review, PR #435) —
-  // no need to gate on `session` being found in the store first, since
-  // sessionId never changes across a render where session hasn't loaded yet.
-  const childCount = useDashboardStore((s) => liveChildCount(s.sessions, sessionId));
   // Issue #168's unread badge — this session's buffered events plus the
   // client half of the 1.1 read cursor (store.ts's lastSeenSeq). Re-derived
   // on every events/lastSeenSeq change; markEventSeen (called below, on
@@ -167,24 +122,8 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
 
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(props.api.title ?? "");
-  const [overflowOpen, setOverflowOpen] = useState(false);
-  const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
-  const [promoteOpen, setPromoteOpen] = useState(false);
-  const [killArmed, setKillArmed] = useState(false);
   const [narrow, setNarrow] = useState(false);
-  // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting
-  // static for the whole arm window — matches KebabMenu's countdown.
-  const [killSecondsLeft, setKillSecondsLeft] = useState(KILL_ARM_SECONDS);
-  // Mirrors killSecondsLeft so the interval callback below can branch on the
-  // current count without reaching into a setState updater — calling
-  // setKillArmed/clearInterval (side effects) from inside a
-  // setKillSecondsLeft updater function is impure and can warn under
-  // StrictMode.
-  const killSecondsRef = useRef(KILL_ARM_SECONDS);
-  const armTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const overflowBtnRef = useRef<HTMLButtonElement>(null);
-  const overflowMenuRef = useRef<HTMLDivElement>(null);
   const tabRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -224,13 +163,6 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       setNarrow(true);
     }
   }, []);
-
-  useEffect(
-    () => () => {
-      if (armTimer.current) clearInterval(armTimer.current);
-    },
-    [],
-  );
 
   // Sync the dockview tab title when the store's session name changes
   // (e.g. from a sidebar rename). The tab's own commitRename (below) calls
@@ -310,113 +242,6 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     [],
   );
 
-  // Dockview's own tab-strip container clips overflowing content (confirmed
-  // live: the menu rendered in the DOM but was invisible, clipped by an
-  // ancestor's `overflow: hidden`) — portaled to document.body with
-  // position:fixed computed from the toggle button's own rect sidesteps
-  // that entirely, rather than fighting dockview's internal stacking
-  // context.
-  useEffect(() => {
-    if (!overflowOpen) return;
-    const onOutsideClick = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (overflowBtnRef.current?.contains(target)) return;
-      if (overflowMenuRef.current?.contains(target)) return;
-      // P11 — a plain mousedown's default action shifts focus to whatever
-      // was clicked (or document.body, for a non-focusable target); without
-      // suppressing it, that default focus shift wins the race against
-      // useFocusTrap's own restore-on-close cleanup (triggered by
-      // setOverflowOpen(false) below), leaving focus on <body> instead of
-      // back on the toggle button. Trade-off, and a deliberate one: if the
-      // "outside" click that dismisses this menu happens to land on some
-      // OTHER real focusable element (e.g. a different pane's own overflow
-      // toggle), that element loses its own native mousedown-focus this one
-      // time — its click handler still fires normally, only the focus
-      // assignment is redirected here instead. Narrow enough (mouse users
-      // rarely depend on focus landing exactly where they clicked) that
-      // reliably restoring focus for the keyboard-close paths (Escape, the
-      // Tab trap) is worth it.
-      e.preventDefault();
-      setOverflowOpen(false);
-    };
-    document.addEventListener("mousedown", onOutsideClick);
-    return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [overflowOpen]);
-
-  // P11 — this menu previously had NO focus management at all: opening it
-  // never moved focus in, Tab escaped straight into whatever's behind the
-  // portal, closing never restored focus to the toggle button, and — worse
-  // than any of the other three P11 sites — only `mousedown` outside-click
-  // could close it, so a keyboard user who tabbed into it had no way to
-  // close it at all. Same shared hook as Settings/CommandPalette/
-  // NotificationBell. No `aria-modal` (see UnifiedBoard.tsx's drawer for
-  // the rule this follows): there's no backdrop and the rest of the tab
-  // strip stays fully interactive while this is open.
-  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: overflowOpen,
-    containerRef: overflowMenuRef,
-  });
-  // Escape scoped to the menu's own onKeyDown (bubbling from whatever's
-  // focused inside it), not a window-level listener — same reasoning as
-  // UnifiedBoard.tsx's onDrawerKeyDown: a global listener would also catch
-  // an Escape meant for some other overlay (the command palette, Settings)
-  // sitting above this tab strip.
-  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      setOverflowOpen(false);
-      return;
-    }
-    // APG menu pattern (Hermes review, PR #592) — `role="menu"` carries an
-    // AT expectation of ArrowUp/ArrowDown (and Home/End) moving focus among
-    // `role="menuitem"` children, which the shared hook's Tab-trap alone
-    // doesn't provide (Tab/Shift+Tab still work as the fallback a
-    // non-menu-savvy keyboard user relies on — this is additive, not a
-    // replacement). Scoped to this menu's own `[role="menuitem"]` children
-    // rather than reusing useFocusTrap's general "any focusable" query,
-    // since a real menu's roving focus is items-only, not links/inputs.
-    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
-      const items = overflowMenuRef.current
-        ? Array.from(
-            overflowMenuRef.current.querySelectorAll<HTMLElement>(
-              '[role="menuitem"]:not([disabled])',
-            ),
-          )
-        : [];
-      if (items.length === 0) return;
-      e.preventDefault();
-      const currentIndex = items.indexOf(document.activeElement as HTMLElement);
-      const nextIndex =
-        e.key === "Home"
-          ? 0
-          : e.key === "End"
-            ? items.length - 1
-            : e.key === "ArrowDown"
-              ? currentIndex < 0
-                ? 0
-                : (currentIndex + 1) % items.length
-              : currentIndex < 0
-                ? items.length - 1
-                : (currentIndex - 1 + items.length) % items.length;
-      items[nextIndex]?.focus();
-      return;
-    }
-    onTrapKeyDown(e);
-  };
-  // Every menu item action below already closes the menu by ALSO doing
-  // something else (renaming — see the effect above that moves focus into
-  // renameInputRef, opening a timeline/browser panel, opening the promote
-  // dialog, or killing the session) — same "closing by opening something
-  // else must not fight the restore-on-close effect" reasoning as
-  // CommandPalette's closeAfterAction. `armOrKill`'s FIRST click (arming,
-  // not killing) is the one path that closes nothing, so it's excluded —
-  // see its own call site below.
-  const closeMenuAfterAction = (action: () => void) => {
-    suppressRestore();
-    setOverflowOpen(false);
-    action();
-  };
-
   const commitRename = () => {
     const value = draftName.trim();
     setRenaming(false);
@@ -425,43 +250,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     void renameSession(session.id, value);
   };
 
-  const armOrKill = () => {
-    if (!session) return;
-    // Settings -> Session management's "Confirm before kill" toggle — off
-    // means the first click kills immediately, skipping the arm step below.
-    // Phase 5 (Track B, issue #196 5.6) — except when this session has live
-    // children: ending it always defaults to detach (never a silent
-    // cascade-kill — see killSession), but that consequence still needs an
-    // explicit confirm even with the global setting off.
-    if (killArmed || (!confirmBeforeKill && childCount === 0)) {
-      if (armTimer.current) clearInterval(armTimer.current);
-      setKillArmed(false);
-      // props.api.close() below tears down this whole pane — nothing left
-      // to restore focus to on this side, and the trap's own restore would
-      // otherwise try to focus the (about-to-be-removed) overflow toggle
-      // button right as dockview tears down the pane around it.
-      suppressRestore();
-      setOverflowOpen(false);
-      props.api.close();
-      void deleteSession(session.id).catch((err) => {
-        console.error("Failed to kill session", session.id, err);
-      });
-    } else {
-      setKillArmed(true);
-      killSecondsRef.current = KILL_ARM_SECONDS;
-      setKillSecondsLeft(KILL_ARM_SECONDS);
-      if (armTimer.current) clearInterval(armTimer.current);
-      armTimer.current = setInterval(() => {
-        killSecondsRef.current -= 1;
-        if (killSecondsRef.current <= 0) {
-          if (armTimer.current) clearInterval(armTimer.current);
-          setKillArmed(false);
-          setKillSecondsLeft(KILL_ARM_SECONDS);
-        } else {
-          setKillSecondsLeft(killSecondsRef.current);
-        }
-      }, 1000);
-    }
+  // Both the tab title's double-click and PaneActionsMenu's "Rename" item
+  // trigger this identical inline-swap — see PaneActionsMenu's own comment
+  // on why the actual rename UI stays here rather than moving with the menu.
+  const beginRename = () => {
+    setDraftName(props.api.title ?? "");
+    setRenaming(true);
   };
 
   // Status badge — rich statuses (issue: extend surfaced session statuses):
@@ -531,14 +325,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           onBlur={commitRename}
         />
       ) : (
-        <span
-          className="pane-tab-name"
-          title="Double-click to rename"
-          onDoubleClick={() => {
-            setDraftName(props.api.title ?? "");
-            setRenaming(true);
-          }}
-        >
+        <span className="pane-tab-name" title="Double-click to rename" onDoubleClick={beginRename}>
           {props.api.title}
         </span>
       )}
@@ -560,127 +347,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       >
         <CloseIcon size={14} />
       </button>
-      <button
-        ref={overflowBtnRef}
-        className="pane-tab-btn"
-        title="More…"
-        onClick={() => {
-          if (!overflowOpen && overflowBtnRef.current) {
-            const rect = overflowBtnRef.current.getBoundingClientRect();
-            setOverflowPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-          }
-          setOverflowOpen((v) => !v);
-        }}
-      >
-        <OverflowIcon size={16} />
-      </button>
-      {overflowOpen &&
-        overflowPos &&
-        createPortal(
-          <div
-            ref={overflowMenuRef}
-            // Portaled to document.body (see the comment above the outside-click
-            // effect), which escapes the .cmux-root/.light element in App.tsx
-            // where every --chrome/--border/--fg/etc. custom property is actually
-            // defined — without reapplying those classes here, var(--chrome) etc.
-            // resolve to nothing and the menu renders with a transparent
-            // background instead of falling back to the theme.
-            className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
-            style={{ position: "fixed", top: overflowPos.top, right: overflowPos.right }}
-            role="menu"
-            aria-label={`${props.api.title ?? "Pane"} actions`}
-            onKeyDown={onMenuKeyDown}
-          >
-            <button
-              className="pane-tab-overflow-item"
-              role="menuitem"
-              onClick={() => {
-                closeMenuAfterAction(() => {
-                  setDraftName(props.api.title ?? "");
-                  setRenaming(true);
-                });
-              }}
-            >
-              <RenameIcon size={14} style={{ color: "var(--muted)" }} />
-              <span style={{ flex: 1 }}>Rename</span>
-              <span className="pane-tab-overflow-hint">↵</span>
-            </button>
-            <button
-              className="pane-tab-overflow-item"
-              role="menuitem"
-              disabled
-              title="Drag the tab to move it between panes/workspaces"
-            >
-              <MoveIcon size={14} style={{ color: "var(--muted)" }} />
-              <span style={{ flex: 1 }}>Move (drag tab)</span>
-            </button>
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => {
-                  closeMenuAfterAction(() => openTimelinePanel(props.containerApi, session));
-                }}
-              >
-                <ListIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>View timeline</span>
-              </button>
-            )}
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => {
-                  closeMenuAfterAction(() => openBrowserPanePanel(props.containerApi, session));
-                }}
-              >
-                <BotIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Open Agent Browser</span>
-              </button>
-            )}
-            {session && project && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => {
-                  closeMenuAfterAction(() => setPromoteOpen(true));
-                }}
-              >
-                <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Promote to worktree…</span>
-              </button>
-            )}
-            <div className="pane-tab-overflow-divider" />
-            <button
-              className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
-              role="menuitem"
-              onClick={armOrKill}
-              title={
-                childCount > 0
-                  ? `${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
-                  : undefined
-              }
-            >
-              <KillIcon size={14} />
-              <span style={{ flex: 1 }}>
-                {killArmed
-                  ? "Click again to kill"
-                  : childCount > 0
-                    ? `Kill session (${childCount} child${childCount === 1 ? "" : "ren"} will detach)`
-                    : "Kill session"}
-              </span>
-              {killArmed && (
-                <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
-                  {killSecondsLeft}s
-                </span>
-              )}
-            </button>
-          </div>,
-          document.body,
-        )}
-      {promoteOpen && session && project && (
-        <PromoteDialog session={session} project={project} onClose={() => setPromoteOpen(false)} />
-      )}
+      <PaneActionsMenu
+        api={props.api}
+        params={props.params}
+        containerApi={props.containerApi}
+        onRename={beginRename}
+        triggerClassName="pane-tab-btn"
+      />
     </div>
   );
 }

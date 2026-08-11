@@ -10,6 +10,7 @@ import {
   hasTiledPanels,
   stripFloatingPanels,
   stripMaximizedNode,
+  stripHiddenHeaders,
   serializeForPersist,
   applyMobilePresentation,
   attentionTransitionPanelIds,
@@ -37,9 +38,16 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
 }
 
 // A grid-target group for dropSessionPanel tests — real DockviewGroupPanels
-// expose the same `api.location.type` shape panels do.
+// expose the same `api.location.type` shape panels do. `header.hidden` is
+// mutable (a plain object, not a getter/setter) so applyMobilePresentation's
+// tests below can assert against it directly the same way the real
+// DockviewGroupPanel.header does (see panelUtils.ts's own comment on that).
 function mockGroup(id: string, locationType: "grid" | "floating" = "grid") {
-  return { id, api: { location: { type: locationType } } } as unknown as DockviewGroupPanel;
+  return {
+    id,
+    api: { location: { type: locationType } },
+    header: { hidden: false },
+  } as unknown as DockviewGroupPanel;
 }
 
 function mockDockviewApi(): DockviewApi {
@@ -816,16 +824,86 @@ describe("stripFloatingPanels", () => {
     });
   });
 
+  // Mobile UI/UX overhaul, item A.3 — mirrors stripMaximizedNode's own test
+  // shape one field over: `hideHeader` (set by applyMobilePresentation) is
+  // pure viewport presentation and must never round-trip through a saved
+  // workspace layout, exactly like grid.maximizedNode above.
+  describe("stripHiddenHeaders", () => {
+    it("removes hideHeader from a leaf group node", () => {
+      const serialized = makeSerialized();
+      const withHidden = {
+        ...serialized,
+        grid: {
+          ...serialized.grid,
+          root: {
+            ...serialized.grid.root,
+            data: { ...serialized.grid.root.data, hideHeader: true },
+          },
+        },
+      } as unknown as SerializedDockview;
+
+      const result = stripHiddenHeaders(withHidden);
+
+      expect(result.grid.root.data).not.toHaveProperty("hideHeader");
+    });
+
+    it("recurses into a branch node's children", () => {
+      const serialized = makeSerialized();
+      const withHidden = {
+        ...serialized,
+        grid: {
+          ...serialized.grid,
+          root: {
+            type: "branch",
+            data: [
+              { type: "leaf", data: { views: ["session-1"], id: "group-1", hideHeader: true } },
+              { type: "leaf", data: { views: ["session-2"], id: "group-2" } },
+            ],
+          },
+        },
+      } as unknown as SerializedDockview;
+
+      const result = stripHiddenHeaders(withHidden);
+
+      const [first, second] = result.grid.root.data as unknown as Array<{ data: unknown }>;
+      expect(first?.data).not.toHaveProperty("hideHeader");
+      expect(second?.data).toEqual({ views: ["session-2"], id: "group-2" });
+    });
+
+    it("returns the input unchanged when there is no hideHeader", () => {
+      const serialized = makeSerialized();
+
+      const result = stripHiddenHeaders(serialized);
+
+      expect(result.grid.root).toEqual(serialized.grid.root);
+    });
+
+    it("returns the input unchanged when grid.root is missing (defensive guard)", () => {
+      const serialized = { ...makeSerialized(), grid: undefined } as unknown as SerializedDockview;
+
+      const result = stripHiddenHeaders(serialized);
+
+      expect(result).toBe(serialized);
+    });
+  });
+
   describe("serializeForPersist (issue #85)", () => {
     function mockApiWithJSON(serialized: SerializedDockview): DockviewApi {
       return { toJSON: vi.fn(() => serialized) } as unknown as DockviewApi;
     }
 
-    it("strips both floating panels and maximizedNode in one pass", () => {
+    it("strips floating panels, maximizedNode, and hideHeader in one pass", () => {
       const serialized = makeSerialized({ activeGroup: "session-2" });
       const withMaximized = {
         ...serialized,
-        grid: { ...serialized.grid, maximizedNode: { location: [0] } },
+        grid: {
+          ...serialized.grid,
+          maximizedNode: { location: [0] },
+          root: {
+            ...serialized.grid.root,
+            data: { ...serialized.grid.root.data, hideHeader: true },
+          },
+        },
       } as unknown as SerializedDockview;
       const api = mockApiWithJSON(withMaximized);
 
@@ -834,6 +912,7 @@ describe("stripFloatingPanels", () => {
       expect(result.panels).not.toHaveProperty("session-2");
       expect(result).not.toHaveProperty("floatingGroups");
       expect(result.grid).not.toHaveProperty("maximizedNode");
+      expect(result.grid.root.data).not.toHaveProperty("hideHeader");
     });
 
     it("is a no-op pass-through when there is nothing to strip", () => {
@@ -854,6 +933,7 @@ describe("applyMobilePresentation (issue #85)", () => {
     maximized: boolean;
     panels?: ReturnType<DockviewApi["getPanel"]>[];
     activePanel?: ReturnType<DockviewApi["getPanel"]> | null;
+    groups?: DockviewGroupPanel[];
   }): DockviewApi {
     return {
       hasMaximizedGroup: vi.fn(() => opts.maximized),
@@ -861,6 +941,7 @@ describe("applyMobilePresentation (issue #85)", () => {
       maximizeGroup: vi.fn(),
       panels: opts.panels ?? [],
       activePanel: opts.activePanel ?? null,
+      groups: opts.groups ?? [],
     } as unknown as DockviewApi;
   }
 
@@ -913,6 +994,39 @@ describe("applyMobilePresentation (issue #85)", () => {
     applyMobilePresentation(api, false);
 
     expect(api.exitMaximizedGroup).not.toHaveBeenCalled();
+  });
+
+  // Mobile UI/UX overhaul, item A.2 — the fix for the reported "doubled pane
+  // switcher": dockview's own tab strip must not render alongside App.tsx's
+  // .mobile-tabs bar. Every group, not just the one being (de)maximized — a
+  // desktop-authored layout can have several groups, and only one becomes
+  // the maximized/visible one here (see applyMobilePresentation's own
+  // comment on why).
+  it("hides every group's header when entering mobile", () => {
+    const active = mockPanel("session-1");
+    const visibleGroup = mockGroup("group-1");
+    const backgroundGroup = mockGroup("group-2");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [active],
+      activePanel: active,
+      groups: [visibleGroup, backgroundGroup],
+    });
+
+    applyMobilePresentation(api, true);
+
+    expect(visibleGroup.header.hidden).toBe(true);
+    expect(backgroundGroup.header.hidden).toBe(true);
+  });
+
+  it("restores every group's header when leaving mobile", () => {
+    const group = mockGroup("group-1");
+    group.header.hidden = true;
+    const api = mockApiForPresentation({ maximized: true, groups: [group] });
+
+    applyMobilePresentation(api, false);
+
+    expect(group.header.hidden).toBe(false);
   });
 });
 

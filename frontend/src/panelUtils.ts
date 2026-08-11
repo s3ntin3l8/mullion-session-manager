@@ -139,6 +139,19 @@ export function hasTiledPanels(api: DockviewApi): boolean {
   return api.panels.some((p) => p.api.location.type === "grid");
 }
 
+// A dockview panel's `params` is untyped (Parameters = Record<string,
+// unknown> | undefined) from the group/board's point of view — only a
+// `terminal` component panel's params are actually `{ sessionId: number }`;
+// a sibling panel could in principle be a GitHubPanel/GitPanel/BrowserPanel
+// with no sessionId at all, so every caller must guard rather than assume.
+// Shared by PaneTab.tsx (the tab-group attention accent) and App.tsx's
+// mobile pane bar (item A.5 of the mobile UI/UX overhaul) so the two don't
+// carry two copies of the same narrowing.
+export function panelSessionId(panel: IDockviewPanel): number | undefined {
+  const id = panel.params?.sessionId;
+  return typeof id === "number" ? id : undefined;
+}
+
 // #98 item 4's auto-focus-on-attention effect (App.tsx) — which panel ids
 // should be brought into view for a live-refresh poll tick, given the set
 // of session ids that already had `attention` the *previous* tick (so this
@@ -483,12 +496,56 @@ export function stripMaximizedNode(serialized: SerializedDockview): SerializedDo
   return { ...serialized, grid: rest };
 }
 
+// Mobile UI/UX overhaul (see .claude/plans/we-need-to-work-iterative-planet.md,
+// item A.2/A.3) — mirrors stripMaximizedNode's own reasoning one field over.
+// applyMobilePresentation below sets `group.header.hidden` so dockview's own
+// tab strip doesn't render a second, duplicate pane switcher underneath
+// App.tsx's `.mobile-tabs` bar. dockview-core serializes that as `hideHeader`
+// on each leaf group node inside `grid.root` (DockviewGroupPanelModel.toJSON,
+// confirmed in the installed package) — left unstripped, mobile's hide would
+// poison a desktop restore exactly the way unstripped maximization did before
+// stripMaximizedNode existed. The `dockview` package this file imports from
+// doesn't re-export the GroupPanelViewState/SerializedGridObject names its
+// own SerializedDockview type is built from, so this walks the tree with a
+// minimal structural type rather than importing them by name.
+interface GridTreeNode {
+  type: "leaf" | "branch";
+  data: unknown;
+  size?: number;
+  visible?: boolean;
+}
+
+function stripHiddenHeadersNode(node: GridTreeNode): GridTreeNode {
+  if (node.type === "branch" && Array.isArray(node.data)) {
+    return { ...node, data: (node.data as GridTreeNode[]).map(stripHiddenHeadersNode) };
+  }
+  if (node.data && typeof node.data === "object" && "hideHeader" in node.data) {
+    const { hideHeader: _hideHeader, ...rest } = node.data as Record<string, unknown>;
+    return { ...node, data: rest };
+  }
+  return node;
+}
+
+export function stripHiddenHeaders(serialized: SerializedDockview): SerializedDockview {
+  const root = serialized.grid?.root as GridTreeNode | undefined;
+  if (!root) return serialized;
+  return {
+    ...serialized,
+    grid: {
+      ...serialized.grid,
+      root: stripHiddenHeadersNode(root) as SerializedDockview["grid"]["root"],
+    },
+  };
+}
+
 // Single choke point for both save paths (App.tsx's flushPendingSave and
 // scheduleSave) so they can't drift — flushPendingSave previously wrote raw
 // api.toJSON() with neither strip applied, leaking floating panels AND
 // maximization through every workspace switch.
 export function serializeForPersist(api: DockviewApi): SerializedDockview {
-  return stripMaximizedNode(stripFloatingPanels(api.toJSON() as SerializedDockview));
+  return stripHiddenHeaders(
+    stripMaximizedNode(stripFloatingPanels(api.toJSON() as SerializedDockview)),
+  );
 }
 
 // Issue #85 — the single entry point for mobile's "single active pane"
@@ -501,7 +558,25 @@ export function serializeForPersist(api: DockviewApi): SerializedDockview {
 // designates as focused — the same one the mobile tab bar renders as active
 // (see App.tsx's panel.id === activePanelId check) — so picking a different
 // panel would show one pane while highlighting a different tab.
+//
+// Mobile UI/UX overhaul, item A.2 — also syncs every group's `header.hidden`
+// to the current breakpoint, so dockview's own tab strip doesn't render
+// underneath App.tsx's `.mobile-tabs` bar (the reported "doubled" pane
+// switcher). Every group, not just the one about to be (de)maximized: a
+// workspace restored from a desktop-authored layout can have several groups,
+// and only one of them becomes the maximized/visible one here — the rest
+// must still not show a header once they're switched to later (e.g. a
+// direct `dockviewApi.maximizeGroup()` call elsewhere, which fires
+// `onDidMaximizedGroupChange` — see App.tsx's own listener for that path).
+// Setting `.hidden` directly toggles `display:none` on dockview's internal
+// tabsContainer element (confirmed in the installed package) inside the
+// group's own flex layout, which the browser reflows on its own — no
+// separate dockview relayout call needed, and TerminalPane's existing
+// ResizeObserver → refit picks up the resulting size change.
 export function applyMobilePresentation(api: DockviewApi, isMobile: boolean): void {
+  for (const group of api.groups) {
+    group.header.hidden = isMobile;
+  }
   if (!isMobile) {
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
     return;

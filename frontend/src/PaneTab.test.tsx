@@ -8,12 +8,23 @@ import type { GitStatus, NotificationEvent, Project, Session } from "./api.js";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 
-// Issue #212's "View timeline" overflow-menu item calls openTimelinePanel
-// directly with props.containerApi — mocked so this file's own tests never
-// need a real DockviewApi, only somewhere to point containerApi at (see
-// makeProps below) and something to assert the call landed correctly.
+// Issue #212's "View timeline" overflow-menu item (now PaneActionsMenu.tsx,
+// rendered as a normal child of PaneTab — see that file's own extraction
+// comment) calls openTimelinePanel directly with props.containerApi —
+// mocked so this file's own tests never need a real DockviewApi, only
+// somewhere to point containerApi at (see makeProps below) and something to
+// assert the call landed correctly. openBrowserPanePanel is the same shape
+// for "Open Agent Browser", not currently exercised by name here but still
+// needed so PaneActionsMenu's import resolves to a callable. panelSessionId
+// is real (not a spy) — PaneTab.tsx's own groupHasAttention needs its actual
+// narrowing behavior, not a mock.
 vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
+  openBrowserPanePanel: vi.fn(),
+  panelSessionId: (panel: { params?: { sessionId?: unknown } }) => {
+    const id = panel.params?.sessionId;
+    return typeof id === "number" ? id : undefined;
+  },
 }));
 
 vi.mock("./api.js", () => ({
