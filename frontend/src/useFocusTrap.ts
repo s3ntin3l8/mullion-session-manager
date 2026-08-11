@@ -46,9 +46,34 @@ function isAriaHidden(el: Element): boolean {
   return el.closest('[aria-hidden="true"]') !== null;
 }
 
+// Hermes review, PR #621 round 3 — a CSS-`display: none` ancestor (not just
+// `aria-hidden`) also needs filtering out: Settings.tsx's mobile drill-down
+// keeps both its nav and content panes mounted at all times, toggling which
+// one is `display: none` purely via CSS class (no unmount), same for its
+// back button outside the mobile breakpoint. Without this, `getFocusable()`
+// could return a hidden element as `focusable[0]`/`focusable[last]` — Tab's
+// wrap-around check (`document.activeElement === first/last`, below) can
+// never match a hidden element (a browser refuses to actually focus one), so
+// the trap silently stops wrapping and focus leaks out of the dialog instead
+// — a real bug, but not `offsetWidth`/`getClientRects`-detectable (see the
+// note above), so `getComputedStyle` instead, walking ancestors the same way
+// `isAriaHidden` walks for `aria-hidden` — a `display: none` ancestor hides
+// this element just as much as one on the element itself. jsdom's
+// `getComputedStyle` reads inline styles and its own default per-tag UA
+// stylesheet correctly (it just can't do real *layout*, which is what
+// `offsetWidth` needs) — jsdom-safe, unlike the layout-dependent checks.
+function isDisplayNone(el: Element): boolean {
+  let node: Element | null = el;
+  while (node) {
+    if (window.getComputedStyle(node).display === "none") return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
 function getFocusable(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (el) => !isAriaHidden(el),
+    (el) => !isAriaHidden(el) && !isDisplayNone(el),
   );
 }
 

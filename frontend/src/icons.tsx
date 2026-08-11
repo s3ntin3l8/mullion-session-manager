@@ -135,6 +135,14 @@ export function ChevronRightIcon(props: IconProps) {
   );
 }
 
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <polyline points="15 18 9 12 15 6" />
+    </Svg>
+  );
+}
+
 export function FolderIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.6} {...props}>
