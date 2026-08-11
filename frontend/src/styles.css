@@ -6871,6 +6871,20 @@ button.danger.armed {
   .settings-modal-header {
     padding-top: calc(16px + env(safe-area-inset-top));
   }
+  /* Hermes review, PR #621 round 4 (nit) — the top inset was handled above,
+     but not the bottom: in landscape on a notched phone, the home-indicator
+     area could otherwise clip the last row of the nav list or scrolled
+     section content. Same `env(safe-area-inset-bottom)` pattern already
+     used by `.sidebar-wrapper`/`.kanban-detail-drawer` elsewhere in this
+     file, added to each pane's own bottom edge rather than the fixed-size
+     `.settings-modal` shell, since these are the parts that actually
+     scroll. */
+  .settings-content-body {
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+  .settings-nav-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
   /* Hermes review, PR #621 round 2 — item E's own 44px floor applies here
      too: this is the drill-down's primary control, same as the close
      button right beside it (already bumped a few rules up), not just a
