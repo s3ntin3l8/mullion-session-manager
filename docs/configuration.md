@@ -21,6 +21,7 @@ a way that doesn't coerce to `false`).
 | ------------------- | ----------------- | -------------------------------------------------------------- |
 | `NODE_ENV`          | `development`     | `development` \| `production` \| `test`                        |
 | `PORT`              | `3000`            | HTTP listen port                                               |
+| `HOST`              | `127.0.0.1`       | interface `app.listen()` binds to; loopback-only by default, see [`auth.md`](auth.md#network-exposure-issue-603) |
 | `LOG_LEVEL`         | `info`            | pino log level                                                 |
 | `CORS_ORIGIN`       | _(empty)_         | comma-separated allowlist; empty disables CORS                 |
 | `RATE_LIMIT_MAX`    | `100`             | max requests per window                                        |
@@ -51,6 +52,7 @@ See [`auth.md`](auth.md) for the full setup/security writeup.
 | Variable                      | Default   | Description                                                                                                                                                                        |
 | ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MULLION_AUTH_TOKEN`          | _(empty)_ | shared token gating every `/api/*` route and every `/ws/*` upgrade (prefix-matched, so any future `/ws/*` route inherits it too); empty disables in-process auth entirely          |
+| `MULLION_TRUST_GATEWAY`       | `false`   | required to boot with neither `MULLION_AUTH_TOKEN` nor `MULLION_OIDC_*` set — acknowledges a reverse-proxy gateway already gates access; adds no check of its own (boot refuses otherwise) |
 | `MULLION_SESSION_SECRET`      | _(empty)_ | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise)                                                               |
 | `MULLION_OIDC_ISSUER`         | _(empty)_ | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together                                                                                                     |
 | `MULLION_OIDC_CLIENT_ID`      | _(empty)_ | OIDC client id                                                                                                                                                                     |

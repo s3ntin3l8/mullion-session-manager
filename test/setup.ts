@@ -58,6 +58,17 @@ process.env.FRONTEND_DIST = tmpFrontendDist;
 // test/routes/hosts.test.ts) already sets this explicitly for its own
 // scope, same as every other var here.
 process.env.HOST_HEARTBEAT_INTERVAL_SECONDS = "0";
+// On by default in tests (schema default is false) — src/app.ts's boot
+// invariant (issue #603) refuses to start the primary role with no
+// in-process auth AND no MULLION_TRUST_GATEWAY acknowledgement. The vast
+// majority of this suite's ~75 buildApp() call sites build a plain app with
+// neither MULLION_AUTH_TOKEN nor this flag set, because they're testing
+// something else entirely — forcing this on here is the same "the harness
+// trusts itself" posture as HOST_HEARTBEAT_INTERVAL_SECONDS above, not an
+// attempt to test the invariant itself. test/plugins/auth.test.ts's own
+// "MULLION_TRUST_GATEWAY boot invariant" describe block explicitly deletes
+// this to exercise the real default.
+process.env.MULLION_TRUST_GATEWAY = "true";
 
 // Give every OTHER config var from the schema a clean (unset) starting
 // value too, once per test file, before that file's own beforeAll/beforeEach/
@@ -77,6 +88,7 @@ const PRESERVED_VARS = new Set([
   "SESSIONS_DIR",
   "FRONTEND_DIST",
   "HOST_HEARTBEAT_INTERVAL_SECONDS",
+  "MULLION_TRUST_GATEWAY",
 ]);
 for (const key of Object.keys(schema.properties)) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];

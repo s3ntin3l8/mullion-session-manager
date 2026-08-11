@@ -157,6 +157,34 @@ export async function buildApp() {
     );
   }
 
+  // Completes the "every half-configured combination refuses to boot"
+  // invariant this block already enforces (issue #603): every check above
+  // and below reacts to auth being PARTIALLY set up. This one reacts to it
+  // being not set up at all — isAuthEnabled(config) false, no MULLION_OIDC_*
+  // either — which used to mean authPlugin installs no onRequest hook at
+  // all (its own early return) and every route is reachable with no
+  // credential, behind nothing but a boot-time log.warn. That posture is
+  // legitimate behind a reverse-proxy gateway (deploy/README.md's primary
+  // deployment model), so this doesn't refuse it outright — it just requires
+  // the operator to say so explicitly via MULLION_TRUST_GATEWAY, the same
+  // "declare the half-configured state you actually want" posture as every
+  // other check here.
+  if (
+    app.config.MULLION_ROLE === "primary" &&
+    !isAuthEnabled(app.config) &&
+    !app.config.MULLION_TRUST_GATEWAY
+  ) {
+    throw new Error(
+      "no in-process auth is configured (MULLION_AUTH_TOKEN/MULLION_OIDC_*) and " +
+        "MULLION_TRUST_GATEWAY is not set — refusing to boot with nothing gating " +
+        "access to this process. If a reverse-proxy gateway (e.g. Traefik forwardAuth " +
+        "-> Authentik, per deploy/README.md) already authenticates every request " +
+        "before it reaches here, set MULLION_TRUST_GATEWAY=true in .env to acknowledge " +
+        "that and boot anyway. Otherwise set MULLION_AUTH_TOKEN (issue #19) or " +
+        "MULLION_OIDC_* (issue #30). See issue #603.",
+    );
+  }
+
   // DB_ENCRYPTION_KEY must decode to exactly 32 bytes — the AES-256-GCM key
   // length EncryptionService's constructor now enforces (security audit
   // finding AS3). Checked here too, not just left to that constructor's own

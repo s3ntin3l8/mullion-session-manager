@@ -37,6 +37,7 @@ describe("env plugin", () => {
     delete process.env.DATABASE_URL;
     const app = await buildApp();
     expect(app.config.PORT).toBe(3000);
+    expect(app.config.HOST).toBe("127.0.0.1");
     expect(app.config.LOG_LEVEL).toBe("info");
     expect(app.config.DATABASE_URL).toBe("file:./data/app.db");
     expect(app.config.DB_ENCRYPTION_KEY).toBe("");
