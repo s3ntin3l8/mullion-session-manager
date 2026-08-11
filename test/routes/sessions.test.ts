@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import net from "node:net";
+import { EventEmitter } from "node:events";
 import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
