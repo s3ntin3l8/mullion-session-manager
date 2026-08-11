@@ -22,7 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:all": "concurrently -n backend,frontend -c blue,green \"npm:test\" \"npm --prefix frontend run test\"",
-    "lint": "eslint .",
+    "lint": "eslint . && npm run check:env-docs",
     "lint:all": "concurrently -n backend,frontend -c blue,green \"npm:lint\" \"npm --prefix frontend run lint\"",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "concurrently -n backend,frontend -c blue,green \"npm:typecheck\" \"npm --prefix frontend run typecheck\"",

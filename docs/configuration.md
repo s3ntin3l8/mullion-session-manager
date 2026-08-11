@@ -4,7 +4,11 @@ All config is validated at startup by `@fastify/env` — the schema in
 [`src/plugins/env.ts`](../src/plugins/env.ts) is the single source of truth.
 This page is the single documented copy of it; every other doc that used to
 carry its own env-var table links here instead, so a value only ever needs
-updating in one place.
+updating in one place. `npm run lint` (and so `make lint`, CI, and the
+pre-commit hook) runs `scripts/check-env-docs.mjs`, which fails if
+`src/plugins/env.ts`, `.env.example`, and this page's tables ever name a
+different set of keys — a new env var can't go undocumented the way
+`PREVIEW_RATE_LIMIT_MAX` briefly did.
 
 Copy `.env.example` to `.env` to get every key with its default and an
 explanatory comment. Booleans accept `true`/`false` (see
