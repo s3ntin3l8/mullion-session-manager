@@ -336,6 +336,20 @@ describe("projects route", () => {
     await app.close();
   });
 
+  it("gitInit without createDir 400s with PROJECT_GIT_INIT_WITHOUT_CREATE_DIR, on create — Hermes review, PR #620", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "git-init-no-createdir-create-"));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "git-init-no-createdir", cwd, gitInit: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("PROJECT_GIT_INIT_WITHOUT_CREATE_DIR");
+    await app.close();
+  });
+
   it("rejects a project missing cwd", async () => {
     const app = await buildApp();
     const res = await app.inject({
@@ -509,6 +523,54 @@ describe("projects route", () => {
       });
       expect(patched.statusCode).toBe(200);
       expect(patched.json()).toMatchObject({ id, name: "renamed", cwd });
+
+      await app.close();
+    });
+
+    it("400s (not 500) when the body contains only createDir/gitInit and no updatable field — Hermes review, PR #620", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "flags-only-"));
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "flags-only", cwd },
+      });
+      const { id } = created.json();
+
+      const gitInitOnly = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { gitInit: true },
+      });
+      expect(gitInitOnly.statusCode).toBe(400);
+
+      const createDirFalseOnly = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { createDir: false },
+      });
+      expect(createDirFalseOnly.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("gitInit without createDir 400s with PROJECT_GIT_INIT_WITHOUT_CREATE_DIR, on update", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "git-init-no-createdir-"));
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "git-init-no-createdir", cwd },
+      });
+      const { id } = created.json();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { name: "renamed", gitInit: true },
+      });
+      expect(patched.statusCode).toBe(400);
+      expect(patched.json().code).toBe("PROJECT_GIT_INIT_WITHOUT_CREATE_DIR");
 
       await app.close();
     });

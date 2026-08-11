@@ -221,7 +221,14 @@ export function CreateProjectModal({
           : undefined,
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
-      if (opts?.createDir && gitInit && result?.gitInitialized === false) {
+      // `gitInitialized: false` alone is ambiguous — it also means "never
+      // attempted" (the directory already existed, e.g. a concurrent
+      // create between the initial 400 and this retry, so the backend
+      // skips git init entirely). `dirCreated` disambiguates: git init only
+      // ever runs when this request actually created the directory, so
+      // `dirCreated && gitInitialized === false` is specifically "attempted
+      // and failed".
+      if (opts?.createDir && gitInit && result?.dirCreated && result.gitInitialized === false) {
         setSubmitting(false);
         setGitInitFailed(true);
         return;

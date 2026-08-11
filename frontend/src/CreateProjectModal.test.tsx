@@ -393,6 +393,29 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("does not show the git-init-failed warning when the directory already existed (dirCreated: false) — Hermes review, PR #620", async () => {
+    // gitInitialized: false here means "never attempted" (the directory was
+    // created concurrently between the initial 400 and this retry, so the
+    // backend skipped git init entirely) — distinct from "attempted and
+    // failed", which only ever happens when dirCreated is also true.
+    const onClose = vi.fn();
+    const onCreate = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError("Directory /new does not exist.", 400, "PROJECT_DIR_MISSING"),
+      )
+      .mockResolvedValueOnce({ dirCreated: false, gitInitialized: false });
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/new" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(await screen.findByRole("checkbox", { name: /initialize a git repository/i }));
+    await user.click(screen.getByRole("button", { name: "Create folder and add project" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByText(/git init.*failed/i)).not.toBeInTheDocument();
+  });
+
   it("disables the submit button while the request is in flight", async () => {
     let resolveCreate: (
       v: { dirCreated?: boolean; gitInitialized?: boolean } | undefined,

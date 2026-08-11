@@ -1932,6 +1932,19 @@ export async function projectsRoute(app: FastifyInstance) {
           code: "PROJECT_DIR_REMOTE_UNSUPPORTED",
         });
       }
+      // gitInit only has an effect when createDir also creates the
+      // directory (see the block below) — without this, `gitInit: true`
+      // alone silently does nothing and the response omits
+      // `gitInitialized` entirely, giving the caller neither an error nor
+      // a result to act on.
+      if (gitInit && !createDir) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: "gitInit requires createDir.",
+          code: "PROJECT_GIT_INIT_WITHOUT_CREATE_DIR",
+        });
+      }
       // The create-project modal's own placeholder is a literal `~/...`
       // path (ported from the design) — expand it the same way
       // PROJECTS_ROOTS/CRS_CONFIG_DIR already are, so a session spawned
@@ -2021,6 +2034,15 @@ export async function projectsRoute(app: FastifyInstance) {
       ) {
         return reply.badRequest("devServerUrl must be a 1-65535 port or a valid http(s) URL");
       }
+      // Same rationale as POST's own gitInit-requires-createDir guard.
+      if (gitInit && !createDir) {
+        return reply.code(400).send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: "gitInit requires createDir.",
+          code: "PROJECT_GIT_INIT_WITHOUT_CREATE_DIR",
+        });
+      }
       if (createDir && cwd === undefined) {
         return reply.code(400).send({
           statusCode: 400,
@@ -2036,6 +2058,27 @@ export async function projectsRoute(app: FastifyInstance) {
           message: `Mullion can't create a directory on host ${existing.hostId} — create it there and try again.`,
           code: "PROJECT_DIR_REMOTE_UNSUPPORTED",
         });
+      }
+      // The schema's `minProperties: 1` only guarantees the body isn't
+      // completely empty — it doesn't guarantee it contains a field that
+      // actually maps to a column. The two guards above already reject a
+      // *truthy* createDir/gitInit with nothing else to act on; this catches
+      // what's left — `{"createDir": false}` (or `{"gitInit": false}`)
+      // alone, which is falsy and so skips both — before it can fall
+      // through to `.update(projects).set({})` with an empty object (every
+      // spread below is conditional on an undefined field), which
+      // drizzle-orm throws on ("No values to set") — a 500, not a 400.
+      if (
+        name === undefined &&
+        cwd === undefined &&
+        devServerUrl === undefined &&
+        autoFetch === undefined &&
+        defaultAgent === undefined &&
+        defaultReviewAgent === undefined
+      ) {
+        return reply.badRequest(
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, or defaultReviewAgent must be provided.",
+        );
       }
 
       const resolvedCwd =
