@@ -17,6 +17,7 @@ import {
   repaintAllTerminals,
   unregisterTerminalRepaint,
 } from "./terminalRepaintRegistry.js";
+import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
 
 vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -27,6 +28,11 @@ vi.mock("./terminalRepaintRegistry.js", () => ({
   registerTerminalRepaint: vi.fn(),
   unregisterTerminalRepaint: vi.fn(),
   repaintAllTerminals: vi.fn(),
+}));
+
+vi.mock("./terminalInputRegistry.js", () => ({
+  registerTerminalInput: vi.fn(),
+  unregisterTerminalInput: vi.fn(),
 }));
 
 // Keyed by OSC ident (10/11/12) — populated by the mocked Terminal's
@@ -121,6 +127,15 @@ vi.mock("@xterm/xterm", () => {
       // close path (TerminalPane.tsx), which hands focus back to the
       // terminal once the bar closes.
       focus: vi.fn(),
+      // Mobile UI/UX overhaul, item C.1 — input()/modes are what
+      // terminalInputRegistry.ts's registered handle calls into
+      // (MobileKeyBar.test.tsx tests the bar itself against a fake handle;
+      // these tests below prove TerminalPane wires that handle to the real
+      // term.input()/term.modes correctly). modes.applicationCursorKeysMode
+      // is a plain mutable field, not a getter, so a test can flip it
+      // directly to exercise the DECCKM branch in sendArrow.
+      input: vi.fn(),
+      modes: { applicationCursorKeysMode: false },
       onData: vi.fn(() => createDisposable()),
       onTitleChange: vi.fn(() => createDisposable()),
       onSelectionChange: vi.fn(() => createDisposable()),
@@ -248,6 +263,8 @@ function getLatestTermInstance() {
     getSelection: ReturnType<typeof vi.fn>;
     clearSelection: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
+    input: ReturnType<typeof vi.fn>;
+    modes: { applicationCursorKeysMode: boolean };
   };
 }
 
@@ -300,6 +317,8 @@ beforeEach(() => {
   vi.mocked(registerTerminalRepaint).mockClear();
   vi.mocked(unregisterTerminalRepaint).mockClear();
   vi.mocked(repaintAllTerminals).mockClear();
+  vi.mocked(registerTerminalInput).mockClear();
+  vi.mocked(unregisterTerminalInput).mockClear();
 });
 
 afterEach(() => {
@@ -482,6 +501,67 @@ describe("TerminalPane repaint registry (issue #107)", () => {
     unmount();
 
     expect(unregisterTerminalRepaint).toHaveBeenCalledExactlyOnceWith(1);
+  });
+});
+
+// Mobile UI/UX overhaul, item C.1 — MobileKeyBar.test.tsx covers the bar's
+// own behavior against a fake TerminalInputHandle; these tests prove
+// TerminalPane wires that handle to the *real* term.input()/term.modes
+// correctly, which is the half MobileKeyBar's own tests can't reach.
+describe("TerminalPane input registry (mobile key bar, issue: mobile UI/UX overhaul)", () => {
+  it("registers this session's input handle on mount and unregisters it on unmount", () => {
+    stubFakeWebSocket(true);
+    const { unmount } = renderPane();
+
+    expect(registerTerminalInput).toHaveBeenCalledTimes(1);
+    const [sessionId, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+    expect(sessionId).toBe(1);
+    expect(handle.sendInput).toBeInstanceOf(Function);
+    expect(handle.sendArrow).toBeInstanceOf(Function);
+    expect(unregisterTerminalInput).not.toHaveBeenCalled();
+
+    unmount();
+
+    expect(unregisterTerminalInput).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("sendInput routes a fixed sequence straight to term.input()", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+
+    const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+    handle.sendInput("\x1b[Z");
+
+    expect(term.input).toHaveBeenCalledExactlyOnceWith("\x1b[Z");
+  });
+
+  it("sendArrow emits normal-mode CSI sequences when DECCKM (applicationCursorKeysMode) is off", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+    term.modes.applicationCursorKeysMode = false;
+
+    const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+    handle.sendArrow("up");
+    handle.sendArrow("down");
+
+    expect(term.input).toHaveBeenNthCalledWith(1, "\x1b[A");
+    expect(term.input).toHaveBeenNthCalledWith(2, "\x1b[B");
+  });
+
+  it("sendArrow emits application-mode SS3 sequences when DECCKM is on", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance();
+    term.modes.applicationCursorKeysMode = true;
+
+    const [, handle] = vi.mocked(registerTerminalInput).mock.calls[0]!;
+    handle.sendArrow("up");
+    handle.sendArrow("down");
+
+    expect(term.input).toHaveBeenNthCalledWith(1, "\x1bOA");
+    expect(term.input).toHaveBeenNthCalledWith(2, "\x1bOB");
   });
 });
 

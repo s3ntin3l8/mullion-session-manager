@@ -26,6 +26,7 @@ import {
   repaintAllTerminals,
   unregisterTerminalRepaint,
 } from "./terminalRepaintRegistry.js";
+import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -613,6 +614,24 @@ export function TerminalPane(props: {
     };
     registerTerminalRepaint(props.params.sessionId, repaint);
 
+    // Mobile UI/UX overhaul, item C.1 — lets MobileKeyBar.tsx inject
+    // Esc/Tab/Shift+Tab/Ctrl+C/`/` (sendInput) and DECCKM-aware arrow keys
+    // (sendArrow, resolved against the live term.modes here — see
+    // terminalInputRegistry.ts's own comment on why that resolution can't
+    // happen in the bar itself) into this session's terminal from outside
+    // this component. `term.input()` (not a direct ws.send) routes through
+    // the existing `onData` subscription above, so a key-bar tap behaves
+    // identically to a real keystroke — including `wasUserInput`'s default
+    // `true`, which keeps/returns focus to the terminal exactly the way
+    // typing normally would, so the on-screen keyboard stays up after a tap.
+    registerTerminalInput(props.params.sessionId, {
+      sendInput: (data) => term.input(data),
+      sendArrow: (direction) => {
+        const csi = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
+        term.input(csi + (direction === "up" ? "A" : "B"));
+      },
+    });
+
     // Mounting a new Terminal shares (and, via the settings-sync effect's
     // clearTextureAtlas() calls, can wipe) the module-global WebGL glyph
     // texture atlas (see acquireTextureAtlas in @xterm/addon-webgl) with
@@ -1000,6 +1019,7 @@ export function TerminalPane(props: {
       pendingOscRef.current = null;
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
+      unregisterTerminalInput(props.params.sessionId);
       uploadImageRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
