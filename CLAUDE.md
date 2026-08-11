@@ -16,10 +16,11 @@ and read [`docs/architecture.md`](docs/architecture.md), plus the
 | `make install`       | Install dependencies (`npm ci`).                                                |
 | `make install-hooks` | Install pre-commit + pre-push hooks.                                            |
 | `make dev`           | Start backend (`tsx watch`) + frontend (Vite, HMR) together via `concurrently`. |
-| `make test`          | Run the Vitest suite.                                                           |
-| `make test-coverage` | Run tests with coverage (`vitest run --coverage`).                              |
-| `make lint`          | Run ESLint.                                                                     |
-| `make typecheck`     | Type-check with `tsc --noEmit`.                                                 |
+| `make test`          | Run the Vitest suite — backend **and** frontend (`npm run test:all`).           |
+| `make test-backend`  | Run backend tests only — the fast inner loop.                                   |
+| `make test-coverage` | Run backend tests with coverage (`vitest run --coverage`).                      |
+| `make lint`          | Run ESLint — backend **and** frontend (`npm run lint:all`).                     |
+| `make typecheck`     | Type-check — backend **and** frontend (`npm run typecheck:all`).                |
 | `make format`        | Format the whole repo with Prettier (`--write`, includes `frontend/`).          |
 | `make format-check`  | Check formatting without writing — the pre-push gate.                           |
 | `make test-e2e`      | Opt-in socket-API e2e suite (real sockets/CLI/Chromium); see `test/e2e/`.       |
@@ -28,13 +29,15 @@ and read [`docs/architecture.md`](docs/architecture.md), plus the
 | `make help`          | List every target (the `.DEFAULT_GOAL`).                                        |
 
 `make dev` starts **both** workspaces (backend `tsx watch` + frontend Vite)
-via `concurrently`. `make test`/`lint`/`typecheck` cover the **backend
-only**; `format`/`format-check` run repo-wide (they resolve `.prettierrc`
-from the root and cover `frontend/` too — see `.prettierignore` for excluded
-generated/vendored paths). The frontend is a separate npm workspace with its
-own `dev`/`build`/`lint`/`typecheck` scripts — run them from `frontend/`, or
-use the root `npm run lint:all`/`typecheck:all`/`test:all` to cover both at
-once. Direct npm equivalents also exist for the backend: `npm run
+via `concurrently`. `make test`/`lint`/`typecheck` now cover **both**
+workspaces (they're thin wrappers around the root `npm run
+test:all`/`lint:all`/`typecheck:all` scripts); use `make test-backend` for
+the backend-only fast loop. `format`/`format-check` have always run
+repo-wide (they resolve `.prettierrc` from the root and cover `frontend/`
+too — see `.prettierignore` for excluded generated/vendored paths). The
+frontend is a separate npm workspace with its own `dev`/`build`/`lint`/
+`typecheck` scripts — run them from `frontend/` if you only want the
+frontend half. Direct npm equivalents also exist for the backend: `npm run
 db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 
 ## Architecture / Layout

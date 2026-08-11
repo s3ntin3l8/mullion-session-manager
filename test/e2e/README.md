@@ -25,7 +25,8 @@ first.
 
 ## Why this is NOT part of `make test` (but IS part of CI)
 
-- `vitest.config.ts` (the default suite `make test`/`npm test` run) excludes
+- `vitest.config.ts` (the default backend suite, run by `npm test` at the
+  repo root and — as one half of both workspaces — by `make test`) excludes
   `test/e2e/**` outright — these tests boot real Unix sockets, spawn a real
   `mullion.mjs` child process, and launch a real headless Chromium, which is
   both meaningfully slower and has a real dependency (a Playwright browser
