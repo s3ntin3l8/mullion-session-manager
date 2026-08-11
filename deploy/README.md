@@ -198,6 +198,17 @@ only listens on loopback out of the box, which is exactly what
 (`http://127.0.0.1:<port>`). Set `HOST=0.0.0.0` only if something other than
 a co-located reverse proxy needs to dial this process directly.
 
+**Upgrading an existing bare deployment (in-process auth, no gateway at
+all)?** Before this change the listener always bound `0.0.0.0`, so an
+install relying on `MULLION_AUTH_TOKEN`/OIDC alone (no Traefik in front —
+the "in-process auth alone" model called out above) was reachable directly
+from the network. `HOST` now defaults to loopback-only on upgrade too, and
+because a real credential is already configured, `MULLION_TRUST_GATEWAY`'s
+own boot check never fires to warn you — the process boots fine, just
+silently unreachable from anywhere but this host. Add `HOST=0.0.0.0` to that
+install's `.env` before upgrading if it needs to keep working exactly as it
+did.
+
 One gap worth knowing: **neither in-process auth mechanism extends to the
 preview subdomain** (`preview-<slug>.<PREVIEW_BASE_HOST>` below) — a
 same-origin session cookie can't reach a different subdomain, and a

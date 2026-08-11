@@ -151,6 +151,15 @@ this host (any local user, any other process) can reach the dashboard
 uncredentialed — the flag only asks the operator to confirm that's the
 intended posture, it can't verify a gateway is actually there.
 
+**Upgrading a bare deployment (in-process auth, no gateway) from before this
+flag existed?** `HOST` defaulting to loopback is a behavior change for you
+specifically — the listener used to bind `0.0.0.0` unconditionally.
+`MULLION_TRUST_GATEWAY`'s boot check won't warn you (a real credential is
+already configured, so it never fires); the process just boots reachable
+only from this host. Add `HOST=0.0.0.0` to `.env` before upgrading if this
+install needs to stay reachable from the network — see `deploy/README.md`'s
+own "Upgrading an existing bare deployment" callout.
+
 ## Security
 
 - **Fail-closed boot checks** (`src/app.ts`): either credential configured

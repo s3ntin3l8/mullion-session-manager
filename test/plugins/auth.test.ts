@@ -812,10 +812,27 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       delete process.env.MULLION_TRUST_GATEWAY;
       delete process.env.MULLION_ROLE;
       delete process.env.MULLION_AGENT_TOKEN;
+      // Explicit, not just relied-on-from-earlier-describes cleanup: mirrors
+      // the exact condition the invariant itself checks (isAuthEnabled),
+      // rather than trusting the OIDC/token describes above this one to have
+      // cleaned up after themselves — if one of them ever left a credential
+      // set, "refuses to boot" below would fail with a different error (or
+      // silently boot) instead of exercising the invariant this block is
+      // named for.
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_OIDC_ISSUER;
+      delete process.env.MULLION_OIDC_CLIENT_ID;
+      delete process.env.MULLION_OIDC_CLIENT_SECRET;
+      delete process.env.MULLION_OIDC_REDIRECT_URI;
     });
 
     it("refuses to boot with no in-process auth and MULLION_TRUST_GATEWAY unset — test/setup.ts forces this true for every other test in the suite", async () => {
       delete process.env.MULLION_TRUST_GATEWAY;
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_OIDC_ISSUER;
+      delete process.env.MULLION_OIDC_CLIENT_ID;
+      delete process.env.MULLION_OIDC_CLIENT_SECRET;
+      delete process.env.MULLION_OIDC_REDIRECT_URI;
       await expect(buildApp()).rejects.toThrow(/MULLION_TRUST_GATEWAY/);
     });
 
