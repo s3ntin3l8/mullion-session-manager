@@ -1,4 +1,5 @@
 import { defineConfig, configDefaults } from "vitest/config";
+import { worktreeExcludes } from "./vitest.shared.js";
 
 // Issue #407 — a separate, opt-in Vitest project for the Phase 4 socket
 // API's manual verification checklist, turned into a repeatable suite: real
@@ -24,7 +25,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./test/setup.ts"],
     include: ["test/e2e/**/*.e2e.test.ts"],
-    exclude: [...configDefaults.exclude, "frontend/**", ".wt/**"],
+    // worktreeExcludes (see vitest.shared.ts) must stay in sync with
+    // vitest.config.ts's own exclude list — both configs glob from the same
+    // repo root and need to skip the same full separate checkouts.
+    exclude: [...configDefaults.exclude, "frontend/**", ...worktreeExcludes],
     // A cold `chromium.launch()` (browser-actions.e2e.test.ts,
     // multi-host.e2e.test.ts) and a real spawned CLI child process
     // round-trip (cli.e2e.test.ts) both comfortably blow past Vitest's
