@@ -45,6 +45,28 @@ describe("security plugin", () => {
     await app.close();
   });
 
+  it("blocks inline scripts (A5 — no 'unsafe-inline'/nonce/hash in script-src)", async () => {
+    // Regression guard for A5: frontend/index.html's iOS status-bar theme
+    // hint used to be an inline <script> block that this exact directive
+    // silently killed in production (it only appeared to work under Vite's
+    // dev server, which doesn't apply helmet). The fix moved the script to
+    // frontend/public/theme-hint.js, loaded via <script src>, which 'self'
+    // already permits — so this test intentionally keeps asserting the
+    // strict directive rather than relaxing it; a future 'unsafe-inline'/
+    // nonce/hash addition here should be a deliberate, reviewed decision,
+    // not an accidental fix for a script that should have been externalized
+    // instead (see the plan's rationale for rejecting a CSP hash: brittle
+    // against Prettier reformatting silently invalidating it).
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/health" });
+    const csp = res.headers["content-security-policy"] as string;
+    expect(csp).toMatch(/script-src 'self'(;|$)/);
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(csp).not.toMatch(/script-src[^;]*'nonce-/);
+    expect(csp).not.toMatch(/script-src[^;]*'sha256-/);
+    await app.close();
+  });
+
   it("rate-limits requests beyond the configured max", async () => {
     process.env.RATE_LIMIT_MAX = "2";
     const app = await buildApp();
@@ -87,6 +109,47 @@ describe("security plugin", () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(third.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rate-limits by raw TCP peer address, ignoring X-Forwarded-For/X-Real-Ip (B5 — trustProxy stays off)", async () => {
+    // Pins the accepted trade-off documented in this plugin's rate-limit
+    // registration comment and docs/auth.md's "Current limitations": with
+    // `trustProxy` off, `request.ip` is always the raw connection peer —
+    // simulating "two different real clients behind the same Traefik" as
+    // one shared `remoteAddress` with two DIFFERENT forwarded-for headers
+    // must still land in the SAME bucket. If a future change (a trustProxy
+    // flip, or an unreviewed keyGenerator) starts trusting these headers,
+    // this test starts failing loudly instead of the characteristic
+    // drifting silently.
+    process.env.RATE_LIMIT_MAX = "2";
+    const app = await buildApp();
+    const remoteAddress = "10.0.0.1"; // stand-in for "Traefik's own IP"
+
+    const first = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress,
+      headers: { "x-forwarded-for": "203.0.113.1", "x-real-ip": "203.0.113.1" },
+    });
+    const second = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress,
+      headers: { "x-forwarded-for": "203.0.113.2", "x-real-ip": "203.0.113.2" },
+    });
+    // A third distinct forwarded-for identity, same raw peer — still 429 if
+    // (and only if) the bucket is keyed on the raw peer, not the header.
+    const third = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress,
+      headers: { "x-forwarded-for": "203.0.113.3", "x-real-ip": "203.0.113.3" },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(third.statusCode).toBe(429);
     await app.close();
   });
 

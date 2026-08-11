@@ -12,7 +12,11 @@ import { defineConfig, configDefaults } from "vitest/config";
 //     never depend on that.
 //   - It's meaningfully slower (real process spawns, real browser launches)
 //     than the mocked unit/integration suite.
-//   - It's explicitly not part of CI — see test/e2e/README.md for why.
+//   - It's opt-in, not run via `make test`/`npm test` — it IS run in CI as
+//     its own dedicated `test-e2e` job (`.github/workflows/ci-cd.yml`,
+//     issue #407), separate from the default suite for exactly the reasons
+//     above; see test/e2e/README.md for the full "why a separate job"
+//     rationale.
 //
 // Run via `make test-e2e` / `npm run test:e2e`.
 export default defineConfig({

@@ -23,20 +23,44 @@ directly). This needs a real Chromium available locally — if
 `~/.cache/ms-playwright/` is empty, run `npx playwright install chromium`
 first.
 
-## Why this is NOT part of `make test` / CI
+## Why this is NOT part of `make test` (but IS part of CI)
 
 - `vitest.config.ts` (the default suite `make test`/`npm test` run) excludes
   `test/e2e/**` outright — these tests boot real Unix sockets, spawn a real
   `mullion.mjs` child process, and launch a real headless Chromium, which is
   both meaningfully slower and has a real dependency (a Playwright browser
-  install) the fast, mocked default suite must never need.
-- `.github/workflows/ci-cd.yml` is a thin caller of the reusable
-  `s3ntin3l8/.github` workflows — this repo has no control over whether
-  Playwright's browsers are pre-installed (or installable) in that shared
-  runner, so wiring `make test-e2e` into CI would make CI's pass/fail depend
-  on infrastructure this repo doesn't own. Run it locally instead, and re-run
-  it by hand after any change that touches `src/plugins/control-socket.ts`,
-  `src/cli/*.mjs`, or `src/routes/browser-automation.ts`.
+  install) the fast, mocked default suite must never need. Every developer's
+  own `make test`/`npm test` run stays fast and dependency-free.
+- **It does now run in CI** (issue #407 / B3), via `.github/workflows/ci-cd.yml`'s
+  `test-e2e` job — but as a real, custom multi-step job (checkout, `npm ci`,
+  `npx playwright install --with-deps chromium`, `npm run test:e2e`), not a
+  `with:` parameter to the shared `ci-node.yml` reusable workflow that
+  `test-node`/`test-frontend` use: that reusable job has no hook to run an
+  arbitrary setup command (like installing a browser) before its own Test
+  step, and this repo can't add one without editing the upstream
+  `s3ntin3l8/.github` repo. `test-e2e` is deliberately **not yet** a required
+  branch-protection status check — give it a run of real, unattended CI
+  before gating every merge on it.
+- **Running it locally from inside a Mullion-hosted session**: scrub the
+  inherited `MULLION_*` env vars first (`MULLION_SOCKET_PATH`,
+  `MULLION_HOOK_SOCKET`, `MULLION_SESSION_ID`, ...) — otherwise a
+  `buildApp()` call in this suite can misidentify (or, depending on timing,
+  collide with) the _hosting_ Mullion instance's own control/hook sockets,
+  the same class of hazard documented for `npm run dev` elsewhere in this
+  repo. CI runners don't have this problem (no ambient Mullion instance),
+  but a local run from a live session will. This is separate from (and was
+  found while chasing) a real bug this PR also fixed:
+  `multi-host.e2e.test.ts` builds two `buildApp()` instances (primary +
+  agent) in the _same_ process, and `test/setup.ts` sets `SESSIONS_DIR`
+  once per test file — so both instances used to fight over the same
+  `hooks.sock`/control-socket path regardless of any ambient env leak. Each
+  instance now gets its own `SESSIONS_DIR`, same pattern as their already-
+  distinct `DATABASE_URL`/`BROWSER_DATA_DIR`; this never occurs in a real
+  deployment, where primary and agent are always separate hosts.
+- Re-run it by hand after any change that touches
+  `src/plugins/control-socket.ts`, `src/cli/*.mjs`, or
+  `src/routes/browser-automation.ts` even though CI now also covers it —
+  CI's feedback loop is slower than a local run.
 
 ## What's covered, file by file
 

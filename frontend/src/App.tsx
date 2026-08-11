@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
@@ -19,9 +19,7 @@ import { DockConfigPanel } from "./DockConfigPanel.js";
 import type { DockConfigPanelParams } from "./DockConfigPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
 import type { SkillsPanelParams } from "./SkillsPanel.js";
-import { BrowserPanel } from "./BrowserPanel.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
-import { BrowserPane } from "./BrowserPane.js";
 import type { BrowserPaneParams } from "./BrowserPane.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { SessionTimelineParams } from "./SessionTimeline.js";
@@ -33,11 +31,9 @@ import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
-import { Settings } from "./Settings.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { UnifiedBoard } from "./UnifiedBoard.js";
-import { GridIcon, RefreshIcon, ServerRackIcon } from "./icons.js";
+import { GridIcon, RefreshIcon, ServerRackIcon, SpinnerIcon } from "./icons.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
@@ -81,6 +77,68 @@ import {
   formatDocumentTitle,
   updateFaviconBadge,
 } from "./documentBadge.js";
+
+// B2 — code-split the substantial, not-always-needed-on-first-paint pieces
+// of UI (Settings' ~2,700-line modal, the two browser/preview panes, and
+// the Kanban board) out of the initial bundle via React.lazy. dockview and
+// xterm+webgl stay eager — a terminal pane is what the app shows first, so
+// splitting those would only move the cost, not remove it. Each import()
+// resolves `{ default }` because these modules use named exports, not a
+// default export.
+const LazySettings = lazy(() => import("./Settings.js").then((m) => ({ default: m.Settings })));
+const LazyUnifiedBoard = lazy(() =>
+  import("./UnifiedBoard.js").then((m) => ({ default: m.UnifiedBoard })),
+);
+const LazyBrowserPanel = lazy(() =>
+  import("./BrowserPanel.js").then((m) => ({ default: m.BrowserPanel })),
+);
+const LazyBrowserPane = lazy(() =>
+  import("./BrowserPane.js").then((m) => ({ default: m.BrowserPane })),
+);
+
+// Shared Suspense fallback for the lazy dockview panels above (the Browser
+// panel/pane and the Kanban board overlay, all absolutely-positioned within
+// their container) — reuses the existing terminal-connecting spinner
+// vocabulary (SpinnerIcon + .terminal-status-spinner's cmuxSpin keyframe,
+// styles.css) instead of inventing a second loading affordance.
+function LazyPanelFallback() {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
+    </div>
+  );
+}
+
+// Settings-specific Suspense fallback — the modal shell (backdrop + a
+// centered spinner in place of the panel body) so clicking the gear icon
+// shows immediate feedback while the chunk loads, rather than nothing
+// happening for a beat. Keeps the backdrop clickable (onClose), matching
+// Settings.tsx's own click-outside-to-close behavior, so a slow chunk load
+// doesn't strand the user unable to dismiss it.
+function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="settings-backdrop" onClick={onClose}>
+      <div
+        className="settings-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+      >
+        <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
+      </div>
+    </div>
+  );
+}
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -217,7 +275,9 @@ function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
   const [resetKey, setResetKey] = useState(0);
   return (
     <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <BrowserPanel key={resetKey} params={props.params} api={props.api} />
+      <Suspense fallback={<LazyPanelFallback />}>
+        <LazyBrowserPanel key={resetKey} params={props.params} api={props.api} />
+      </Suspense>
     </ErrorBoundary>
   );
 }
@@ -237,8 +297,36 @@ function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
   );
   return (
     <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <BrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
+      <Suspense fallback={<LazyPanelFallback />}>
+        <LazyBrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
+      </Suspense>
     </ErrorBoundary>
+  );
+}
+
+// B2 — the Kanban board overlay (not a dockview panel, see its render site's
+// own "overlay, not a conditionally-mounted replacement" comment for why
+// dockview stays untouched underneath). Same ErrorBoundary+resetKey pattern
+// as the panel wrappers above, kept as its own component (rather than inline
+// JSX in App's render) purely so it can own that local resetKey — App's
+// render body has no natural per-mount slot for it.
+function KanbanBoardOverlay(props: {
+  onOpenSession: (session: Session) => void;
+  onSessionEnded: (session: Session) => void;
+}) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <div className="kanban-board-overlay" style={{ position: "absolute", inset: 0 }}>
+      <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+        <Suspense fallback={<LazyPanelFallback />}>
+          <LazyUnifiedBoard
+            key={resetKey}
+            onOpenSession={props.onOpenSession}
+            onSessionEnded={props.onSessionEnded}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    </div>
   );
 }
 
@@ -2226,9 +2314,7 @@ export function App() {
                   no other way to reach the task board (ViewModeToggle
                   itself already renders on mobile, at the Toolbar). */}
               {viewMode === "kanban" && (
-                <div className="kanban-board-overlay" style={{ position: "absolute", inset: 0 }}>
-                  <UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
-                </div>
+                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}
             </div>
             <Dock
@@ -2262,7 +2348,43 @@ export function App() {
         />
       )}
       {settingsOpen && (
-        <Settings onClose={() => setSettingsOpen(false)} initialSection={settingsSection} />
+        // ErrorBoundary's fallback (.crashed-pane, styles.css) has no
+        // positioning of its own — it depends entirely on its parent. .app
+        // is a column flex container (styles.css), so without this wrapper
+        // .crashed-pane would render as a squeezed item in that flex flow
+        // (alongside the toolbar/.app-body) on a Settings chunk-load
+        // failure, not a centered full-screen crash state — unlike the
+        // other three lazy boundaries, which each already sit inside a
+        // sized/positioned container (dockview's own panel content div for
+        // BrowserPanel/BrowserPane, KanbanBoardOverlay's own position:
+        // absolute; inset: 0 div). This position: fixed; inset: 0 wrapper
+        // gives .crashed-pane the same kind of dedicated full-viewport box.
+        // Not a visual change for the normal load/success path: LazySettings'
+        // and SettingsLoadingFallback's own `.settings-backdrop` (position:
+        // absolute; inset: 0) already resolved against `.app` (also fixed;
+        // inset: 0) before this wrapper existed, and resolve against this
+        // wrapper the same way now — same full-viewport coverage either way.
+        //
+        // zIndex: 60 is load-bearing, not decoration: `position: fixed`
+        // makes this div its own stacking context, so without an explicit
+        // z-index it paints at the implicit "auto" level among .app's other
+        // children — losing to any sibling with its own explicit z-index
+        // above 0 (e.g. the mobile sidebar drawer at 45, `.overlay-backdrop`
+        // at 50), regardless of DOM order. `.settings-backdrop`'s own
+        // z-index: 60 (styles.css) is what correctly out-ranks those today;
+        // matching it here keeps that ordering unchanged now that this
+        // wrapper — not `.settings-backdrop` directly — is what competes in
+        // `.app`'s stacking context.
+        <div style={{ position: "fixed", inset: 0, zIndex: 60 }}>
+          <ErrorBoundary onReset={() => setSettingsOpen(false)}>
+            <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
+              <LazySettings
+                onClose={() => setSettingsOpen(false)}
+                initialSection={settingsSection}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
       )}
     </div>
   );

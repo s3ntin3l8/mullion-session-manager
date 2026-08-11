@@ -53,6 +53,36 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
   });
 
   // Basic abuse protection. Tune via RATE_LIMIT_MAX / RATE_LIMIT_WINDOW.
+  //
+  // B5 (audit remediation plan) — no keyGenerator override, so this (and
+  // every per-route limiter built on top of it, e.g. routes/auth.ts's
+  // LOGIN_RATE_LIMIT) keys on Fastify's default `request.ip`, which —
+  // because `trustProxy` is off app-wide (see docs/auth.md, and
+  // control-socket-addr.ts/raw-remote-address.ts's own comments on why) —
+  // is always the raw TCP peer address, never an XFF-derived one. Behind a
+  // reverse proxy (Traefik, per deploy/README.md) that peer is the proxy
+  // itself, so every request from every real client shares one bucket —
+  // the login limiter throttles the whole deployment rather than one
+  // attacker. Decided NOT to fix this with a trusted-header keyGenerator
+  // (e.g. reading X-Real-Ip): Traefik does not overwrite a client-supplied
+  // X-Real-Ip/X-Forwarded-For by default — that requires the entrypoint's
+  // own `forwardedHeaders.trustedIPs`, which this repo's
+  // deploy/traefik-dynamic.yml template does not set up — and docs/auth.md
+  // explicitly supports a bare, gateway-less deployment too. Trusting an
+  // unverified header in either of those cases would let any direct client
+  // forge a fresh bucket per request, which is strictly worse than today's
+  // global bucketing (an attacker could evade the login limiter entirely
+  // instead of merely sharing its ceiling with everyone else). Accepted as
+  // a real, documented trade-off (docs/auth.md's "Current limitations")
+  // rather than a silent gap — revisit if this app ever requires a
+  // mandatory, pre-verified gateway hop (at which point a narrowly-scoped,
+  // rate-limit-only keyGenerator reading that gateway's header would be
+  // safe to add, distinct from flipping `trustProxy` app-wide, which the
+  // CSRF Origin check, the control-socket allowlist above, and
+  // raw-remote-address.ts's other call sites all depend on staying off).
+  // test/plugins/security.test.ts pins the current behavior so a future
+  // trustProxy flip (or an unreviewed keyGenerator addition) can't change
+  // it silently.
   await app.register(rateLimit, {
     max: app.config.RATE_LIMIT_MAX,
     timeWindow: app.config.RATE_LIMIT_WINDOW,

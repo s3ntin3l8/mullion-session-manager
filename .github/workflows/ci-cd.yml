@@ -46,6 +46,68 @@ jobs:
       working-directory: "frontend"
       cache-dependency-path: "frontend/package-lock.json"
       typecheck-script: "typecheck"
-      test-script: "test"
+      test-script: "test:coverage"
+      # Measured at 80.21% line coverage as of this PR (frontend/vitest.config.ts's
+      # new coverage block) — 70 leaves ~10 points of headroom to add
+      # uncovered code without CI going red on routine changes, same
+      # philosophy as test-node's own 80-against-~92% floor above (a real
+      # floor with room to breathe, not a cosmetic bump off 0). No sharding
+      # here (frontend's suite runs in well under lint-and-test's 10-minute
+      # timeout as a single job), so unlike test-node this doesn't need
+      # test-shards/test-merge.
+      coverage-fail-under: "70"
       strict-checks: true
     secrets: inherit # pragma: allowlist secret
+
+  # Issue #407 (B3 of the audit remediation plan) — runs the opt-in e2e
+  # suite (vitest.e2e.config.ts / `make test-e2e`, see test/e2e/README.md)
+  # in CI. A real, multi-step job rather than a `with:` tweak to test-node
+  # above — same "no upstream reusable workflow for this" exception class
+  # as release-please.yml's build-tarball job (see that job's own comment):
+  # ci-node.yml's reusable `lint-and-test` job has no hook to run an
+  # arbitrary setup command (e.g. `playwright install`) before its Test
+  # step, and this repo can't add one without editing s3ntin3l8/.github,
+  # which is out of this PR's reach. The e2e suite itself needs nothing
+  # else CI-unfriendly — test/e2e/multi-host.e2e.test.ts's own comment
+  # documents that dtach/systemd-run are mocked throughout (real process
+  # lifecycle is deliberately out of this suite's scope, see
+  # test/e2e/README.md's "What stays manual" section), so a stock
+  # ubuntu-latest runner with a real Chromium is sufficient.
+  #
+  # Deliberately NOT added to CLAUDE.md's required-status-checks list yet:
+  # this is the suite's first run anywhere outside a developer's own
+  # machine, so it needs a stretch of real, unattended CI runs (network
+  # variance on the Chromium download, shared-runner resource limits under
+  # vitest.e2e.config.ts's `fileParallelism: false` real-browser tests) to
+  # prove it isn't flaky before every future merge is gated on it.
+  test-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      # Caches the downloaded Chromium binary (not the OS-level deps
+      # `--with-deps` also installs below, which don't persist across the
+      # runner's ephemeral filesystem anyway) — keyed off a hash of the
+      # whole root package-lock.json (the pinned `playwright` version lives
+      # in there, so a version bump invalidates the cache automatically),
+      # not restricted to just the playwright entry: hashFiles() can't hash
+      # a sub-field, only whole files. No restore-keys fallback, so an
+      # unrelated dependency bump costs a full re-download rather than
+      # silently reusing a stale browser build under a partial-match key.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run e2e suite
+        run: npm run test:e2e
