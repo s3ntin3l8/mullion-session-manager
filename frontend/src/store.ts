@@ -371,6 +371,14 @@ interface DashboardState {
   // pre-existing child as newly-arrived on the next tick and force-open all
   // of their panels.
   sessionsLoaded: boolean;
+  // Same "distinguish not-yet-loaded from genuinely empty" reasoning as
+  // sessionsLoaded above, for UnifiedBoard.tsx's task board specifically:
+  // without it, its "No tasks yet." empty state (tasks.length === 0) flashed
+  // on every single board open, since refreshTasks() is called fresh on
+  // mount and tasks starts as []. Flips true on the first refreshTasks()
+  // ATTEMPT, not the first success — see that function's own comment for
+  // why that has to differ from sessionsLoaded's success-only semantics.
+  tasksLoaded: boolean;
   // Derived read-only slices of `settings`, kept as real state fields (not
   // getters) so existing `useDashboardStore((s) => s.theme)`-style reactive
   // selectors across the app keep working unchanged.
@@ -816,6 +824,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
     sessionsLoaded: false,
+    tasksLoaded: false,
     theme: readThemeHint(),
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
@@ -1056,11 +1065,20 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         }
         try {
           const tasks = await api.listTasks();
-          set({ tasks });
+          set({ tasks, tasksLoaded: true });
         } catch (err) {
           console.warn("[tasks] refreshTasks failed", err);
           // Swallow — keep the last-known-good list rather than blanking it
           // to [] on a transient failure (same posture as refreshGitStatuses).
+          // tasksLoaded still flips to true here, on the FIRST ATTEMPT
+          // rather than the first success — deliberately different from
+          // sessionsLoaded above, which only flips on success. Gating
+          // UnifiedBoard.tsx's "No tasks yet." empty state on this flag
+          // means a dead backend has to fall through to that empty state
+          // (same as an empty task list would) rather than being stuck on a
+          // permanent loading skeleton with no success and no error ever
+          // reaching the UI.
+          set({ tasksLoaded: true });
         }
       };
 

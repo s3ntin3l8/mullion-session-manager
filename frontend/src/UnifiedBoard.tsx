@@ -34,8 +34,10 @@ import {
   LayersIcon,
   PlusIcon,
   TerminalPromptIcon,
+  WarningTriangleIcon,
 } from "./icons.js";
 import { ApiError } from "./api.js";
+import { formatRelativeAge } from "./relativeTime.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
@@ -69,18 +71,27 @@ export function UnifiedBoard({
   // inside effects/handlers below, never read as a value) — see the
   // useDashboardStore.getState() calls at their own call sites instead of
   // subscribing to them here.
-  const { tasks, sessions, projects, taskMasterEnabled, hideEndedSessions, kanbanOrder, theme } =
-    useDashboardStore(
-      useShallow((s) => ({
-        tasks: s.tasks,
-        sessions: s.sessions,
-        projects: s.projects,
-        taskMasterEnabled: s.taskMasterEnabled,
-        hideEndedSessions: s.hideEndedSessions,
-        kanbanOrder: s.kanbanOrder,
-        theme: s.theme,
-      })),
-    );
+  const {
+    tasks,
+    tasksLoaded,
+    sessions,
+    projects,
+    taskMasterEnabled,
+    hideEndedSessions,
+    kanbanOrder,
+    theme,
+  } = useDashboardStore(
+    useShallow((s) => ({
+      tasks: s.tasks,
+      tasksLoaded: s.tasksLoaded,
+      sessions: s.sessions,
+      projects: s.projects,
+      taskMasterEnabled: s.taskMasterEnabled,
+      hideEndedSessions: s.hideEndedSessions,
+      kanbanOrder: s.kanbanOrder,
+      theme: s.theme,
+    })),
+  );
 
   useEffect(() => {
     void useDashboardStore.getState().refreshTasks();
@@ -261,8 +272,19 @@ export function UnifiedBoard({
             }
             onCreated={() => setCreating(false)}
           />
-          {dragError && <div className="task-detail-error tasks-panel-drag-error">{dragError}</div>}
-          {tasks.length === 0 ? (
+          {dragError && (
+            <div className="task-detail-error tasks-panel-drag-error" role="status">
+              {dragError}
+            </div>
+          )}
+          {/* Shown ABOVE the columns, not instead of them — at zero tasks
+              this used to replace the whole board, so a first-time user saw
+              no workflow model and no drop targets at all. The seven empty
+              columns underneath still communicate the board's shape.
+              Gated on tasksLoaded (store.ts) too — without it this flashed
+              on every board open, since the mount effect above always
+              starts from tasks === [] until its own refreshTasks() lands. */}
+          {tasksLoaded && tasks.length === 0 && (
             <div className="github-panel-empty">
               <LayersIcon size={20} />
               <div>No tasks yet.</div>
@@ -271,34 +293,33 @@ export function UnifiedBoard({
                 one locally.
               </div>
             </div>
-          ) : (
-            <div className="kanban-board tasks-board kanban-unified-columns">
-              {TASK_COLUMNS.map((column) => {
-                const columnTasks = orderTasksForColumn(tasks, column.id);
-                const acceptsDrop =
-                  draggingTask !== null &&
-                  (draggingTask.status === column.id ||
-                    (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
-                return (
-                  <TaskColumn
-                    key={column.id}
-                    title={column.title}
-                    projectsById={projectsById}
-                    sessionsById={sessionsById}
-                    theme={theme}
-                    tasks={columnTasks}
-                    taskMasterEnabled={taskMasterEnabled}
-                    acceptsDrop={acceptsDrop}
-                    onOpen={(task) => openDetail(task.id)}
-                    onOpenSession={openSession}
-                    onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
-                    onDragBegin={setDraggingId}
-                    onDragFinish={() => setDraggingId(null)}
-                  />
-                );
-              })}
-            </div>
           )}
+          <div className="kanban-board tasks-board kanban-unified-columns">
+            {TASK_COLUMNS.map((column) => {
+              const columnTasks = orderTasksForColumn(tasks, column.id);
+              const acceptsDrop =
+                draggingTask !== null &&
+                (draggingTask.status === column.id ||
+                  (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+              return (
+                <TaskColumn
+                  key={column.id}
+                  title={column.title}
+                  projectsById={projectsById}
+                  sessionsById={sessionsById}
+                  theme={theme}
+                  tasks={columnTasks}
+                  taskMasterEnabled={taskMasterEnabled}
+                  acceptsDrop={acceptsDrop}
+                  onOpen={(task) => openDetail(task.id)}
+                  onOpenSession={openSession}
+                  onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
+                  onDragBegin={setDraggingId}
+                  onDragFinish={() => setDraggingId(null)}
+                />
+              );
+            })}
+          </div>
         </div>
         {detailTaskId !== null && (
           <aside
@@ -308,15 +329,29 @@ export function UnifiedBoard({
             aria-label="Task detail"
             onKeyDown={onDrawerKeyDown}
           >
-            <button
-              ref={drawerCloseButtonRef}
-              type="button"
-              className="kanban-detail-drawer-close"
-              aria-label="Close task detail"
-              onClick={() => setDetailTaskId(null)}
-            >
-              <CloseIcon size={14} />
-            </button>
+            {/* A fixed header bar rather than the close button floating
+                absolutely over TaskDetail's own content — it used to sit
+                directly on top of TaskDetail's status badge (see
+                .task-detail-header's own padding-right comment in
+                styles.css) and was a 22px target, well under the 44px
+                mobile minimum where it's the drawer's only way out. Must
+                stay the drawer's first child, with the close button its
+                first (and only) focusable — the Tab focus-trap test
+                (UnifiedBoard.test.tsx) asserts shift-Tab from this button
+                wraps to the LAST focusable inside the aside, which only
+                holds if nothing focusable sits before it. */}
+            <div className="kanban-detail-drawer-header">
+              <span className="kanban-detail-drawer-header-label">Task</span>
+              <button
+                ref={drawerCloseButtonRef}
+                type="button"
+                className="kanban-detail-drawer-close"
+                aria-label="Close task detail"
+                onClick={() => setDetailTaskId(null)}
+              >
+                <CloseIcon size={14} />
+              </button>
+            </div>
             <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={openSession} />
           </aside>
         )}
@@ -528,7 +563,7 @@ function TaskColumn({
     acceptsDrop && e.dataTransfer.types.includes(TASK_DRAG_MIME);
 
   return (
-    <div className="kanban-column">
+    <div className={`kanban-column${tasks.length === 0 ? " kanban-column-is-empty" : ""}`}>
       <div className="kanban-column-header">
         <span className="kanban-column-title">{title}</span>
         <span className="kanban-column-count">{tasks.length}</span>
@@ -683,6 +718,25 @@ function TaskCard({
     ? rowClassNameForSeverity(workerSession.sessionStatusSeverity)
     : "";
 
+  // D3 — time in the task's current status, at scan distance rather than
+  // only in the drawer's own "Created ... Claimed ... Completed" footer
+  // (TaskDetail.tsx). The timestamp that means "how long has this been
+  // sitting here" changes with the column: claimedAt for claimed/
+  // in_progress (still not started, or actively running), reviewingAt once
+  // it's waiting on a look, completedAt once it's settled, createdAt
+  // otherwise (backlog/ready, never yet claimed). Task's own timestamps are
+  // ISO strings (api.ts) but formatRelativeAge takes epoch ms, same
+  // Date.parse TaskDetail.tsx's own footer already does.
+  const statusTimestamp =
+    task.status === "claimed" || task.status === "in_progress"
+      ? task.claimedAt
+      : task.status === "reviewing"
+        ? task.reviewingAt
+        : task.status === "done"
+          ? task.completedAt
+          : task.createdAt;
+  const statusAge = statusTimestamp ? formatRelativeAge(Date.parse(statusTimestamp)) : null;
+
   return (
     <div
       className={`task-card${severityClass ? ` ${severityClass}` : ""}${dropTarget ? " kanban-card-drop-target" : ""}`}
@@ -702,14 +756,37 @@ function TaskCard({
         }
       }}
     >
-      <div className="task-card-title">{task.title}</div>
+      {/* D1 — the title is 2-line-clamped (styles.css), so a truncated one
+          was previously unreadable even on hover: nothing carried the full
+          text. */}
+      <div className="task-card-title" title={task.title}>
+        {task.title}
+      </div>
       <div className="task-card-meta">
         {project && <span className="task-card-project">{project.name}</span>}
-        {task.issueNumber !== null && (
-          <span className="task-card-issue" title={task.htmlUrl ?? undefined}>
-            <GitHubIcon size={11} />#{task.issueNumber}
-          </span>
-        )}
+        {task.issueNumber !== null &&
+          (task.htmlUrl ? (
+            // D2 — was a <span> whose only use of htmlUrl was as a tooltip;
+            // the URL is right there, so make it a real link. Mirrors the PR
+            // badge below, including its suppressClickRef guard, so a drag
+            // that ends on this badge doesn't also navigate.
+            <a
+              className="task-card-issue"
+              href={task.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (suppressClickRef.current) e.preventDefault();
+              }}
+            >
+              <GitHubIcon size={11} />#{task.issueNumber}
+            </a>
+          ) : (
+            <span className="task-card-issue">
+              <GitHubIcon size={11} />#{task.issueNumber}
+            </span>
+          ))}
         {matchedPr && (
           <a
             className="task-card-pr"
@@ -740,7 +817,31 @@ function TaskCard({
             {agentName}
           </span>
         )}
+        {statusAge && <span className="task-card-age">{statusAge}</span>}
+        {/* D4 — #485's own drawer-only sync-error banner (TaskDetail.tsx)
+            defeats its own stated motivation if a task can be happily
+            in_progress while its GitHub sync is silently broken and nothing
+            on the board says so. */}
+        {task.githubSyncError && (
+          <span className="task-card-sync-error" title={`GitHub sync: ${task.githubSyncError}`}>
+            <WarningTriangleIcon size={11} />
+          </span>
+        )}
       </div>
+      {/* D5 — a Failed column of several identical-looking cards conveys
+          nothing on its own; the reason is the one thing worth a glance. */}
+      {task.status === "failed" && task.failureReason && (
+        <div className="task-card-failure-reason" title={task.failureReason}>
+          <WarningTriangleIcon size={11} />
+          {task.failureReason}
+        </div>
+      )}
+      {/* D5 — "sent back to the worker once" is the single most useful fact
+          about a task sitting in Reviewing (mirrors TaskDetail.tsx's own
+          round indicator in the drawer). */}
+      {task.status === "reviewing" && task.reviewRounds > 0 && (
+        <div className="task-card-review-round">Round {task.reviewRounds} · returned to worker</div>
+      )}
       {task.sessionId !== null && (
         <TaskSessionSlot
           session={workerSession ?? undefined}

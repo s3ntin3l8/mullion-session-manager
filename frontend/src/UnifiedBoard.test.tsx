@@ -26,6 +26,7 @@ import type {
 let sessions: Session[];
 let projects: Project[];
 let tasks: Task[];
+let tasksLoaded: boolean;
 let taskMasterEnabled: boolean;
 let kanbanOrder: Record<string, number[]>;
 let events: Record<number, NotificationEvent[]>;
@@ -49,6 +50,7 @@ function storeState() {
     sessions,
     projects,
     tasks,
+    tasksLoaded,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,
@@ -255,6 +257,11 @@ beforeEach(() => {
   sessions = [];
   projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
   tasks = [];
+  // Defaults to "loaded" — this file's own concern is the board's rendered
+  // content, not the loading-skeleton transition, which store.tasksLoaded.test.ts
+  // covers directly. Individual tests override this to false where the
+  // pre-load state matters.
+  tasksLoaded = true;
   taskMasterEnabled = true;
   kanbanOrder = {};
   events = {};
@@ -445,11 +452,97 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText(/Task Master is off/)).toBeInTheDocument();
   });
 
+  it("carries the full title as a tooltip for the (possibly clamped) card title", () => {
+    tasks = [makeTask({ id: 1, title: "A very long task title that might get clamped" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("A very long task title that might get clamped")).toHaveAttribute(
+      "title",
+      "A very long task title that might get clamped",
+    );
+  });
+
+  it("links the issue badge to the issue's htmlUrl", () => {
+    tasks = [makeTask({ id: 1, issueNumber: 42, htmlUrl: "https://github.com/o/r/issues/42" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const link = screen.getByRole("link", { name: /#42/ });
+    expect(link).toHaveAttribute("href", "https://github.com/o/r/issues/42");
+  });
+
+  it("renders the issue badge as plain text (not a link) when htmlUrl is null", () => {
+    tasks = [makeTask({ id: 1, issueNumber: 42, htmlUrl: null })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByRole("link", { name: /#42/ })).toBeNull();
+    expect(screen.getByText("#42")).toBeInTheDocument();
+  });
+
+  it("shows time in status, sourced from the timestamp matching the task's own column", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-03T00:00:00.000Z"));
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        createdAt: "2025-12-01T00:00:00.000Z",
+        reviewingAt: "2026-01-02T00:00:00.000Z",
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    // reviewingAt (1 day before "now"), not the much-older createdAt.
+    expect(screen.getByText("1d ago")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("shows a warning glyph for a task with a GitHub sync error", () => {
+    tasks = [makeTask({ id: 1, githubSyncError: "401 Unauthorized" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByTitle("GitHub sync: 401 Unauthorized")).toBeInTheDocument();
+  });
+
+  it("shows the failure reason on a failed card", () => {
+    tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("budget exceeded")).toBeInTheDocument();
+  });
+
+  it("shows a review-round indicator once a reviewing task has been auto-returned to the worker", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewRounds: 1 })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Round 1/)).toBeInTheDocument();
+  });
+
+  it("shows no review-round indicator before any auto-return has happened", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewRounds: 0 })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText(/Round/)).toBeNull();
+  });
+
   it("shows 'No tasks yet.' with the mullion-task hint when there are no tasks", () => {
     tasks = [];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText("No tasks yet.")).toBeInTheDocument();
     expect(screen.getByText(/mullion-task/)).toBeInTheDocument();
+  });
+
+  // store.tasksLoaded.test.ts covers the flag's own semantics; this is the
+  // consumer side — without gating on it, this message flashed on every
+  // single board open (tasks always starts as [] until the mount effect's
+  // own refreshTasks() lands), not just on a genuinely empty board.
+  it("does not show 'No tasks yet.' before the first refreshTasks() attempt has landed", () => {
+    tasks = [];
+    tasksLoaded = false;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText("No tasks yet.")).toBeNull();
+  });
+
+  it("still renders the seven columns while tasksLoaded is false", () => {
+    tasks = [];
+    tasksLoaded = false;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen.getAllByText(/^Backlog$|^Ready$|^Claimed$|^In Progress$|^Reviewing$|^Done$|^Failed$/, {
+        selector: ".kanban-column-title",
+      }),
+    ).toHaveLength(7);
   });
 
   it("calls refreshTasks on mount", () => {

@@ -3189,6 +3189,15 @@ body {
   gap: 3px;
   font-size: 10px;
   color: var(--dim);
+  /* .task-card-issue is now sometimes an <a> (D2 — was always a <span>, a
+     dead end that only ever carried the issue URL as a tooltip); this and
+     its :hover below match .task-card-pr's own link treatment so an
+     unclickable label doesn't visually differ from a clickable one. */
+  text-decoration: none;
+}
+.task-card-issue:hover {
+  color: var(--fg);
+  text-decoration: underline;
 }
 .task-card-pr {
   display: inline-flex;
@@ -3202,9 +3211,33 @@ body {
   color: var(--fg);
   text-decoration: underline;
 }
+.task-card-age {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+.task-card-sync-error {
+  display: inline-flex;
+  align-items: center;
+  color: var(--y);
+}
 .task-card-hint {
   font-size: 10px;
   color: var(--y);
+}
+.task-card-failure-reason {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--r);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-review-round {
+  font-size: 10.5px;
+  color: var(--muted);
 }
 
 /* UnifiedBoard.tsx's TaskSessionSlot — a task card's nested worker/review
@@ -3261,10 +3294,26 @@ body {
   flex-direction: column;
   gap: 10px;
 }
+/* Inside the kanban drawer (not the standalone task-detail-<id> dockview
+   panel restore path, which keeps the base height: 100% above — its own
+   container isn't necessarily a flex parent) this sits under
+   .kanban-detail-drawer-header rather than filling the whole aside, so it
+   has to size to the remaining space instead of 100% of it. */
+.kanban-detail-drawer .task-detail {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .task-detail-header {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* The kanban drawer's own close button (.kanban-detail-drawer-close) is
+     absolutely positioned at top:8/right:8 over this panel, so without this
+     the status badge below — pinned right by its own flex-shrink:0 — sits
+     directly under it and gets its right edge painted over by the button's
+     opaque background. This reserves that corner so the two never overlap. */
+  padding-right: 30px;
 }
 .task-detail-title {
   font-size: 14px;
@@ -3532,7 +3581,11 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
-  padding: 7px 9px 0;
+  /* Tightened from `7px 9px 0` — now that the card sizes to content (see
+     .kanban-lane-group .kanban-card above), this label's own padding is a
+     bigger share of a one-line card and read as a whole extra row of
+     chrome above it. */
+  padding: 5px 9px 0;
 }
 
 /* UnifiedBoard.tsx — the merged task+session board. Deliberately does NOT
@@ -3560,25 +3613,69 @@ body {
   min-width: 200px;
   max-width: 320px;
 }
+/* Pins each column's title/count in view while its own body scrolls past —
+   without this, a long Backlog scrolls its header out of frame and nothing
+   on screen says which column you're looking at. Scoped to
+   .kanban-unified-columns rather than the bare .kanban-column-header it
+   overrides (styles.css's own "shared session/task column family, sibling
+   modifiers only" convention — see the comment on .kanban-unified above);
+   .kanban-column-header currently has exactly one consumer (this board) but
+   keeping the modifier scoped costs nothing. `background` is required, not
+   cosmetic: the base rule only carries a border-bottom, so cards would
+   otherwise show straight through the stuck header. `.kanban-board`'s own
+   padding (16px) sits *below* the scrollport's padding edge that `top: 0`
+   pins to, so a bare `top: 0` would both leave a 16px gap above the header
+   AND make it jump upward by that much the instant it starts sticking —
+   the negative margin/padding pair below absorbs exactly that padding
+   instead of moving it off the shared .kanban-board rule. */
+.kanban-unified-columns .kanban-column-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  margin-top: -16px;
+  padding-top: 16px;
+}
 .kanban-detail-drawer {
   position: relative;
   flex: 0 0 380px;
   min-width: 0;
   border-left: 1px solid var(--border-soft);
-  overflow: auto;
+  /* A fixed header (.kanban-detail-drawer-header) plus TaskDetail's own
+     scrolling body underneath — was a single `overflow: auto` here with
+     .task-detail ALSO scrolling internally (a nested pair where the outer
+     never actually moved), which is harmless with no header but would let
+     a fixed one scroll away with the rest of the content. `hidden` makes
+     .task-detail the one and only scroller. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.kanban-detail-drawer-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.kanban-detail-drawer-header-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--dim);
 }
 .kanban-detail-drawer-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 1;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   border: none;
-  background: var(--sidebar);
+  background: transparent;
   color: var(--dim);
   border-radius: 6px;
   cursor: pointer;
@@ -3625,7 +3722,14 @@ body {
   gap: 16px;
   padding: 0 16px 12px;
   overflow-x: auto;
-  max-height: 40vh;
+  /* No max-height (previously 40vh) — with .kanban-lane-group .kanban-card
+     below fixed at content height, the two flex-basis axes on this row
+     container (overflow-x: auto, the other axis left `visible`) computed
+     overflow-y to `auto` too, opening a second, hidden-until-hovered
+     vertical scrollbar the moment more than one or two groups filled a
+     column past the cap. The lane's own collapse toggle
+     (.kanban-lane-collapse above) is already the "this is taking up too
+     much room" affordance; a silent inner scrollbar isn't. */
 }
 .kanban-lane-empty {
   font-size: 11.5px;
@@ -3637,6 +3741,14 @@ body {
   flex-direction: column;
   gap: 8px;
   flex-shrink: 0;
+  /* Width lives here, not on the card below — this container has no width
+     and no flex-basis of its own and sits `flex-shrink: 0` inside a
+     shrink-to-fit row, so a card sized to its own content and a group sized
+     from its children would resolve against each other (every group ending
+     up a different width, tracking whichever card inside it happens to be
+     widest). Fixing it on the group instead gives every group the same
+     width and lets the cards inside it stretch (the flex default) to match. */
+  width: 260px;
 }
 .kanban-lane-group-title {
   font-size: 10px;
@@ -3646,9 +3758,19 @@ body {
   display: flex;
   gap: 5px;
 }
+/* Was `flex: 0 0 280px; width: 280px` — inside this *column*-direction
+   group, flex-basis sets the vertical axis, not the horizontal one, so
+   every ad-hoc card was pinned to 280px TALL regardless of content (a
+   LaneCard is a project label + one collapsed SessionRow line, ~40px) —
+   the reported "boxes too large, no content inside" bug. Worse,
+   .kanban-card's own `overflow: hidden` silently clipped anything that
+   *did* grow past 280px (an expanded git-details line, several file-change
+   chips). `width: 280px` was the cross size and rendered correctly, which
+   is exactly why this half-looked right. `flex: none` makes both axes
+   track content; the card's width now comes from .kanban-lane-group's own
+   stretch above. */
 .kanban-lane-group .kanban-card {
-  flex: 0 0 280px;
-  width: 280px;
+  flex: none;
 }
 
 .dock-monitor {
@@ -6441,24 +6563,99 @@ button.danger.armed {
   .kanban-unified-main {
     flex-direction: column;
   }
+  /* Was two independently scrolling regions (this + .tasks-board below)
+     nested inside .kanban-board-overlay's own `overflow: auto` — three
+     scroll containers stacked in one viewport, which on touch means no
+     overscroll chaining and unpredictable momentum. Letting the overlay be
+     the one scroller (combined with .kanban-lane-body going vertical below)
+     makes the whole board a single page scroll instead. */
+  .kanban-unified,
+  .kanban-unified-tasks {
+    height: auto;
+    overflow: visible;
+  }
   .kanban-unified-columns {
     flex-direction: column;
     padding: 10px;
+  }
+  .kanban-unified-tasks .tasks-board {
+    overflow: visible;
   }
   .kanban-unified-columns .kanban-column {
     max-width: none;
     min-width: 0;
     width: 100%;
   }
+  /* An empty column still renders its header (so the board's full shape —
+     all seven statuses — stays legible) but hides the "No tasks" body
+     beneath it; stacked full-width, several empty columns otherwise turn
+     reaching Reviewing/Done into a long scroll past nothing. CSS-only
+     (display: none), not a conditional render — UnifiedBoard.test.tsx's own
+     drop-target tests query .kanban-column-body on empty columns, and a
+     component that stopped rendering it there would throw. Desktop is
+     untouched: that same empty body is a live drop target there. */
+  .kanban-column-is-empty .kanban-column-body {
+    display: none;
+  }
   .kanban-detail-drawer {
     position: fixed;
-    inset: 44px 0 0;
+    /* Matches .sidebar-wrapper's own inset-aware top a few rules up in this
+       same block — a bare 44px here left the sheet sliding under a taller,
+       notched-device toolbar, same bug that rule's own comment already
+       covers. No tap-to-dismiss scrim: right/bottom/left are all 0, so the
+       sheet is already full-bleed and there's no visible background left
+       to tap. */
+    inset: calc(44px + env(safe-area-inset-top)) 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
     flex: none;
     z-index: 46;
     background: var(--bg);
+    /* A stray vertical line has nothing to divide on a full-bleed sheet. */
+    border-left: none;
+  }
+  .kanban-detail-drawer-close {
+    width: 44px;
+    height: 44px;
   }
   .kanban-lane-body {
-    max-height: 50vh;
+    /* Was a horizontally-scrolling strip of fixed-width cards nested inside
+       the page's own vertical scroll — a scroll-direction trap on a phone
+       (roughly 1.2 cards visible at a time). Stacking it removes the
+       competing scroll axis; .kanban-lane-group's own width below (260px)
+       would otherwise leave a lot of dead space on a ~390px viewport, so it
+       goes full width here too. */
+    flex-direction: column;
+    overflow-x: visible;
+    max-height: none;
+  }
+  .kanban-lane-group {
+    width: 100%;
+  }
+  /* Bare 11px text with padding: 0 (collapse), 4px/9px at 11.5px (new-task),
+     3px/7px (session strip) — all comfortably under the 44px touch-target
+     floor, and the collapse button in particular is the lane's ONLY
+     affordance for reclaiming the space it takes up on a phone. */
+  .kanban-lane-collapse {
+    min-height: 44px;
+    padding: 0 4px;
+  }
+  .tasks-panel-new-btn {
+    min-height: 44px;
+  }
+  .task-card-session-strip {
+    min-height: 44px;
+  }
+  /* iOS Safari auto-zooms the whole page on focus for any input computing
+     under 16px, and does not zoom back out on blur — these two are 11.5px.
+     Expected side effect: .tasks-panel-new-form is `flex: 1; min-width:
+     240px` inside a `flex-wrap` toolbar, so at this width the create form
+     now wraps onto its own line; that's a layout consequence of fixing the
+     zoom, not a regression. */
+  .tasks-panel-new-project,
+  .tasks-panel-new-title {
+    font-size: 16px;
   }
 }
 

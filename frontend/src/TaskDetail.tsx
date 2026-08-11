@@ -273,8 +273,15 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 // card already shows the new session's live status, and "Open session" in
 // TaskDetail's own meta row above opens it on demand.
 function TaskActions({ task }: { task: Task }) {
-  const { taskMasterEnabled, claimTask, approveTask, rejectTask, retryTask, giveUpTask } =
-    useDashboardStore();
+  const {
+    taskMasterEnabled,
+    claimTask,
+    approveTask,
+    rejectTask,
+    retryTask,
+    giveUpTask,
+    updateTask,
+  } = useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
   // Which free-text-reason-then-confirm flow is open, if any — reject and
   // give-up share the same input/confirm/cancel shape, so one bit of state
@@ -287,6 +294,41 @@ function TaskActions({ task }: { task: Task }) {
   const disabledHint = !taskMasterEnabled
     ? "Task Master is disabled — enable it to use this action."
     : null;
+
+  // Backlog<->Ready is the board's only user-driven, non-terminal drag
+  // (UnifiedBoard.tsx's DRAG_EDITABLE_STATUSES) — and drag is the ONLY way
+  // to reach it, which HTML5 drag-and-drop never fires on a touch device.
+  // Same request shape UnifiedBoard.tsx's own applyDrop sends on a drop
+  // (status patch, no boardOrder change needed here since this always
+  // appends), and not gated on taskMasterEnabled — it's local board CRUD,
+  // same posture as DeleteTaskAction above, not one of the
+  // spawn/promote-an-agent actions that flag actually guards.
+  const moveStatus = async (status: "backlog" | "ready") => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await updateTask(task.id, { status });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to move task");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (task.status === "backlog") {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => void moveStatus("ready")}
+        >
+          Move to Ready
+        </button>
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    );
+  }
 
   if (task.status === "ready") {
     return (
@@ -307,6 +349,13 @@ function TaskActions({ task }: { task: Task }) {
           }}
         >
           Claim
+        </button>
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => void moveStatus("backlog")}
+        >
+          Move to Backlog
         </button>
         {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
         {error && <span className="task-detail-error">{error}</span>}

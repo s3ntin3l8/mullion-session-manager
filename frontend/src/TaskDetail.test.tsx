@@ -18,6 +18,7 @@ const retryTask = vi.fn(async () => makeSession({ id: 100 }));
 const giveUpTask = vi.fn(async () => makeTask({}));
 const refreshTasks = vi.fn(async () => {});
 const deleteTask = vi.fn(async () => {});
+const updateTask = vi.fn(async () => makeTask({}));
 
 function storeState() {
   return {
@@ -32,6 +33,7 @@ function storeState() {
     giveUpTask,
     refreshTasks,
     deleteTask,
+    updateTask,
     prsByProject,
   };
 }
@@ -148,6 +150,7 @@ beforeEach(() => {
   giveUpTask.mockClear();
   refreshTasks.mockClear();
   deleteTask.mockClear();
+  updateTask.mockClear();
 });
 
 describe("TaskDetail", () => {
@@ -433,6 +436,42 @@ describe("TaskDetail claim action", () => {
     expect(screen.queryByRole("button", { name: "Claim" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+// A non-drag path between the board's only user-driven, non-terminal status
+// change (backlog<->ready) — drag is otherwise the sole way to reach it, and
+// HTML5 drag-and-drop never fires on a touch device.
+describe("TaskDetail backlog/ready move actions", () => {
+  it("shows a Move to Ready button for a backlog task and calls updateTask", async () => {
+    tasks = [makeTask({ id: 1, status: "backlog" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "ready" });
+  });
+
+  it("shows a Move to Backlog button alongside Claim for a ready task, unaffected by taskMasterEnabled", async () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "ready" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    const moveBtn = screen.getByRole("button", { name: "Move to Backlog" });
+    expect(moveBtn).not.toBeDisabled();
+    await user.click(moveBtn);
+    expect(updateTask).toHaveBeenCalledWith(1, { status: "backlog" });
+  });
+
+  it("shows an error when updateTask rejects", async () => {
+    updateTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "backlog" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Move to Ready" }));
+    expect(screen.getByText("Failed to move task")).toBeInTheDocument();
   });
 });
 
