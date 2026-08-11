@@ -125,7 +125,7 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "ws-tasks-p", cwd },
+      payload: { createDir: true, name: "ws-tasks-p", cwd },
     });
     const projectId = project.json().id as number;
     const [task] = app.db
@@ -170,7 +170,7 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "ws-tasks-p2", cwd: "/tmp" },
+      payload: { createDir: true, name: "ws-tasks-p2", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
     const [task] = app.db
@@ -204,7 +204,7 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "ws-tasks-p3", cwd: "/tmp" },
+      payload: { createDir: true, name: "ws-tasks-p3", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
     const [task] = app.db

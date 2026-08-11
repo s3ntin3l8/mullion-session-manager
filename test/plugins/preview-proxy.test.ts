@@ -57,7 +57,7 @@ async function createProjectWithDevServer(
   const created = await app.inject({
     method: "POST",
     url: "/api/projects",
-    payload: { name: "proxy-test", cwd: "/tmp/preview-proxy-test" },
+    payload: { createDir: true, name: "proxy-test", cwd: "/tmp/preview-proxy-test" },
     headers,
   });
   const projectId = created.json().id as number;
@@ -915,7 +915,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       method: "POST",
       url: "/api/projects",
       headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
-      payload: { name: "should-not-be-created", cwd: "/tmp" },
+      payload: { createDir: true, name: "should-not-be-created", cwd: "/tmp" },
     });
     expect(res.statusCode).toBe(404);
 

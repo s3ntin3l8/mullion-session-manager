@@ -347,7 +347,7 @@ describe("browser automation API (issue #183)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/tmp" },
+      payload: { createDir: true, name: "p", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
     const session = await app.inject({

@@ -127,7 +127,7 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "demo", cwd: "/tmp/demo" },
+      payload: { createDir: true, name: "demo", cwd: "/tmp/demo" },
     });
     const projectId = project.json().id;
 
@@ -171,7 +171,7 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "demo-local", cwd: "/tmp/demo-local" },
+      payload: { createDir: true, name: "demo-local", cwd: "/tmp/demo-local" },
     });
     const projectId = project.json().id;
 
@@ -202,7 +202,7 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "demo-multi-local", cwd: "/tmp/demo-multi-local" },
+      payload: { createDir: true, name: "demo-multi-local", cwd: "/tmp/demo-multi-local" },
     });
     const projectId = project.json().id;
 
@@ -227,7 +227,7 @@ describe("tasks route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "claim-p", cwd },
+        payload: { createDir: true, name: "claim-p", cwd },
       });
       return res.json().id as number;
     }
@@ -603,7 +603,7 @@ describe("tasks route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "retry-p", cwd },
+        payload: { createDir: true, name: "retry-p", cwd },
       });
       return res.json().id as number;
     }
@@ -747,7 +747,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "approve-reject-p", cwd: "/tmp/approve-reject" },
+        payload: { createDir: true, name: "approve-reject-p", cwd: "/tmp/approve-reject" },
       });
       const projectId = project.json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -867,7 +867,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "not-reviewing-p", cwd: "/tmp/not-reviewing" },
+        payload: { createDir: true, name: "not-reviewing-p", cwd: "/tmp/not-reviewing" },
       });
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
@@ -992,7 +992,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "reject-reseed-p", cwd },
+        payload: { createDir: true, name: "reject-reseed-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1048,7 +1048,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "reject-reseed-content-p", cwd },
+        payload: { createDir: true, name: "reject-reseed-content-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1123,7 +1123,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "reject-no-reseed-p", cwd },
+        payload: { createDir: true, name: "reject-no-reseed-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1174,7 +1174,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "reject-spawn-fail-p", cwd },
+        payload: { createDir: true, name: "reject-spawn-fail-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1349,7 +1349,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "approve-cleanup-p", cwd: "/tmp/approve-cleanup" },
+        payload: { createDir: true, name: "approve-cleanup-p", cwd: "/tmp/approve-cleanup" },
       });
       const projectId = project.json().id;
       const [task] = app.db
@@ -1398,7 +1398,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "give-up-p", cwd: "/tmp/give-up" },
+        payload: { createDir: true, name: "give-up-p", cwd: "/tmp/give-up" },
       });
       const projectId = project.json().id;
       const [row] = app.db
@@ -1451,7 +1451,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "give-up-not-reviewing-p", cwd: "/tmp/give-up-2" },
+        payload: { createDir: true, name: "give-up-not-reviewing-p", cwd: "/tmp/give-up-2" },
       });
       const [row] = app.db
         .insert(tasks)
@@ -1510,7 +1510,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "give-up-cleanup-p", cwd: "/tmp/give-up-cleanup" },
+        payload: { createDir: true, name: "give-up-cleanup-p", cwd: "/tmp/give-up-cleanup" },
       });
       const projectId = project.json().id;
       const [task] = app.db
@@ -1547,7 +1547,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "filter-status-p", cwd: "/tmp/filter-status" },
+        payload: { createDir: true, name: "filter-status-p", cwd: "/tmp/filter-status" },
       });
       const projectId = project.json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -1569,14 +1569,14 @@ describe("tasks route", () => {
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "filter-project-a", cwd: "/tmp/filter-project-a" },
+          payload: { createDir: true, name: "filter-project-a", cwd: "/tmp/filter-project-a" },
         })
       ).json().id;
       const projectB = (
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "filter-project-b", cwd: "/tmp/filter-project-b" },
+          payload: { createDir: true, name: "filter-project-b", cwd: "/tmp/filter-project-b" },
         })
       ).json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -1604,7 +1604,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "get-one-p", cwd: "/tmp/get-one" },
+        payload: { createDir: true, name: "get-one-p", cwd: "/tmp/get-one" },
       });
       const created = await app.inject({
         method: "POST",
@@ -1632,7 +1632,7 @@ describe("tasks route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "local-crud-p", cwd },
+        payload: { createDir: true, name: "local-crud-p", cwd },
       });
       return res.json().id as number;
     }

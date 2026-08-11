@@ -177,7 +177,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
           method: "POST",
           url: "/api/projects",
           headers,
-          payload: { name: "p", cwd: "/tmp" },
+          payload: { createDir: true, name: "p", cwd: "/tmp" },
         });
         if (res.statusCode === 201) {
           const { id } = JSON.parse(res.body);
@@ -597,7 +597,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
           method: "POST",
           url: "/api/projects",
           headers: previewHeaders,
-          payload: { name: "p", cwd: "/tmp" },
+          payload: { createDir: true, name: "p", cwd: "/tmp" },
         });
         expect(post.statusCode).toBe(404);
 
@@ -652,7 +652,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
           method: "POST",
           url: "/api/projects",
           headers: previewHeaders,
-          payload: { name: "p", cwd: "/tmp" },
+          payload: { createDir: true, name: "p", cwd: "/tmp" },
         });
         expect(post.statusCode).toBe(401);
 

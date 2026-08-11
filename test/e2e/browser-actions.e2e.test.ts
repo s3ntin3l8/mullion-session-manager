@@ -52,7 +52,7 @@ describe("browser automation — all 20 actions against a real page (issue #407)
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "browser-e2e", cwd: "/tmp" },
+      payload: { createDir: true, name: "browser-e2e", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
 

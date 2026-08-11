@@ -147,7 +147,7 @@ describe("reconcileTasks", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/tmp" },
+      payload: { createDir: true, name: "p", cwd: "/tmp" },
     });
     const session = await app.inject({
       method: "POST",
@@ -183,7 +183,7 @@ describe("reconcileTasks", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p-review", cwd: "/tmp" },
+      payload: { createDir: true, name: "p-review", cwd: "/tmp" },
     });
     await app.inject({
       method: "PATCH",
@@ -996,7 +996,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-bounded", cwd: "/tmp" },
+        payload: { createDir: true, name: "p-bounded", cwd: "/tmp" },
       });
       const workerSession = await app.inject({
         method: "POST",

@@ -282,7 +282,7 @@ describe("hosts route (issue #26)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "local-project", cwd: "/tmp/local-project" },
+      payload: { createDir: true, name: "local-project", cwd: "/tmp/local-project" },
     });
     const projectId = created.json().id as number;
 
