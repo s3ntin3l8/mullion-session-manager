@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  unregisterTerminalInput(SESSION_ID);
+  unregisterTerminalInput(SESSION_ID, handle);
 });
 
 describe("MobileKeyBar", () => {
@@ -87,7 +87,7 @@ describe("MobileKeyBar", () => {
   });
 
   it("does not throw when no session is registered (e.g. panel torn down mid-tap)", async () => {
-    unregisterTerminalInput(SESSION_ID);
+    unregisterTerminalInput(SESSION_ID, handle);
     const user = userEvent.setup();
     render(<MobileKeyBar sessionId={SESSION_ID} />);
 

@@ -40,16 +40,53 @@ export interface TerminalInputHandle {
   sendCtrlC: () => void;
 }
 
-const terminalInputRegistry = new Map<number, TerminalInputHandle>();
+// Hermes review, PR #616 round 3 — a stack per sessionId, not a single
+// value: Dock.tsx mounts its own `<TerminalPane params={{ sessionId:
+// running.id }} captureCtrlC={true} />` for a session that's ALSO open as a
+// normal dockview pane, i.e. the same sessionId can have two live
+// TerminalPane mounts (and two registrations) at once. A single-value Map
+// (register = unconditional overwrite, unregister = unconditional delete)
+// meant whichever mounted second silently owned every key-bar tap for that
+// session — including, worse, that the LATER one's unmount would delete the
+// entry outright even if the OTHER instance was still alive, leaving the
+// key bar a silent no-op for a session whose main pane never went away.
+// Registering/unregistering push/remove-by-identity onto a small stack (the
+// common case is exactly one entry, so this never actually behaves
+// differently from a single value there) means an unmount only ever removes
+// its OWN registration, restoring whichever one was registered before it —
+// so the main pane's handle correctly reappears once a dock monitor for the
+// same session closes, rather than staying wiped out.
+//
+// getTerminalInputHandle still resolves to whichever registration is most
+// recent (the top of the stack) when more than one is live at once — e.g. a
+// dock monitor open at the same time as its own session's main pane — which
+// is a real, known limitation (a key-bar tap could target the dock's own
+// mobile-hidden terminal instead of the visible one during that overlap).
+// Left as a follow-up rather than fixed here: doing better means either
+// preferring the non-dock registration specifically, or keying by
+// (sessionId, pane) and having the caller resolve the visible one — a
+// larger change than this fix's actual scope (stopping the silent-no-op
+// case, not perfecting the disambiguation).
+const terminalInputRegistry = new Map<number, TerminalInputHandle[]>();
 
 export function registerTerminalInput(sessionId: number, handle: TerminalInputHandle): void {
-  terminalInputRegistry.set(sessionId, handle);
+  const stack = terminalInputRegistry.get(sessionId);
+  if (stack) stack.push(handle);
+  else terminalInputRegistry.set(sessionId, [handle]);
 }
 
-export function unregisterTerminalInput(sessionId: number): void {
-  terminalInputRegistry.delete(sessionId);
+// Takes the same handle reference passed to registerTerminalInput — not
+// just the sessionId — specifically so this can remove only its OWN
+// registration by identity, not whichever one happens to be current.
+export function unregisterTerminalInput(sessionId: number, handle: TerminalInputHandle): void {
+  const stack = terminalInputRegistry.get(sessionId);
+  if (!stack) return;
+  const index = stack.indexOf(handle);
+  if (index !== -1) stack.splice(index, 1);
+  if (stack.length === 0) terminalInputRegistry.delete(sessionId);
 }
 
 export function getTerminalInputHandle(sessionId: number): TerminalInputHandle | undefined {
-  return terminalInputRegistry.get(sessionId);
+  const stack = terminalInputRegistry.get(sessionId);
+  return stack?.[stack.length - 1];
 }

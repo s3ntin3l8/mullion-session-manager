@@ -27,6 +27,7 @@ import {
   unregisterTerminalRepaint,
 } from "./terminalRepaintRegistry.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
+import type { TerminalInputHandle } from "./terminalInputRegistry.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -644,7 +645,14 @@ export function TerminalPane(props: {
       term.focus();
       term.input(data);
     };
-    registerTerminalInput(props.params.sessionId, {
+    // Named (not passed as an inline object literal) so the cleanup below
+    // can pass this exact same reference to unregisterTerminalInput —
+    // required for that call to remove only this mount's own registration
+    // by identity, not whichever one happens to be current (see
+    // terminalInputRegistry.ts's own comment on why: this component can be
+    // mounted twice for the same sessionId, once as the real pane and once
+    // as Dock.tsx's own monitor).
+    const inputHandle: TerminalInputHandle = {
       sendInput: focusThenInput,
       sendArrow: (direction) => {
         const csi = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
@@ -677,7 +685,8 @@ export function TerminalPane(props: {
         }
         term.input("\x03");
       },
-    });
+    };
+    registerTerminalInput(props.params.sessionId, inputHandle);
 
     // Mounting a new Terminal shares (and, via the settings-sync effect's
     // clearTextureAtlas() calls, can wipe) the module-global WebGL glyph
@@ -1066,7 +1075,7 @@ export function TerminalPane(props: {
       pendingOscRef.current = null;
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
-      unregisterTerminalInput(props.params.sessionId);
+      unregisterTerminalInput(props.params.sessionId, inputHandle);
       uploadImageRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the

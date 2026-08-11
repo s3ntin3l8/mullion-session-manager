@@ -522,7 +522,11 @@ describe("TerminalPane input registry (mobile key bar, issue: mobile UI/UX overh
 
     unmount();
 
-    expect(unregisterTerminalInput).toHaveBeenCalledExactlyOnceWith(1);
+    // Hermes review, PR #616 round 3 — unregister now takes the same handle
+    // reference registerTerminalInput was called with (identity-guarded
+    // removal, since the same sessionId can be registered twice at once —
+    // Dock.tsx's own monitor mount), not just the sessionId.
+    expect(unregisterTerminalInput).toHaveBeenCalledExactlyOnceWith(1, handle);
   });
 
   it("sendInput routes a fixed sequence straight to term.input()", () => {
