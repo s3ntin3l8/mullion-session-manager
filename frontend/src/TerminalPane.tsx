@@ -26,6 +26,8 @@ import {
   repaintAllTerminals,
   unregisterTerminalRepaint,
 } from "./terminalRepaintRegistry.js";
+import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
+import type { TerminalInputHandle } from "./terminalInputRegistry.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -613,6 +615,79 @@ export function TerminalPane(props: {
     };
     registerTerminalRepaint(props.params.sessionId, repaint);
 
+    // Mobile UI/UX overhaul, item C.1 — lets MobileKeyBar.tsx inject
+    // Esc/Tab/Shift+Tab/`/` (sendInput) and DECCKM-aware arrow keys
+    // (sendArrow, resolved against the live term.modes here — see
+    // terminalInputRegistry.ts's own comment on why that resolution can't
+    // happen in the bar itself) into this session's terminal from outside
+    // this component. `term.input()` (not a direct ws.send) routes through
+    // the existing `onData` subscription above, so a key-bar tap reaches the
+    // PTY exactly like a real keystroke would. (Independent code review, PR
+    // #616: `wasUserInput`'s default `true` does NOT focus anything — per
+    // the installed @xterm/xterm source it only triggers scroll-to-bottom
+    // and clears an active selection. The on-screen keyboard staying up is
+    // entirely MobileKeyBar.tsx's own `preventDefault()` on pointerdown, not
+    // anything on this end.)
+    // Hermes review, PR #616 round 2 — every send below focuses the
+    // terminal first. `preventDefault()` on the bar's own pointerdown
+    // (MobileKeyBar.tsx) only ever *keeps* focus from leaving the terminal
+    // if it was already there; it can't bring focus (or the on-screen
+    // keyboard) TO the terminal if the user tapped the bar while focus was
+    // somewhere else (e.g. the keyboard was already dismissed). Without
+    // this, that tap's own send would be real but invisible — nothing
+    // visibly happens until the user separately taps the terminal itself.
+    // A deliberate explicit action (the user tapped a button that targets
+    // this terminal specifically), same category as the find-bar's own
+    // close-time `termRef.current?.focus()` below — not the unconditional,
+    // no-user-action focus this component is otherwise kept free of (see
+    // that effect's own comment).
+    const focusThenInput = (data: string) => {
+      term.focus();
+      term.input(data);
+    };
+    // Named (not passed as an inline object literal) so the cleanup below
+    // can pass this exact same reference to unregisterTerminalInput —
+    // required for that call to remove only this mount's own registration
+    // by identity, not whichever one happens to be current (see
+    // terminalInputRegistry.ts's own comment on why: this component can be
+    // mounted twice for the same sessionId, once as the real pane and once
+    // as Dock.tsx's own monitor).
+    const inputHandle: TerminalInputHandle = {
+      sendInput: focusThenInput,
+      sendArrow: (direction) => {
+        const csi = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
+        focusThenInput(csi + (direction === "up" ? "A" : "B"));
+      },
+      // Independent code review, PR #616 — a raw `term.input("\x03")` here
+      // would bypass attachCustomKeyEventHandler's own Ctrl+C branch above
+      // entirely (that handler intercepts the physical keydown before it
+      // ever reaches `onData`; injecting the byte directly through
+      // `term.input()` skips it), silently reintroducing exactly the two
+      // cases that branch exists to prevent: a captureCtrlC dock monitor
+      // (issue #332) would get a raw SIGINT byte forwarded instead of
+      // triggering its copy-not-kill behavior, and a user with the opt-in
+      // "Ctrl+C copies when there's a selection" setting on would have that
+      // selection silently discarded and a SIGINT sent instead of copied.
+      // Mirrors that branch's exact three-way decision (dock-monitor copy /
+      // opt-in selection-aware copy / raw SIGINT) via the same refs it
+      // reads, rather than special-casing MobileKeyBar.tsx around it.
+      sendCtrlC: () => {
+        term.focus();
+        if (captureCtrlCRef.current) {
+          void copyHandlerRef.current();
+          return;
+        }
+        if (prefsRef.current.clipboardKeys.ctrlC && term.hasSelection() && hasClipboardApi()) {
+          void copyHandlerRef.current().then((copied) => {
+            if (copied) term.clearSelection();
+          });
+          return;
+        }
+        term.input("\x03");
+      },
+    };
+    registerTerminalInput(props.params.sessionId, inputHandle);
+
     // Mounting a new Terminal shares (and, via the settings-sync effect's
     // clearTextureAtlas() calls, can wipe) the module-global WebGL glyph
     // texture atlas (see acquireTextureAtlas in @xterm/addon-webgl) with
@@ -1000,6 +1075,7 @@ export function TerminalPane(props: {
       pendingOscRef.current = null;
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
+      unregisterTerminalInput(props.params.sessionId, inputHandle);
       uploadImageRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
