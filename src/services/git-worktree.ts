@@ -656,14 +656,16 @@ export async function clearOrphanedTaskWorktree(
     // `contained` re-derives that same absolute-path/no-".."-segment check
     // via `isSafeAbsolutePath`, ANDed with an explicit `.mullion-worktrees/`
     // prefix requirement — strictly narrower than the "recognized" shape,
-    // not weaker. `CodeQL` is a non-required status check on this repo (see
-    // CLAUDE.md's required-contexts list); dismissed here rather than
-    // reshaping already-verified-safe code to chase a query that doesn't
-    // model manual containment checks as sanitizers.
-    // codeql[js/path-injection]
+    // not weaker. Dismissed in GHAS as alerts #167 (existsSync below) and
+    // #168 (rmSync below) rather than reshaping already-verified-safe code
+    // to chase a query that doesn't model manual containment checks as
+    // sanitizers. (A `codeql[...]` line comment here would be a real CodeQL
+    // suppression annotation, but this repo's codeql.yml has no follow-up
+    // step to turn that SARIF suppression into an actual Security-tab
+    // dismissal — see dock-config.ts's isSymlinkPath for the fuller note —
+    // so the dismissal above happened via the API instead.)
     if (existsSync(resolvedWorktreePath)) {
       directoryWasPresent = true;
-      // codeql[js/path-injection]
       rmSync(resolvedWorktreePath, { recursive: true, force: true });
     }
   }
