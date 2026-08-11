@@ -19,11 +19,12 @@
 // through /internal/dock-config on that host — a project's `.crs/dock.json`
 // is a property of whichever filesystem it lives on, so a remote-hosted
 // project's config has to round-trip through that host, never the primary's.
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
   readDockConfig,
   writeDockConfig,
@@ -65,34 +66,6 @@ const writeDockConfigSchema = {
     },
   },
 };
-
-// Same "forward the remote host's real 4xx instead of flattening it into a
-// generic 503" reasoning as agent-rules.ts's own forwardHostRequestError —
-// duplicated rather than imported since routes/agent-rules.ts doesn't
-// export it as a shared cross-feature utility today; both copies encode the
-// identical, narrow (401/403 -> "host rejected", else -> forward
-// status+message) contract, so a future third consumer would be the trigger
-// to actually extract this into a shared module rather than three near-
-// identical local copies.
-function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
-  if (err.statusCode === 401 || err.statusCode === 403) {
-    return reply.serviceUnavailable("Host rejected the request — check its agent token");
-  }
-  let message = err.message;
-  try {
-    const parsed: unknown = JSON.parse(err.body);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      typeof (parsed as { message?: unknown }).message === "string"
-    ) {
-      message = (parsed as { message: string }).message;
-    }
-  } catch {
-    // Not a JSON body — fall back to HostRequestError's own message.
-  }
-  return reply.code(err.statusCode).send({ message });
-}
 
 export async function dockConfigRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {

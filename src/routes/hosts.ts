@@ -14,7 +14,7 @@ import {
 import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
-import { forwardHostRequestError } from "./agent-rules.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { buildAgentConfig } from "./internal.js";
 
 interface CreateHostBody {
