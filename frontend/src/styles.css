@@ -5317,6 +5317,28 @@ body {
   font-size: 15px;
   font-weight: 600;
 }
+/* Mobile UI/UX overhaul, item D — the drill-down's "back to nav list"
+   chevron (Settings.tsx). Hidden unconditionally here; only the <700px
+   breakpoint below turns it on, so the component can mount/unmount it
+   purely off its own `mobileNavOpen` state without also having to know
+   the current viewport width itself. */
+.settings-back-btn {
+  display: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--track);
+  color: var(--muted);
+  border-radius: 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.settings-back-btn:hover {
+  color: var(--fg);
+}
 .settings-modal-close {
   width: 28px;
   height: 28px;
@@ -6874,6 +6896,126 @@ button.danger.armed {
   .tasks-panel-new-project,
   .tasks-panel-new-title {
     font-size: 16px;
+  }
+
+  /* Mobile UI/UX overhaul, item D — Settings as a full-bleed sheet instead
+     of a centered 1040x720 modal with no room for a 212px nav rail beside
+     its content (the desktop shell, above, is untouched outside this
+     breakpoint). */
+  .settings-modal {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+  }
+  .settings-modal-header {
+    padding-top: calc(16px + env(safe-area-inset-top));
+  }
+  /* Hermes review, PR #621 round 4 (nit) — the top inset was handled above,
+     but not the bottom: in landscape on a notched phone, the home-indicator
+     area could otherwise clip the last row of the nav list or scrolled
+     section content. Same `env(safe-area-inset-bottom)` pattern already
+     used by `.sidebar-wrapper`/`.kanban-detail-drawer` elsewhere in this
+     file, added to each pane's own bottom edge rather than the fixed-size
+     `.settings-modal` shell, since these are the parts that actually
+     scroll. */
+  .settings-content-body {
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+  .settings-nav-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  /* Hermes review, PR #621 round 2 — item E's own 44px floor applies here
+     too: this is the drill-down's primary control, same as the close
+     button right beside it (already bumped a few rules up), not just a
+     visibility toggle. */
+  .settings-back-btn {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* Settings.tsx's drill-down: nav list first, tapping a section swaps to
+     its content (Settings.tsx's `mobileNavOpen` state adds this modifier
+     class). Both panes stay mounted — only one is ever the wrong side of
+     `display: none` at a time — so section content doesn't remount (and
+     lose local state, e.g. an in-flight rename) on every nav round-trip. */
+  .settings-modal-body-showing-content .settings-nav {
+    display: none;
+  }
+  .settings-modal-body:not(.settings-modal-body-showing-content) .settings-content {
+    display: none;
+  }
+  .settings-nav,
+  .settings-content {
+    width: 100%;
+  }
+
+  /* Item D cont'd — .settings-row's label/control pair has no room to sit
+     side by side at this width (`gap: 20px`, no wrap, in the base rule);
+     stacking is the same fix UnifiedBoard's kanban lanes already use above
+     for the same "two things fighting over one narrow row" shape. */
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .settings-row-control {
+    align-self: stretch;
+  }
+  .settings-row-control select,
+  .settings-row-control input[type="text"] {
+    width: 100%;
+  }
+  .settings-segmented,
+  .settings-slider-row {
+    width: 100%;
+  }
+
+  /* Item E — touch targets. .mobile-tab/.mobile-tab-btn and the kanban lane
+     controls above are already sized for this; these are the remaining
+     sub-44px interactive rows/buttons that are still reachable on mobile
+     (dockview's own tab strip, i.e. .pane-tab/.pane-tab-btn, is not — its
+     group header is hidden entirely on mobile, item A). */
+  .session-item,
+  .project-row-header,
+  .workspace-item,
+  .settings-nav-item {
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .settings-modal-close,
+  .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* Independent code review, PR #621 — .view-mode-toggle/.hierarchy-toggle's
+     own `.toolbar-icon-btn` override (two-class selector, styles.css:315,
+     335) outranks the plain `.toolbar-icon-btn` bump above regardless of
+     source order — CSS specificity, not cascade position, decides here —
+     so both toggles were silently staying at 26x26 on mobile despite this
+     block's own comment claiming every reachable .toolbar-icon-btn was
+     covered. ViewModeToggle.tsx always renders in .toolbar-actions (never
+     hidden on mobile) and HierarchyToggle.tsx renders in the sidebar drawer
+     (Sidebar.tsx), which is reachable on mobile too — both need their own,
+     equally-specific override. */
+  .view-mode-toggle .toolbar-icon-btn,
+  .hierarchy-toggle .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  /* The card itself is a drag-and-drop reorder handle (out of scope on
+     touch — see the plan's "Explicitly out of scope"), not a tap target;
+     this only guards against its own padding/border squeezing the nested
+     .session-item (already bumped above) back under the floor. */
+  .kanban-card {
+    min-height: 44px;
   }
 }
 
