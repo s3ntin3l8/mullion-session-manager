@@ -232,8 +232,6 @@ agent's own loopback, never pivot into its LAN.
 
 ## Current limitations
 
-- No DNS-rebinding protection (see Security above) — proxy mode only; direct
-  embed has no server-side fetch, so it isn't SSRF-relevant at all.
 - Direct-embed mode can't show an `http://` dev server once Mullion itself
   is served over https (browser mixed-content block, not overridable), and
   can't frame sites that refuse embedding via their own
