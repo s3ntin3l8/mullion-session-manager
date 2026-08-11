@@ -863,9 +863,9 @@ export interface SkillToggleErrorClassification {
  * (routes/internal.ts), so a local write and a remote-hosted write that hit
  * the exact same underlying failure always produce the exact same status
  * and message (services/host-error-reply.ts's forwardHostRequestError
- * forwards a remote 4xx's body/status verbatim, so this is what a primary caller
- * actually sees for either topology). Returns `null` for anything this
- * function doesn't recognize — callers rethrow rather than mask an
+ * forwards a remote 4xx's body/status verbatim, so this is what a primary
+ * caller actually sees for either topology). Returns `null` for anything
+ * this function doesn't recognize — callers rethrow rather than mask an
  * unexpected error as a generic response. */
 export function classifySkillToggleError(err: unknown): SkillToggleErrorClassification | null {
   if (err instanceof SkillNotFoundError) return { statusCode: 404, message: err.message };

@@ -5,10 +5,13 @@
 // gave, the same way a local-host failure already does.
 //
 // Originally defined in routes/agent-rules.ts (Hermes review, PR #458) and
-// duplicated verbatim in routes/dock-config.ts; extracted here once a third
-// consumer (routes/skills.ts) needed the exact same mapping, since three
-// near-identical local copies was the repo's own documented trigger to
-// actually share this instead of re-copying it a third time.
+// exported from there; routes/skills.ts and routes/hosts.ts already
+// imported that export, but routes/dock-config.ts couldn't (agent-rules.ts
+// wasn't a route it could import from without an awkward route-to-route
+// dependency) and so carried a byte-for-byte duplicate of the function
+// instead. Extracted to this services/ module to give every consumer —
+// including agent-rules.ts itself — a shared, dependency-direction-correct
+// home, and to retire dock-config.ts's duplicate.
 import type { FastifyReply } from "fastify";
 import type { HostRequestError } from "./remote-host-client.js";
 
