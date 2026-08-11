@@ -11,7 +11,10 @@ can offer whichever apply.
 
 Neither mechanism replaces the gateway model; they compose with it for
 defense in depth, or stand alone for a bare deployment with no gateway at
-all.
+all. If you configure neither, `src/app.ts`'s boot-time invariant now
+requires you to say so explicitly via `MULLION_TRUST_GATEWAY=true` (issue
+#603) — see "Network exposure" below — rather than silently booting reachable
+on every interface with no credential at all.
 
 ## Shared token (issue #19)
 
@@ -120,11 +123,50 @@ below):
 | `/api/auth/oidc/login`    | GET    | Redirects to the provider; sets a short-lived PKCE/state/nonce transaction cookie. Browser navigation, not a fetch. |
 | `/api/auth/oidc/callback` | GET    | Exchanges the code, verifies the ID token, mints the session cookie, redirects to `/`.                              |
 
+## Network exposure (issue #603)
+
+Two settings, checked at boot, close the gap between "no in-process auth
+configured" and "reachable by anyone who can route to this host":
+
+- **`HOST`** (`.env.example`, default `127.0.0.1`) — the interface
+  `src/server.ts`'s `app.listen()` binds to. A fresh install is loopback-only
+  out of the box; a same-host reverse proxy (Traefik) is unaffected, since it
+  dials `127.0.0.1:<port>` directly (`deploy/traefik-dynamic.yml`). Set
+  `HOST=0.0.0.0` (or a specific interface) only when something other than a
+  co-located gateway needs to reach this process directly.
+- **`MULLION_TRUST_GATEWAY`** (default `false`) — required to boot with
+  neither `MULLION_AUTH_TOKEN` nor `MULLION_OIDC_*` configured. Setting it
+  doesn't add any authorization check of its own; it's an explicit
+  acknowledgement that something else (normally a reverse-proxy forwardAuth)
+  already authenticates every request before it reaches this process. Before
+  this flag existed, that combination just logged a boot-time warning and
+  ran wide open — every `/api/*` route and the `/ws/terminal` upgrade
+  reachable with no credential at all, since `src/plugins/auth.ts`'s
+  `onRequest` gate installs no hook whatsoever in that case (see "Preview-host
+  auth token" below for the one other place this same early-return matters).
+
+Neither setting is a substitute for the other: `HOST=127.0.0.1` with
+`MULLION_TRUST_GATEWAY=true` and no gateway at all still means anything on
+this host (any local user, any other process) can reach the dashboard
+uncredentialed — the flag only asks the operator to confirm that's the
+intended posture, it can't verify a gateway is actually there.
+
+**Upgrading a bare deployment (in-process auth, no gateway) from before this
+flag existed?** `HOST` defaulting to loopback is a behavior change for you
+specifically — the listener used to bind `0.0.0.0` unconditionally.
+`MULLION_TRUST_GATEWAY`'s boot check won't warn you (a real credential is
+already configured, so it never fires); the process just boots reachable
+only from this host. Add `HOST=0.0.0.0` to `.env` before upgrading if this
+install needs to stay reachable from the network — see `deploy/README.md`'s
+own "Upgrading an existing bare deployment" callout.
+
 ## Security
 
 - **Fail-closed boot checks** (`src/app.ts`): either credential configured
   without `MULLION_SESSION_SECRET` refuses to boot (an unsigned cookie is
-  forgeable); a partial `MULLION_OIDC_*` set refuses to boot too.
+  forgeable); a partial `MULLION_OIDC_*` set refuses to boot too; neither
+  credential configured and no `MULLION_TRUST_GATEWAY` acknowledgement
+  refuses to boot as well (see "Network exposure" above).
 - **ID token signature verification is explicitly enabled.**
   [openid-client](https://github.com/panva/openid-client) does **not**
   verify the ID token's JWS signature by default for the authorization-code

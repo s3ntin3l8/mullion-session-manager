@@ -17,17 +17,18 @@ a way that doesn't coerce to `false`).
 
 ## Core
 
-| Variable            | Default           | Description                                                    |
-| ------------------- | ----------------- | -------------------------------------------------------------- |
-| `NODE_ENV`          | `development`     | `development` \| `production` \| `test`                        |
-| `PORT`              | `3000`            | HTTP listen port                                               |
-| `LOG_LEVEL`         | `info`            | pino log level                                                 |
-| `CORS_ORIGIN`       | _(empty)_         | comma-separated allowlist; empty disables CORS                 |
-| `RATE_LIMIT_MAX`    | `100`             | max requests per window                                        |
-| `RATE_LIMIT_WINDOW` | `1 minute`        | rate-limit window                                              |
-| `FRONTEND_DIST`     | `./frontend/dist` | built frontend assets; served at `/` once present              |
-| `PROJECTS_ROOTS`    | _(empty)_         | comma-separated dirs to scan for `GET /api/projects/discover`  |
-| `CRS_CONFIG_DIR`    | `~/.config/crs`   | global launcher/dock config dir (a project's own `.crs/` wins) |
+| Variable            | Default           | Description                                                                                                      |
+| ------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`          | `development`     | `development` \| `production` \| `test`                                                                          |
+| `PORT`              | `3000`            | HTTP listen port                                                                                                 |
+| `HOST`              | `127.0.0.1`       | interface `app.listen()` binds to; loopback-only by default, see [`auth.md`](auth.md#network-exposure-issue-603) |
+| `LOG_LEVEL`         | `info`            | pino log level                                                                                                   |
+| `CORS_ORIGIN`       | _(empty)_         | comma-separated allowlist; empty disables CORS                                                                   |
+| `RATE_LIMIT_MAX`    | `100`             | max requests per window                                                                                          |
+| `RATE_LIMIT_WINDOW` | `1 minute`        | rate-limit window                                                                                                |
+| `FRONTEND_DIST`     | `./frontend/dist` | built frontend assets; served at `/` once present                                                                |
+| `PROJECTS_ROOTS`    | _(empty)_         | comma-separated dirs to scan for `GET /api/projects/discover`                                                    |
+| `CRS_CONFIG_DIR`    | `~/.config/crs`   | global launcher/dock config dir (a project's own `.crs/` wins)                                                   |
 
 ## Database and sessions
 
@@ -48,15 +49,16 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 See [`auth.md`](auth.md) for the full setup/security writeup.
 
-| Variable                      | Default   | Description                                                                                                                                                                        |
-| ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MULLION_AUTH_TOKEN`          | _(empty)_ | shared token gating every `/api/*` route and every `/ws/*` upgrade (prefix-matched, so any future `/ws/*` route inherits it too); empty disables in-process auth entirely          |
-| `MULLION_SESSION_SECRET`      | _(empty)_ | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise)                                                               |
-| `MULLION_OIDC_ISSUER`         | _(empty)_ | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together                                                                                                     |
-| `MULLION_OIDC_CLIENT_ID`      | _(empty)_ | OIDC client id                                                                                                                                                                     |
-| `MULLION_OIDC_CLIENT_SECRET`  | _(empty)_ | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                         |
-| `MULLION_OIDC_REDIRECT_URI`   | _(empty)_ | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                            |
-| `MULLION_REVIEW_GATE_ENABLED` | `false`   | enables Claude Code's blocking `PreToolUse` review gate on Bash; off by default since an unattended session has nobody to approve/deny it — see [`agent-hooks.md`](agent-hooks.md) |
+| Variable                      | Default   | Description                                                                                                                                                                                |
+| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MULLION_AUTH_TOKEN`          | _(empty)_ | shared token gating every `/api/*` route and every `/ws/*` upgrade (prefix-matched, so any future `/ws/*` route inherits it too); empty disables in-process auth entirely                  |
+| `MULLION_TRUST_GATEWAY`       | `false`   | required to boot with neither `MULLION_AUTH_TOKEN` nor `MULLION_OIDC_*` set — acknowledges a reverse-proxy gateway already gates access; adds no check of its own (boot refuses otherwise) |
+| `MULLION_SESSION_SECRET`      | _(empty)_ | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise)                                                                       |
+| `MULLION_OIDC_ISSUER`         | _(empty)_ | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together                                                                                                             |
+| `MULLION_OIDC_CLIENT_ID`      | _(empty)_ | OIDC client id                                                                                                                                                                             |
+| `MULLION_OIDC_CLIENT_SECRET`  | _(empty)_ | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                 |
+| `MULLION_OIDC_REDIRECT_URI`   | _(empty)_ | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                                    |
+| `MULLION_REVIEW_GATE_ENABLED` | `false`   | enables Claude Code's blocking `PreToolUse` review gate on Bash; off by default since an unattended session has nobody to approve/deny it — see [`agent-hooks.md`](agent-hooks.md)         |
 
 ## Multi-host
 

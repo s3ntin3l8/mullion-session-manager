@@ -20,6 +20,19 @@ export const schema = {
       type: "number",
       default: 3000,
     },
+    // Interface src/server.ts's app.listen() binds to. Defaults to loopback
+    // only (issue #603) — a fresh install is reachable from nowhere but this
+    // host until an operator deliberately widens it. A same-host reverse
+    // proxy (Traefik, per deploy/README.md) reaches this over loopback and
+    // is unaffected by this default; set HOST=0.0.0.0 (or a specific
+    // interface address) only when Mullion itself needs to be reachable
+    // directly, e.g. no gateway in front. Orthogonal to MULLION_TRUST_GATEWAY
+    // below: that flag is about whether no-in-process-auth is an
+    // acknowledged choice, this is about which interfaces can even dial in.
+    HOST: {
+      type: "string",
+      default: "127.0.0.1",
+    },
     LOG_LEVEL: {
       type: "string",
       default: "info",
@@ -210,6 +223,26 @@ export const schema = {
     MULLION_AUTH_TOKEN: {
       type: "string",
       default: "",
+    },
+    // Required acknowledgement (issue #603) to boot the primary role with
+    // neither MULLION_AUTH_TOKEN nor MULLION_OIDC_* configured — completes
+    // this app's existing "every half-configured combination refuses to
+    // boot" invariant (src/app.ts: partial OIDC, auth-without-session-secret,
+    // a whitespace-only token, PREVIEW_AUTH_REQUIRED-without-auth,
+    // agent-role-without-MULLION_AGENT_TOKEN) by closing the one gap that
+    // wasn't half-configured, just silently unconfigured: with nothing set
+    // here, authPlugin installs no onRequest hook at all
+    // (src/plugins/auth.ts's own early return) and the dashboard is reachable
+    // with no credential at all, behind nothing but a boot-time log.warn.
+    // Setting this to true does NOT itself add any authorization check — it
+    // is a deliberate statement that something else (normally a
+    // reverse-proxy forwardAuth, e.g. Traefik+Authentik per
+    // deploy/README.md) already authenticates every request before it
+    // reaches this process. False by default: an operator must make this
+    // choice explicitly, not inherit it as a schema default.
+    MULLION_TRUST_GATEWAY: {
+      type: "boolean",
+      default: false,
     },
     // Native OIDC login (issue #30) — the second way (alongside
     // MULLION_AUTH_TOKEN above) to mint the same signed session cookie
@@ -652,6 +685,7 @@ declare module "fastify" {
     config: {
       NODE_ENV: "development" | "production" | "test";
       PORT: number;
+      HOST: string;
       LOG_LEVEL: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
       DATABASE_URL: string;
       DB_ENCRYPTION_KEY: string;
@@ -672,6 +706,7 @@ declare module "fastify" {
       MULLION_ENROLLMENT_SECRET: string;
       MULLION_ENROLLMENT_ALLOWED_CIDRS: string;
       MULLION_AUTH_TOKEN: string;
+      MULLION_TRUST_GATEWAY: boolean;
       MULLION_SESSION_SECRET: string;
       MULLION_OIDC_ISSUER: string;
       MULLION_OIDC_CLIENT_ID: string;

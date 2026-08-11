@@ -181,10 +181,33 @@ populated at all depends entirely on your provider's own claim-mapping
 configuration (e.g. Authentik needs an explicit Scope Mapping added to the
 provider before `groups` shows up), not on anything this app can force.
 
-Either credential is off by default (a clear warning logs at boot when
-neither is set), and both **compose with** forwardAuth rather than
-replacing it — run any combination for defense in depth, or in-process auth
-alone for a bare deployment with no gateway at all.
+Either credential is off by default, and both **compose with** forwardAuth
+rather than replacing it — run any combination for defense in depth, or
+in-process auth alone for a bare deployment with no gateway at all. If you
+leave both off (relying entirely on the Traefik middleware above), the
+process now refuses to boot unless you also set `MULLION_TRUST_GATEWAY=true`
+(issue #603) — an explicit acknowledgement that something else is gating
+access, replacing what used to be just a boot-time log warning. This
+install's own Traefik container already satisfies that; a bare `make dev`
+checkout with no gateway at all needs either a real credential above or this
+flag.
+
+Separately, `HOST` (`.env.example`) defaults to `127.0.0.1` — this process
+only listens on loopback out of the box, which is exactly what
+`traefik-dynamic.yml`'s own `loadBalancer.servers[].url` above targets
+(`http://127.0.0.1:<port>`). Set `HOST=0.0.0.0` only if something other than
+a co-located reverse proxy needs to dial this process directly.
+
+**Upgrading an existing bare deployment (in-process auth, no gateway at
+all)?** Before this change the listener always bound `0.0.0.0`, so an
+install relying on `MULLION_AUTH_TOKEN`/OIDC alone (no Traefik in front —
+the "in-process auth alone" model called out above) was reachable directly
+from the network. `HOST` now defaults to loopback-only on upgrade too, and
+because a real credential is already configured, `MULLION_TRUST_GATEWAY`'s
+own boot check never fires to warn you — the process boots fine, just
+silently unreachable from anywhere but this host. Add `HOST=0.0.0.0` to that
+install's `.env` before upgrading if it needs to keep working exactly as it
+did.
 
 One gap worth knowing: **neither in-process auth mechanism extends to the
 preview subdomain** (`preview-<slug>.<PREVIEW_BASE_HOST>` below) — a
