@@ -111,7 +111,7 @@ export type SkillScope = "builtin" | "global" | "project";
 // presence here means "some of its skills are toggleable," not all —
 // attachEnabledByAgent/resolveSkillForToggle still gate individual skills
 // out (builtin scope, basename collisions) below.
-export const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode", "claude-code"];
+const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode", "claude-code"];
 
 export interface SkillInfo {
   name: string;
@@ -741,14 +741,14 @@ export async function listGlobalSkills(): Promise<SkillInfo[]> {
   return attachEnabledByAgent(await scanSkillDirs(dirs), null);
 }
 
-export class SkillNotFoundError extends Error {
+class SkillNotFoundError extends Error {
   constructor(agent: SkillAgent, name: string) {
     super(`No ${agent} skill named "${name}" was found`);
     this.name = "SkillNotFoundError";
   }
 }
 
-export class SkillAmbiguousError extends Error {
+class SkillAmbiguousError extends Error {
   constructor(agent: SkillAgent, name: string) {
     super(
       `"${name}" matches more than one discovered ${agent} skill (different directories, same ` +
@@ -758,7 +758,7 @@ export class SkillAmbiguousError extends Error {
   }
 }
 
-export class SkillNotToggleableError extends Error {
+class SkillNotToggleableError extends Error {
   constructor(agent: SkillAgent) {
     super(`Skill enable/disable is not supported for ${agent} yet`);
     this.name = "SkillNotToggleableError";
@@ -862,10 +862,10 @@ export interface SkillToggleErrorClassification {
  * (routes/skills.ts, a local project) and the agent-side route
  * (routes/internal.ts), so a local write and a remote-hosted write that hit
  * the exact same underlying failure always produce the exact same status
- * and message (routes/agent-rules.ts's forwardHostRequestError forwards a
- * remote 4xx's body/status verbatim, so this is what a primary caller
- * actually sees for either topology). Returns `null` for anything this
- * function doesn't recognize — callers rethrow rather than mask an
+ * and message (services/host-error-reply.ts's forwardHostRequestError
+ * forwards a remote 4xx's body/status verbatim, so this is what a primary
+ * caller actually sees for either topology). Returns `null` for anything
+ * this function doesn't recognize — callers rethrow rather than mask an
  * unexpected error as a generic response. */
 export function classifySkillToggleError(err: unknown): SkillToggleErrorClassification | null {
   if (err instanceof SkillNotFoundError) return { statusCode: 404, message: err.message };
