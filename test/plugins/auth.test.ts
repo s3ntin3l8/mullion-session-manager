@@ -807,6 +807,69 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     });
   });
 
+  describe("MULLION_TRUST_GATEWAY boot invariant (issue #603)", () => {
+    afterEach(() => {
+      delete process.env.MULLION_TRUST_GATEWAY;
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
+      // Explicit, not just relied-on-from-earlier-describes cleanup: mirrors
+      // the exact condition the invariant itself checks (isAuthEnabled),
+      // rather than trusting the OIDC/token describes above this one to have
+      // cleaned up after themselves — if one of them ever left a credential
+      // set, "refuses to boot" below would fail with a different error (or
+      // silently boot) instead of exercising the invariant this block is
+      // named for.
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_OIDC_ISSUER;
+      delete process.env.MULLION_OIDC_CLIENT_ID;
+      delete process.env.MULLION_OIDC_CLIENT_SECRET;
+      delete process.env.MULLION_OIDC_REDIRECT_URI;
+    });
+
+    it("refuses to boot with no in-process auth and MULLION_TRUST_GATEWAY unset — test/setup.ts forces this true for every other test in the suite", async () => {
+      delete process.env.MULLION_TRUST_GATEWAY;
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_OIDC_ISSUER;
+      delete process.env.MULLION_OIDC_CLIENT_ID;
+      delete process.env.MULLION_OIDC_CLIENT_SECRET;
+      delete process.env.MULLION_OIDC_REDIRECT_URI;
+      await expect(buildApp()).rejects.toThrow(/MULLION_TRUST_GATEWAY/);
+    });
+
+    it("boots with MULLION_TRUST_GATEWAY=true and no in-process auth", async () => {
+      process.env.MULLION_TRUST_GATEWAY = "true";
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("does not require MULLION_TRUST_GATEWAY when MULLION_AUTH_TOKEN is configured", async () => {
+      delete process.env.MULLION_TRUST_GATEWAY;
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("does not require MULLION_TRUST_GATEWAY when OIDC is fully configured", async () => {
+      delete process.env.MULLION_TRUST_GATEWAY;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("does not apply to the agent role — an agent's trust boundary is MULLION_AGENT_TOKEN, not this flag", async () => {
+      delete process.env.MULLION_TRUST_GATEWAY;
+      process.env.MULLION_ROLE = "agent";
+      process.env.MULLION_AGENT_TOKEN = "test-agent-token";
+      const app = await buildApp();
+      await app.close();
+    });
+  });
+
   describe("PREVIEW_AUTH_REQUIRED boot invariant (issue #383)", () => {
     afterEach(() => {
       delete process.env.PREVIEW_AUTH_REQUIRED;

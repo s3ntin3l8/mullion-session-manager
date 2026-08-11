@@ -37,6 +37,7 @@ describe("env plugin", () => {
     delete process.env.DATABASE_URL;
     const app = await buildApp();
     expect(app.config.PORT).toBe(3000);
+    expect(app.config.HOST).toBe("127.0.0.1");
     expect(app.config.LOG_LEVEL).toBe("info");
     expect(app.config.DATABASE_URL).toBe("file:./data/app.db");
     expect(app.config.DB_ENCRYPTION_KEY).toBe("");
@@ -65,6 +66,34 @@ describe("env plugin", () => {
     expect(app.config.BROWSER_DATA_DIR).toBe("./data/browsers");
     expect(app.config.MULLION_SOCKET_PATH).toBe("");
     await app.close();
+  });
+
+  // The default-values test above can't assert this one directly:
+  // test/setup.ts forces MULLION_TRUST_GATEWAY=true suite-wide (see its own
+  // comment) so the other ~75 buildApp() call sites across the suite don't
+  // trip src/app.ts's boot invariant, so app.config.MULLION_TRUST_GATEWAY
+  // would read `true` there regardless of the schema's own default. Pin the
+  // real schema default here instead, in a boot state (real auth
+  // configured) where deleting the suite override doesn't also trip that
+  // invariant.
+  it("defaults MULLION_TRUST_GATEWAY to false (test/setup.ts forces it true suite-wide; this pins the real schema default)", async () => {
+    delete process.env.MULLION_TRUST_GATEWAY;
+    process.env.MULLION_AUTH_TOKEN = "test-auth-token-0123456789";
+    process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789";
+    try {
+      const app = await buildApp();
+      expect(app.config.MULLION_TRUST_GATEWAY).toBe(false);
+      await app.close();
+    } finally {
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_SESSION_SECRET;
+      // Restore the suite-wide override this test deliberately unset above —
+      // every later test in this file (and this file alone; test/setup.ts
+      // re-forces it fresh per file regardless) expects it back, the same
+      // "the harness trusts itself" default every other buildApp() call site
+      // in the suite relies on.
+      process.env.MULLION_TRUST_GATEWAY = "true";
+    }
   });
 
   it("respects environment variable overrides", async () => {
