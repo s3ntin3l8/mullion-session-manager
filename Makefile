@@ -21,7 +21,7 @@ test: ## Run tests (backend + frontend)
 test-backend: ## Run backend tests only (fast inner loop)
 	npm run test
 
-test-coverage: ## Run tests with coverage
+test-coverage: ## Run tests with coverage (backend only)
 	npm run test:coverage
 
 test-e2e: ## Run the opt-in Phase 4 socket API e2e suite (real browser/sockets, not part of `make test`)
