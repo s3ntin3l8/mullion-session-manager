@@ -6600,6 +6600,20 @@ button.danger.armed {
 /* ============================================================ */
 
 @media (max-width: 699px) {
+  /* Mobile UI/UX overhaul, item B.2 — `.app`'s base rule (near the top of
+     this file) is `position: fixed; inset: 0`, so the fixed shell never
+     reflows when the on-screen keyboard opens; `--kb-inset` (App.tsx's own
+     useVisualViewportInset hook, 0px when the keyboard is closed) shrinks
+     it from the bottom instead, so whatever's focused stays above the
+     keyboard rather than hidden behind it. `bottom` alone, not the other
+     three `inset` edges — this only ever needs to reclaim height from the
+     bottom of the shell. TerminalPane's existing ResizeObserver → refit
+     picks up the resulting size change and re-fits the active terminal
+     automatically; no separate wiring needed here. */
+  .app {
+    bottom: var(--kb-inset, 0px);
+  }
+
   .toolbar-lead {
     width: auto !important;
   }
