@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" — see mock-pty.ts's header comment for
+// the empirically confirmed hoisting/ordering failure mode.
+import { plainNodePtyMock } from "../helpers/mock-pty.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -30,15 +34,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 // (pty-manager.ts's stopScope/isMasterAlive — never actually reaches a
 // real scope once systemd-run is faked, and doesn't `.kill()` its child)
 // and everything else passes through to the real `spawn`.
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => ({
-    onData: () => ({ dispose: () => {} }),
-    onExit: () => ({ dispose: () => {} }),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-  })),
-}));
+vi.mock("node-pty", () => plainNodePtyMock());
 
 // Marker substring a target cwd can contain to make runGitInit's own `git
 // init` spawn fail deterministically (real `git init` essentially never
@@ -51,6 +47,13 @@ vi.mock("node-pty", () => ({
 // since that's a different child_process API than the mocked `spawn`.
 const GIT_INIT_FAIL_MARKER = "route-git-init-fail";
 
+// Not converted to mock-spawn.ts's mockChildProcessSpawn — that helper's
+// own header deliberately excludes files needing command-specific
+// conditional behavior beyond a static fake/passthrough command list
+// (e.g. this file's GIT_INIT_FAIL_MARKER, which fakes a `git init` failure
+// only for one specific target path, while every other `git` invocation
+// passes through to the real binary). Forcing this into the shared helper
+// would need a per-args predicate the helper doesn't support.
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {

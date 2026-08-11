@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" (e.g. the `execFileSync`/`spawnChildProcess`
+// import a few lines down) — see mock-pty.ts's header comment for the
+// empirically confirmed hoisting/ordering failure mode.
+import { createNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -19,39 +25,18 @@ import { gitEnv } from "../../src/services/git-env.js";
 // created and discarded) so a scrollback-identity test can push real,
 // distinguishable output through a specific session's PTY after the fact —
 // see the "returns the base64-encoded scrollback buffer" test below.
-const fakePtyListeners: Array<Array<(data: string) => void>> = [];
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => {
-    const listeners: Array<(data: string) => void> = [];
-    fakePtyListeners.push(listeners);
-    return {
-      onData: (cb: (data: string) => void) => {
-        listeners.push(cb);
-        return { dispose: () => {} };
-      },
-      onExit: () => ({ dispose: () => {} }),
-      write: vi.fn(),
-      resize: vi.fn(),
-      kill: vi.fn(),
-    };
-  }),
-}));
+// `ptyMock.spawnedPtys[n].emitData(...)` (mock-pty.ts's listener-capturing
+// variant) replaces this file's own hand-rolled `fakePtyListeners` array.
+const ptyMock = createNodePtyMock();
+vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
-  return {
-    ...actual,
-    spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
-      // Issue #271's worktree tests need real `git` subprocesses (git-worktree.ts's
-      // createWorktree, invoked via routes/sessions.ts) — only the
-      // systemd-run/dtach bootstrap child_process.spawn call (pty-manager.ts's
-      // bootstrapMaster) is faked, same reasoning as node-pty's mock above.
-      if (command === "git") return actual.spawn(command, args, options);
-      const ee = new EventEmitter();
-      setImmediate(() => ee.emit("exit", 0));
-      return ee;
-    }),
-  };
+  // Issue #271's worktree tests need real `git` subprocesses (git-worktree.ts's
+  // createWorktree, invoked via routes/sessions.ts) — only the
+  // systemd-run/dtach bootstrap child_process.spawn call (pty-manager.ts's
+  // bootstrapMaster) is faked, same reasoning as node-pty's mock above.
+  return mockChildProcessSpawn(actual, { passthrough: ["git"] });
 });
 
 const { buildApp } = await import("../../src/app.js");
@@ -576,13 +561,13 @@ describe("sessions route", () => {
       });
 
       // Push real, distinguishable output through this specific session's
-      // FakePty (captured by fakePtyListeners at spawn time — see this
+      // FakePty (captured by ptyMock.spawnedPtys at spawn time — see this
       // file's node-pty mock) so this test verifies actual scrollback
       // *content*, not just that some non-empty base64 string comes back
       // (which the preamble alone would already satisfy — see
       // pty-manager.ts's getScrollback doc comment).
       const marker = `scrollback-marker-${sessionId}`;
-      for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) cb(`${marker}\r\n`);
+      ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1].emitData(`${marker}\r\n`);
 
       const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/scrollback` });
       expect(res.statusCode).toBe(200);
@@ -1040,7 +1025,7 @@ describe("sessions route", () => {
       await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
 
       const marker = `  ➜  Local:   http://localhost:${port}/\r\n`;
-      for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) cb(marker);
+      ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1].emitData(marker);
 
       const detected = app.pty.sweepDevServerDetection(new Map([[String(sessionId), projectId]]));
       if (detected.length === 0) throw new Error("expected a dev-server detection to land");
@@ -1201,7 +1186,7 @@ describe("sessions route", () => {
           const sessionId = created.json().id;
           await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
           const marker = `  ➜  Local:   http://localhost:${port}/\r\n`;
-          for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) cb(marker);
+          ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1].emitData(marker);
           const detected = app.pty.sweepDevServerDetection(
             new Map([[String(sessionId), projectId]]),
           );
@@ -1299,9 +1284,9 @@ describe("sessions route", () => {
         expect(project.devServerUrl).toBeNull();
 
         // A re-printed banner for the SAME port must not re-offer.
-        for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) {
-          cb("  ➜  Local:   http://localhost:5173/\r\n");
-        }
+        ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1].emitData(
+          "  ➜  Local:   http://localhost:5173/\r\n",
+        );
         const detected = app.pty.sweepDevServerDetection(new Map([[String(sessionId), projectId]]));
         expect(detected).toEqual([]);
         await app.close();

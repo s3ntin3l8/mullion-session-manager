@@ -6,6 +6,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { EncryptionService } from "../../src/services/encryption.js";
 import { hosts, projects } from "../../src/db/schema.js";
+import { buildTestApp } from "../helpers/app.js";
 
 const tmpDb = path.join(os.tmpdir(), `db-plugin-test-${process.pid}.db`);
 
@@ -20,7 +21,7 @@ describe("db plugin", () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
 
-    const app = await buildApp();
+    const app = await buildTestApp();
     expect(app.db).toBeDefined();
     expect(app.encryption).toBeInstanceOf(EncryptionService);
 
@@ -70,7 +71,7 @@ describe("DB_ENCRYPTION_KEY boot invariant (finding AS3)", () => {
   it("boots fine with a proper 32-byte key", async () => {
     process.env.DB_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64url");
     process.env.DATABASE_URL = `file:${tmpDb}-as3`;
-    const app = await buildApp();
+    const app = await buildTestApp();
     expect(app.encryption.isEnabled).toBe(true);
     await app.close();
     closeDb();
@@ -81,7 +82,7 @@ describe("DB_ENCRYPTION_KEY boot invariant (finding AS3)", () => {
   it("boots fine with DB_ENCRYPTION_KEY left empty — encryption stays disabled, not an error", async () => {
     delete process.env.DB_ENCRYPTION_KEY;
     process.env.DATABASE_URL = `file:${tmpDb}-as3-empty`;
-    const app = await buildApp();
+    const app = await buildTestApp();
     expect(app.encryption.isEnabled).toBe(false);
     await app.close();
     closeDb();
