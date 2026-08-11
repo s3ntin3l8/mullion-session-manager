@@ -178,4 +178,69 @@ describe("useFocusTrap", () => {
     // siblings.
     expect(screen.getByText("visible")).toHaveFocus();
   });
+
+  // Hermes review, PR #621 round 3 — Settings.tsx's mobile drill-down keeps
+  // both panes mounted, toggling visibility with `display: none` rather than
+  // unmounting, so a display:none descendant needs the same treatment as an
+  // aria-hidden one: excluded from both the initial-focus target and the Tab
+  // wrap boundary. Inline `style={{ display: "none" }}` (not a stylesheet
+  // rule) so this is jsdom-safe — see the hook's own comment on why.
+  it("filters display:none descendants out of both the initial focus target and the Tab trap", async () => {
+    function HarnessWithDisplayNone() {
+      const [active, setActive] = useState(false);
+      const containerRef = useRef<HTMLDivElement>(null);
+      const { onKeyDown } = useFocusTrap({ active, containerRef });
+      return (
+        <div>
+          <button onClick={() => setActive(true)}>open</button>
+          {active && (
+            <div ref={containerRef} onKeyDown={onKeyDown}>
+              <button style={{ display: "none" }}>hidden-first</button>
+              <button>visible</button>
+              <button style={{ display: "none" }}>hidden-last</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<HarnessWithDisplayNone />);
+    await user.click(screen.getByText("open"));
+    // Same reasoning as the aria-hidden case above: "visible" is the only
+    // real candidate, so Tab wrapping to it (rather than escaping the trap,
+    // or landing on a hidden sibling) proves the filter's actually applied
+    // at both the initial-focus site and the wrap-boundary check.
+    expect(screen.getByText("visible")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByText("visible")).toHaveFocus();
+  });
+
+  it("filters a display:none ANCESTOR out too, not just an element's own display", async () => {
+    function HarnessWithHiddenAncestor() {
+      const [active, setActive] = useState(false);
+      const containerRef = useRef<HTMLDivElement>(null);
+      const { onKeyDown } = useFocusTrap({ active, containerRef });
+      return (
+        <div>
+          <button onClick={() => setActive(true)}>open</button>
+          {active && (
+            <div ref={containerRef} onKeyDown={onKeyDown}>
+              {/* The child itself has no display override — only its
+                  wrapper does, mirroring Settings.tsx's `.settings-nav`/
+                  `.settings-content` panes (the `display: none` rule
+                  targets the pane container, not each control inside it). */}
+              <div style={{ display: "none" }}>
+                <button>hidden-inside-hidden-wrapper</button>
+              </div>
+              <button>visible</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<HarnessWithHiddenAncestor />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByText("visible")).toHaveFocus();
+  });
 });
