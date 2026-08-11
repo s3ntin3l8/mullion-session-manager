@@ -2,11 +2,13 @@
 
 The `mullion` command is the primary consumer of the [control socket
 API](socket-api.md) — a local-only CLI for listing/creating/attaching to
-sessions, driving a session's bound browser, and tailing notification events,
-with no HTTP base URL or bearer token required. Run from inside a Mullion
-session, it defaults to targeting that session with zero flags; run from an
-operator's own shell, it needs `MULLION_AUTH_TOKEN` (see
-[Authentication and scope](#authentication-and-scope) below).
+sessions, driving a session's bound browser (see
+[browser-automation.md](browser-automation.md) for the underlying action
+set), and tailing notification events, with no HTTP base URL or bearer
+token required. Run from inside a Mullion session, it defaults to targeting
+that session with zero flags; run from an operator's own shell, it needs
+`MULLION_AUTH_TOKEN` (see [Authentication and scope](#authentication-and-scope)
+below).
 
 A versioned install links it at `~/.local/bin/mullion` (see
 `deploy/install.sh` — it skips the link if that release predates the CLI, and
@@ -69,7 +71,7 @@ Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session
 
 ### browser
 
-Every [browser-automation](socket-api.md) action is its own subcommand
+Every [browser-automation](browser-automation.md) action is its own subcommand
 (not a `--action` flag), taking the same fields as the underlying
 `AgentAction` schema (`src/routes/browser-automation.ts`). Targeting for
 actions that operate on a specific element uses `--ref e17` (from a prior

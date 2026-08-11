@@ -25,7 +25,13 @@ export default tseslint.config(
     // service; plain JS files under eslint's own `recommended` config
     // don't have any environment assumed, so `no-undef` flags every Node
     // global unless declared explicitly here.
-    files: ["src/hooks/**/*.mjs", "src/hooks/**/*.js", "src/mcp/**/*.mjs", "src/cli/**/*.mjs"],
+    files: [
+      "src/hooks/**/*.mjs",
+      "src/hooks/**/*.js",
+      "src/mcp/**/*.mjs",
+      "src/cli/**/*.mjs",
+      "scripts/**/*.mjs",
+    ],
     languageOptions: {
       globals: {
         process: "readonly",

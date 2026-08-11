@@ -384,6 +384,9 @@ connection, for that.
 
 ## Browser automation ops (`browser.action`/`find`/`bindings`)
 
+See [browser-automation.md](browser-automation.md) for the full action set
+and REST equivalents; this section covers only the socket transport.
+
 Request/response, not streams — a single `browser.action` call already
 returns a full snapshot/console/errors envelope in one shot (same as
 `POST /api/sessions/:id/browser` itself), so there's nothing here that needs

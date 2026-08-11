@@ -274,7 +274,13 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     devServerDetectTimer.unref();
   }
 
-  // codeql[js/missing-rate-limiting]
+  // Dismissed in GHAS as alert #124 (js/missing-rate-limiting) — CodeQL
+  // treats any app.addHook(...) callback as a candidate route handler, but
+  // "onClose" is a Fastify lifecycle hook that fires once at process
+  // shutdown, not a request handler. (See dock-config.ts's isSymlinkPath for
+  // why a `codeql[...]` line comment here wouldn't have dismissed this on
+  // its own — this repo's codeql.yml has no step that turns a SARIF
+  // suppression into an actual Security-tab dismissal.)
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (devServerDetectTimer) clearInterval(devServerDetectTimer);
