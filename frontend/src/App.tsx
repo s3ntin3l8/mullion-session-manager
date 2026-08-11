@@ -29,11 +29,12 @@ import type { TaskDetailParams } from "./TaskDetail.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
+import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { GridIcon, RefreshIcon, ServerRackIcon, SpinnerIcon } from "./icons.js";
+import { GridIcon, RefreshIcon, ServerRackIcon, SpinnerIcon, CloseIcon } from "./icons.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
@@ -46,6 +47,7 @@ import { getSchemeBackground } from "./terminalTheme.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
+import { resolveAgentLogo } from "./cliLogos.js";
 import {
   hasTiledPanels,
   openSessionPanel,
@@ -61,8 +63,10 @@ import {
   shouldAutoOpenChildPanels,
   closeLegacyPanels,
   handleGlobalEscape,
+  panelSessionId,
 } from "./panelUtils.js";
-import { describeEvent } from "./eventDescriptions.js";
+import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
+import { useVisualViewportInset } from "./useVisualViewportInset.js";
 import {
   pickNewNotifiableEvents,
   notificationChannelEnabled,
@@ -443,6 +447,24 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  // Mobile UI/UX overhaul, item B.2 — writes the keyboard's on-screen height
+  // (0 when closed) directly onto `document.documentElement`'s own
+  // `--kb-inset` custom property (no React state — see the hook's own
+  // comment on why), which the mobile-only `.app { bottom: var(--kb-inset) }`
+  // rule (styles.css) inherits to shrink the fixed-position shell above the
+  // keyboard instead of letting it overlay the terminal's active line. A
+  // no-op on desktop: the CSS that reads this variable is scoped to the
+  // mobile breakpoint, same as every other mobile-only rule in that file.
+  useVisualViewportInset();
+  // Mobile UI/UX overhaul, item A.5 — the mobile pane bar's own inline
+  // rename, mirroring PaneTab.tsx's renaming/draftName pair (the actual
+  // rename UI can't move into the shared PaneActionsMenu — see that
+  // component's own comment on why — so each host of the menu owns an
+  // equivalent inline swap). Keyed by panel id (not a boolean) since the bar
+  // renders every panel, not just the active one.
+  const [mobileRenamingPanelId, setMobileRenamingPanelId] = useState<string | null>(null);
+  const [mobileDraftName, setMobileDraftName] = useState("");
+  const mobileRenameInputRef = useRef<HTMLInputElement>(null);
   const [palette, setPalette] = useState<PaletteState>({
     open: false,
     scope: "global",
@@ -488,6 +510,8 @@ export function App() {
     sessions,
     sessionsLoaded,
     events,
+    lastSeenSeq,
+    dismissedEventKeys,
     activeWorkspaceId,
     theme,
     settings,
@@ -509,6 +533,8 @@ export function App() {
       sessions: s.sessions,
       sessionsLoaded: s.sessionsLoaded,
       events: s.events,
+      lastSeenSeq: s.lastSeenSeq,
+      dismissedEventKeys: s.dismissedEventKeys,
       activeWorkspaceId: s.activeWorkspaceId,
       theme: s.theme,
       settings: s.settings,
@@ -865,6 +891,68 @@ export function App() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, [dockviewApi]);
+
+  // Mobile UI/UX overhaul, item A.2 — applyMobilePresentation (above) syncs
+  // every group's header.hidden on restore and on breakpoint change, but a
+  // group created and maximized *between* those two moments (e.g. opening a
+  // session's timeline or Agent Browser panel on mobile — panelUtils.ts's
+  // openTimelinePanel/openBrowserPanePanel/openTaskDetailPanel, or the ~14
+  // inline `if (isMobile) dockviewApi.maximizeGroup(...)` call sites further
+  // down this file) would otherwise show its header un-hidden until the next
+  // breakpoint change. Every one of those calls `maximizeGroup`, which fires
+  // this event — subscribing here once covers all of them (current and
+  // future) without editing each call site individually. Also covers
+  // `onDidAddGroup` (Hermes review, PR #613): a group created WITHOUT an
+  // intervening maximizeGroup — a drag-split, or a future programmatic
+  // `addGroup()` — would otherwise render dockview's own tab strip un-hidden
+  // until the next breakpoint change, reintroducing this PR's own "doubled
+  // switcher" bug for that one group.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const hideIfMobile = (group: DockviewGroupPanel) => {
+      group.header.hidden = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+    };
+    const maximizedSub = dockviewApi.onDidMaximizedGroupChange(({ group }) => hideIfMobile(group));
+    const addedSub = dockviewApi.onDidAddGroup((group) => hideIfMobile(group));
+    return () => {
+      maximizedSub.dispose();
+      addedSub.dispose();
+    };
+  }, [dockviewApi]);
+
+  // Focuses the mobile pane bar's inline rename input the moment it opens —
+  // same "explicit transition, not a bare mount effect" shape as
+  // TerminalPane.tsx's find-bar focus (see that file's own comment on why
+  // that distinction matters).
+  useEffect(() => {
+    if (mobileRenamingPanelId) {
+      mobileRenameInputRef.current?.focus();
+      mobileRenameInputRef.current?.select();
+    }
+  }, [mobileRenamingPanelId]);
+
+  // Code review finding on PR #613 — `isRenaming` (below, in the mobile bar's
+  // render) is keyed only by `mobileRenamingPanelId`, independent of
+  // `activePanelId`. Nothing normally moves `activePanelId` away from the
+  // tab being renamed without also stealing DOM focus (which would already
+  // fire the input's own onBlur commit) — except the auto-focus-on-attention
+  // effect further down, which calls `panel.api.setActive()` programmatically
+  // with no click/focus involved. Without this guard, that could leave a
+  // stale rename input rendered on a now-background tab, still holding DOM
+  // focus, while a *different* tab shows as active. Cancels rather than
+  // commits: silently persisting a half-typed name off an external focus
+  // steal would be a worse surprise than losing the in-progress edit. Direct
+  // setState is genuinely needed here (canceling in response to an
+  // externally-driven activePanelId change, not a pure render-time
+  // derivation) — same shape as TerminalPane.tsx's own findQuery-clear
+  // effect, which this repo's react-hooks/set-state-in-effect rule also
+  // flags as a cascading-render risk without the disable.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMobileRenamingPanelId((current) =>
+      current !== null && current !== activePanelId ? null : current,
+    );
+  }, [activePanelId]);
 
   // Sidebar drag-to-dock: subscribe to dockview's external drag-over events
   // so it shows drop indicators when a session row is dragged over the
@@ -2238,33 +2326,112 @@ export function App() {
               </div>
             )}
           <div className={`grid-area-body${!backendReachable ? " dimmed" : ""}`}>
+            {/* Mobile UI/UX overhaul, item A — the single mobile pane
+                switcher (dockview's own tab strip is now hidden here, via
+                applyMobilePresentation's header.hidden sync in
+                panelUtils.ts, so the two no longer double up). The active
+                pane also gets a close (×) + kebab (PaneActionsMenu) here,
+                since dockview's per-tab actions are unreachable with its
+                header hidden — same actions the desktop tab strip offers
+                (close/rename/kill/promote/timeline/Agent Browser), just
+                surfaced through this bar instead. The toolbar's own sidebar
+                toggle (Toolbar.tsx) is the only one left at this breakpoint
+                — the second, redundant ☰ that used to render here is gone. */}
             {isMobile && mobilePanels.length > 0 && (
               <div className="mobile-tabs">
                 {mobilePanels.map((panel) => {
-                  const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
+                  const sessionId = panelSessionId(panel);
                   const session = sessions.find((s) => s.id === sessionId);
+                  const isActive = panel.id === activePanelId;
+                  const isRenaming = mobileRenamingPanelId === panel.id;
                   let dotColor = "var(--dim)";
                   if (session?.attention) dotColor = "var(--ring)";
                   else if (session?.activity === "working") dotColor = "var(--g)";
+                  const agentLogo = session ? resolveAgentLogo(session.command, theme) : null;
+                  // Same unread derivation as PaneTab.tsx's own tab badge —
+                  // shared via eventDescriptions.ts's unreadEventSummary
+                  // (Hermes review, PR #613) rather than a third copy.
+                  const unreadCount =
+                    sessionId === undefined
+                      ? 0
+                      : unreadEventSummary(
+                          sessionId,
+                          events[sessionId],
+                          lastSeenSeq[sessionId] ?? 0,
+                          dismissedEventKeys,
+                        ).count;
+                  const commitMobileRename = () => {
+                    const value = mobileDraftName.trim();
+                    setMobileRenamingPanelId(null);
+                    if (!value || sessionId === undefined) return;
+                    panel.api.setTitle(value);
+                    void useDashboardStore.getState().renameSession(sessionId, value);
+                  };
                   return (
-                    <button
-                      key={panel.id}
-                      className={`mobile-tab${panel.id === activePanelId ? " active" : ""}`}
-                      onClick={() => {
-                        panel.api.setActive();
-                        dockviewApi?.maximizeGroup(panel);
-                      }}
-                    >
-                      <span className="mobile-tab-dot" style={{ background: dotColor }} />
-                      {panel.title}
-                    </button>
+                    <div key={panel.id} className="mobile-tab-wrap">
+                      {isRenaming ? (
+                        <input
+                          ref={mobileRenameInputRef}
+                          className="mobile-tab-rename-input"
+                          value={mobileDraftName}
+                          onChange={(e) => setMobileDraftName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitMobileRename();
+                            else if (e.key === "Escape") setMobileRenamingPanelId(null);
+                          }}
+                          onBlur={commitMobileRename}
+                        />
+                      ) : (
+                        <button
+                          className={`mobile-tab${isActive ? " active" : ""}`}
+                          onClick={() => {
+                            panel.api.setActive();
+                            dockviewApi?.maximizeGroup(panel);
+                          }}
+                        >
+                          <span className="mobile-tab-dot" style={{ background: dotColor }} />
+                          {agentLogo && (
+                            <img
+                              src={agentLogo}
+                              alt=""
+                              width={14}
+                              height={14}
+                              className="mobile-tab-agent-logo"
+                            />
+                          )}
+                          <span className="mobile-tab-title">{panel.title}</span>
+                          {unreadCount > 0 && (
+                            <span className="mobile-tab-unread-badge">{unreadCount}</span>
+                          )}
+                        </button>
+                      )}
+                      {isActive && !isRenaming && dockviewApi && (
+                        <>
+                          <button
+                            className="mobile-tab-btn"
+                            title="Close pane — detaches your view, session keeps running"
+                            aria-label="Close pane"
+                            onClick={() => panel.api.close()}
+                          >
+                            <CloseIcon size={13} />
+                          </button>
+                          <PaneActionsMenu
+                            api={panel.api}
+                            params={panel.params as TerminalPaneParams | undefined}
+                            containerApi={dockviewApi}
+                            onRename={() => {
+                              setMobileDraftName(panel.title ?? "");
+                              setMobileRenamingPanelId(panel.id);
+                            }}
+                            triggerClassName="mobile-tab-btn"
+                          />
+                        </>
+                      )}
+                    </div>
                   );
                 })}
               </div>
             )}
-            <button className="sidebar-toggle" onClick={toggleSidebar}>
-              ☰
-            </button>
             <div
               className="dockview-container"
               style={{ "--mullion-chrome-bg": dockviewChromeBg } as CSSProperties}
