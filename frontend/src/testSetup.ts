@@ -25,6 +25,15 @@ afterEach(cleanup);
 // with "window.matchMedia is not a function" when that happened. Individual
 // tests that need `matches: true` still layer their own vi.stubGlobal on
 // top, which correctly reverts back to this default, not to undefined.
+//
+// addListener/addEventListener are deliberate no-ops (independent code
+// review, PR #615): this default exists to stop a stray render from
+// crashing, not to simulate a live-updating media query. A future test that
+// renders App.tsx and expects its isMobile state to actually flip on a
+// simulated breakpoint change (App.tsx's own matchMedia(...).addEventListener
+// ("change", ...) subscription) needs its own vi.stubGlobal("matchMedia", ...)
+// with a real listener registry — this default will otherwise silently
+// report "desktop forever" instead of erroring, rather than failing loudly.
 if (typeof window !== "undefined" && !window.matchMedia) {
   window.matchMedia = ((query: string) => ({
     matches: false,

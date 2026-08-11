@@ -7,11 +7,22 @@ import { useEffect, useState } from "react";
 // without the layout viewport (or this fixed shell) reflowing at all: the
 // terminal's active line, and any focused input, can end up rendered behind
 // the keyboard. `window.visualViewport` is the one API that reports the
-// keyboard's actual on-screen height — `innerHeight - (visualViewport.height
-// + visualViewport.offsetTop)` is the gap between the layout viewport's
-// bottom edge and the visible viewport's bottom edge, which is exactly the
-// keyboard's height when it's open (0 when it's closed, or on a browser
-// with no visualViewport support at all).
+// keyboard's actual on-screen height — `documentElement.clientHeight -
+// (visualViewport.height + visualViewport.offsetTop)` is the gap between the
+// layout viewport's bottom edge and the visible viewport's bottom edge,
+// which is exactly the keyboard's height when it's open (0 when it's
+// closed, or on a browser with no visualViewport support at all).
+//
+// Independent code review, PR #615 — `document.documentElement.clientHeight`
+// specifically, NOT `window.innerHeight`: `.app`'s `position: fixed` box is
+// sized against the initial containing block, i.e. clientHeight, and the two
+// aren't reliably the same number on mobile Safari, where innerHeight can
+// diverge from clientHeight as the address bar/toolbar collapses and
+// expands — the same underlying quirk `dvh`/`svh`/`lvh` CSS units exist to
+// work around. Using innerHeight here risked a permanent non-zero
+// --kb-inset (clipping the bottom of .app) on iOS with no keyboard open at
+// all, on exactly the platform this hook does all of its real work on
+// (interactive-widget=resizes-content, index.html, is Chrome/Android-only).
 //
 // rAF-coalesced for the same reason terminalRepaintRegistry.ts's own
 // repaint dispatch is: `resize`/`scroll` on visualViewport can fire in a
@@ -29,7 +40,8 @@ export function useVisualViewportInset(): number {
     const update = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        setInset(Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)));
+        const layoutHeight = document.documentElement.clientHeight;
+        setInset(Math.max(0, layoutHeight - (vv.height + vv.offsetTop)));
       });
     };
 

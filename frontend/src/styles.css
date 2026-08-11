@@ -6609,7 +6609,19 @@ button.danger.armed {
      three `inset` edges — this only ever needs to reclaim height from the
      bottom of the shell. TerminalPane's existing ResizeObserver → refit
      picks up the resulting size change and re-fits the active terminal
-     automatically; no separate wiring needed here. */
+     automatically; no separate wiring needed here.
+
+     Known limitation (independent code review, PR #615): only `bottom`
+     moves, `top` stays pinned to 0. When iOS's native scroll-into-view pans
+     the visual viewport to keep a focused input visible above the keyboard,
+     `visualViewport.offsetTop` goes positive — folded into --kb-inset's own
+     gap calculation (useVisualViewportInset.ts), so `bottom` shrinks by
+     more than the keyboard alone accounts for, while the toolbar at the top
+     of the now-panned viewport can end up scrolled out of view with no
+     scroll container to bring it back. Not chased further here — a real
+     fix would need `.app` to track `top` too, which conflicts with the
+     toolbar's own fixed-at-top design; flagging so it isn't an unstated
+     assumption if it turns out to matter on a real device. */
   .app {
     bottom: var(--kb-inset, 0px);
   }
