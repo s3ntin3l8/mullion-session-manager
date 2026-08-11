@@ -922,6 +922,29 @@ export function App() {
     }
   }, [mobileRenamingPanelId]);
 
+  // Code review finding on PR #613 — `isRenaming` (below, in the mobile bar's
+  // render) is keyed only by `mobileRenamingPanelId`, independent of
+  // `activePanelId`. Nothing normally moves `activePanelId` away from the
+  // tab being renamed without also stealing DOM focus (which would already
+  // fire the input's own onBlur commit) — except the auto-focus-on-attention
+  // effect further down, which calls `panel.api.setActive()` programmatically
+  // with no click/focus involved. Without this guard, that could leave a
+  // stale rename input rendered on a now-background tab, still holding DOM
+  // focus, while a *different* tab shows as active. Cancels rather than
+  // commits: silently persisting a half-typed name off an external focus
+  // steal would be a worse surprise than losing the in-progress edit. Direct
+  // setState is genuinely needed here (canceling in response to an
+  // externally-driven activePanelId change, not a pure render-time
+  // derivation) — same shape as TerminalPane.tsx's own findQuery-clear
+  // effect, which this repo's react-hooks/set-state-in-effect rule also
+  // flags as a cascading-render risk without the disable.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMobileRenamingPanelId((current) =>
+      current !== null && current !== activePanelId ? null : current,
+    );
+  }, [activePanelId]);
+
   // Sidebar drag-to-dock: subscribe to dockview's external drag-over events
   // so it shows drop indicators when a session row is dragged over the
   // workspace (the drag source sets application/x-mullion-session in dataTransfer).
