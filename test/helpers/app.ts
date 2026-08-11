@@ -28,6 +28,18 @@ import type { FastifyInstance } from "fastify";
 // need to call `closeDb()` itself. Agent-role apps never decorate `db` in
 // the first place, so there's nothing to close either way.
 //
+// One real limit on the "unforgettable close" guarantee: `onTestFinished`
+// is only registered AFTER `buildApp()` resolves. If `buildApp()` itself
+// hangs or is still in flight when the test's own timeout fires, this
+// helper never gets a chance to register the close callback, and that
+// build keeps running in the background — able to race a later test's own
+// buildApp() over the same per-file `hooks.sock` (SESSIONS_DIR). This is
+// not a regression versus the old hand-rolled `try/finally` pattern (that
+// had the identical gap: no `app` reference exists to close if the build
+// itself never returns) — just a pre-existing limit worth knowing about
+// when a whole file's tests cascade-fail with SocketAlreadyListeningError
+// under heavy parallel/CI load.
+//
 // Scope this to `it()`/`beforeEach()` bodies, not `afterEach()`: a handful
 // of files (e.g. test/services/github-device-flow.test.ts) build a
 // throwaway app inside their own `afterEach` purely to call a cleanup

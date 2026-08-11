@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildTestApp } from "../helpers/app.js";
+import { uniqueDir } from "../helpers/tmpdir.js";
 
 describe("staticPlugin", () => {
   const originalFrontendDist = process.env.FRONTEND_DIST;
@@ -15,7 +15,7 @@ describe("staticPlugin", () => {
   });
 
   it("serves the built frontend at / instead of the placeholder, once it exists", async () => {
-    tmpDist = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-test-"));
+    tmpDist = uniqueDir("static-plugin-test-");
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
     process.env.FRONTEND_DIST = tmpDist;
 
@@ -32,7 +32,7 @@ describe("staticPlugin", () => {
   // deploy's new content-hash URLs and the VitePWA autoUpdate flow both
   // still work (see static.ts's own doc comment).
   it("gives /assets/* a long, immutable cache lifetime but leaves index.html/sw.js at max-age=0", async () => {
-    tmpDist = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-test-"));
+    tmpDist = uniqueDir("static-plugin-test-");
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
     fs.writeFileSync(path.join(tmpDist, "sw.js"), "// service worker");
     fs.mkdirSync(path.join(tmpDist, "assets"));
@@ -63,7 +63,7 @@ describe("staticPlugin", () => {
   // path segment (e.g. `/srv/assets/mullion-dist`). Root the temp dist dir
   // under a directory literally named "assets" to exercise exactly that.
   it("does not treat index.html as a long-cache asset even when FRONTEND_DIST's own path contains an 'assets' segment", async () => {
-    const assetsParent = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-assets-"));
+    const assetsParent = uniqueDir("static-plugin-assets-");
     tmpDist = path.join(assetsParent, "assets", "dist");
     fs.mkdirSync(tmpDist, { recursive: true });
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
@@ -84,7 +84,7 @@ describe("staticPlugin", () => {
   // dir (e.g. under some other served subpath) would go stale forever if
   // it wrongly picked up the immutable long-cache header.
   it("does not give a nested, non-root assets/ directory the long-cache header — only Vite's top-level assets/ output qualifies", async () => {
-    tmpDist = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-nested-assets-"));
+    tmpDist = uniqueDir("static-plugin-nested-assets-");
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
     fs.mkdirSync(path.join(tmpDist, "assets"));
     fs.writeFileSync(path.join(tmpDist, "assets", "index-abc123.js"), "console.log('hi')");
@@ -117,7 +117,7 @@ describe("staticPlugin", () => {
   // app (its own docs warn registration order matters here — see app.ts's
   // comment on why it's registered before staticPlugin).
   it("compresses a static asset response when the client accepts gzip", async () => {
-    tmpDist = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-test-"));
+    tmpDist = uniqueDir("static-plugin-test-");
     fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
     fs.mkdirSync(path.join(tmpDist, "assets"));
     // @fastify/compress's default threshold is 1024 bytes — pad well past it
