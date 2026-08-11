@@ -55,6 +55,9 @@ export function mockChildProcessSpawn(
   opts: MockSpawnOptions = {},
 ): typeof ChildProcess {
   const { passthrough, fake, event = "exit", exitCode = 0 } = opts;
+  if (passthrough && fake) {
+    throw new Error("mockChildProcessSpawn: pass only one of passthrough/fake, not both");
+  }
 
   const spawn = vi.fn((command: string, args?: readonly string[], options?: object) => {
     const shouldFake = passthrough

@@ -2,8 +2,8 @@ import { onTestFinished } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 // The backend suite's ~76 `await buildApp()` call sites all follow the same
-// shape: build the app inline in a test/beforeAll, then remember to
-// `await app.close()` before the test/describe block ends. `buildApp()`
+// shape: build the app inline in a test body, then remember to
+// `await app.close()` before the test ends. `buildApp()`
 // itself takes no options — every call site configures it beforehand via
 // `process.env`/`app.config` (see src/app.ts), not through arguments — so
 // this helper doesn't accept any either; it exists purely to make the
@@ -17,11 +17,20 @@ import type { FastifyInstance } from "fastify";
 // then fails with `SocketAlreadyListeningError`, a confusing failure with
 // no obvious connection to the test that actually leaked. `onTestFinished`
 // (unlike `afterEach`, which can only be registered at describe-collection
-// time) can be called from *inside* a running test/hook and is guaranteed
-// to run once that specific test finishes, pass or fail — exactly the
-// per-call-site guarantee needed here, since every one of this suite's
-// `buildApp()` calls happens inside an `it()`/`beforeAll()` body, not at
-// collection time.
+// time) can be called from *inside* a running test and is guaranteed
+// to run once that specific test finishes, pass or fail.
+//
+// This is why `buildTestApp()` only works from `it()`/`beforeEach()`
+// bodies, not `beforeAll()`: Vitest only has a "current test" set while
+// `runTest` is executing (`beforeAll`/`describe` bodies run inside
+// `runSuite`, where none is set), so `onTestFinished` called from a
+// `beforeAll` throws `Hook onTestFinished() can only be called inside a
+// test` (verified against this repo's pinned Vitest). None of this
+// PR's converted files call `buildTestApp()` from a `beforeAll` — every
+// call sits inside an `it()` body, and the `beforeAll`s that exist do
+// other setup (env vars, fixture dirs). A future conversion that needs
+// one shared app across a whole `describe` block should keep using plain
+// `buildApp()` + an explicit `afterAll(() => app.close())` instead.
 //
 // `app.close()` already cascades into `closeDb()` for primary-role apps
 // (dbPlugin's own `onClose` hook, src/plugins/db.ts) — this helper doesn't
