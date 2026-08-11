@@ -1,6 +1,23 @@
 import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
+// CodeQL flags every fs call below as js/path-injection since `absPath`
+// ultimately derives from request.body.cwd — same false positive already
+// dismissed at this exact trust boundary in projects.ts's POST/PATCH
+// handlers (this module's only callers) and in internal.ts's
+// resolveWithinRoots docstring: /api/projects is the authenticated-primary
+// boundary, and a caller who can reach it can already spawn a session
+// against an arbitrary cwd (full code execution), which is strictly more
+// powerful than any filesystem operation this module performs. The actual
+// hardening here — leaf-only, non-recursive creation with the full parent
+// chain realpath-resolved before any fs mutation, and a refusal to create
+// through a pre-planted symlink — is what closes the real threat (issue
+// #604 / PR #612's pre-planted-symlink model), not path containment. Same
+// dismissal posture as dock-config.ts's own flagged calls: acknowledged and
+// dismissed as a false positive via the Security tab, not suppressed
+// in-line (this repo's codeql.yml has no step that turns a SARIF
+// suppression annotation into an actual alert dismissal).
+
 export type ProjectDirIssue =
   | "missing"
   | "parent-missing"
