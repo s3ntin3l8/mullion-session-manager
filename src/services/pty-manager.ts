@@ -2307,18 +2307,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "permission_resolved":
-        // See PermissionResolvedHookMessage's doc comment (hook-protocol.ts)
-        // — a possible EXTRA release path for a pending permission_request,
-        // never asserted as the only one (Claude Code's PermissionDenied can
-        // fire with no preceding PermissionRequest at all, per its own
-        // docs). Safe to clear unconditionally either way: if nothing was
-        // pending, this is a no-op.
-        this.permissionState = "idle";
-        this.permissionAt = null;
-        this.pendingPermissionTool = null;
-        this.clearIfConfirmedKind("permissionRequest");
-        return;
       case "plan_resolved":
         this.planState = "idle";
         this.planAt = null;

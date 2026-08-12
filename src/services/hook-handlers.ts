@@ -663,6 +663,21 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.emitEvent("session_diff", { files: sd.files });
     },
   ],
+  [
+    "permission_resolved",
+    (ctx) => {
+      // See PermissionResolvedHookMessage's doc comment (hook-protocol.ts)
+      // — a possible EXTRA release path for a pending permission_request,
+      // never asserted as the only one (Claude Code's PermissionDenied can
+      // fire with no preceding PermissionRequest at all, per its own
+      // docs). Safe to clear unconditionally either way: if nothing was
+      // pending, this is a no-op.
+      ctx.permissionState = "idle";
+      ctx.permissionAt = null;
+      ctx.pendingPermissionTool = null;
+      ctx.clearIfConfirmedKind("permissionRequest");
+    },
+  ],
 ]);
 
 export type { HookMessageKind };
