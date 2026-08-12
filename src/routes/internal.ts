@@ -94,7 +94,6 @@ import {
 } from "../services/request-signature.js";
 import { appVersion } from "./server-info.js";
 import type { AgentConfig } from "../services/remote-host-client.js";
-import type { PromoteDecision } from "../plugins/hooks.js";
 import type { Page } from "playwright";
 import {
   executeBrowserAction,
@@ -106,399 +105,50 @@ import {
 import type { AgentAction, FindElementsBody } from "./browser-automation.js";
 import { attachSocketToBrowser } from "./browser.js";
 import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js";
-
-interface SpawnSessionBody {
-  id: string;
-  cwd: string;
-  command: string;
-  cols: number;
-  rows: number;
-  skipPermissions?: boolean;
-  initialPrompt?: string;
-  projectId?: number;
-}
-
-interface LiveStatusBody {
-  ids: string[];
-  idleThresholdMs: number;
-  sessionProjectIds?: Record<string, number>;
-}
-
-interface LivenessBody {
-  ids: string[];
-}
-
-// A session id is always the primary's stringified integer row id
-// (String(sessionId) — see terminal.ts/sessions.ts) by construction, but
-// this schema is the agent's only defense against a malformed one: it flows
-// straight into pty-manager.ts's scopeUnitName(id) -> `crs-session-<id>`,
-// naming a real systemd --user scope and dtach socket file. An id with
-// systemd- or filesystem-illegal characters (e.g. "/") wouldn't be an
-// injection (spawn/stop always use an argv array, never a shell string),
-// but would make bootstrap/terminate silently target the wrong unit/file.
-const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-const SESSION_ID_SCHEMA = {
-  type: "string",
-  minLength: 1,
-  pattern: SESSION_ID_PATTERN.source,
-} as const;
-
-const spawnSessionSchema = {
-  body: {
-    type: "object",
-    required: ["id", "cwd", "command", "cols", "rows"],
-    additionalProperties: false,
-    properties: {
-      id: SESSION_ID_SCHEMA,
-      cwd: { type: "string", minLength: 1 },
-      command: { type: "string", minLength: 1 },
-      cols: { type: "integer", minimum: 1 },
-      rows: { type: "integer", minimum: 1 },
-      skipPermissions: { type: "boolean" },
-      // Task Master's initial-turn prompt — no maxLength, same posture as
-      // the existing `seed` field's own schema comment a few hundred lines
-      // down (worktree create's promote flow): an issue body/task spec can
-      // legitimately run long.
-      initialPrompt: { type: "string" },
-      projectId: { type: "integer" },
-    },
-  },
-};
-
-const liveStatusSchema = {
-  body: {
-    type: "object",
-    required: ["ids", "idleThresholdMs"],
-    additionalProperties: false,
-    properties: {
-      ids: { type: "array", items: SESSION_ID_SCHEMA },
-      idleThresholdMs: { type: "integer", minimum: 0 },
-      sessionProjectIds: {
-        type: "object",
-        additionalProperties: { type: "integer" },
-      },
-    },
-  },
-};
-
-const livenessSchema = {
-  body: {
-    type: "object",
-    required: ["ids"],
-    additionalProperties: false,
-    properties: {
-      ids: { type: "array", items: SESSION_ID_SCHEMA },
-    },
-  },
-};
-
-const terminateSchema = {
-  params: {
-    type: "object",
-    required: ["id"],
-    properties: {
-      id: SESSION_ID_SCHEMA,
-    },
-  },
-};
-
-interface ReviewGateBody {
-  decision: "approved" | "denied";
-  reason?: string;
-}
-
-// Issue #178 — the agent-side counterpart of POST /api/sessions/:id/review-gate.
-const reviewGateSchema = {
-  params: {
-    type: "object",
-    required: ["id"],
-    properties: {
-      id: SESSION_ID_SCHEMA,
-    },
-  },
-  body: {
-    type: "object",
-    required: ["decision"],
-    additionalProperties: false,
-    properties: {
-      decision: { type: "string", enum: ["approved", "denied"] },
-      reason: { type: "string" },
-    },
-  },
-};
-
-interface GitWorktreeCreateBody {
-  cwd: string;
-  baseRef: string;
-  seed: string;
-  branchName?: string;
-}
-
-// Issue #271 — the agent-side counterpart of the primary's worktree-creation
-// flows (launcher toggle, promote). No maxLength on seed/branchName: both
-// pass through git-worktree.ts's own sanitizeRefComponent, which truncates
-// and collapses unsafe characters regardless of input length before either
-// ever reaches a `git` argv.
-const gitWorktreeCreateSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "baseRef", "seed"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      baseRef: { type: "string", minLength: 1 },
-      seed: { type: "string", minLength: 1 },
-      branchName: { type: "string" },
-    },
-  },
-};
-
-interface GitWorktreeRemoveBody {
-  worktreePath: string;
-  parentCwd?: string;
-}
-
-// Issue #283 — the agent-side counterpart of removeWorktreeIfClean, for a
-// remote-hosted task's cleanup-on-done/failed step.
-const gitWorktreeRemoveSchema = {
-  body: {
-    type: "object",
-    required: ["worktreePath"],
-    additionalProperties: false,
-    properties: {
-      worktreePath: { type: "string", minLength: 1 },
-      parentCwd: { type: "string" },
-    },
-  },
-};
-
-interface GitWorktreeCheckoutBody {
-  cwd: string;
-  branch: string;
-}
-
-// Issue #345 — the agent-side counterpart of checkoutBranchWorktree, for a
-// remote-hosted project's dock-preview flow (an EXISTING branch, detached
-// HEAD — distinct from gitWorktreeCreateSchema above, which creates a new
-// branch from a baseRef).
-const gitWorktreeCheckoutSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "branch"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      branch: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-interface GitWorktreeForceRemoveBody {
-  worktreePath: string;
-  parentCwd?: string;
-}
-
-// Issue #345 — the agent-side counterpart of removeWorktree (--force,
-// unlike gitWorktreeRemoveSchema above which is the never-force
-// removeWorktreeIfClean). A dock-preview worktree running an HMR dev server
-// is almost always dirty, so the safe path can't be reused here.
-const gitWorktreeForceRemoveSchema = {
-  body: {
-    type: "object",
-    required: ["worktreePath"],
-    additionalProperties: false,
-    properties: {
-      worktreePath: { type: "string", minLength: 1 },
-      parentCwd: { type: "string" },
-    },
-  },
-};
-
-interface GitWorktreeSyncBody {
-  worktreePath: string;
-  branch: string;
-}
-
-// Issue #345 — the agent-side counterpart of syncWorktree (the
-// worktreeRefresh live-sync tick's `git reset --hard`), for a remote-hosted
-// project's dock-preview worktree.
-const gitWorktreeSyncSchema = {
-  body: {
-    type: "object",
-    required: ["worktreePath", "branch"],
-    additionalProperties: false,
-    properties: {
-      worktreePath: { type: "string", minLength: 1 },
-      branch: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-interface GitWorktreeClearOrphanBody {
-  cwd: string;
-  worktreePath: string;
-  branchName: string;
-}
-
-// Issue #283 — the agent-side counterpart of clearOrphanedTaskWorktree,
-// task-claim.ts's pre-claim step. `branchName` is required (unlike the
-// create route's optional one) — this route always deletes it when a
-// removal succeeds, so an absent value would silently no-op the half of
-// this route that actually matters for the retry-collision it exists to fix.
-const gitWorktreeClearOrphanSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "worktreePath", "branchName"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      worktreePath: { type: "string", minLength: 1 },
-      branchName: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-interface GitWorktreePruneBody {
-  cwd: string;
-  orphanPaths: string[];
-}
-
-// Issue #283 — the agent-side counterpart of pruneWorktrees. `orphanPaths`
-// is capped at 200 — the same "bound it, don't silently truncate the
-// caller's intent" posture as MAX_READBACK_CHECKS_PER_SWEEP elsewhere in
-// this phase; a project with more orphans than that in one sweep is
-// unusual enough to warrant investigation, not a bigger cap.
-const gitWorktreePruneSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "orphanPaths"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      orphanPaths: {
-        type: "array",
-        items: { type: "string", minLength: 1 },
-        maxItems: 200,
-      },
-    },
-  },
-};
-
-interface GitBranchDeleteBody {
-  cwd: string;
-  name: string;
-  force?: boolean;
-}
-
-// Issue #442 — the agent-side counterpart of deleteBranch, for a
-// remote-hosted project's GitPanel manual branch-management UI.
-const gitBranchDeleteSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "name"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      name: { type: "string", minLength: 1 },
-      force: { type: "boolean" },
-    },
-  },
-};
-
-interface GitWorktreeRemoveListedBody {
-  cwd: string;
-  worktreePath: string;
-  force?: boolean;
-}
-
-// Issue #442 — the agent-side counterpart of removeListedWorktree: unlike
-// /internal/git-worktree/remove above, not scoped to task worktrees — the
-// validity gate is membership in this agent's own `git worktree list`.
-const gitWorktreeRemoveListedSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "worktreePath"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      worktreePath: { type: "string", minLength: 1 },
-      force: { type: "boolean" },
-    },
-  },
-};
-
-interface GitWorktreePruneMetadataBody {
-  cwd: string;
-}
-
-// Issue #442 — the agent-side counterpart of pruneWorktreeMetadata (`git
-// worktree prune`, not pruneWorktrees' task-worktree sweeper above).
-const gitWorktreePruneMetadataSchema = {
-  body: {
-    type: "object",
-    required: ["cwd"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-interface GitPushBody {
-  cwd: string;
-  branch: string;
-  token: string;
-}
-
-// #484 — the agent-side counterpart of pushBranch, for a remote-hosted
-// task's promotion. `token` is never logged (see the route's own comment)
-// and is only ever echoed back redacted, via pushBranch's own redact().
-const gitPushSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "branch", "token"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      branch: { type: "string", minLength: 1 },
-      token: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-interface GitWorktreeResumeBody {
-  cwd: string;
-  branchName: string;
-}
-
-// #484 — the agent-side counterpart of resumeTaskWorktree, for Retry
-// (#483) on a remote-hosted task.
-const gitWorktreeResumeSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "branchName"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      branchName: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-type PromoteDecisionBody = PromoteDecision;
-
-// Issue #271 — mirrors reviewGateSchema's shape for the accepted/declined
-// union (see plugins/hooks.ts's PromoteDecision).
-const promoteDecisionSchema = {
-  type: "object",
-  required: ["decision"],
-  properties: {
-    decision: { type: "string", enum: ["accepted", "declined"] },
-    worktreePath: { type: "string" },
-    newSessionId: { type: "integer" },
-    reason: { type: "string" },
-  },
-} as const;
+import {
+  SESSION_ID_PATTERN,
+  SESSION_ID_PARAMS_SCHEMA,
+  spawnSessionSchema,
+  liveStatusSchema,
+  livenessSchema,
+  terminateSchema,
+  reviewGateSchema,
+  gitWorktreeCreateSchema,
+  gitWorktreeRemoveSchema,
+  gitWorktreeCheckoutSchema,
+  gitWorktreeForceRemoveSchema,
+  gitWorktreeSyncSchema,
+  gitWorktreeClearOrphanSchema,
+  gitWorktreePruneSchema,
+  gitBranchDeleteSchema,
+  gitWorktreeRemoveListedSchema,
+  gitWorktreePruneMetadataSchema,
+  gitPushSchema,
+  gitWorktreeResumeSchema,
+  promoteDecisionSchema,
+  writeDockConfigBodySchema,
+  agentRuleWriteBodySchema,
+  toggleSkillBodySchema,
+} from "./internal-schemas.js";
+import type {
+  SpawnSessionBody,
+  LiveStatusBody,
+  LivenessBody,
+  ReviewGateBody,
+  GitWorktreeCreateBody,
+  GitWorktreeRemoveBody,
+  GitWorktreeCheckoutBody,
+  GitWorktreeForceRemoveBody,
+  GitWorktreeSyncBody,
+  GitWorktreeClearOrphanBody,
+  GitWorktreePruneBody,
+  GitBranchDeleteBody,
+  GitWorktreeRemoveListedBody,
+  GitWorktreePruneMetadataBody,
+  GitPushBody,
+  GitWorktreeResumeBody,
+  PromoteDecisionBody,
+} from "./internal-schemas.js";
 
 // Not a public rate limit exemption — a distinct, higher ceiling. A primary
 // polling this agent's bulk live-status/liveness endpoints at the reconcile
@@ -507,56 +157,6 @@ const promoteDecisionSchema = {
 // tuned for a browser). Still bounded, since the token alone doesn't prove
 // the caller is well-behaved.
 const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 minute" } } };
-
-// Mirrors routes/dock-config.ts's own writeDockConfigSchema exactly —
-// deliberately thin (see that file's own comment on why: Fastify's ajv
-// defaults to `removeAdditional: true`, which SILENTLY STRIPS an unknown
-// property under `additionalProperties: false` instead of rejecting it, so
-// per-control shape validation is left entirely to validateDockConfig
-// against the untouched raw array). Kept as a second literal copy rather
-// than a shared export for the same reason agentRuleWriteBodySchema just
-// below is its own copy rather than imported from routes/agent-rules.ts.
-const writeDockConfigBodySchema = {
-  body: {
-    type: "object",
-    required: ["controls"],
-    additionalProperties: false,
-    properties: {
-      controls: { type: "array", items: { type: "object" } },
-    },
-  },
-};
-
-// Mirrors routes/agent-rules.ts's own writeRuleSchema — Hermes review, PR
-// #458: this route had no body schema at all, so a missing/malformed
-// `content` field threw a raw TypeError inside writeAgentRule (undefined
-// isn't a string) instead of Fastify's usual 400.
-const agentRuleWriteBodySchema = {
-  body: {
-    type: "object",
-    required: ["content"],
-    additionalProperties: false,
-    properties: {
-      content: { type: "string" },
-    },
-  },
-};
-
-// Mirrors routes/skills.ts's own toggleSkillSchema exactly — see that
-// file's header for why this is body-only ({agent, name, enabled}), no
-// path params.
-const toggleSkillBodySchema = {
-  body: {
-    type: "object",
-    required: ["agent", "name", "enabled"],
-    additionalProperties: false,
-    properties: {
-      agent: { type: "string", enum: ["claude-code", "codex", "opencode", "agy"] },
-      name: { type: "string", minLength: 1 },
-      enabled: { type: "boolean" },
-    },
-  },
-};
 
 /**
  * A symlink-tolerant realpath: resolves every symlink in the deepest
@@ -1880,7 +1480,7 @@ export async function internalRoutes(app: FastifyInstance) {
     {
       ...INTERNAL_RATE_LIMIT,
       schema: {
-        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        params: SESSION_ID_PARAMS_SCHEMA,
       },
     },
     async (request) => {
@@ -1898,7 +1498,7 @@ export async function internalRoutes(app: FastifyInstance) {
     {
       ...INTERNAL_RATE_LIMIT,
       schema: {
-        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        params: SESSION_ID_PARAMS_SCHEMA,
         body: {
           type: "object",
           required: ["seed"],
@@ -1920,7 +1520,7 @@ export async function internalRoutes(app: FastifyInstance) {
     {
       ...INTERNAL_RATE_LIMIT,
       schema: {
-        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        params: SESSION_ID_PARAMS_SCHEMA,
         body: promoteDecisionSchema,
       },
     },
@@ -2006,10 +1606,11 @@ export async function internalRoutes(app: FastifyInstance) {
         if (!query.id || !query.cwd || !query.command) {
           return reply.badRequest("id, cwd, and command query params are required");
         }
-        // Same shape as SESSION_ID_SCHEMA above — this route takes id as a
-        // query param, not a JSON body, so it can't use the ajv schema
-        // directly, but the id flows into the exact same scopeUnitName(id)
-        // sink (pty-manager.ts) either way.
+        // Same shape as SESSION_ID_PARAMS_SCHEMA's `id` field
+        // (internal-schemas.ts) — this route takes id as a query param, not
+        // a JSON body, so it can't use the ajv schema directly, but the id
+        // flows into the exact same scopeUnitName(id) sink (pty-manager.ts)
+        // either way.
         if (!SESSION_ID_PATTERN.test(query.id)) {
           return reply.badRequest("id must match ^[A-Za-z0-9_-]+$");
         }
@@ -2171,7 +1772,7 @@ export async function internalRoutes(app: FastifyInstance) {
     {
       ...INTERNAL_RATE_LIMIT,
       schema: {
-        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        params: SESSION_ID_PARAMS_SCHEMA,
         body: agentActionSchema.body,
       },
     },
@@ -2207,7 +1808,7 @@ export async function internalRoutes(app: FastifyInstance) {
     {
       ...INTERNAL_RATE_LIMIT,
       schema: {
-        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        params: SESSION_ID_PARAMS_SCHEMA,
         body: findElementsSchema.body,
       },
     },
