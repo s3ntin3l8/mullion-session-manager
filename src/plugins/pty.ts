@@ -58,7 +58,7 @@ function readStaleBusyMs(app: FastifyInstance): number {
 // a large reconcileIntervalSeconds silently starves this feature for
 // minutes, and a small one re-`toString("utf8")`s + regex-scans every
 // eligible session's up-to-1MiB scrollback (SCROLLBACK_MAX_BYTES,
-// pty-manager.ts) far more often than a once-per-startup banner needs. 10s
+// scrollback-buffer.ts) far more often than a once-per-startup banner needs. 10s
 // is much LESS frequent than the 500ms attention-eval tick (issue #404 asks
 // for throttling well below that tick's rate, i.e. a much longer interval
 // between scans, not a faster one).

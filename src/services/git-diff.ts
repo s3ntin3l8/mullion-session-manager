@@ -201,7 +201,7 @@ export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDi
 // doesn't help — a local `git diff` streams fast, well within that window,
 // long before it produces megabytes of output. 2 MiB mirrors the order of
 // magnitude this codebase already uses for other single in-memory buffers
-// it deliberately bounds (SCROLLBACK_MAX_BYTES in pty-manager.ts is 1 MiB
+// it deliberately bounds (SCROLLBACK_MAX_BYTES in scrollback-buffer.ts is 1 MiB
 // per session; the various *_BACKPRESSURE_MAX_BUFFERED_BYTES constants in
 // terminal.ts/browser.ts/ws-pipe.ts/task-events.ts are 4 MiB) — large
 // enough that no single-file diff a human would actually read through hits
