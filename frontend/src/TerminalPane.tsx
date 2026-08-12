@@ -8,19 +8,11 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import type { ISearchResultChangeEvent } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
-import {
-  ChevronDownIcon,
-  CloseIcon,
-  ImageIcon,
-  KillIcon,
-  RefreshIcon,
-  SearchIcon,
-  WifiOffIcon,
-} from "./ui/icons.js";
+import { ImageIcon, KillIcon, RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { useDashboardStore } from "./store/index.js";
-import { buildSearchDecorations, buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
-import { api, type AppSettings } from "./api/index.js";
+import { buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
+import { api } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -28,6 +20,16 @@ import {
 } from "./terminalRepaintRegistry.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
 import type { TerminalInputHandle } from "./terminalInputRegistry.js";
+import {
+  attachKeyConflictHandler,
+  hasClipboardApi,
+  readClipboard,
+  reservedKeysFromSettings,
+  SEARCH_HIGHLIGHT_LIMIT,
+} from "./lib/terminalKeys.js";
+import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
+import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
+import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
 // ResizeMessage physically lives in src/shared/ws-protocol.ts (repo root,
 // NOT this frontend workspace — see src/routes/terminal.ts's own re-export)
 // as one arm of TerminalWSMessage; the other arm, ExitedMessage, isn't
@@ -46,204 +48,11 @@ export interface TerminalPaneParams {
 // for exactly which signals distinguish the two.
 type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed" | "ended";
 
-// Ceiling on how many scrollback matches @xterm/addon-search decorates
-// (terminal scrollback search, U1) — matches the addon's own default
-// (`Constants.DEFAULT_HIGHLIGHT_LIMIT` in its source), passed explicitly
-// here rather than left implicit so this same value can also gate the
-// match-count display below ("1000+" instead of a bare "1000", since
-// `resultCount` is the *decorated* count — `SearchResultTracker.
-// updateResults` slices to this limit — not necessarily the true total).
-// findNext/findPrevious themselves keep working past this limit regardless;
-// it only bounds how many get a paint-time decoration.
-const SEARCH_HIGHLIGHT_LIMIT = 1000;
-
-// Ctrl+R (readline reverse-search, extremely common) collides with page
-// refresh, Ctrl+L (clear screen) and Ctrl+K (kill-line) collide with
-// address-bar-focus in some browsers — Settings -> Terminal behavior's
-// "Key-conflict handling" list (settings.terminal.keyCapture) makes each of
-// the three independently toggleable. Browsers reserve some other combos
-// (Ctrl+W/T/N — close/open tab, new window) at a level JS categorically
-// cannot override; deliberately not attempted here since preventDefault()
-// on those is a silent no-op anyway.
-function reservedKeysFromSettings(keyCapture: AppSettings["terminal"]["keyCapture"]): Set<string> {
-  const keys = new Set<string>();
-  if (keyCapture.ctrlR) keys.add("r");
-  if (keyCapture.ctrlL) keys.add("l");
-  if (keyCapture.ctrlK) keys.add("k");
-  return keys;
-}
-
-// Terminal scrollback search (U1) match-counter text. A pure function of
-// the addon's own onDidChangeResults payload — no component state needed —
-// so it's declared at module scope rather than inside TerminalPane.
-function formatMatchCount(matchState: { index: number; count: number } | null): string {
-  if (!matchState) return "";
-  if (matchState.count === 0) return "No results";
-  // `resultCount` is the *decorated* count (SearchResultTracker.
-  // updateResults slices to SEARCH_HIGHLIGHT_LIMIT), not necessarily the
-  // true total — append "+" so a truncated count at the ceiling isn't
-  // misread as exact (Hermes review, PR #578).
-  const countText =
-    matchState.count >= SEARCH_HIGHLIGHT_LIMIT ? `${matchState.count}+` : `${matchState.count}`;
-  // resultIndex is -1 when the selected match sits beyond highlightLimit
-  // (per the addon's own typings) — show just the count rather than a
-  // misleading "0/N" in that edge case.
-  if (matchState.index < 0) return countText;
-  return `${matchState.index + 1}/${countText}`;
-}
-
-// Shared by every clipboard entry point below — e.g. absent on a plain-http
-// LAN deploy (no secure context), where the Clipboard API doesn't exist at
-// all rather than merely rejecting.
-function hasClipboardApi(): boolean {
-  return !!navigator.clipboard;
-}
-
-function readClipboard(): Promise<string | null> {
-  if (!hasClipboardApi()) {
-    console.warn("[terminal] clipboard API not available (not a secure context)");
-    return Promise.resolve(null);
-  }
-  return navigator.clipboard.readText().catch(() => {
-    console.warn("[terminal] clipboard read denied");
-    return null;
-  });
-}
-
-function attachKeyConflictHandler(opts: {
-  term: Terminal;
-  reservedKeys: Set<string>;
-  onPaste?: () => void;
-  // Returns whether the copy actually landed (used by the opt-in Ctrl+C
-  // branch below to decide whether it's safe to clear the selection); the
-  // other two callers (Ctrl+Insert, dock capture) ignore the return value.
-  onCopy?: () => Promise<boolean> | void;
-  captureCtrlC?: boolean;
-  // Opt-in clipboard chords (settings.terminal.clipboardKeys — issue #67
-  // follow-up). A live getter, not a captured value: this handler is
-  // (re-)attached from three different effects (mount, captureCtrlC sync,
-  // settings sync), and a getter means whichever attach happens to be
-  // "latest" always reads the current setting instead of whatever was true
-  // at attach time.
-  getClipboardKeys: () => AppSettings["terminal"]["clipboardKeys"];
-  // Opens (and focuses) the scrollback find bar on Ctrl+Shift+F — see the
-  // handler branch below for why that chord and not bare Ctrl+F.
-  onToggleFind?: () => void;
-}): void {
-  const { term, reservedKeys, onPaste, onCopy, captureCtrlC, getClipboardKeys, onToggleFind } =
-    opts;
-  term.attachCustomKeyEventHandler((event) => {
-    if (event.type === "keydown") {
-      const key = event.key.toLowerCase();
-      // Paste: Cmd+V (macOS) or Shift+Insert (Linux/Windows) always work —
-      // neither collides with anything, so there's no reason to gate them.
-      // Plain Ctrl+V is opt-in only (settings.terminal.clipboardKeys.ctrlV,
-      // default off): it's vim's Visual Block mode and readline's
-      // quoted-insert (both bound to raw 0x16), so claiming it
-      // unconditionally would silently break both for every user. Shift+
-      // Insert is the classic X11/Linux terminal convention (xterm, PuTTY,
-      // ...) chosen specifically because it collides with nothing.
-      // Ctrl+Shift+V, the more "modern" alternative, was rejected: it's
-      // Chrome/Firefox's own "paste as plain text" combo in some contexts.
-      // Cmd+V doesn't collide with anything on macOS since vim/readline
-      // bind the *Ctrl* form, not Cmd.
-      const isPasteChord =
-        (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && key === "v") ||
-        (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && key === "insert") ||
-        (getClipboardKeys().ctrlV &&
-          event.ctrlKey &&
-          !event.shiftKey &&
-          !event.metaKey &&
-          !event.altKey &&
-          key === "v");
-      if (isPasteChord) {
-        event.preventDefault();
-        onPaste?.();
-        return false;
-      }
-      // Terminal scrollback search (U1) — deliberately NOT bare Ctrl+F: that
-      // chord is the browser's own "Find in page," reserved at the browser-
-      // chrome level the same way Ctrl+W/T/N are above (preventDefault() on
-      // it is a silent no-op), so claiming it here would just fail invisibly
-      // while also shadowing the shortcut a user reasonably expects still
-      // finds text *outside* this terminal (other panes, page chrome).
-      // Ctrl+Shift+F sidesteps that collision and isn't reserved by any
-      // major browser at the page level (Chrome/Firefox DevTools bind it,
-      // but only while DevTools itself has focus — this app's page never
-      // does). Always active, unlike Ctrl+R/L/K above: no shell or TUI binds
-      // Ctrl+Shift+F, so there's no existing terminal-program convention for
-      // it to shadow, and thus no need to gate it behind a
-      // settings.terminal.keyCapture toggle.
-      if (event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && key === "f") {
-        event.preventDefault();
-        onToggleFind?.();
-        return false;
-      }
-      // Copy: Ctrl+Insert (Linux/Windows) always works, the Shift+Insert
-      // paste convention's copy counterpart. Ctrl+Shift+C (the more
-      // "modern" alternative) was rejected: it's Chrome/Firefox's native
-      // "Inspect Element" DevTools shortcut, handled by the browser chrome
-      // above the page — preventDefault() in page JS can't reliably stop
-      // it, the same class of un-overridable combo as Ctrl+W/T/N above.
-      // Cmd+C (macOS) needs no handling here: meta-only chords are never
-      // translated to PTY control bytes by xterm, so it already only
-      // triggers the browser's native copy.
-      if (event.ctrlKey && !event.shiftKey && !event.metaKey && !event.altKey && key === "insert") {
-        event.preventDefault();
-        onCopy?.();
-        return false;
-      }
-      // Plain Ctrl+C: SIGINT by default (xterm forwards the raw ETX byte
-      // regardless of selection). Two ways this branch instead swallows it:
-      if (event.ctrlKey && !event.shiftKey && !event.metaKey && !event.altKey && key === "c") {
-        // Dock monitors — where SIGINT would kill the monitored process
-        // (issue #332). Unconditional: dock sessions pass captureCtrlC=true
-        // so users can copy text without killing the dev server (the dock
-        // toggle button handles stop/kill instead). onCopy already guards on
-        // term.hasSelection() so no-selection is a silent no-op. This wins
-        // over the opt-in setting below — a dock monitor is never a shell a
-        // user expects to interrupt via Ctrl+C.
-        if (captureCtrlC) {
-          event.preventDefault();
-          onCopy?.();
-          return false;
-        }
-        // Opt-in selection-aware copy (settings.terminal.clipboardKeys.ctrlC,
-        // default off — Windows Terminal / VS Code convention). hasSelection()
-        // is false for a collapsed/zero-width selection, so a stray click
-        // can't eat an interrupt. If there's no Clipboard API at all (e.g. a
-        // plain-http LAN deploy — no secure context), there's nothing to copy
-        // to, so don't swallow the chord at all: fall through and let it
-        // reach the shell as SIGINT like normal, rather than silently eating
-        // a keypress that accomplishes nothing.
-        if (getClipboardKeys().ctrlC && term.hasSelection() && hasClipboardApi()) {
-          event.preventDefault();
-          // The write itself is still async and can fail after we've already
-          // committed to swallowing this keypress (permission denied, etc.) —
-          // clearSelection() only runs if it actually landed. Clearing
-          // unconditionally would wipe the selection with nothing copied and
-          // no way to retry; clears the selection so a *second* Ctrl+C reaches
-          // the shell as SIGINT instead of copying (or re-copying) it again.
-          // clearSelection() fires onSelectionChange, whose own "copy on
-          // select" listener already no-ops on an empty selection, so this
-          // can't double-fire the copy that was just made.
-          const copyResult = onCopy?.();
-          if (copyResult) {
-            void copyResult.then((copied) => {
-              if (copied) term.clearSelection();
-            });
-          }
-          return false;
-        }
-      }
-      // Browser-reserved combos the user opted into this app
-      if (event.ctrlKey && !event.altKey && !event.metaKey && reservedKeys.has(key)) {
-        event.preventDefault();
-      }
-    }
-    return true;
-  });
-}
+// SEARCH_HIGHLIGHT_LIMIT, reservedKeysFromSettings, formatMatchCount,
+// hasClipboardApi, readClipboard, and attachKeyConflictHandler all moved to
+// lib/terminalKeys.ts (PR 35, Wave 6 of .claude/plans/can-we-do-a-warm-cocke.md)
+// — self-contained, closure-free helpers with no reason to live inside this
+// file. See that module for their own comments.
 
 // One xterm.js instance + one WebSocket per session, bound to a session id
 // (not to the panel's own lifetime) — closing this panel only tears down the
@@ -297,37 +106,6 @@ export function TerminalPane(props: {
   // read as broken rather than slow.
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Terminal scrollback search (U1) — find-bar open state, the query text,
-  // and the addon's own match-position/count (via onDidChangeResults, only
-  // populated once decorations are enabled — see the mount effect below).
-  // `matchState` is null rather than {index:-1,count:0} whenever there's no
-  // active search (bar closed, or query cleared) so the counter can tell
-  // "haven't searched yet" apart from "searched and found nothing" in the
-  // render below.
-  const [findOpen, setFindOpen] = useState(false);
-  const [findQuery, setFindQuery] = useState("");
-  const [matchState, setMatchState] = useState<{ index: number; count: number } | null>(null);
-  const findInputRef = useRef<HTMLInputElement>(null);
-  // Populated by the mount effect once the addon exists, mirroring
-  // fitAddonRef/webglAddonRef above — the render's find-bar buttons (and the
-  // findOpen-transition effect below) reach in through this ref rather than
-  // closing over the mount effect's own local.
-  const searchAddonRef = useRef<SearchAddon | null>(null);
-  // Tracks the previous findOpen value so the findOpen-transition effect
-  // below can tell "just closed" (clear decorations, hand focus back to the
-  // terminal) apart from "still closed, first mount" — this component is
-  // otherwise deliberately free of unconditional `.focus()` calls (a pane
-  // never auto-steals focus just by mounting/rendering), and an unguarded
-  // `term.focus()` here would quietly break that.
-  const prevFindOpenRef = useRef(false);
-  // U7 — mirrors `findOpen` for the activation-focus effect below, the same
-  // "expose current state to a ref so an unrelated effect can read it
-  // without depending on it" shape as uploadImageRef/retryRef/refitRef
-  // further down: that effect must fire ONLY on `props.active`'s own
-  // false->true transition, not additionally re-fire (and double-call
-  // `.focus()` alongside the findOpen-transition effect just below) every
-  // time the find bar itself opens/closes while a pane stays active.
-  const findOpenRef = useRef(findOpen);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
@@ -362,6 +140,60 @@ export function TerminalPane(props: {
   // so the settings-sync effect below can update the *same* live instance
   // instead of only ever seeing the value captured at construction.
   const termRef = useRef<Terminal | null>(null);
+  // Terminal scrollback search (U1) — find-bar open state, query text, the
+  // addon's own match-position/count, and the addon ref itself all live in
+  // this hook now (frontend/src/hooks/useTerminalSearch.ts, PR 35, Wave 6 of
+  // .claude/plans/can-we-do-a-warm-cocke.md) — genuinely independent of the
+  // mount effect below, EXCEPT `searchAddonRef`/`setMatchState`, which that
+  // effect still populates directly (see the hook's own header comment for
+  // why). `termRef` is passed in so the hook can hand focus back to the
+  // terminal when the find bar closes.
+  //
+  // Called here (before the mount effect), not further down where its two
+  // pre-extraction call sites (`findOpen`/`findQuery`'s useState calls, the
+  // local `openFind` function) used to sit relative to the OTHER effects in
+  // this component — this repo's react-hooks/immutability lint rule
+  // requires a value be declared before any closure references it, even a
+  // deferred one, which rules out calling this hook after the mount/
+  // captureCtrlC-sync/settings-sync effects that reference `openFind`/
+  // `searchAddonRef`/`setMatchState` in their own attachKeyConflictHandler
+  // calls. The one real consequence: this hook's own two internal effects
+  // (incremental-search, findOpen-transition-focus) now register — and
+  // therefore fire, each commit — BEFORE the mount, captureCtrlC-sync, AND
+  // settings-sync effects, instead of after all three (their pre-extraction
+  // position, registered near the very end of the component). On first
+  // mount specifically this is inert: `findOpen` starts false so
+  // incremental-search returns immediately, and findOpen-transition-focus
+  // hits neither of its branches (`prevFindOpenRef` also starts false) and
+  // only writes its two refs — `searchAddonRef` is still null at that point
+  // regardless (the mount effect hasn't constructed the addon yet). The
+  // findOpenRef write itself still lands before the pane-activation effect
+  // (further down) ever reads it, preserving that invariant. Confirmed
+  // benign on every later commit too: the incremental-search effect only
+  // touches the SearchAddon's decorations via buildSearchDecorations (plain
+  // hex colors passed as addon options) — it never reads/writes
+  // `term.options.theme` or the WebGL glyph texture atlas, the two things
+  // this file's other ordering-sensitive comments (atlas clear/rebuild/
+  // repaint, OSC dispatch order) actually depend on, so the two effect
+  // groups operate on disjoint subsystems regardless of which fires first.
+  // One interaction is reasoned-through rather than test-covered (a mocked
+  // Terminal in tests can't observe decoration survival across a
+  // term.options.theme reassignment): open the find bar with a query that
+  // has matches, then toggle dark/light — highlights should persist and
+  // recolor. Worth a manual spot-check if this area is touched again.
+  const {
+    findOpen,
+    setFindOpen,
+    findQuery,
+    setFindQuery,
+    matchState,
+    setMatchState,
+    findInputRef,
+    searchAddonRef,
+    findOpenRef,
+    openFind,
+    runSearch,
+  } = useTerminalSearch({ colorScheme: terminalSettings.colorScheme, theme, termRef });
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   // Mirrors `ws` for the settings-sync effect below so the OSC color push on
@@ -406,25 +238,46 @@ export function TerminalPane(props: {
     onTitleChangeRef.current = props.onTitleChange;
   });
 
-  // Opens the find bar on Ctrl+Shift+F — and also handles the "already
-  // open" case (Hermes review, PR #578): `setFindOpen(true)` alone is a
-  // no-op when findOpen is already true (same value, React bails without a
-  // re-render), so the findOpen-transition effect below — which is what
-  // normally focuses the input — never re-fires, leaving a second
-  // Ctrl+Shift+F while the *terminal* has focus (bar open, input not
-  // focused) a dead keypress. Calling focus()/select() directly here covers
-  // both cases without extra state: on a fresh open, findInputRef.current
-  // is still null (the bar hasn't rendered yet), so this is a harmless
-  // no-op and the transition effect does the real focus once it mounts; on
-  // a repeat press with the bar already open, the ref is already populated,
-  // so this refocuses/reselects immediately — Ctrl+Shift+F now behaves like
-  // "open or refocus" rather than only ever opening.
-  function openFind(): void {
-    setFindOpen(true);
-    findInputRef.current?.focus();
-    findInputRef.current?.select();
-  }
-
+  // INTENTIONALLY MONOLITHIC — do not split this effect up.
+  //
+  // This is the single riskiest piece of code in the frontend (PR 35, Wave 6
+  // of .claude/plans/can-we-do-a-warm-cocke.md — see that plan's "Deliberately
+  // NOT doing" table). A prior attempt to decompose it was rejected: this
+  // effect constructs the xterm.js `Terminal` + WebGL/fit/search addons, the
+  // WebSocket connection with its reconnect/backoff state machine, and every
+  // OSC/clipboard/resize subscription, all sharing local closures (`ws`,
+  // `destroyed`, `reconnectAttempt`, `sessionExited`, `term`, ...) that a
+  // split would force into refs or a shared object — and per the comments
+  // scattered through the body below, that sharing is load-bearing, not
+  // incidental:
+  //   - the WebGL glyph texture atlas is module-global and shared across
+  //     every live terminal (see the atlas comments around webglAddonRef and
+  //     the settings-sync effect below) — ordering the atlas
+  //     clear/rebuild/repaint relative to addon construction and sibling-pane
+  //     repaint wrong reintroduces the shared-atlas corruption bug (#107,
+  //     #124, #129) that this effect's own comments document in detail;
+  //   - the async-hydration race between this mount (which may construct the
+  //     terminal with DEFAULT_SETTINGS before GET /api/settings resolves) and
+  //     the settings-sync effect that corrects it in place depends on both
+  //     effects reading/writing the exact same `termRef`/`prefsRef` at the
+  //     right time — moving construction into a separate module makes that
+  //     ordering implicit instead of a single readable function body;
+  //   - the OSC 10/11/12 "report current theme" handlers (registered here so
+  //     they run BEFORE xterm's own built-in OSC 10/11/12 handling, since
+  //     xterm walks handlers last-registered-first) and the reconnect/backoff
+  //     state machine's P13 "genuinely gone vs. network blip" distinction
+  //     both depend on precise ordering against `ws`/`sessionExited` that a
+  //     split across files would make easy to subtly reorder.
+  //
+  // Only the genuinely separable, closure-free pieces were pulled out in PR
+  // 35: attachKeyConflictHandler/reservedKeysFromSettings/formatMatchCount/
+  // clipboard helpers -> lib/terminalKeys.ts; the find-bar UI/state ->
+  // hooks/useTerminalSearch.ts + terminal-pane/TerminalFindBar.tsx; the toast
+  // UI -> terminal-pane/TerminalToasts.tsx. This effect's own internal logic
+  // is otherwise untouched — only some of its local `const`/`function`
+  // declarations were swapped for the equivalent imported/hook-returned
+  // reference (e.g. `attachKeyConflictHandler(...)`, `searchAddonRef`,
+  // `openFind`) where an extracted piece now owns that declaration.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -459,15 +312,16 @@ export function TerminalPane(props: {
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.loadAddon(new WebLinksAddon());
-    // Terminal scrollback search (U1). See SEARCH_HIGHLIGHT_LIMIT above for
-    // why this is passed explicitly rather than left at the addon's default.
+    // Terminal scrollback search (U1). See SEARCH_HIGHLIGHT_LIMIT's own
+    // comment (lib/terminalKeys.ts) for why this is passed explicitly rather
+    // than left at the addon's default.
     const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
     searchAddonRef.current = searchAddon;
     term.loadAddon(searchAddon);
-    // Only fires once decorations are enabled (see runSearch below, which
-    // always passes a `decorations` option) — this is the addon's only way
-    // to report match count/position, there's no synchronous "how many
-    // matches" query on the addon itself.
+    // Only fires once decorations are enabled (see useTerminalSearch's own
+    // runSearch, which always passes a `decorations` option) — this is the
+    // addon's only way to report match count/position, there's no
+    // synchronous "how many matches" query on the addon itself.
     const searchResultsSub = searchAddon.onDidChangeResults((e: ISearchResultChangeEvent) => {
       setMatchState({ index: e.resultIndex, count: e.resultCount });
     });
@@ -1099,6 +953,13 @@ export function TerminalPane(props: {
       getClipboardKeys: () => prefsRef.current.clipboardKeys,
       onToggleFind: openFind,
     });
+    // `openFind` (from useTerminalSearch) only closes over stable refs/
+    // setState identities, same as the plain in-component function it was
+    // before PR 35's extraction — deliberately excluded here exactly as it
+    // was pre-extraction (this effect must only re-run on captureCtrlC
+    // changes, not on every render). The linter can't see through the
+    // custom-hook boundary to infer that stability on its own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.captureCtrlC]);
 
   // Applies every terminal pref to the *live* instance in place — this is
@@ -1228,79 +1089,13 @@ export function TerminalPane(props: {
       refitRef.current();
       if (atlasKeyChanged) repaintAllTerminals();
     }
+    // `openFind` (from useTerminalSearch, used in this effect's own
+    // attachKeyConflictHandler call above) only closes over stable refs/
+    // setState identities — same as before PR 35's extraction, just now
+    // opaque to the linter across the custom-hook boundary. See the
+    // captureCtrlC-sync effect's own comment above for the full rationale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalSettings, theme]);
-
-  // Terminal scrollback search (U1). A plain function (not ref-wired like
-  // retryRef/refitRef above) — this one only needs values that are already
-  // fresh every render (findQuery, terminalSettings, theme, the addon ref),
-  // unlike those two, which have to reach into a mount-effect closure that
-  // only runs once.
-  function runSearch(direction: "next" | "previous"): void {
-    const addon = searchAddonRef.current;
-    if (!addon || !findQuery) return;
-    const options = {
-      decorations: buildSearchDecorations(terminalSettings.colorScheme, theme),
-    };
-    if (direction === "next") addon.findNext(findQuery, options);
-    else addon.findPrevious(findQuery, options);
-  }
-
-  // Live-updates highlights as the query changes, the way every other find
-  // bar (browser Ctrl+F included) behaves — without this, typing would do
-  // nothing until Enter/Next was pressed, which reads as broken rather than
-  // just less convenient. `incremental: true` only affects findNext (per the
-  // addon's own docs) — it expands/refines the current match as the query
-  // grows instead of jumping to a new one on every keystroke, so backspacing
-  // a character doesn't lose your place in the scrollback. Also re-runs on a
-  // color-scheme/theme change so an open find bar's highlight colors stay
-  // correct if the user switches schemes or toggles dark/light mid-search,
-  // and clears out cleanly when the query is emptied rather than leaving
-  // stale decorations/count on screen.
-  useEffect(() => {
-    if (!findOpen) return;
-    const addon = searchAddonRef.current;
-    if (!addon) return;
-    if (!findQuery) {
-      addon.clearDecorations();
-      // clearDecorations() only clears the addon's own internal result
-      // array — per its source (SearchResultTracker.clearResults()), it
-      // never fires onDidChangeResults, so nothing else will reset the
-      // match counter for an emptied query. Direct setState is genuinely
-      // needed here, not just convenient (this repo's react-hooks/
-      // set-state-in-effect rule rejects it as a cascading-render risk).
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setMatchState(null);
-      return;
-    }
-    addon.findNext(findQuery, {
-      incremental: true,
-      decorations: buildSearchDecorations(terminalSettings.colorScheme, theme),
-    });
-  }, [findQuery, findOpen, terminalSettings.colorScheme, theme]);
-
-  // Focuses the find input the moment the bar opens (Ctrl+Shift+F, handled
-  // inside attachKeyConflictHandler above, fires while the *terminal* has
-  // focus, not this input, so it needs an explicit focus() here). On the
-  // reverse transition — bar was open, now closed — clears the addon's
-  // decorations/selection and hands focus back to the terminal so typing
-  // resumes immediately instead of landing on whatever the browser defaults
-  // to once the input unmounts. Gated on `prevFindOpenRef` so this never
-  // fires on a plain mount (findOpen starts false, prevFindOpenRef starts
-  // false too) — this component is deliberately free of unconditional
-  // `.focus()` calls elsewhere, and a mount-time `term.focus()` here would
-  // quietly reintroduce one.
-  useEffect(() => {
-    if (findOpen) {
-      findInputRef.current?.focus();
-      findInputRef.current?.select();
-    } else if (prevFindOpenRef.current) {
-      searchAddonRef.current?.clearDecorations();
-      setMatchState(null);
-      termRef.current?.focus();
-    }
-    prevFindOpenRef.current = findOpen;
-    findOpenRef.current = findOpen;
-  }, [findOpen]);
 
   // U7 fix — clicking a pane's tab (or activating it via keyboard pane-
   // switching, a deep link, a push-notification open, or auto-focus-on-
@@ -1311,20 +1106,27 @@ export function TerminalPane(props: {
   // component's own prop doc comment) is the wrapper's `onDidActiveChange`
   // signal. Deliberately keyed on `[props.active]` alone (findOpenRef reads
   // the CURRENT findOpen without retriggering this effect on its own
-  // change — see that ref's own comment) so this only runs on the
-  // false->true (or mount-already-active) transition, same "guarded, never
-  // unconditional" posture as every other `.focus()` call in this file (see
-  // prevFindOpenRef's own comment above) — `active` going back to false
-  // intentionally does nothing, and `active` staying true across an
-  // unrelated re-render (including the find bar opening/closing) doesn't
-  // retrigger this effect, so it can't steal focus back from e.g. the find
-  // bar's own input while this same pane stays the active one. The
-  // `findOpenRef.current` check additionally skips the steal-back when the
-  // find bar was ALREADY open at the moment this pane became active — the
-  // findOpen-transition effect above owns focus in that case.
+  // change — see that ref's own comment in useTerminalSearch.ts) so this
+  // only runs on the false->true (or mount-already-active) transition, same
+  // "guarded, never unconditional" posture as every other `.focus()` call in
+  // this file (see useTerminalSearch's own prevFindOpenRef comment) —
+  // `active` going back to false intentionally does nothing, and `active`
+  // staying true across an unrelated re-render (including the find bar
+  // opening/closing) doesn't retrigger this effect, so it can't steal focus
+  // back from e.g. the find bar's own input while this same pane stays the
+  // active one. The `findOpenRef.current` check additionally skips the
+  // steal-back when the find bar was ALREADY open at the moment this pane
+  // became active — useTerminalSearch's own findOpen-transition effect owns
+  // focus in that case.
   useEffect(() => {
     if (!props.active || findOpenRef.current) return;
     termRef.current?.focus();
+    // `findOpenRef` (from useTerminalSearch) is a plain useRef — its
+    // identity is stable across renders, same as before PR 35's extraction;
+    // deliberately excluded per this effect's own comment above (must fire
+    // ONLY on props.active's false->true transition). Opaque to the linter
+    // across the custom-hook boundary, same as openFind above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.active]);
 
   // Auto-dismisses the "upload failed" toast — "uploading" instead clears
@@ -1389,68 +1191,20 @@ export function TerminalPane(props: {
       </button>
       {
         // Scrollback find bar (U1) — opened via Ctrl+Shift+F, see
-        // attachKeyConflictHandler above for why that chord. Positioned
-        // top-left rather than sharing the attach-image button's top-right
-        // corner (`.terminal-attach-image-btn`, always visible) so the two
-        // never collide.
+        // attachKeyConflictHandler (lib/terminalKeys.ts) for why that chord.
+        // Positioned top-left rather than sharing the attach-image button's
+        // top-right corner (`.terminal-attach-image-btn`, always visible) so
+        // the two never collide.
       }
       {findOpen && (
-        <div className="terminal-find-bar" role="search">
-          <SearchIcon size={13} className="terminal-find-icon" />
-          <input
-            ref={findInputRef}
-            type="text"
-            className="terminal-find-input"
-            placeholder="Find in scrollback…"
-            aria-label="Find in scrollback"
-            value={findQuery}
-            onChange={(event) => setFindQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                // Local close only — App.tsx's global Escape handler also
-                // fires on this same keydown (it bubbles to `window`), but
-                // that handler only ever closes the command palette/settings
-                // modal, both no-ops here, so the two never fight.
-                event.preventDefault();
-                setFindOpen(false);
-              } else if (event.key === "Enter") {
-                event.preventDefault();
-                runSearch(event.shiftKey ? "previous" : "next");
-              }
-            }}
-          />
-          {
-            // aria-live so screen-reader users hear result updates as they
-            // type/navigate, not just sighted users watching the counter
-            // (Hermes review, PR #578).
-          }
-          <span className="terminal-find-count" aria-live="polite">
-            {formatMatchCount(matchState)}
-          </span>
-          <button
-            className="pane-tab-btn terminal-find-btn"
-            title="Previous match (Shift+Enter)"
-            disabled={!findQuery}
-            onClick={() => runSearch("previous")}
-          >
-            <ChevronDownIcon size={13} style={{ transform: "rotate(180deg)" }} />
-          </button>
-          <button
-            className="pane-tab-btn terminal-find-btn"
-            title="Next match (Enter)"
-            disabled={!findQuery}
-            onClick={() => runSearch("next")}
-          >
-            <ChevronDownIcon size={13} />
-          </button>
-          <button
-            className="pane-tab-btn terminal-find-btn"
-            title="Close (Esc)"
-            onClick={() => setFindOpen(false)}
-          >
-            <CloseIcon size={13} />
-          </button>
-        </div>
+        <TerminalFindBar
+          findQuery={findQuery}
+          onFindQueryChange={setFindQuery}
+          matchState={matchState}
+          findInputRef={findInputRef}
+          onRunSearch={runSearch}
+          onClose={() => setFindOpen(false)}
+        />
       )}
       {status !== "open" && (
         <div className={`terminal-status-overlay ${status}`}>
@@ -1498,16 +1252,7 @@ export function TerminalPane(props: {
           )}
         </div>
       )}
-      {copied && (
-        <div key={copyToastKey} className="terminal-copy-indicator">
-          Copied
-        </div>
-      )}
-      {uploadState !== "idle" && (
-        <div className={`terminal-upload-indicator ${uploadState === "error" ? "error" : ""}`}>
-          {uploadState === "uploading" ? "Uploading image…" : "Image upload failed"}
-        </div>
-      )}
+      <TerminalToasts copied={copied} copyToastKey={copyToastKey} uploadState={uploadState} />
     </div>
   );
 }
