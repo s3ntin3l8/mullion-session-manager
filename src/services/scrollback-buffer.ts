@@ -39,7 +39,7 @@
 // screen" — raised from the original 256KiB (issue #83) because that cap and
 // xterm's own line-based scrollback (DEFAULT_SETTINGS.terminal.scrollback in
 // settings.ts) were both starving real history, especially once
-// pty-manager.ts's nudgeRedraw() repaints are folded in too. Keep this
+// redraw-nudge.ts's RedrawNudge repaints are folded in too. Keep this
 // roughly proportionate to that line cap if either changes — at typical line
 // widths they trade off against each other, so raising one alone barely
 // helps.
