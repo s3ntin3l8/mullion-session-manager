@@ -51,6 +51,15 @@ export type {
   SoundName,
 };
 
+// TASK_STATUSES/LOCAL_HOST_ID are runtime VALUES (not type-only shapes —
+// see above), so these are plain imports, not `import type`, and now
+// physically live in src/shared/constants.ts (repo root, NOT this frontend
+// workspace). Re-exported below so every existing import of them from
+// "./api.js" elsewhere in the frontend keeps working unchanged.
+import { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID } from "../../src/shared/constants.js";
+
+export { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID };
+
 // Mirrors src/routes/auth.ts's GET /api/auth/me response. `methods` reports
 // each in-process auth mechanism independently (not a single mode string)
 // since issue #19's shared token and issue #30's OIDC login are additive —
@@ -141,7 +150,8 @@ export interface Host {
   lastCheckedAt: string | null;
 }
 
-export const LOCAL_HOST_ID = "local";
+// LOCAL_HOST_ID now physically lives in src/shared/constants.ts — see that
+// import's own comment at the top of this file.
 
 // Mirrors src/services/remote-host-client.ts's AgentConfig 1:1 — issue #247 /
 // roadmap 7.4. No idle timeout: that's a DB-backed Settings value on the
@@ -805,21 +815,11 @@ export interface ServerInfo {
   };
 }
 
-// Mirrors src/services/task-state.ts's TASK_TRANSITIONS keys (and
-// src/db/schema.ts's TASK_STATUSES) 1:1 — Phase 6 Task Master (6.2/#215).
-// A closed union so an unhandled status is a `tsc` failure in tasksBoard.ts's
-// exhaustive switches, not a runtime surprise (same convention as
-// kanban.ts's SessionSeverity switch).
-export const TASK_STATUSES = [
-  "backlog",
-  "ready",
-  "claimed",
-  "in_progress",
-  "reviewing",
-  "done",
-  "failed",
-] as const;
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+// TASK_STATUSES/TaskStatus now physically live in src/shared/constants.ts —
+// see that import's own comment at the top of this file. A closed union so
+// an unhandled status is a `tsc` failure in tasksBoard.ts's exhaustive
+// switches, not a runtime surprise (same convention as kanban.ts's
+// SessionSeverity switch).
 
 // Mirrors src/routes/tasks.ts's TASK_ROW_COLUMNS (GET /api/tasks and GET
 // /api/tasks/:id) 1:1 — issue #214/#219, extended through Phase 6 (#233,
