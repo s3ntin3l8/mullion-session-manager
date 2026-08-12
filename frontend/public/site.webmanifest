@@ -19,5 +19,42 @@
   "background_color": "#0e1512",
   "display": "standalone",
   "orientation": "any",
-  "categories": ["developer", "productivity"]
+  "categories": ["developer", "productivity"],
+  "screenshots": [
+    {
+      "src": "/screenshots/desktop-dashboard.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "A live terminal session, with the project sidebar showing sessions across multiple projects"
+    },
+    {
+      "src": "/screenshots/desktop-git-panel.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "The Git panel — branch, changed files, and worktrees — open alongside a terminal"
+    },
+    {
+      "src": "/screenshots/desktop-kanban.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Task Master's Kanban board, tracking tasks from backlog through review to done"
+    },
+    {
+      "src": "/screenshots/mobile-session-list.png",
+      "sizes": "750x1624",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "The mobile session list, showing sessions grouped by project"
+    },
+    {
+      "src": "/screenshots/mobile-terminal.png",
+      "sizes": "750x1624",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "A terminal session on mobile, with the on-screen key bar for Esc/Tab/Ctrl+C"
+    }
+  ]
 }

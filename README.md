@@ -13,6 +13,11 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 
 - [xterm.js](https://xtermjs.org/).
 
+<p align="center">
+  <img src="frontend/public/screenshots/desktop-dashboard.png" width="49%" alt="A live terminal session, with the project sidebar showing sessions across multiple projects" />
+  <img src="frontend/public/screenshots/desktop-kanban.png" width="49%" alt="Task Master's Kanban board, tracking tasks from backlog through review to done" />
+</p>
+
 ## ✨ Features
 
 - **Tiled.** A dockview-based split/tab layout turns the browser into mission
