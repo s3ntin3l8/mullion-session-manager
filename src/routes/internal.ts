@@ -673,13 +673,16 @@ function resolveWithinRoots(app: FastifyInstance, cwd: string): string | null {
  * `const resolvedX = requireWithinRoots(app, reply, x, "x"); if (resolvedX
  * === null) return;` — the same early-return-after-sending-a-reply shape
  * already used elsewhere in this file (e.g. the mullionSignatureSecret
- * check above). `field` defaults to "cwd", the overwhelmingly common case.
+ * check above). `field` is required, not defaulted — every one of this
+ * file's ~37 call sites passes it explicitly (Hermes review, PR #626), so a
+ * default would only ever mask a call site that forgot to name its own
+ * field, not save anyone real typing.
  */
 function requireWithinRoots(
   app: FastifyInstance,
   reply: FastifyReply,
   value: string,
-  field = "cwd",
+  field: string,
 ): string | null {
   const resolved = resolveWithinRoots(app, value);
   if (!resolved) {
