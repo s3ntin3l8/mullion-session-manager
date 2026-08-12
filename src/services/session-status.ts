@@ -26,27 +26,14 @@
 // frontend.
 
 import type { SessionInfo } from "./pty-manager.js";
+// SessionStatus/SessionSeverity now physically live in src/shared/types.ts
+// (they're hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
+// re-export). Re-exported below so every existing backend importer of this
+// module keeps working unchanged. See that file for the members' own doc
+// comments.
+import type { SessionStatus, SessionSeverity } from "../shared/types.js";
 
-export type SessionStatus =
-  | "exited" // process gone (DB says killed/exited, or PtyManager has no live handle)
-  | "awaiting_permission" // a tool-permission dialog is blocking the agent
-  | "awaiting_plan" // an ExitPlanMode plan is ready for human review
-  | "awaiting_review_gate" // Mullion's own blocking PreToolUse gate is waiting
-  | "awaiting_promote" // a worktree-isolation promote request is waiting
-  | "awaiting_question" // the agent's `question` tool is blocking on a user decision
-  | "awaiting_elicitation" // an MCP server is asking the human for input
-  | "api_error" // turn ended on an API error (StopFailure hook)
-  | "tool_failure" // a tool call failed and the agent has since stalled (PostToolUseFailure hook)
-  | "finished" // the agent's turn is over; process alive, your move
-  | "needs_input" // byte-heuristic attention (bell/notification/title/silence) — a guess
-  | "compacting" // context compaction is running
-  | "subagent" // one or more subagents are running
-  | "background" // outstanding backgroundTasks (bash/MCP/agent) the Stop hook reported (issue #428)
-  | "working"
-  | "idle";
-
-export type SessionSeverity =
-  "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant";
+export type { SessionStatus, SessionSeverity };
 
 // Assigning this object literal directly to a `Record<SessionStatus, ...>`-
 // typed const makes it exhaustive at the type level, same technique

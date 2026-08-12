@@ -2,6 +2,13 @@ import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
+// GitFileStatusCode/GitFileStatus/GitStatus now physically live in
+// src/shared/types.ts (hand-mirrored 1:1 on the frontend — see
+// frontend/src/api.ts's own re-export). Re-exported below so every existing
+// backend importer of this module keeps working unchanged.
+import type { GitFileStatusCode, GitFileStatus, GitStatus } from "../shared/types.js";
+
+export type { GitFileStatusCode, GitFileStatus, GitStatus };
 
 // The repo's first `git` CLI shell-out (issue #76) — everything else that
 // reads git state (git-remote.ts, git-branch.ts) is a pure filesystem read.
@@ -18,23 +25,6 @@ import { gitEnv } from "./git-env.js";
 // routes/internal.ts's own comment on why: "spawn/stop always use an argv
 // array, never a shell string" is this repo's standing injection guard for
 // every child_process call, not just PtyManager's.
-
-export type GitFileStatusCode = "M" | "A" | "D" | "U" | "?";
-
-export interface GitFileStatus {
-  path: string;
-  status: GitFileStatusCode;
-}
-
-export interface GitStatus {
-  branch: string;
-  hash: string | null;
-  ahead: number;
-  behind: number;
-  files: GitFileStatus[];
-  isClean: boolean;
-  hasConflicts: boolean;
-}
 
 const GIT_TIMEOUT_MS = 5_000;
 // B9 — grace period after the initial SIGTERM before escalating to SIGKILL,

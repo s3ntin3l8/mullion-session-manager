@@ -1,6 +1,16 @@
 import { eq } from "drizzle-orm";
 import { settings as settingsTable } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
+// Theme/CursorStyle/SidebarDensity/SoundName (AppSettings's leaf unions)
+// now physically live in src/shared/types.ts (hand-mirrored 1:1 on the
+// frontend — see frontend/src/api.ts's own re-export). Re-exported below so
+// every existing backend importer of this module keeps working unchanged.
+// AppSettings itself stays declared here — see shared/types.ts's own doc
+// comment for why (its notificationMatrix field is a real, deliberate
+// backend/frontend type divergence, not cosmetic drift).
+import type { Theme, CursorStyle, SidebarDensity, SoundName } from "../shared/types.js";
+
+export type { Theme, CursorStyle, SidebarDensity, SoundName };
 
 // Shared shape + defaults for the server-persisted Settings blob (the
 // Settings modal's "Everything wired now" rework). One JSON blob, same
@@ -16,11 +26,6 @@ import type { getDb } from "../db/client.js";
 // migration, and `mergeSettings` deep-merges a stored (possibly older,
 // missing-keys) blob over these defaults so a fresh key introduced by a
 // later release always resolves instead of coming back `undefined`.
-
-export type Theme = "dark" | "light" | "system";
-export type CursorStyle = "block" | "bar" | "underline";
-export type SidebarDensity = "comfortable" | "compact";
-export type SoundName = "ping" | "chime" | "blip";
 
 export interface AppSettings {
   theme: Theme;

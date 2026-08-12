@@ -2,6 +2,13 @@ import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
+// GitBranchInfo/GitWorktreeInfo now physically live in src/shared/types.ts
+// (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
+// re-export). Re-exported below so every existing backend importer of this
+// module keeps working unchanged.
+import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
+
+export type { GitBranchInfo, GitWorktreeInfo };
 
 // Branch + worktree enumeration for the GitPanel (issue #162's "worktree
 // awareness" half): the repo's first `git branch`/`git worktree list`-style
@@ -20,46 +27,6 @@ import { gitEnv } from "./git-env.js";
 // file in this group (git-status.ts, git-branch.ts, git-worktree.ts) already
 // duplicates that guard rather than sharing it, so this follows the
 // established pattern instead of introducing a new cross-file dependency.
-
-export interface GitBranchInfo {
-  name: string;
-  isCurrent: boolean;
-  // Issue #442 — enrichment fields for the GitPanel's branch-management UI.
-  // All optional: the same shape crosses the /internal/git-branches proxy,
-  // so a new primary talking to an old agent (or the reverse) must degrade
-  // rather than break (see the plan's binding decision #7).
-  /** `%(upstream:short)` — e.g. "origin/main". Absent when no upstream is
-   * configured for this branch. */
-  upstream?: string;
-  /** Parsed from `%(upstream:track)`'s "[ahead N]"/"[ahead N, behind M]"
-   * form. Absent when there's no upstream or nothing to report. */
-  ahead?: number;
-  behind?: number;
-  /** True when `%(upstream:track)` reports "[gone]" — the upstream branch
-   * was deleted on the remote. */
-  upstreamGone?: boolean;
-  /** `%(committerdate:relative)` — e.g. "3 days ago". */
-  lastCommitRelative?: string;
-  /** Whether this branch is an ancestor of the resolved default base ref
-   * (`git branch --merged`). Only computed when `listBranches` is called
-   * with `{ detail: true }` (the GitPanel's explicit `?detail=1` fetch) —
-   * see that function's own doc comment for why this is opt-in rather than
-   * free like the fields above. Left `undefined` (not `false`) when detail
-   * wasn't requested, or when the base-ref chain fell through to `HEAD`
-   * (no remote configured) — "merged into whatever branch you're standing
-   * on" is a misleading thing to label a bare `merged`. */
-  isMerged?: boolean;
-}
-
-export interface GitWorktreeInfo {
-  path: string;
-  /** `null` for a worktree checked out at a detached HEAD (or a bare repo
-   * entry) — not every worktree has a branch. */
-  branch: string | null;
-  /** The repo's original working directory — always first in `git worktree
-   * list`'s own output, never removable via `git worktree remove`. */
-  isMain: boolean;
-}
 
 const GIT_TIMEOUT_MS = 10_000;
 // B9 — see git-status.ts's identical constant for the full rationale

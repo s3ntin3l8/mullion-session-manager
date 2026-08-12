@@ -1,6 +1,13 @@
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
+// GitDiffStats now physically lives in src/shared/types.ts (hand-mirrored
+// 1:1 on the frontend — see frontend/src/api.ts's own re-export).
+// Re-exported below so every existing backend importer of this module keeps
+// working unchanged.
+import type { GitDiffStats } from "../shared/types.js";
+
+export type { GitDiffStats };
 
 // Diff stats (issue #202, greenfield) — a session's own "how much has
 // changed here" number, distinct from git-status.ts's per-file list: this
@@ -19,12 +26,6 @@ import { isGitRepo } from "./git-status.js";
 // would require reading and line-counting each untracked file's full
 // contents, a much heavier operation for a number this feature only ever
 // uses as a rough "how much has changed" glance.
-
-export interface GitDiffStats {
-  filesChanged: number;
-  insertions: number;
-  deletions: number;
-}
 
 const GIT_TIMEOUT_MS = 5_000;
 // B9 — see git-status.ts's identical constant for the full rationale
