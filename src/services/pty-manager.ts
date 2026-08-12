@@ -70,8 +70,14 @@ import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
 import { RedrawNudge } from "./redraw-nudge.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
-import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
+import {
+  scopeUnitName,
+  stopScope,
+  isMasterAlive as isMasterAliveProcess,
+  isMasterAliveBatch as isMasterAliveBatchProcess,
+  listSessionProcesses as listSessionProcessesProcess,
+} from "./session-process.js";
 // NotificationEvent now physically lives in src/shared/types.ts
 // (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
@@ -638,29 +644,6 @@ function isGenuineUserInput(data: string): boolean {
     remainder = remainder.replace(shape, "");
   }
   return remainder.length > 0;
-}
-
-// Deterministic (no timestamp) so a *future* process — one that never
-// tracked this session in memory at all, e.g. right after a restart — can
-// still reference the exact same scope to fully terminate it. See
-// PtyManager.terminate().
-function scopeUnitName(id: string): string {
-  return `crs-session-${id}`;
-}
-
-/** Stop a session's systemd scope, killing its dtach master + program. Safe
- * to call even if the scope doesn't exist or is already gone. */
-function stopScope(id: string): Promise<void> {
-  return new Promise((resolve) => {
-    const child = spawnChild("systemctl", ["--user", "stop", `${scopeUnitName(id)}.scope`], {
-      stdio: "ignore",
-    });
-    // "unit not loaded" (already stopped / never existed) is an expected,
-    // ignorable outcome here — this is a best-effort cleanup, not a
-    // correctness-critical step whose failure should propagate.
-    child.on("error", () => resolve());
-    child.on("exit", () => resolve());
-  });
 }
 
 // A well-formed hook token is exactly what crypto.randomBytes(24).toString("hex")
@@ -4085,128 +4068,38 @@ export class PtyManager {
 
   /**
    * Whether `id`'s systemd scope — the true owner of the dtach master and
-   * the program running inside it, per terminate()'s doc comment above —
-   * is still active. False for "inactive" (the program exited on its own;
-   * dtach exits with its child and the `--collect` scope is then reaped),
-   * "failed", or "unknown" (never existed), and for any spawn error. This
-   * is the source of truth session-reconciler.ts polls to catch a program
-   * that exited without an explicit DELETE /api/sessions/:id — deliberately
-   * NOT based on anything tracked in this process's memory, so it works
-   * correctly even right after a restart, before anything has re-attached.
+   * the program running inside it, per terminate()'s doc comment above — is
+   * still active. See isMasterAlive() in session-process.ts for the full
+   * doc comment (the "close" vs "exit" race, the false-vs-unknown
+   * collapse). Kept as a real instance method — not just a re-export of the
+   * imported function — so `app.pty.isMasterAlive` stays the one call
+   * surface session-reconciler.ts, session-backend.ts, and their tests
+   * (pty-manager.test.ts calls `manager.isMasterAlive` directly) already
+   * use.
    */
   isMasterAlive(id: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      let stdout = "";
-      const child = spawnChild("systemctl", ["--user", "is-active", `${scopeUnitName(id)}.scope`], {
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      child.on("error", () => resolve(false));
-      // 'close', not 'exit' — see agent-detect.ts's probe() for the exact
-      // same race this avoids: 'exit' fires once the process itself has
-      // ended, but doesn't guarantee every stdout 'data' chunk has been
-      // delivered yet, which reconcileExitedSessions() polling many
-      // sessions concurrently could hit in the same way.
-      child.on("close", () => resolve(stdout.trim() === "active"));
-    });
+    return isMasterAliveProcess(id);
   }
 
   /**
    * Lists the genuine OS processes currently running inside `id`'s systemd
-   * scope — the dtach master, the agent process, and anything the agent
-   * itself spawns (MCP servers, `Bash run_in_background` jobs, nested CLIs,
-   * dev servers). This is NOT subagent detection: Claude Code subagents run
-   * in-process with no PID of their own (see agent-detect.ts). Returns `[]`
-   * for a scope that isn't active, same as isMasterAlive() would report.
+   * scope. See listSessionProcesses() in session-process.ts for the full
+   * doc comment; same "keep it a real method" reasoning as isMasterAlive()
+   * above — session-backend.ts calls `app.pty.listSessionProcesses(id)`.
    */
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
-    return listScopeProcesses(`${scopeUnitName(id)}.scope`);
+    return listSessionProcessesProcess(id);
   }
 
   /**
-   * Perf audit finding B8(2) — batched counterpart to isMasterAlive() above,
-   * for a caller checking liveness of MANY sessions in one go
-   * (session-backend.ts's LocalSessionBackend.isMasterAlive, and
-   * routes/internal.ts's `/internal/sessions/liveness` for a remote agent's
-   * own sessions). Both used to call isMasterAlive(id) once per id via
-   * `Promise.all` — N simultaneous `systemctl --user is-active` subprocess
-   * spawns every reconcile tick, scaling with the number of active
-   * sessions. A single `systemctl --user list-units`, filtered to this
-   * app's own `crs-session-*` scope naming convention (scopeUnitName) and
-   * to active units only, returns every currently-active scope in one
-   * spawn; membership in that result is then a plain in-memory Set lookup
-   * per id, no further subprocesses.
-   *
-   * Trust rule — deliberately NOT the same "unknown collapses to false"
-   * posture isMasterAlive() takes for a single id: `is-active` on one
-   * specific, already-known unit failing IS a real, trustworthy negative
-   * signal for that one unit. A *list-units spawn/parse failure* here is a
-   * different kind of event — an infrastructure problem (systemctl
-   * missing, a `--user` D-Bus hiccup, an unexpected output shape) that
-   * says nothing about whether any particular session is actually alive.
-   * Collapsing that to "every id is false" would mass-flip every active
-   * session to exited on a single transient systemctl error — exactly the
-   * "missing key -> false" mass-exit landmine session-reconciler.ts's own
-   * doc comment calls out and specifically protects against for the
-   * multi-host case (a key a REACHABLE host's response merely omits is
-   * treated as "unknown," never "not alive"). So on spawn error or a
-   * non-zero exit (systemctl's own signal that this list-units call itself
-   * failed, not "no matches" — verified empirically: a `--state=active`
-   * query matching zero units still exits 0 with empty stdout), this
-   * returns an EMPTY record — every id "unknown," not "false" — which
-   * every caller already handles correctly via that same
-   * `alive === undefined` -> skip path. Only a clean, successfully-parsed
-   * response asserts real true/false answers.
+   * Perf audit finding B8(2) — batched counterpart to isMasterAlive()
+   * above. See isMasterAliveBatch() in session-process.ts for the full doc
+   * comment (the trust-rule rationale for collapsing failures to an empty
+   * record rather than all-false). Kept as a real method for the same
+   * reason as isMasterAlive() above — session-reconciler.test.ts spies on
+   * `app.pty.isMasterAliveBatch` directly.
    */
   isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
-    if (ids.length === 0) return Promise.resolve(Object.create(null));
-
-    return new Promise((resolve) => {
-      let stdout = "";
-      const child = spawnChild(
-        "systemctl",
-        [
-          "--user",
-          "list-units",
-          "--type=scope",
-          "--state=active",
-          "--no-legend",
-          "--plain",
-          "crs-session-*.scope",
-        ],
-        { stdio: ["ignore", "pipe", "ignore"] },
-      );
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      // Spawn failure (systemctl missing, etc.) — unknown for every id, per
-      // this method's own trust-rule doc comment above.
-      child.on("error", () => resolve(Object.create(null)));
-      // 'close', not 'exit' — same stdout-delivery race isMasterAlive()
-      // guards against above.
-      child.on("close", (code) => {
-        if (code !== 0) {
-          resolve(Object.create(null));
-          return;
-        }
-        // `--plain --no-legend` output is one unit per line: "UNIT LOAD
-        // ACTIVE SUB DESCRIPTION", whitespace-separated (DESCRIPTION may
-        // itself contain spaces, but only the first field — the unit name
-        // — is needed here).
-        const activeUnits = new Set(
-          stdout
-            .split("\n")
-            .map((line) => line.trim().split(/\s+/)[0])
-            .filter((unit): unit is string => Boolean(unit)),
-        );
-        const result: Record<string, boolean> = Object.create(null);
-        for (const id of ids) {
-          result[id] = activeUnits.has(`${scopeUnitName(id)}.scope`);
-        }
-        resolve(result);
-      });
-    });
+    return isMasterAliveBatchProcess(ids);
   }
 }
