@@ -80,16 +80,26 @@ export interface NotificationEvent {
     | "tool_failure"
     | "session_end"
     | "plan_ready"
-    // Rich statuses — the one new NotificationEvent kind added alongside
-    // this feature (see pty-manager.ts's matching doc comment for why
-    // turn_start/compact/subagent are routed through "status_change"
-    // instead of getting their own kinds).
+    // Rich statuses — elicitation is a "blocked pending a human decision"
+    // event, same tier as review_gate/promote_request/permission_request/
+    // plan_ready above, so it gets its own dedicated kind the same way they
+    // did. turn_start/compact/subagent are lower-signal state transitions —
+    // routed through the existing "status_change" kind instead (same
+    // reasoning progress/git_branch/cwd_changed already use it for), not
+    // given their own kinds.
     | "elicitation"
     | "question"
     | "todo"
     | "session_diff"
     // Issue #404 — a background, PTY-scrollback-derived signal that a plain
-    // (non-dock) session's dev server just started listening.
+    // (non-dock) session's dev server just started listening (see
+    // dev-server-detect.ts's parseDevServerPort and
+    // PtyManager.sweepDevServerDetection). Its own dedicated kind, same tier
+    // as review_gate/promote_request/plan_ready above ("pending a human
+    // decision" — accept wires the port into the project's devServerUrl +
+    // preview, dismiss suppresses it), not folded into status_change. Unlike
+    // review_gate/promote_request, nothing blocks on this: it's purely
+    // backend-detected, never holds an agent's hook-socket connection open.
     | "dev_server_detected";
   ts: number;
   payload: Record<string, unknown>;
