@@ -727,9 +727,9 @@ describe("PtyManager", () => {
 
     fakePtyChildren[0].emitData("\x1b[?1003h\x1b[?1006h");
     // startsWith, not exact equality — the raw buffered bytes ALSO begin
-    // with this same escape sequence (pushScrollback stores it verbatim
-    // regardless of mode tracking), same reason the alt-screen tests above
-    // use startsWith rather than asserting the full byte count.
+    // with this same escape sequence (ScrollbackBuffer.push() stores it
+    // verbatim regardless of mode tracking), same reason the alt-screen
+    // tests above use startsWith rather than asserting the full byte count.
     expect(
       session.getScrollback().toString().startsWith(`${PRIMARY_PREAMBLE}\x1b[?1003h\x1b[?1006h`),
     ).toBe(true);
@@ -799,7 +799,7 @@ describe("PtyManager", () => {
 
     // Check the PREAMBLE specifically (its known, exact prefix), not the
     // whole getScrollback() output — the raw buffered bytes legitimately
-    // still contain "\x1b[?1000h" as history (pushScrollback stores
+    // still contain "\x1b[?1000h" as history (ScrollbackBuffer.push() stores
     // everything verbatim regardless of mode tracking), so a whole-string
     // not-toContain check would be testing the wrong thing.
     const scrollback = session.getScrollback().toString();

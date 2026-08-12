@@ -290,8 +290,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // Raised from 1000 (issue #83) — at typical line widths 1000 lines was
     // already roughly as tight a limit as the old 256KiB server-side ring
     // buffer, so the two were both starving real scrollback history. Keep
-    // this roughly proportionate to SCROLLBACK_MAX_BYTES in pty-manager.ts
-    // if either changes.
+    // this roughly proportionate to SCROLLBACK_MAX_BYTES in
+    // scrollback-buffer.ts if either changes.
     scrollback: 5000,
     copyOnSelect: true,
     pasteOnRightClick: false,

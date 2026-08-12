@@ -44,7 +44,7 @@ import { reclaimSocketPath } from "../services/unix-socket.js";
 
 // Larger than hooks.ts's 64 KiB cap: base64'd scrollback replay and
 // screenshot payloads travel on this socket (added in later Phase 4 PRs),
-// and SCROLLBACK_MAX_BYTES (pty-manager.ts) is already 1 MiB before the
+// and SCROLLBACK_MAX_BYTES (scrollback-buffer.ts) is already 1 MiB before the
 // ~33% base64 inflation — see docs/socket-api.md's framing section. Checked
 // against Buffer.byteLength of the decoded buffer (not JS string.length,
 // which counts UTF-16 code units and would let a line up to 2x this past

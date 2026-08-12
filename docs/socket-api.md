@@ -35,7 +35,7 @@ Newline-delimited JSON, UTF-8 encoded, 2 MiB max per line (large enough for a
 base64'd screenshot or a scrollback replay chunk once those ops land). This
 cap is enforced on **inbound** lines only — nothing today caps an outbound
 frame's size, since scrollback and PTY-output frames stay well under 2 MiB
-even after base64 inflation (`SCROLLBACK_MAX_BYTES`, `pty-manager.ts`). If a
+even after base64 inflation (`SCROLLBACK_MAX_BYTES`, `scrollback-buffer.ts`). If a
 future op's outbound payload could exceed that, a symmetric outbound cap
 (and a defined behavior for exceeding it) would need to be added then — it
 isn't a gap this PR needs to close.

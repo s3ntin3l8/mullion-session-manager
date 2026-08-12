@@ -622,7 +622,7 @@ export function detectAltScreenSwitch(chunk: string): "alt" | "primary" | null {
 // "opencode sometimes cycles prompt history instead of scrolling on mouse
 // wheel" traced to exactly this gap: a reconnecting client's fresh xterm.js
 // only ever sees whatever DECSET bytes are still within the bounded
-// scrollback ring buffer (see SCROLLBACK_MAX_BYTES in pty-manager.ts), so if
+// scrollback ring buffer (see SCROLLBACK_MAX_BYTES in scrollback-buffer.ts), so if
 // the program's original mouse-tracking-enabling escape has aged out by the
 // time a client (re)attaches, the client silently defaults to no tracking
 // while the real process is never told anything changed. protocol/encoding

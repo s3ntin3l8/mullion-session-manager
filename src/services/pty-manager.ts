@@ -73,6 +73,7 @@ import {
   resolveForwarderPath,
 } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
+import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
@@ -97,9 +98,10 @@ export type { NotificationEvent };
 // runs, independent of how many browser tabs are attached — closing the last
 // tab does NOT kill it. That means the common case (browser tab closes,
 // reopens later, Node process never restarted) never needs a fresh dtach-level
-// reattach at all: the scrollback ring buffer below is a continuous,
-// gap-free record of everything the session produced while unwatched, so
-// replaying it reconstructs the screen exactly. A fresh OS-level `dtach -a`
+// reattach at all: the scrollback ring buffer (Session's own ScrollbackBuffer,
+// see scrollback-buffer.ts) is a continuous, gap-free record of everything the
+// session produced while unwatched, so replaying it reconstructs the screen
+// exactly. A fresh OS-level `dtach -a`
 // attach (and the redraw-reliability question in Risk 1 of the plan) is only
 // needed when this Node process itself restarts and the child is gone.
 //
@@ -422,8 +424,8 @@ type ExitListener = () => void;
 
 type EventListener = (event: NotificationEvent) => void;
 
-// Cap on each session's own event ring buffer — mirrors SCROLLBACK_MAX_BYTES's
-// FIFO-eviction shape (pushScrollback below) but bounded by count rather than
+// Cap on each session's own event ring buffer — mirrors ScrollbackBuffer's
+// (scrollback-buffer.ts) FIFO-eviction shape but bounded by count rather than
 // bytes, since events are small structured records, not raw terminal bytes.
 const EVENTS_MAX = 100;
 
@@ -433,16 +435,6 @@ const EVENTS_MAX = 100;
 // per new start (see recordSubagentStart) — a still-running entry is never
 // evicted, so this is a soft cap under pathological load, not a hard one.
 const MAX_TRACKED_SUBAGENTS = 50;
-
-// Enough for a healthy amount of scrollback history, not just "the last
-// screen" — raised from the original 256KiB (issue #83) because that cap and
-// xterm's own line-based scrollback (DEFAULT_SETTINGS.terminal.scrollback in
-// settings.ts) were both starving real history, especially once nudgeRedraw()
-// repaints (see NUDGE_REPAINT_GRACE_MS below) are folded in too. Keep this
-// roughly proportionate to that line cap if either changes — at typical line
-// widths they trade off against each other, so raising one alone barely
-// helps.
-const SCROLLBACK_MAX_BYTES = 1024 * 1024;
 
 // B9 — WS->PTY backpressure (write()'s own doc comment has the full
 // rationale). 4 MiB matches every other *_BACKPRESSURE_MAX_BUFFERED_BYTES
@@ -885,8 +877,11 @@ export class Session {
   private ptyProcess: IPty | null = null;
   private cols: number;
   private rows: number;
-  private scrollback: Buffer[] = [];
-  private scrollbackBytes = 0;
+  // The byte-level ring buffer itself — see scrollback-buffer.ts's own header
+  // comment for exactly what moved there vs. what stayed here (inAltScreen/
+  // mouseTracking/detectCarry/cwdDetectCarry all stay on Session; only the
+  // append/evict/read logic over raw chunks moved).
+  private readonly scrollbackBuffer = new ScrollbackBuffer();
   // Tracked screen-mode truth, updated as output streams through onData (see
   // detectAltScreenSwitch). getScrollback() replays a preamble synthesized
   // from this rather than trusting the buffered bytes to be a self-balanced
@@ -1935,7 +1930,7 @@ export class Session {
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a nudgeRedraw() repaint window — see
       // suppressSynthesizedOutput's docstring. Listeners below still get it live.
-      if (!this.suppressSynthesizedOutput) this.pushScrollback(chunk);
+      if (!this.suppressSynthesizedOutput) this.scrollbackBuffer.push(chunk);
 
       // Prepend any carry from the previous chunk so a `?1049h`/mouse-mode
       // DECSET split across two PTY reads is still recognized — detection
@@ -2193,8 +2188,9 @@ export class Session {
 
   /**
    * Record a notification event into this session's ring buffer and fan it
-   * out to live subscribers (mirrors pushScrollback's FIFO-eviction shape
-   * and dataListeners' fan-out shape respectively). Only ever called from
+   * out to live subscribers (mirrors scrollbackBuffer's own FIFO-eviction
+   * shape — see ScrollbackBuffer.push() in scrollback-buffer.ts — and
+   * dataListeners' fan-out shape respectively). Only ever called from
    * genuinely byte-driven (or exit-driven) transitions — see onData/onExit
    * below — or from the attention state machine's own time-based
    * confirmations (tick(), via applyAttentionTransition() below) — never
@@ -3207,15 +3203,6 @@ export class Session {
     if (seq > this.lastSeenSeq) this.lastSeenSeq = seq;
   }
 
-  private pushScrollback(chunk: Buffer): void {
-    this.scrollback.push(chunk);
-    this.scrollbackBytes += chunk.length;
-    while (this.scrollbackBytes > SCROLLBACK_MAX_BYTES && this.scrollback.length > 1) {
-      const dropped = this.scrollback.shift();
-      if (dropped) this.scrollbackBytes -= dropped.length;
-    }
-  }
-
   /**
    * Everything currently buffered, oldest first, prefixed with a preamble
    * synthesized from tracked alt-screen and mouse-tracking state — replay
@@ -3237,6 +3224,14 @@ export class Session {
    * touches CoreMouseService) — chosen only to match typical program emit
    * order. See MouseTrackingState's docstring in attention-detect.ts for why
    * this exists (issue #93).
+   *
+   * The preamble is synthesized here (not in ScrollbackBuffer) because it
+   * depends on inAltScreen/mouseTracking — Session-level state that's read
+   * and written by more than just scrollback replay (see this class's
+   * inAltScreen field doc, and scrollback-buffer.ts's own header comment,
+   * for why those two fields didn't move with the ring buffer itself).
+   * ScrollbackBuffer.toBuffer() does the actual concat over the raw,
+   * preamble-free bytes.
    */
   getScrollback(): Buffer {
     const altPreamble = this.inAltScreen ? ALT_SCREEN_ENTER : ALT_SCREEN_EXIT;
@@ -3248,7 +3243,7 @@ export class Session {
       mousePreamble += MOUSE_ENCODING_ENABLE[this.mouseTracking.encoding];
     }
     const preamble = Buffer.from(altPreamble + mousePreamble, "utf8");
-    return Buffer.concat([preamble, ...this.scrollback]);
+    return this.scrollbackBuffer.toBuffer(preamble);
   }
 
   /**
@@ -3256,31 +3251,12 @@ export class Session {
    * mode preamble (unlike getScrollback() above, this isn't replayed to a
    * reattaching terminal — it only ever feeds a text scan, e.g.
    * dev-server-detect.ts's banner regex, where alt-screen/mouse-tracking
-   * escape sequences are irrelevant noise). Walks `this.scrollback`'s chunk
-   * list from the newest end, stopping as soon as `maxBytes` is covered,
-   * so this is O(chunks needed to reach maxBytes) rather than
-   * getScrollback()'s O(entire ring) `Buffer.concat` + the caller's own
-   * full `toString("utf8")` copy — the pty.ts dev-server-detect timer
-   * used to pay both costs every 10s for every eligible session
-   * regardless of how much (if any) of a ~1 MiB scrollback ring had ever
-   * changed. A startup banner is virtually always near the most recent
-   * output, so tail-only scanning doesn't meaningfully reduce detection
-   * accuracy.
+   * escape sequences are irrelevant noise). Delegates to
+   * ScrollbackBuffer.tail() — see that method's own doc comment for the
+   * O(chunks needed to reach maxBytes) walk and the maxBytes-trim step.
    */
   getScrollbackTail(maxBytes: number): Buffer {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for (let i = this.scrollback.length - 1; i >= 0 && total < maxBytes; i--) {
-      const chunk = this.scrollback[i];
-      chunks.push(chunk);
-      total += chunk.length;
-    }
-    chunks.reverse();
-    const tail = Buffer.concat(chunks, total);
-    // The oldest included chunk may itself start well before the maxBytes
-    // boundary — trim to exactly the last maxBytes so a caller's cost bound
-    // holds regardless of how large this session's individual chunks are.
-    return total > maxBytes ? tail.subarray(total - maxBytes) : tail;
+    return this.scrollbackBuffer.tail(maxBytes);
   }
 
   /**
