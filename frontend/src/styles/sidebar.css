@@ -1,0 +1,1649 @@
+/* ============================================================ */
+/* Sidebar                                                        */
+/* ============================================================ */
+.cmux-scrim {
+  display: none;
+  position: fixed;
+  /* Issue #87 — matches .toolbar's own inset-aware height (base rule
+     above): a bare 44px here would paint the scrim over the toolbar's
+     lower safe-area-inset-top region on a notched device, and its top edge
+     would no longer align with .sidebar-wrapper's own matching top offset. */
+  top: calc(44px + env(safe-area-inset-top));
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: color-mix(in srgb, #000 48%, transparent);
+  z-index: 40;
+}
+
+.sidebar-wrapper {
+  width: var(--sidebar-width, 288px);
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: width 0.16s ease;
+}
+
+/* Desktop-only collapse (the mobile <700px block below fully owns
+   .sidebar-wrapper's positioning at that breakpoint, so this is scoped to
+   widths above it to avoid fighting the overlay transform there). */
+@media (min-width: 700px) {
+  .app.sidebar-collapsed .sidebar-wrapper {
+    width: 0;
+    border-right: none;
+    overflow: hidden;
+  }
+
+  /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
+     its three icons; the center divider is removed because there is no
+     longer a sidebar edge for it to line up with. */
+  .app.sidebar-collapsed .toolbar-lead {
+    width: auto;
+  }
+  .app.sidebar-collapsed .toolbar-center {
+    border-left: none;
+  }
+  /* Mirror the toggle glyph so its panel line reads as "collapsed". */
+  .app.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
+    transform: scaleX(-1);
+  }
+}
+
+/* Resize handle on the sidebar's right edge — hover-revealed, same pattern
+   as .dock-resize-handle. Hidden when sidebar is collapsed. */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+.sidebar-resize-handle:hover::after {
+  background: var(--ring, var(--muted));
+}
+.app.sidebar-collapsed .sidebar-resize-handle {
+  display: none;
+}
+.app.sidebar-resizing .sidebar-wrapper {
+  transition: none;
+}
+
+.new-session-trigger {
+  margin: 10px 10px 8px;
+  width: calc(100% - 20px);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  background: var(--sidebar-2);
+  color: var(--fg);
+  border-radius: 9px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.new-session-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent-solid) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent-solid) 10%, var(--sidebar-2));
+}
+.new-session-trigger-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent-solid);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.new-session-trigger-label {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+  text-align: left;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 15px 6px 16px;
+}
+.sidebar-section-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--dim);
+  font-weight: 700;
+  flex: 1;
+}
+
+/* U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
+   the sidebar's search box + status chips. `position: sticky` keeps it
+   reachable while scrolled deep into a long session list, which is exactly
+   the scenario this filter exists for; it still occupies its normal flow
+   height (sticky doesn't remove it from layout), which is what
+   VirtualizedProjectTree's own `scrollMargin` measurement (Sidebar.tsx)
+   relies on. `background` matches `.sidebar-wrapper` so content scrolling
+   underneath doesn't show through. */
+.sidebar-filter-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--sidebar);
+  padding: 6px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.sidebar-filter-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--sidebar-2);
+  color: var(--muted);
+}
+.sidebar-filter-search input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+}
+.sidebar-filter-search input::placeholder {
+  color: var(--muted);
+}
+.sidebar-filter-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sidebar-filter-clear:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.sidebar-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+/* Same on/off shape as .toolbar-icon-btn.active (HierarchyToggle's own
+   segmented toggle) — a text pill instead of an icon square, since each
+   chip needs its own label. */
+.sidebar-filter-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.sidebar-filter-chip:hover {
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--fg) 25%, var(--border));
+}
+.sidebar-filter-chip.active {
+  background: var(--seg);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* U3's virtualized rendering path (Sidebar.tsx's VirtualizedProjectTree) —
+   each session/empty-note row is its own independent absolutely-positioned
+   virtual item, unlike the plain path's single `.project-row-body` wrapping
+   div (whose left border/indent guide spans every session in one
+   continuous line). This reproduces that same indent treatment PER ROW
+   instead, since a shared wrapping div isn't compatible with each row being
+   independently positioned — the border segments sit flush against each
+   other with no gap (rows are stacked edge-to-edge by the virtualizer), so
+   in practice this reads as the same continuous guide. */
+.sidebar-vrow-session {
+  margin-left: 6px;
+  padding-left: 13px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.ws-group {
+  padding: 0 8px;
+}
+.ws-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.ws-group-header:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.ws-group-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  color: currentColor;
+}
+.ws-group-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+.ws-group-color {
+  width: 11px;
+  height: 11px;
+  border-radius: 3.5px;
+  flex-shrink: 0;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.ws-group-color:hover {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 20%, transparent);
+}
+.ws-group-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-group-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+.ws-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+/* Same 22x22 centered box as .kebab-trigger-btn — see the matching comment
+   on .workspace-item-actions button above. */
+.ws-group-actions button {
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ws-group-actions button:hover {
+  color: var(--fg);
+}
+/* `border: none` above sets border-style to none, which a plain
+   border-color override (button.danger.armed further below) can't undo —
+   restore a real border so the armed ring/box reads the same here as it
+   does everywhere else .danger.armed is used (box-sizing: border-box keeps
+   it from growing past the 22x22 box the kebab trigger also uses). */
+.ws-group-actions .danger.armed {
+  border: 1px solid var(--r);
+}
+.ws-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 6px 15px;
+}
+
+.workspace-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--fg);
+}
+.workspace-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.workspace-item.active {
+  color: #fff;
+  background: var(--accent-solid);
+}
+.workspace-item-icon {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+.workspace-item-name {
+  font-size: 12.5px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workspace-item.active .workspace-item-name {
+  font-weight: 600;
+}
+.workspace-attn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  flex-shrink: 0;
+  animation: cmuxPulse 1.4s ease-in-out infinite;
+}
+.workspace-item:not(.active) .workspace-attn-dot {
+  background: var(--ring);
+}
+.workspace-working-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--g);
+  flex-shrink: 0;
+}
+.workspace-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+/* Same 22x22 centered box as .kebab-trigger-btn (below) — without an
+   explicit box, this button only sizes to its 13px icon and (with no
+   align-items set) the flex default stretches it to match its taller
+   kebab-menu sibling while leaving the icon pinned to the stretched box's
+   top edge, so it reads visibly higher than the kebab's dots. */
+.workspace-item-actions button {
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.workspace-item-actions button:hover {
+  color: var(--fg);
+}
+/* `border: none` above sets border-style to none, which a plain
+   border-color override (button.danger.armed further below) can't undo —
+   restore a real border so the armed ring/box reads the same here as it
+   does everywhere else .danger.armed is used (box-sizing: border-box keeps
+   it from growing past the 22x22 box the kebab trigger also uses). */
+.workspace-item-actions .danger.armed {
+  border: 1px solid var(--r);
+}
+/* The active row's saturated accent fill (see .workspace-item.active below)
+   makes the trash quick-action's default `--dim` icon color unreadable —
+   same problem the kebab trigger already solves for itself just below;
+   mirror that fix here instead of leaving dim-on-accent. `:not(.armed)`
+   keeps this scoped to the resting/hover states only — armed's own red
+   (button.danger.armed below) has more classes in its selector, so without
+   the exclusion this rule would outrank and mask it, leaving the armed
+   checkmark white instead of red on an active row. */
+.workspace-item.active .workspace-item-actions .danger:not(.armed) {
+  color: rgba(255, 255, 255, 0.85);
+}
+.workspace-item.active .workspace-item-actions .danger:not(.armed):hover {
+  color: #fff;
+}
+
+/* Drag-and-drop (Phase 4d, design section 07 "workspace-group
+   choreography") — grip handle, dragged/dimmed states, the drop-position
+   indicator, and a group header's "drop here" assign highlight. The
+   insertion marker is a real inserted element (not a box-shadow on the
+   hovered row) so adjacent rows' hover states can't double-render it at an
+   ambiguous shared boundary. */
+.ws-drop-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 6px;
+}
+.ws-drop-list-empty-hint {
+  height: 30px;
+  margin: 2px 0;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+.ws-drag-handle {
+  display: flex;
+  align-items: center;
+  color: var(--dim);
+  cursor: grab;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.1s;
+  user-select: none;
+}
+.ws-group-header:hover .ws-drag-handle,
+.workspace-item:hover .ws-drag-handle {
+  opacity: 1;
+}
+.ws-drag-handle:active {
+  cursor: grabbing;
+}
+.ws-dragging {
+  transform: rotate(-1deg);
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.6);
+  cursor: grabbing;
+}
+.ws-sibling-dim {
+  opacity: 0.5;
+}
+.ws-drop-indicator {
+  height: 2px;
+  margin: 3px 6px;
+  border-radius: 2px;
+  background: var(--accent-solid);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-solid) 60%, transparent);
+}
+.ws-group-drop-target {
+  border: 1.5px dashed var(--accent-solid);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent-solid) 8%, transparent);
+}
+.ws-group-drop-label {
+  font-size: 9.5px;
+  color: var(--accent-solid);
+  font-family: "Geist Mono", monospace;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.workspace-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--term);
+  border: 1px solid var(--accent-solid);
+  border-radius: 6px;
+  padding: 3px 8px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
+  font-family: inherit;
+  outline: none;
+}
+
+.new-workspace-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.new-workspace-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--accent-solid);
+  background: var(--accent-solid);
+  color: #fff;
+  cursor: pointer;
+}
+.new-workspace-confirm:hover {
+  filter: brightness(1.08);
+}
+
+.project-row {
+  padding: 0 8px;
+}
+.project-row-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.project-row-header:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+/* P9 — a failed "Delete project" (see ProjectHeader's kebab menu handler in
+   Sidebar.tsx), rendered as a second line under the header, same slot
+   .session-event-line/.session-end-error occupy for a session row. */
+.project-row-error {
+  font-size: 11px;
+  color: var(--r);
+  padding: 0 8px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-row-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Per-project git dirty badge (issue #76) — a small colored dot next to the
+   project name, same "dot" language as .github-panel-ci-dot's good/bad/
+   pending. `none` (not a repo, not fetched yet, or an unreachable remote
+   host) is deliberately subtle — var(--dim) at low opacity — so it reads as
+   "nothing to report" rather than competing with the clean/dirty/conflict
+   states for attention. */
+.project-git-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dim);
+  opacity: 0.4;
+}
+.project-git-dot.clean {
+  background: var(--g);
+  opacity: 1;
+}
+.project-git-dot.dirty {
+  background: var(--o);
+  opacity: 1;
+}
+.project-git-dot.conflict {
+  background: var(--r);
+  opacity: 1;
+}
+/* Ahead/behind sync badge (issue #433 scope A) — sits right next to
+   .project-git-dot, `flex-shrink: 0` since .project-row-name is the flex
+   child that gives way as the sidebar narrows (see its own `flex: 1` +
+   ellipsis above). Renders nothing at 0/0, so it never competes for space
+   in the common (synced) case. */
+.project-git-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.project-git-ahead {
+  color: var(--muted);
+}
+.project-git-behind {
+  color: var(--o);
+}
+.project-git-sync.stale .project-git-behind {
+  color: var(--r);
+  font-weight: 600;
+}
+.project-host-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  color: var(--muted);
+  border: 1px solid var(--border-soft);
+  padding: 1px 5px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-attn-pill {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  background: var(--ring);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.project-session-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  flex-shrink: 0;
+}
+.project-add-session {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.project-add-session:hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+}
+.project-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 1px 0 6px 13px;
+  margin-left: 6px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 6px 9px;
+  /* Phase 5 (Track B, issue #195 5.5b) — --session-depth is set inline only
+     when depth > 0 (SessionRow.tsx), so flat rows keep the exact base
+     margin they always had. */
+  margin-left: calc(6px + var(--session-depth, 0) * 16px);
+  border-radius: 8px;
+  cursor: grab;
+  color: var(--fg);
+}
+/* Issue #167's status line lives as a second row below this one — this row
+   holds all of the original single-line content (dot/logo/name/label/close)
+   with the layout .session-item itself used to have before it became a
+   column. */
+.session-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.session-item:active {
+  cursor: grabbing;
+}
+.session-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-item.status-attention {
+  background: color-mix(in srgb, var(--ring) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--ring);
+}
+.session-item.status-attention:hover {
+  background: color-mix(in srgb, var(--ring) 18%, transparent);
+}
+.session-item.status-finished {
+  background: color-mix(in srgb, var(--c) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--c);
+}
+.session-item.status-finished:hover {
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+.session-item.status-exited,
+.session-item.status-killed {
+  opacity: 0.5;
+}
+.session-item.status-exited:hover,
+.session-item.status-killed:hover {
+  opacity: 0.7;
+}
+/* Issue #319 — a session whose status can't be confirmed by its agent's
+   hook capabilities renders with a dotted inset border + dimmed dot to
+   signal that the status is inferred (byte-heuristic) rather than reported.
+   This class is additive alongside `.session-item.status-attention` etc,
+   so the compound selector specificity still works — CSS `&&` via the class
+   concatenation pattern `.session-item.status-estimated` used here. */
+.session-item.status-estimated {
+  border-left: 2px dotted color-mix(in srgb, var(--dim) 30%, transparent);
+  margin-left: -2px;
+}
+.session-dot-wrap {
+  width: 14px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.session-dot-attention.estimated,
+.session-dot-working.estimated,
+.session-dot-error.estimated,
+.session-dot-plan.estimated,
+.session-dot-permission.estimated,
+.session-dot-finished.estimated {
+  opacity: 0.45;
+}
+.session-dot-attention {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ring);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: cmuxAttn 1.6s ease-out infinite;
+}
+.session-dot-working {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--g);
+  animation: cmuxPulse 1.1s ease-in-out infinite;
+}
+.session-dot-idle {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--dim);
+  box-sizing: border-box;
+}
+.session-name {
+  font-size: 12.5px;
+  color: var(--fg);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-name.mono {
+  font-family: "Geist Mono", monospace;
+}
+.session-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--term);
+  border: 1px solid var(--accent-solid);
+  border-radius: 4px;
+  padding: 2px 5px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
+}
+.session-agent-logo {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+.session-agent-text {
+  font-size: 12.5px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.session-status-label {
+  font-size: 10px;
+  font-family: "Geist Mono", monospace;
+  /* A long sessionStatusDetail (e.g. an untruncated tool-call summary from
+     an older backend) must ellipsis in place rather than refuse to shrink
+     and spill out of the sidebar over the terminal beside it — flex-shrink:
+     0 with no overflow guard was exactly that bug. min-width: 0 overrides
+     the flex item default of `auto`, which is what let this span's content
+     dictate its own width regardless of the row's actual space. */
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-status-label.attention {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ring);
+}
+.session-status-label.working {
+  color: var(--g);
+}
+.session-status-label.idle {
+  color: var(--dim);
+}
+.session-status-label.exited {
+  color: var(--dim);
+}
+.session-status-label.killed {
+  color: var(--r);
+  opacity: 0.85;
+}
+.session-dot-error {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--r);
+  animation: cmuxPulse 1.1s ease-in-out infinite;
+}
+.session-dot-plan {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--o);
+}
+.session-dot-permission {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  /* Rich statuses (issue: extend surfaced session statuses) — was a
+     hardcoded #c084fc; now the named --p token (already defined in both
+     themes, previously unused) so this color has one source of truth
+     shared with the tab badge (sessionStatus.ts's colorToken). */
+  background: var(--p);
+}
+/* Rich statuses — "Finished": turn complete, process alive. Deliberately
+   NOT pulsing (unlike working/error) — the agent isn't doing anything right
+   now, it's just waiting on you; a static dot reads as "resting", matching
+   the resting-but-attention-worthy tier this status belongs to. */
+.session-dot-finished {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.session-status-label.error {
+  color: var(--r);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-status-label.plan {
+  color: var(--o);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-status-label.permission {
+  color: var(--p);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-status-label.finished {
+  color: var(--c);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* Issue #167 — latest notification-event text, one line below the session
+   name/title. Idle-ish events (title changes, alt-screen flips, exit, an
+   attention "clear") get the gray/italic treatment; a live attention event
+   reuses the same --ring accent as the attention dot/status-label above. */
+.session-event-line {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--dim);
+  padding-left: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-event-line.attention {
+  font-style: normal;
+  color: var(--ring);
+}
+/* P9 — a failed "End this session" (SessionRow's handleEnd), same slot as
+   .session-event-line just above but tinted like .task-detail-error/
+   .project-row-error (var(--r)) rather than --dim/--ring. */
+.session-end-error {
+  font-size: 11px;
+  color: var(--r);
+  padding-left: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Row 3 toggle (issue #202) — reuses .ws-group-chevron's own rotate
+   transition for the collapsed/expanded caret, same visual language as
+   ProjectSection's own collapse chevron. */
+.session-git-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+}
+.session-git-toggle:hover {
+  color: var(--fg);
+}
+/* Row 3 (issue #202) — collapsible worktree/branch/PR/diff-stats line,
+   directly below row 2's .session-event-line. One line, ellipsis-truncated
+   like row 2, rather than wrapping — .project-git-dot/.github-panel-ci-dot
+   are reused as-is for the dirty/PR dots so this stays visually consistent
+   with the project row and GitHubPanel rather than inventing a third dot
+   language. */
+.session-git-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.session-git-branch {
+  font-family: "Geist Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.session-git-worktree {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 9.5px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-git-pr {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dim);
+  text-decoration: none;
+}
+.session-git-pr:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.session-git-diffstat {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+}
+.session-git-ins {
+  color: var(--g);
+}
+.session-git-del {
+  color: var(--r);
+}
+/* Row 4 (issue #177) — recent file-change chips, same ellipsis-truncated
+   single-line posture as rows 2/3 above. Each chip reuses
+   .github-panel-ci-dot's good/bad/pending language for create/delete/modify
+   (GitPanel.tsx's own per-file badges), not a new dot vocabulary. */
+.session-file-changes-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 22px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.session-file-change-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 110px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+.session-file-change-chip:hover {
+  color: var(--fg);
+}
+.session-file-change-letter {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+}
+.session-file-change-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The click-to-expand detail line — minimal by design (issue #177's scope
+   is path + action + count, not a diff view; see the follow-up issue filed
+   for real diff rendering). */
+.session-file-change-detail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 22px;
+  font-size: 10.5px;
+  color: var(--dim);
+  overflow: hidden;
+}
+.session-file-change-detail-path {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: "Geist Mono", monospace;
+}
+.session-file-change-detail-meta {
+  flex-shrink: 0;
+}
+
+/* Click-to-expand diff view (issue #262, follow-up to #177) — rendered below
+   the detail line when a file-change chip is expanded. Shows the raw unified
+   diff patch with line-level coloring. */
+.session-file-change-diff {
+  margin: 2px 0 0 22px;
+  padding: 4px 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sidebar);
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.session-diff-line {
+  display: block;
+  padding: 0 8px;
+  white-space: pre;
+}
+.session-diff-add {
+  background: color-mix(in srgb, var(--good, #4caf50) 10%, transparent);
+  color: color-mix(in srgb, var(--good, #4caf50) 70%, var(--fg));
+}
+.session-diff-del {
+  background: color-mix(in srgb, var(--bad, #f44336) 10%, transparent);
+  color: color-mix(in srgb, var(--bad, #f44336) 70%, var(--fg));
+}
+.session-diff-hunk {
+  color: var(--dim, #888);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border-soft, rgba(128, 128, 128, 0.2));
+  margin-bottom: 2px;
+}
+.session-diff-file {
+  color: var(--dim, #888);
+}
+.session-diff-context {
+  color: var(--fg);
+}
+.session-diff-spinner,
+.session-diff-empty {
+  display: block;
+  padding: 6px 8px;
+  color: var(--dim, #888);
+  font-size: 10.5px;
+}
+
+/* Row 5 (Phase 5 Track A, #195/5.5a) — subagent chips, same flex-row/chip
+   shape as .session-file-changes-line/.session-file-change-chip above, with
+   the same .github-panel-ci-dot good/pending vocabulary (good = finished,
+   pending = still running) rather than a new dot language. */
+.session-subagents-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 22px;
+}
+.session-subagent-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+.session-subagent-chip:hover {
+  color: var(--fg);
+}
+.session-subagent-name {
+  font-family: "Geist Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-subagent-age {
+  flex-shrink: 0;
+  color: var(--dim);
+}
+.session-subagent-detail {
+  /* flex-basis: 100% forces this onto its own line within the parent's
+     flex-wrap row — each chip's detail can be expanded independently
+     (unlike row 4's single-open-at-a-time file-change detail), so without
+     this a short summary would otherwise stay on the same flex line as a
+     neighboring chip instead of appearing directly under its own. */
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 4px 22px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.session-subagent-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.session-subagent-detail-meta {
+  color: var(--dim);
+}
+/* Row 6 (issue #428) — background-task chips, same flex-row/chip shape as
+   .session-subagents-line above, minus the click/expand affordance (a
+   background task has no file/tool-failure counters to reveal — see
+   BackgroundTaskChip's own doc comment). */
+.session-background-tasks-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 22px;
+}
+.session-background-task-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+.session-background-task-letter {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+  color: var(--g);
+}
+.session-background-task-desc {
+  font-family: "Geist Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-item-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+}
+
+.discover-block {
+  padding: 10px 8px 8px;
+}
+.discover-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+.discover-header:hover {
+  border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
+  color: var(--fg);
+}
+.discover-title {
+  font-size: 12px;
+  font-weight: 500;
+  flex: 1;
+}
+.discover-count {
+  font-size: 10.5px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+.discover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 2px 0;
+}
+.discover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.discover-item:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.discover-item-name {
+  font-size: 12px;
+  color: var(--fg);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.discover-git-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  color: var(--o);
+  border: 1px solid color-mix(in srgb, var(--o) 40%, transparent);
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-family: "Geist Mono", monospace;
+  flex-shrink: 0;
+}
+/* Codex hook-trust pending indicator (issue #259) — same pill shape as
+   .discover-git-badge above, reused here rather than duplicated styling. */
+.hook-trust-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  color: var(--o);
+  border: 1px solid color-mix(in srgb, var(--o) 40%, transparent);
+  padding: 1px 5px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.discover-add {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-solid);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+.discover-add:hover {
+  text-decoration: underline;
+}
+
+.dockview-container {
+  position: relative;
+  flex: 1;
+  /* Must equal Dock.tsx's GRID_MIN_HEIGHT — the resize drag clamps to this
+     floor in JS, so the two have to agree or the CSS floor silently wins
+     partway through a drag. */
+  min-height: 160px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  /* Without this, `position: relative` alone does NOT make this a stacking
+     context (z-index stays `auto`), so dockview's internal z-indexes
+     (.dv-sash at 99, its split-view separator at 5, per-terminal upload/
+     attach overlays at 10 — see .kanban-board-overlay below) resolve into
+     the SAME shared context as app-level modals (command palette z-50,
+     settings z-70). `isolation: isolate` scopes all of that to this
+     container, so .kanban-board-overlay's z-index only has to clear
+     dockview's own internal maximum (99) — it can never compete with a
+     modal rendered outside this element. */
+  isolation: isolate;
+}
+
+/* Dockview's own theme classes (dockview.css) set --dv-* directly on this
+   element, which always wins over an inherited value of the same name no
+   matter how it's set upstream — so these overrides must match or beat that
+   selector's specificity (0,1,0), not just live somewhere in the cascade.
+   Only background/border surfaces are remapped to the active terminal
+   scheme's background (--mullion-chrome-bg, set in App.tsx); tab text-color
+   vars are left as dockview's own light/dark defaults (issue #132). */
+/* .dockview-theme-abyss is included alongside light/dark for a non-obvious
+   reason (#121): floating ("peek") groups don't render inside the
+   .dockview-theme-light/-dark element this app classes onto <DockviewReact>'s
+   root — dockview mounts them in its own internal shell element
+   (.dv-shell/.dv-floating-overlay-host), which gets its OWN theme class from
+   the (unset) `theme` component option, defaulting to dockview's built-in
+   "abyss" dark theme regardless of the app's light/dark mode. That's the
+   actual mechanism behind floating panels reading as a plain black frame on
+   a light theme — not just the border/shadow. Repeating the same remap under
+   .dockview-theme-abyss reaches that shell too. (Passing an explicit `theme`
+   prop to <DockviewReact> would be the more principled fix, but is a bigger,
+   riskier change than this bug-fix PR's scope — see issue #121.) */
+/* --dv-floating-border/--dv-floating-box-shadow: var(--border) already
+   resolves per-theme (light vs. dark root class), so one rule covers all
+   three theme classes above. --dv-floating-group-border exists but
+   dockview's base theme — the one this app uses — never applies it to
+   anything, only its "-spaced" theme variants do; setting it here would be
+   a no-op. */
+.dockview-container .dockview-theme-light,
+.dockview-container .dockview-theme-dark,
+.dockview-container .dockview-theme-abyss {
+  --dv-group-view-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-tabs-and-actions-container-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-activegroup-visiblepanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-tab-divider-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-separator-border: var(--border);
+  --dv-floating-border: 1px solid var(--border);
+  --dv-floating-box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.14);
+}
+
+/* .dockview-theme-abyss also needs its tab TEXT colors remapped, unlike
+   light/dark above: abyss's own defaults are white/near-white (correct only
+   against abyss's own hardcoded dark background, which the block above just
+   replaced with the app's — possibly light — background). Left alone, a
+   light app theme would pair light tab background with abyss's default
+   white text and become illegible. light/dark don't need this — their own
+   default text colors already pair correctly with their own (unmodified)
+   backgrounds, which is the existing issue #132 behavior this isn't meant to
+   change. var(--fg) already resolves per app theme via inheritance. */
+.dockview-container .dockview-theme-abyss {
+  --dv-activegroup-visiblepanel-tab-color: var(--fg);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--muted);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--dim);
+}
+
+/* Floating panel chrome: make drag-to-move / drag-to-resize discoverable
+   (#121). The titlebar is already draggable (dockview sets cursor: grab on
+   .dv-draggable) — this adds a hover tint so it visibly invites the drag, and
+   a subtle accent highlight on the otherwise-invisible 4px resize strips. */
+.dockview-container .dv-floating-titlebar.dv-draggable:hover {
+  background-color: color-mix(in srgb, var(--fg) 8%, var(--dv-floating-titlebar-background-color));
+}
+.dockview-container .dv-resize-handle-top:hover,
+.dockview-container .dv-resize-handle-bottom:hover,
+.dockview-container .dv-resize-handle-left:hover,
+.dockview-container .dv-resize-handle-right:hover,
+.dockview-container .dv-resize-handle-topleft:hover,
+.dockview-container .dv-resize-handle-topright:hover,
+.dockview-container .dv-resize-handle-bottomleft:hover,
+.dockview-container .dv-resize-handle-bottomright:hover {
+  background-color: var(--accent-solid);
+  opacity: 0.5;
+}
+
+.mobile-tabs {
+  display: none;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  overflow-x: auto;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  -webkit-overflow-scrolling: touch;
+}
+/* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
+   trailing close/kebab buttons (added conditionally in App.tsx) sit next to
+   its own tab without being swept into that tab's own flex sizing. */
+.mobile-tab-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.mobile-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  /* Item E's touch-target floor (44px), applied here directly rather than
+     shipped at the old 30px and raised again in a later pass — this bar's
+     markup is new in this same change. */
+  height: 44px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mobile-tab.active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+}
+.mobile-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.mobile-tab-agent-logo {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+.mobile-tab-title {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-tab-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: 15px;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--ring);
+}
+/* The active pane's close (×) + kebab (PaneActionsMenu) — same glyph sizes
+   as .pane-tab-btn's desktop equivalent, just a larger hit area to clear the
+   44px touch floor. */
+.mobile-tab-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.mobile-tab-btn:hover,
+.mobile-tab-btn:active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+}
+.mobile-tab-rename-input {
+  height: 44px;
+  min-width: 140px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--term);
+  border: 1px solid var(--accent-solid);
+  border-radius: 8px;
+  padding: 0 10px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
+}
+
+/* Mobile UI/UX overhaul, item C.2 — the terminal key bar (MobileKeyBar.tsx).
+   Hidden by default/on desktop; shown only via the mobile breakpoint block
+   further down, same pattern as .mobile-tabs above. Claims the bottom
+   safe-area inset itself when present — see .grid-area-body's own comment
+   and the `.app.key-bar` override below for why that ownership moves here
+   rather than staying on .grid-area-body. */
+.mobile-key-bar {
+  display: none;
+}
+
+.grid-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Mirrors .grid-area's own flex properties one level deeper — this wrapper
+   exists only so the whole-backend-down banner can dim everything below it
+   without dimming itself. */
+.grid-area-body {
+  flex: 1;
+  min-height: 0;
+  /* A dock dragged to its max height must clip here rather than push the
+     page taller — the dockview-container above already has its own
+     min-height floor to keep the grid usable. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* Issue #87 — unconditional; env() is 0px without a home-indicator gesture
+     area to account for. This is the bottom-most visible content region on
+     mobile EXCEPT when the key bar is showing (.dock is hidden there,
+     .mobile-tabs is a top-of-screen pane switcher, not a bottom bar) — see
+     the `.app.key-bar` override below, where MobileKeyBar.tsx becomes the
+     bottom-most element instead and claims this inset itself. A landscape
+     phone can have this inset outside the <700px breakpoint too — see
+     .toolbar's own comment above. left/right cover the landscape case
+     specifically — a notch/Dynamic Island sits on one side in landscape, not
+     top/bottom, and the live terminal/panel content would otherwise render
+     underneath it. */
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.grid-area-body.dimmed {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Whole backend down — design States doc section 04. */
+.backend-down-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--r) 13%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--r) 25%, transparent);
+}
+.backend-down-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.backend-down-subtext {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.backend-down-reconnect {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--r) 40%, transparent);
+  background: transparent;
+  color: var(--r);
+  border-radius: 7px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.backend-down-reconnect:hover {
+  background: color-mix(in srgb, var(--r) 12%, transparent);
+}
+
+/* Update available — orange/warning palette, below the backend-down
+   banner if both are showing, before the grid-area-body. Click navigates
+   to Settings -> Server info -> Updates subsection. */
+.update-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--o) 13%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--o) 25%, transparent);
+  cursor: pointer;
+  user-select: none;
+}
+.update-banner-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.update-banner-subtext {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.update-banner-dismiss {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.update-banner-dismiss:hover {
+  background: color-mix(in srgb, var(--o) 18%, transparent);
+  color: var(--fg);
+}

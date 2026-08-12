@@ -1,0 +1,32 @@
+/* ============================================================ */
+/* xterm.js overrides                                             */
+/* ============================================================ */
+/* xterm.js v6 renders scrolling via its own custom widget
+   (.xterm-scrollable-element > .scrollbar > .slider) but still keeps a
+   legacy `.xterm-viewport` div with `overflow-y: scroll` for macOS
+   opacity reasons (see @xterm/xterm/css/xterm.css). That div has no
+   scrollable content, so browsers show a native full-height thumb on
+   top of the real one. Suppress it via scrollbar-hiding properties
+   (rather than overflow-y, so this doesn't depend on import order
+   relative to xterm.css) — see issue #94. */
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* dockview's own .dv-tab is flex-shrink:0 (dockview.css), which keeps every
+   tab at its natural content width and makes the tab strip scroll instead of
+   compressing in narrow multi-tab groups — issue #103. flex-basis is left at
+   `auto` (not overridden to 0) so tabs still start at natural width and only
+   shrink once the strip is actually bounded below that, rather than depending
+   on whether .dv-tabs-container stretches to fill the group's width.
+   Anchored under .cmux-root (the app root, see App.tsx) rather than a bare
+   `.dv-tab`, so this override wins on specificity alone — the `!important`
+   is belt-and-suspenders in case dockview ever applies a competing inline
+   style or the CSS import order changes. */
+.cmux-root .dv-tab {
+  flex-shrink: 1 !important;
+  min-width: 110px;
+}

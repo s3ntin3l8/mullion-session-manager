@@ -1,0 +1,75 @@
+/* ============================================================ */
+/* Settings modal                                                 */
+/* ============================================================ */
+.settings-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(1.5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+.settings-modal {
+  width: 1040px;
+  max-width: calc(100% - 48px);
+  height: 720px;
+  max-height: calc(100% - 56px);
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 40px 90px -20px rgba(0, 0, 0, 0.7);
+  animation: cmuxPop 0.13s ease-out;
+}
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.settings-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+/* Mobile UI/UX overhaul, item D — the drill-down's "back to nav list"
+   chevron (Settings.tsx). Hidden unconditionally here; only the <700px
+   breakpoint below turns it on, so the component can mount/unmount it
+   purely off its own `mobileNavOpen` state without also having to know
+   the current viewport width itself. */
+.settings-back-btn {
+  display: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--track);
+  color: var(--muted);
+  border-radius: 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.settings-back-btn:hover {
+  color: var(--fg);
+}
+.settings-modal-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--track);
+  color: var(--muted);
+  border-radius: 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+}

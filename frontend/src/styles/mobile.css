@@ -1,0 +1,346 @@
+/* ============================================================ */
+/* Mobile (<700px): single active pane + switcher, sidebar overlay */
+/* ============================================================ */
+
+@media (max-width: 699px) {
+  /* Mobile UI/UX overhaul, item B.2 — `.app`'s base rule (near the top of
+     this file) is `position: fixed; inset: 0`, so the fixed shell never
+     reflows when the on-screen keyboard opens; `--kb-inset` (App.tsx's own
+     useVisualViewportInset hook, 0px when the keyboard is closed) shrinks
+     it from the bottom instead, so whatever's focused stays above the
+     keyboard rather than hidden behind it. `bottom` alone, not the other
+     three `inset` edges — this only ever needs to reclaim height from the
+     bottom of the shell. TerminalPane's existing ResizeObserver → refit
+     picks up the resulting size change and re-fits the active terminal
+     automatically; no separate wiring needed here.
+
+     Known limitation (independent code review, PR #615): only `bottom`
+     moves, `top` stays pinned to 0. When iOS's native scroll-into-view pans
+     the visual viewport to keep a focused input visible above the keyboard,
+     `visualViewport.offsetTop` goes positive — folded into --kb-inset's own
+     gap calculation (useVisualViewportInset.ts), so `bottom` shrinks by
+     more than the keyboard alone accounts for, while the toolbar at the top
+     of the now-panned viewport can end up scrolled out of view with no
+     scroll container to bring it back. Not chased further here — a real
+     fix would need `.app` to track `top` too, which conflicts with the
+     toolbar's own fixed-at-top design; flagging so it isn't an unstated
+     assumption if it turns out to matter on a real device. */
+  .app {
+    bottom: var(--kb-inset, 0px);
+  }
+
+  /* Mobile UI/UX overhaul, item B.4 — when the key bar renders, App.tsx adds
+     `.key-bar` to `.app` and the bar itself becomes the bottom-most element
+     in `.grid-area-body`'s flex column, so it — not `.grid-area-body` — is
+     what should touch the home-indicator gesture area. Without dropping
+     `.grid-area-body`'s own padding here, the inset would be reserved twice
+     (once by the now-irrelevant gap it leaves below the dockview container,
+     once by the bar), pushing real content up for no reason. */
+  .app.key-bar .grid-area-body {
+    padding-bottom: 0;
+  }
+
+  .mobile-key-bar {
+    display: flex;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--chrome);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-key-bar-btn {
+    flex: 1;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-right: 1px solid var(--border-soft);
+    background: transparent;
+    color: var(--fg);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mobile-key-bar-btn:last-child {
+    border-right: none;
+  }
+  .mobile-key-bar-btn:active {
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+
+  .toolbar-lead {
+    width: auto !important;
+  }
+  .toolbar-center {
+    display: none !important;
+  }
+  .run-cmd-btn {
+    display: none !important;
+  }
+
+  .sidebar-wrapper {
+    position: fixed !important;
+    /* Matches .toolbar's own inset-aware height (its base rule, near the
+       top of this file) — a bare 44px here would let the drawer start
+       under the (now taller, on a notched device) toolbar. Genuinely
+       mobile-only, unlike .toolbar/.toolbar-actions/.grid-area-body's own
+       safe-area padding: this fixed-position overlay-with-scrim drawer only
+       exists at this breakpoint at all. */
+    top: calc(44px + env(safe-area-inset-top));
+    left: 0;
+    bottom: 0;
+    width: min(310px, 84vw) !important;
+    padding-left: env(safe-area-inset-left);
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 45;
+    transform: translateX(-101%);
+    transition: transform 0.24s ease;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
+  }
+  .app.sb-open .sidebar-wrapper {
+    transform: none;
+  }
+  .app.sb-open .cmux-scrim {
+    display: block !important;
+  }
+
+  .mobile-tabs {
+    display: flex !important;
+  }
+
+  .dock {
+    display: none !important;
+  }
+
+  /* UnifiedBoard.tsx now renders on mobile too (the "tasks" dockview panel
+     it replaced was reachable on mobile via the mobile-tabs maximize path —
+     removing it means this overlay is the only way left to reach the task
+     board). Stacks task columns full-width and turns the side drawer into a
+     full-bleed sheet rather than a 380px rail there's no room for. */
+  .kanban-unified-main {
+    flex-direction: column;
+  }
+  /* Was two independently scrolling regions (this + .tasks-board below)
+     nested inside .kanban-board-overlay's own `overflow: auto` — three
+     scroll containers stacked in one viewport, which on touch means no
+     overscroll chaining and unpredictable momentum. Letting the overlay be
+     the one scroller (combined with .kanban-lane-body going vertical below)
+     makes the whole board a single page scroll instead. */
+  .kanban-unified,
+  .kanban-unified-tasks {
+    height: auto;
+    overflow: visible;
+  }
+  .kanban-unified-columns {
+    flex-direction: column;
+    padding: 10px;
+  }
+  .kanban-unified-tasks .tasks-board {
+    overflow: visible;
+  }
+  .kanban-unified-columns .kanban-column {
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+  }
+  /* An empty column still renders its header (so the board's full shape —
+     all seven statuses — stays legible) but hides the "No tasks" body
+     beneath it; stacked full-width, several empty columns otherwise turn
+     reaching Reviewing/Done into a long scroll past nothing. CSS-only
+     (display: none), not a conditional render — UnifiedBoard.test.tsx's own
+     drop-target tests query .kanban-column-body on empty columns, and a
+     component that stopped rendering it there would throw. Desktop is
+     untouched: that same empty body is a live drop target there. */
+  .kanban-column-is-empty .kanban-column-body {
+    display: none;
+  }
+  .kanban-detail-drawer {
+    position: fixed;
+    /* Matches .sidebar-wrapper's own inset-aware top a few rules up in this
+       same block — a bare 44px here left the sheet sliding under a taller,
+       notched-device toolbar, same bug that rule's own comment already
+       covers. No tap-to-dismiss scrim: right/bottom/left are all 0, so the
+       sheet is already full-bleed and there's no visible background left
+       to tap. */
+    inset: calc(44px + env(safe-area-inset-top)) 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    flex: none;
+    z-index: 46;
+    background: var(--bg);
+    /* A stray vertical line has nothing to divide on a full-bleed sheet. */
+    border-left: none;
+  }
+  .kanban-detail-drawer-close {
+    width: 44px;
+    height: 44px;
+  }
+  /* The mobile drawer is a full-bleed fixed sheet (above) with no columns
+     visible behind it to resize against, and mouse drag events don't fire
+     on touch anyway. */
+  .kanban-detail-resize-handle {
+    display: none;
+  }
+  .kanban-lane-body {
+    /* Was a horizontally-scrolling strip of fixed-width cards nested inside
+       the page's own vertical scroll — a scroll-direction trap on a phone
+       (roughly 1.2 cards visible at a time). Stacking it removes the
+       competing scroll axis; .kanban-lane-group's own width below (260px)
+       would otherwise leave a lot of dead space on a ~390px viewport, so it
+       goes full width here too. */
+    flex-direction: column;
+    overflow-x: visible;
+    max-height: none;
+  }
+  .kanban-lane-group {
+    width: 100%;
+  }
+  /* Bare 11px text with padding: 0 (collapse), 4px/9px at 11.5px (new-task),
+     3px/7px (session strip) — all comfortably under the 44px touch-target
+     floor, and the collapse button in particular is the lane's ONLY
+     affordance for reclaiming the space it takes up on a phone. */
+  .kanban-lane-collapse {
+    min-height: 44px;
+    padding: 0 4px;
+  }
+  .tasks-panel-new-btn {
+    min-height: 44px;
+  }
+  .task-card-session-strip {
+    min-height: 44px;
+  }
+  /* iOS Safari auto-zooms the whole page on focus for any input computing
+     under 16px, and does not zoom back out on blur — these two are 11.5px.
+     Expected side effect: .tasks-panel-new-form is `flex: 1; min-width:
+     240px` inside a `flex-wrap` toolbar, so at this width the create form
+     now wraps onto its own line; that's a layout consequence of fixing the
+     zoom, not a regression. */
+  .tasks-panel-new-project,
+  .tasks-panel-new-title {
+    font-size: 16px;
+  }
+
+  /* Mobile UI/UX overhaul, item D — Settings as a full-bleed sheet instead
+     of a centered 1040x720 modal with no room for a 212px nav rail beside
+     its content (the desktop shell, above, is untouched outside this
+     breakpoint). */
+  .settings-modal {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+  }
+  .settings-modal-header {
+    padding-top: calc(16px + env(safe-area-inset-top));
+  }
+  /* Hermes review, PR #621 round 4 (nit) — the top inset was handled above,
+     but not the bottom: in landscape on a notched phone, the home-indicator
+     area could otherwise clip the last row of the nav list or scrolled
+     section content. Same `env(safe-area-inset-bottom)` pattern already
+     used by `.sidebar-wrapper`/`.kanban-detail-drawer` elsewhere in this
+     file, added to each pane's own bottom edge rather than the fixed-size
+     `.settings-modal` shell, since these are the parts that actually
+     scroll. */
+  .settings-content-body {
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+  .settings-nav-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  /* Hermes review, PR #621 round 2 — item E's own 44px floor applies here
+     too: this is the drill-down's primary control, same as the close
+     button right beside it (already bumped a few rules up), not just a
+     visibility toggle. */
+  .settings-back-btn {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* Settings.tsx's drill-down: nav list first, tapping a section swaps to
+     its content (Settings.tsx's `mobileNavOpen` state adds this modifier
+     class). Both panes stay mounted — only one is ever the wrong side of
+     `display: none` at a time — so section content doesn't remount (and
+     lose local state, e.g. an in-flight rename) on every nav round-trip. */
+  .settings-modal-body-showing-content .settings-nav {
+    display: none;
+  }
+  .settings-modal-body:not(.settings-modal-body-showing-content) .settings-content {
+    display: none;
+  }
+  .settings-nav,
+  .settings-content {
+    width: 100%;
+  }
+
+  /* Item D cont'd — .settings-row's label/control pair has no room to sit
+     side by side at this width (`gap: 20px`, no wrap, in the base rule);
+     stacking is the same fix UnifiedBoard's kanban lanes already use above
+     for the same "two things fighting over one narrow row" shape. */
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .settings-row-control {
+    align-self: stretch;
+  }
+  .settings-row-control select,
+  .settings-row-control input[type="text"] {
+    width: 100%;
+  }
+  .settings-segmented,
+  .settings-slider-row {
+    width: 100%;
+  }
+
+  /* Item E — touch targets. .mobile-tab/.mobile-tab-btn and the kanban lane
+     controls above are already sized for this; these are the remaining
+     sub-44px interactive rows/buttons that are still reachable on mobile
+     (dockview's own tab strip, i.e. .pane-tab/.pane-tab-btn, is not — its
+     group header is hidden entirely on mobile, item A). */
+  .session-item,
+  .project-row-header,
+  .workspace-item,
+  .settings-nav-item {
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .settings-modal-close,
+  .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* Independent code review, PR #621 — .view-mode-toggle/.hierarchy-toggle's
+     own `.toolbar-icon-btn` override (two-class selector, styles.css:315,
+     335) outranks the plain `.toolbar-icon-btn` bump above regardless of
+     source order — CSS specificity, not cascade position, decides here —
+     so both toggles were silently staying at 26x26 on mobile despite this
+     block's own comment claiming every reachable .toolbar-icon-btn was
+     covered. ViewModeToggle.tsx always renders in .toolbar-actions (never
+     hidden on mobile) and HierarchyToggle.tsx renders in the sidebar drawer
+     (Sidebar.tsx), which is reachable on mobile too — both need their own,
+     equally-specific override. */
+  .view-mode-toggle .toolbar-icon-btn,
+  .hierarchy-toggle .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  /* The card itself is a drag-and-drop reorder handle (out of scope on
+     touch — see the plan's "Explicitly out of scope"), not a tap target;
+     this only guards against its own padding/border squeezing the nested
+     .session-item (already bumped above) back under the floor. */
+  .kanban-card {
+    min-height: 44px;
+  }
+}

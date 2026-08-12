@@ -1,0 +1,1079 @@
+/* ============================================================ */
+/* Create-project / create-group modals — ported 1:1 from the    */
+/* design's "Add project" / "New workspace group" overlays. Top-  */
+/* anchored (not centered like Settings), z-index above it (70).  */
+/* ============================================================ */
+.create-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, #000 55%, transparent);
+  backdrop-filter: blur(1.5px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 120px;
+  z-index: 70;
+}
+.create-modal {
+  width: 520px;
+  max-width: calc(100% - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px -16px rgba(0, 0, 0, 0.65);
+  animation: cmuxPop 0.13s ease-out;
+}
+.create-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.create-modal-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-solid) 16%, transparent);
+  color: var(--accent-solid);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.create-modal-header-text {
+  flex: 1;
+  min-width: 0;
+}
+.create-modal-title {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.create-modal-subtitle {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.create-modal-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--track);
+  color: var(--muted);
+  border-radius: 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.create-modal-close:hover {
+  color: var(--fg);
+}
+.create-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+}
+.create-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.create-modal-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.create-modal-field-hint {
+  font-size: 11px;
+  color: var(--dim);
+}
+.create-modal-field-hint.error {
+  color: var(--r);
+}
+.create-modal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+}
+.create-modal-input-row input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  outline: none;
+  padding: 0;
+}
+.create-modal-input-row input.mono {
+  font-family: "Geist Mono", monospace;
+}
+.create-modal-textarea {
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 9px 11px;
+  outline: none;
+  resize: vertical;
+}
+.create-modal-browse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 4px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+.create-modal-browse-btn:hover {
+  color: var(--fg);
+  border-color: var(--muted);
+}
+.create-modal-dir-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+}
+.create-modal-dir-confirm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.create-modal-dir-confirm-btn {
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  background: var(--accent-solid);
+  color: #fff;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.create-modal-dir-confirm-btn:hover {
+  filter: brightness(1.08);
+}
+.create-modal-dir-confirm-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.create-modal-detected-devserver {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent-solid);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.create-modal-detected-devserver:hover {
+  text-decoration: underline;
+}
+.create-modal-swatches {
+  display: flex;
+  gap: 9px;
+}
+.color-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.color-swatch.selected {
+  border-color: var(--fg);
+}
+.create-modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--sidebar-2);
+}
+.create-modal-footer-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--dim);
+}
+.create-modal-cancel {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.create-modal-cancel:hover {
+  color: var(--fg);
+  border-color: var(--muted);
+}
+.create-modal-submit {
+  height: 32px;
+  padding: 0 16px;
+  border: none;
+  background: var(--accent-solid);
+  color: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.create-modal-submit:hover {
+  filter: brightness(1.08);
+}
+.create-modal-cancel:disabled,
+.create-modal-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* GitHub device-flow code (GitHubDeviceFlowModal.tsx, issue #27 phase 4) —
+   the user_code GitHub asks for at the verification_uri. */
+.device-flow-code {
+  font-family: "Geist Mono", monospace;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--fg);
+}
+.settings-modal-close:hover {
+  color: var(--fg);
+}
+.settings-modal-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* Nav rail — 1a's accented sidebar (distinct surface + icons + search +
+   footer identity chip) ported into the 1b centered-modal shell. */
+.settings-nav {
+  width: 212px;
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.settings-nav-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 12px 12px 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.settings-nav-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.settings-nav-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 10px 12px;
+  overflow-y: auto;
+}
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+}
+.settings-nav-item svg {
+  flex-shrink: 0;
+}
+.settings-nav-item.active {
+  background: var(--seg);
+  color: var(--fg);
+  font-weight: 600;
+}
+.settings-nav-empty {
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.settings-nav-footer {
+  margin-top: auto;
+  padding: 12px 15px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+.settings-nav-footer-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--accent-solid);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.settings-nav-footer-text {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-content-header {
+  padding: 18px 24px 13px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.settings-content-title {
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.settings-content-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.settings-content-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 24px 24px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Row primitive — label/desc left, control right                    */
+/* ---------------------------------------------------------------- */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-row.align-start {
+  align-items: flex-start;
+}
+.settings-row:last-child {
+  border-bottom: none;
+}
+.settings-row-text {
+  flex: 1;
+  min-width: 0;
+}
+.settings-row-label {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.settings-row-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+.settings-row-control {
+  flex-shrink: 0;
+}
+.settings-row-control select,
+.settings-row-control input[type="text"] {
+  background: var(--field);
+  border: 1px solid var(--border-soft);
+  color: var(--fg);
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+
+.settings-group-heading {
+  padding: 6px 0 11px;
+}
+.settings-group-title {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.settings-group-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.settings-eyebrow-block {
+  padding: 18px 0 9px;
+}
+.settings-eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+  font-weight: 700;
+}
+.settings-eyebrow-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+  line-height: 1.45;
+}
+
+/* ---------------------------------------------------------------- */
+/* Toggle                                                            */
+/* ---------------------------------------------------------------- */
+.settings-toggle {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  padding: 0;
+}
+.settings-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.settings-toggle.small {
+  width: 36px;
+  height: 21px;
+}
+.settings-toggle.on {
+  background: var(--accent-solid);
+}
+.settings-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.16s;
+}
+.settings-toggle.small .settings-toggle-knob {
+  width: 17px;
+  height: 17px;
+}
+.settings-toggle.on .settings-toggle-knob {
+  left: 18px;
+}
+.settings-toggle.small.on .settings-toggle-knob {
+  left: 17px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Segmented control (Theme, Cursor style, Sidebar density)          */
+/* ---------------------------------------------------------------- */
+.settings-segmented {
+  display: inline-flex;
+  background: var(--track);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  padding: 2px;
+}
+.settings-segmented-btn {
+  padding: 5px 13px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings-segmented-btn.active {
+  background: var(--seg);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- */
+/* Slider (Font size, Idle threshold)                                */
+/* ---------------------------------------------------------------- */
+.settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 230px;
+}
+.settings-slider {
+  flex: 1;
+  accent-color: var(--accent-solid);
+  cursor: pointer;
+}
+.settings-slider-bubble {
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  min-width: 34px;
+  text-align: right;
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- */
+/* Number field w/ unit suffix (Scrollback, reconcile interval, ...) */
+/* ---------------------------------------------------------------- */
+.settings-numberfield {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+}
+.settings-numberfield input {
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: "Geist Mono", monospace;
+  font-size: 12.5px;
+  padding: 7px 4px 7px 11px;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+.settings-numberfield input::-webkit-outer-spin-button,
+.settings-numberfield input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.settings-numberfield-suffix {
+  font-size: 11px;
+  color: var(--muted);
+  padding-right: 11px;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- */
+/* Dropdown (font family, default shell/agent, sound)                */
+/* ---------------------------------------------------------------- */
+.settings-dropdown select {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 7px 30px 7px 11px;
+  cursor: pointer;
+}
+.settings-dropdown.small select {
+  font-size: 12px;
+  border-radius: 7px;
+  padding: 6px 26px 6px 10px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Styled list (project roots, detected CLIs, key-conflicts, ...)    */
+/* ---------------------------------------------------------------- */
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.settings-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.settings-list-row.unavailable {
+  opacity: 0.55;
+}
+.settings-list-row-icon {
+  display: flex;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.settings-list-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.settings-list-row-subtitle {
+  flex: 1;
+  min-width: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-list-row-trailing {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--g);
+}
+.settings-status-dot.off {
+  background: transparent;
+  border: 1.5px solid var(--dim);
+  box-sizing: border-box;
+}
+.settings-status-dot.warn {
+  background: var(--y);
+}
+
+/* ---------------------------------------------------------------- */
+/* Launchers table (Settings → Launchers & agents) — a single shared */
+/* grid template drives the header and every row so name/path/status */
+/* columns stay aligned across the Shells/AI agents group break, even */
+/* when a row has no icon or omits a toggle.                          */
+/* ---------------------------------------------------------------- */
+.settings-launcher-table {
+  --lch-cols: 16px 9px 132px minmax(0, 1fr) 36px 72px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.settings-launcher-head,
+.settings-launcher-row {
+  display: grid;
+  grid-template-columns: var(--lch-cols);
+  gap: 12px;
+  align-items: center;
+}
+.settings-launcher-head {
+  padding: 0 13px 4px;
+}
+.settings-launcher-head span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 700;
+}
+.settings-launcher-head .settings-launcher-col-center {
+  text-align: center;
+}
+.settings-launcher-row {
+  padding: 10px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.settings-launcher-row.unavailable {
+  opacity: 0.55;
+}
+.settings-launcher-icon {
+  display: flex;
+  color: var(--muted);
+}
+.settings-launcher-icon img {
+  display: block;
+}
+.settings-launcher-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-launcher-config {
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-launcher-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-launcher-status {
+  font-size: 10.5px;
+  text-align: center;
+}
+.settings-launcher-status.available {
+  color: var(--g);
+}
+.settings-launcher-status.unavailable {
+  color: var(--dim);
+}
+
+.settings-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  width: 100%;
+}
+.settings-add-btn:hover {
+  border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
+  color: var(--fg);
+}
+
+.settings-cascade-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 13px;
+  border: 1px solid color-mix(in srgb, var(--r) 40%, transparent);
+  background: color-mix(in srgb, var(--r) 10%, transparent);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.settings-secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings-secondary-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.settings-secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-kbd-chip {
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  background: var(--track);
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------- */
+/* Color-scheme swatch grid + live terminal preview                  */
+/* ---------------------------------------------------------------- */
+.settings-swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.settings-swatch {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.settings-swatch.selected {
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
+}
+.settings-swatch-chips {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.settings-swatch-chip {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.settings-swatch-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.settings-swatch.selected .settings-swatch-label {
+  color: var(--fg);
+}
+
+.settings-terminal-preview {
+  margin-top: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  overflow: hidden;
+}
+.settings-terminal-preview-titlebar {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  background: var(--pane-hd);
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-terminal-preview-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.settings-terminal-preview-dot.red {
+  background: #e5575a;
+}
+.settings-terminal-preview-dot.yellow {
+  background: #d7b06a;
+}
+.settings-terminal-preview-dot.green {
+  background: #5ec27a;
+}
+.settings-terminal-preview-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "Geist Mono", monospace;
+  margin-left: 4px;
+}
+.settings-terminal-preview-body {
+  background: var(--pbg);
+  color: var(--pfg);
+  line-height: 1.62;
+  padding: 13px 15px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.settings-caret {
+  display: inline-block;
+  background: var(--pfg);
+  vertical-align: text-bottom;
+  animation: cmuxSettingsBlink 1.06s ease-in-out infinite;
+}
+@keyframes cmuxSettingsBlink {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  65%,
+  90% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Server info — health banner, stat cards, info table                */
+/* ---------------------------------------------------------------- */
+.settings-health-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 14px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--g) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--g) 30%, transparent);
+  margin-bottom: 16px;
+}
+.settings-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--g);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g) 25%, transparent);
+  flex-shrink: 0;
+}
+.settings-health-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-health-status {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: "Geist Mono", monospace;
+}
+.settings-health-uptime {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+
+.settings-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.settings-stat-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.settings-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 700;
+}
+.settings-stat-value {
+  font-size: 13.5px;
+  font-family: "Geist Mono", monospace;
+  margin-top: 5px;
+}
+.settings-stat-value.good {
+  color: var(--g);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-stat-value.warn {
+  color: var(--y);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-stat-value-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--g);
+}
+.settings-stat-value-dot.warn {
+  background: var(--y);
+}
+.settings-stat-value a {
+  color: inherit;
+  text-decoration: none;
+}
+.settings-stat-value a:hover {
+  color: var(--accent-solid);
+}
+
+.settings-info-table {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  overflow: hidden;
+}
+.settings-info-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+}
+.settings-info-row.zebra {
+  background: var(--field);
+}
+.settings-info-key {
+  font-size: 12.5px;
+  color: var(--muted);
+  width: 150px;
+  flex-shrink: 0;
+}
+.settings-info-value {
+  flex: 1;
+  min-width: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-footer-note {
+  font-size: 11.5px;
+  color: var(--dim);
+  margin-top: 14px;
+  line-height: 1.5;
+}
+
+.settings-readonly-value {
+  font-size: 12.5px;
+  font-family: "Geist Mono", monospace;
+  color: var(--muted);
+}

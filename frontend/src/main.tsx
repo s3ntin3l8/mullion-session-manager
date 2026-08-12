@@ -33,7 +33,7 @@ import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
-import "./styles.css";
+import "./styles/index.css";
 
 // Issue #87 — registerType: "autoUpdate" (vite.config.ts) only makes the
 // SERVICE WORKER itself take over immediately (skipWaiting/clientsClaim);
