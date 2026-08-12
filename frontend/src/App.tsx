@@ -50,6 +50,7 @@ import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useMobileLayout } from "./hooks/useMobileLayout.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
+import { useAppStreams } from "./hooks/useAppStreams.js";
 import { usePolling } from "./hooks/usePolling.js";
 import {
   pickNewNotifiableEvents,
@@ -493,24 +494,17 @@ export function App() {
   // actually re-probes the filesystem.
   usePolling(() => useDashboardStore.getState().checkCodexHookTrust(), 60 * 1000);
 
-  // Starts the ~4s session-status poll once (paused while the tab is
-  // hidden) so status badges reflect the backend without a mutation.
-  useEffect(() => useDashboardStore.getState().startLiveRefresh(), []);
-
-  // Connects the single /ws/events push channel once (issue #166) — not
-  // per-pane, unlike TerminalPane.tsx's own per-session WS. Additive
-  // alongside the poll above, which stays exactly as-is; nothing in this PR
-  // yet renders from the resulting `events` store slice.
-  useEffect(() => useDashboardStore.getState().startEventsStream(), []);
-
-  // #488 — connects the /ws/tasks push channel once on mount so the Tasks
-  // panel picks up a transition within ~1s instead of on the next 60s poll
-  // tick. Additive alongside that poll, which stays as the fallback.
-  useEffect(() => useDashboardStore.getState().startTasksStream(), []);
-
-  // Phase 2 GitHub WS — connects the /ws/github push channel once on mount
-  // so real-time PR/CI/issue updates from webhooks reach the store.
-  useEffect(() => useDashboardStore.getState().connectGitHubWS(), []);
+  // Starts this app's live data feeds from the backend once on mount: the
+  // ~4s session-status poll plus the /ws/events, /ws/tasks, and /ws/github
+  // push channels — extracted to useAppStreams (hooks/useAppStreams.ts).
+  // Called here, at the position its four effects previously occupied in
+  // this component's body (right after the global keyboard shortcuts effect
+  // above, right before the update-check poll below), though — like
+  // useDockviewDrop/useGlobalShortcuts before it — this position is NOT
+  // load-bearing: none of the four extracted effects share state with any
+  // other effect in this file, or with each other — see that hook's own
+  // header comment for the full ordering/coupling analysis.
+  useAppStreams();
 
   // Fetches the server-persisted Settings blob once on mount (store.ts seeds
   // sane defaults synchronously so nothing blocks on this) and starts
