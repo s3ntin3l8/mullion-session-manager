@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { DeviceFlowStatus } from "./api.js";
 import { CloseIcon, GitHubIcon } from "./icons.js";
+import { usePolling } from "./hooks/usePolling.js";
 import { SecondaryButton } from "./ui/primitives.js";
 
 const POLL_INTERVAL_MS = 2000;
@@ -39,18 +40,21 @@ export function GitHubDeviceFlowModal({
       });
   }, []);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
+  // Stops polling once the attempt reaches any terminal state — `enabled`
+  // recomputes to `false` on a non-"pending" status, which tears the
+  // interval down via usePolling's own effect cleanup (no `state` in a
+  // dependency array needed: `enabled` is `true` both before the first
+  // response arrives and for every "pending" tick after, so the interval
+  // is never restarted mid-poll, only ever torn down once at the end).
+  // `immediate: false` matches the pre-extraction effect, which only ever
+  // checked status on an interval tick, never synchronously on mount.
+  usePolling(
+    () => {
       api
         .getGitHubDeviceFlowStatus()
         .then((summary) => {
           setState(summary);
           if (summary.status === "connected") onConnectedRef.current();
-          // Stop polling once the attempt reaches any terminal state —
-          // the interval id is captured in this same closure, so clearing
-          // it here (rather than via effect cleanup) doesn't need `state`
-          // in the dependency array either.
-          if (summary.status !== "pending") clearInterval(timer);
         })
         .catch(() => {
           // A transient poll failure (or a stray 404 before the initial
@@ -58,9 +62,10 @@ export function GitHubDeviceFlowModal({
           // state on screen rather than flashing an error for one missed
           // beat.
         });
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, []);
+    },
+    POLL_INTERVAL_MS,
+    { enabled: state === null || state.status === "pending", immediate: false },
+  );
 
   const copyCode = () => {
     if (!state) return;

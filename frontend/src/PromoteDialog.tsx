@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { api } from "./api.js";
+import { useState } from "react";
 import type { Session, Project } from "./api.js";
 import { useDashboardStore } from "./store.js";
+import { useGitBranches } from "./hooks/useGitBranches.js";
 import { Dropdown } from "./ui/primitives.js";
 import { GitBranchIcon, CloseIcon } from "./icons.js";
 
@@ -31,28 +31,23 @@ export function PromoteDialog({
 
   const isPending = session.promoteState === "pending";
 
-  const [branches, setBranches] = useState<string[]>([]);
-  const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   const [baseRef, setBaseRef] = useState(session.promoteSuggestedBaseRef ?? "");
   const [branchName, setBranchName] = useState("");
   const [seedPrompt, setSeedPrompt] = useState(session.promoteSummary ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void api.getProjectGitBranches(project.id).then((result) => {
-      if (cancelled || !result) return;
-      const local = result.branches.map((b) => b.name);
-      setBranches([...local, ...result.remoteBranches]);
-      const current = result.branches.find((b) => b.isCurrent)?.name ?? null;
-      setCurrentBranch(current);
-      setBaseRef((prev) => prev || current || local[0] || "");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [project.id]);
+  // Pre-extraction, this fetch had no `.catch` at all (an unhandled
+  // rejection on failure) — useGitBranches always tracks its own `error`
+  // internally, which this dialog doesn't read/render, so that unhandled
+  // rejection is quietly absorbed rather than reproduced. A deliberate,
+  // strictly-an-improvement side effect of sharing this hook with
+  // CommandPalette.tsx (which does render its own error).
+  const { branches, currentBranch } = useGitBranches(project.id, {
+    onLoaded: ({ branches, currentBranch }) => {
+      setBaseRef((prev) => prev || currentBranch || branches[0] || "");
+    },
+  });
 
   const confirm = () => {
     const trimmedBaseRef = baseRef.trim();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
+import { usePolling } from "./hooks/usePolling.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
 import { Toggle } from "./ui/primitives.js";
 import { ConfirmButton } from "./ConfirmButton.js";
@@ -188,26 +189,19 @@ export function GitPanel({
     [params.projectId],
   );
 
-  useEffect(() => {
-    const cancelledRef = { current: false };
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchStatus(cancelledRef);
-
-    const tick = () => {
-      if (document.visibilityState === "visible") void fetchStatus(cancelledRef);
-    };
-    const timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
-
-    // Same reasoning as GitHubPanel's effect for the dep array: this panel
-    // is mounted fresh per project (a stable "git-<projectId>" dockview
-    // panel id, see App.tsx' onOpenGit), so params.projectId never
-    // actually changes under an existing instance.
-    return () => {
-      cancelledRef.current = true;
-      clearInterval(timer);
-    };
-  }, [params.projectId, fetchStatus]);
+  // Same reasoning as GitHubPanel's effect for the dep array: this panel is
+  // mounted fresh per project (a stable "git-<projectId>" dockview panel
+  // id, see App.tsx' onOpenGit), so params.projectId never actually
+  // changes under an existing instance — the `cancelledRef` param
+  // fetchStatus accepts is otherwise unused here (still passed by its two
+  // other, non-polling call sites below), since that guard only mattered
+  // for a stale in-flight request from a torn-down effect instance, which
+  // this panel's fresh-mount-per-project invariant means never happens in
+  // practice.
+  usePolling(() => void fetchStatus(), LIVE_REFRESH_INTERVAL_MS, {
+    pauseWhenHidden: true,
+    deps: [fetchStatus],
+  });
 
   // Issue #442 — extracted out of the mount-time effect so mutation
   // handlers can re-run it too. `?detail=1` (the `true` argument) requests

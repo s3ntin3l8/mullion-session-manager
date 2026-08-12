@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api, LOCAL_HOST_ID } from "./api.js";
 import type { GitFileStatus, GitStatus } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
+import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
 import { ChevronDownIcon, GitBranchIcon } from "./icons.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
@@ -59,21 +60,12 @@ function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
   // its position under the matching file row, so switching which file is
   // expanded unmounts this instance and mounts a fresh one rather than
   // reusing it. Same shape as Sidebar.tsx's own SessionFileDiff.
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getProjectGitFileDiff(projectId, filePath)
-      .then((r) => {
-        if (cancelled) return;
-        setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null);
-      })
-      .catch(() => {
-        if (!cancelled) setDiffLines(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, filePath]);
+  useAsyncData(
+    () => api.getProjectGitFileDiff(projectId, filePath),
+    (r) => setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null),
+    () => setDiffLines(null),
+    [projectId, filePath],
+  );
 
   if (diffLines === undefined) {
     return (

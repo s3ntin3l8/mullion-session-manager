@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  CSSProperties,
-  DragEvent,
-  KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent,
-} from "react";
+import type { CSSProperties, DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store.js";
 import type { Theme } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
@@ -43,6 +38,7 @@ import {
 } from "./icons.js";
 import { ApiError } from "./api.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import { useDragResize } from "./hooks/useDragResize.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
@@ -295,42 +291,24 @@ export function UnifiedBoard({
     const n = readNumber(STORAGE_KEYS.taskDrawerWidth, NaN);
     return Number.isFinite(n) && n > 0 ? clampDrawerWidth(n, Infinity) : DEFAULT_DRAWER_WIDTH;
   });
-  const widthDragRef = useRef<{ startX: number; startW: number; maxW: number } | null>(null);
-  const [widthDragging, setWidthDragging] = useState(false);
-
-  const onResizeMouseDown = (e: ReactMouseEvent) => {
-    e.preventDefault();
-    const containerWidth = mainRef.current?.clientWidth ?? Infinity;
-    widthDragRef.current = {
-      startX: e.clientX,
-      startW: drawerWidth,
-      maxW: Math.max(MIN_DRAWER_WIDTH, containerWidth - MIN_COLUMNS_WIDTH),
-    };
-    setWidthDragging(true);
-  };
-
-  useEffect(() => {
-    if (!widthDragging) return;
-    const onMove = (e: MouseEvent) => {
-      const d = widthDragRef.current;
-      if (!d) return;
-      // Handle sits on the drawer's LEFT border: dragging left (clientX
-      // decreases) grows the drawer, matching the direction the border
-      // itself moves.
-      setDrawerWidth(clampDrawerWidth(d.startW + (d.startX - e.clientX), d.maxW));
-    };
-    const onUp = () => setWidthDragging(false);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-    };
-  }, [widthDragging]);
+  // Handle sits on the drawer's LEFT border: dragging left (clientX
+  // decreases) grows the drawer, matching the direction the border itself
+  // moves — hence `invert: true`. Persists on drag end only via
+  // `onCommit` (see the mount-time-clamp comment below for why that's
+  // deliberately NOT also persisted).
+  const { onMouseDown: onResizeMouseDown } = useDragResize({
+    axis: "x",
+    invert: true,
+    min: MIN_DRAWER_WIDTH,
+    getMax: () => {
+      const containerWidth = mainRef.current?.clientWidth ?? Infinity;
+      return Math.max(MIN_DRAWER_WIDTH, containerWidth - MIN_COLUMNS_WIDTH);
+    },
+    value: drawerWidth,
+    onChange: setDrawerWidth,
+    onCommit: (w) => writeNumber(STORAGE_KEYS.taskDrawerWidth, w),
+    cursor: "col-resize",
+  });
 
   // Independent review — the initial useState above only applies
   // clampDrawerWidth's floor (maxW: Infinity), since the ceiling depends on
@@ -360,23 +338,6 @@ export function UnifiedBoard({
     window.addEventListener("resize", clampToContainer);
     return () => window.removeEventListener("resize", clampToContainer);
   }, []);
-
-  // Persist on drag end only (Dock.tsx's own precedent) — skips the initial
-  // mount so a user who never touches the handle doesn't get the
-  // localStorage-or-default width silently written back. The mount-time
-  // clamp above is deliberately NOT persisted here either — it's cheap to
-  // recompute from the raw localStorage value + a live measurement on
-  // every mount, so there's nothing to gain from writing the clamped
-  // result back over the user's actual last-dragged width.
-  const widthMountedRef = useRef(false);
-  useEffect(() => {
-    if (!widthMountedRef.current) {
-      widthMountedRef.current = true;
-      return;
-    }
-    if (!widthDragging) writeNumber(STORAGE_KEYS.taskDrawerWidth, drawerWidth);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- persist-on-drag-end, drawerWidth read intentionally
-  }, [widthDragging]);
 
   return (
     <div className="kanban-unified">

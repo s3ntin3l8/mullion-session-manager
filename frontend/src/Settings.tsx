@@ -24,6 +24,7 @@ import { formatRelativeAge } from "./relativeTime.js";
 import { requestNotificationPermission } from "./desktopNotify.js";
 import { disablePush, enablePush, isPushSupported } from "./pushClient.js";
 import { useFocusTrap } from "./useFocusTrap.js";
+import { usePolling } from "./hooks/usePolling.js";
 import { STATUS_PRESENTATION, isStatusReachable } from "./sessionStatus.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
@@ -820,14 +821,10 @@ function HostsSection() {
   // #246) actually updates while this section stays open, instead of only
   // on mount/after a host mutation — matching #246's "continuously-updated
   // indicator" ask, not just a one-shot fetch.
-  useEffect(() => {
-    void refreshHosts();
-    const tick = () => {
-      if (document.visibilityState === "visible") void refreshHosts();
-    };
-    const timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [refreshHosts]);
+  usePolling(() => void refreshHosts(), LIVE_REFRESH_INTERVAL_MS, {
+    pauseWhenHidden: true,
+    deps: [refreshHosts],
+  });
 
   // Snapshotting host.lastCheckedAt when the click *begins* (not when it
   // resolves) is what deriveHostStatus compares against later — see its
@@ -2841,15 +2838,19 @@ function UpdatesSubsection() {
 
   // Polls only while an update is actually running — matches the
   // poll-until-terminal-state pattern in GitHubDeviceFlowModal.tsx.
-  useEffect(() => {
-    if (!applying) return;
-    const timer = setInterval(() => {
+  // `enabled: applying` both starts the poll AND, via usePolling's own
+  // effect-restart-on-`enabled`-change, stops it once `setApplying(false)`
+  // below takes effect on the next render — no explicit `clearInterval`
+  // call needed here the way the pre-extraction effect had. `immediate:
+  // false` matches the original: the first check was always the first
+  // *interval* tick, `UPDATE_STATUS_POLL_MS` after `applying` became true.
+  usePolling(
+    () => {
       api
         .getUpdateStatus()
         .then((s) => {
           setStatus(s);
           if (s.phase === "done" || s.phase === "failed") {
-            clearInterval(timer);
             setApplying(false);
             // The server just restarted itself into the new release —
             // reload so every other tab/websocket reconnects against it
@@ -2862,9 +2863,10 @@ function UpdatesSubsection() {
           // A transient poll failure keeps the last known state on screen
           // rather than flashing an error for one missed beat.
         });
-    }, UPDATE_STATUS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [applying]);
+    },
+    UPDATE_STATUS_POLL_MS,
+    { enabled: applying, immediate: false },
+  );
 
   const apply = () => {
     if (!check?.latestVersion || !check.assetUrl || !check.checksumUrl) return;

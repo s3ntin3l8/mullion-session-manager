@@ -45,6 +45,7 @@ import {
 } from "./icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
+import { useAsyncData } from "./hooks/useAsyncData.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
 import { matchesQuery } from "./matchQuery.js";
@@ -1424,21 +1425,12 @@ interface SessionFileDiffProps {
 function SessionFileDiff({ sessionId, filePath }: SessionFileDiffProps) {
   const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getSessionGitFileDiff(sessionId, filePath)
-      .then((r) => {
-        if (cancelled) return;
-        setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null);
-      })
-      .catch(() => {
-        if (!cancelled) setDiffLines(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, filePath]);
+  useAsyncData(
+    () => api.getSessionGitFileDiff(sessionId, filePath),
+    (r) => setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null),
+    () => setDiffLines(null),
+    [sessionId, filePath],
+  );
 
   if (diffLines === undefined) {
     return (
