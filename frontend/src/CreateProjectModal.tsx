@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./icons.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type { Host, Launcher } from "./api.js";
-import { Dropdown } from "./settings/primitives.js";
+import { Dropdown } from "./ui/primitives.js";
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from

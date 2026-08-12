@@ -59,7 +59,7 @@ import {
   Slider,
   StyledList,
   Toggle,
-} from "./settings/primitives.js";
+} from "./ui/primitives.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { SwatchGrid, TerminalPreview } from "./settings/TerminalPreview.js";
 import { resolveTaskMaster } from "./taskConfig.js";

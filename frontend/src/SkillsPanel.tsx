@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { SkillAgent, SkillInfo, SkillScope } from "./api.js";
 import { SkillIcon } from "./icons.js";
-import { Toggle } from "./settings/primitives.js";
+import { Toggle } from "./ui/primitives.js";
 
 export interface SkillsPanelParams {
   projectId: number;

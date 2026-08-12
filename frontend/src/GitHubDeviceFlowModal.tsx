@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { DeviceFlowStatus } from "./api.js";
 import { CloseIcon, GitHubIcon } from "./icons.js";
-import { SecondaryButton } from "./settings/primitives.js";
+import { SecondaryButton } from "./ui/primitives.js";
 
 const POLL_INTERVAL_MS = 2000;
 

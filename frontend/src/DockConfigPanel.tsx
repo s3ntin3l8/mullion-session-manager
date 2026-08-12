@@ -3,7 +3,7 @@ import { api, ApiError } from "./api.js";
 import type { DockControlInput } from "./api.js";
 import { PlusIcon, CloseIcon, DockIcon } from "./icons.js";
 import { ConfirmButton } from "./ConfirmButton.js";
-import { Row } from "./settings/primitives.js";
+import { Row } from "./ui/primitives.js";
 import { useDashboardStore } from "./store.js";
 
 export interface DockConfigPanelParams {

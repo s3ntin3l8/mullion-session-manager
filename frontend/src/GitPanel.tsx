@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
-import { Toggle } from "./settings/primitives.js";
+import { Toggle } from "./ui/primitives.js";
 import { ConfirmButton } from "./ConfirmButton.js";
 
 export interface GitPanelParams {
