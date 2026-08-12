@@ -28,10 +28,12 @@ import {
 } from "./terminalRepaintRegistry.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
 import type { TerminalInputHandle } from "./terminalInputRegistry.js";
-// ResizeMessage/ExitedMessage physically live in src/shared/ws-protocol.ts
-// (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
-// re-export) as TerminalWSMessage's two arms.
-import type { ResizeMessage, ExitedMessage } from "../../src/shared/ws-protocol.js";
+// ResizeMessage physically lives in src/shared/ws-protocol.ts (repo root,
+// NOT this frontend workspace — see src/routes/terminal.ts's own re-export)
+// as one arm of TerminalWSMessage; the other arm, ExitedMessage, isn't
+// imported here since its single field is checked structurally below
+// rather than through the named type.
+import type { ResizeMessage } from "../../src/shared/ws-protocol.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -965,7 +967,7 @@ export function TerminalPane(props: {
         } catch {
           return;
         }
-        if ((parsed as Partial<ExitedMessage> | null)?.type === "exited") {
+        if ((parsed as { type?: unknown } | null)?.type === "exited") {
           sessionExited = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           setStatus("ended");
