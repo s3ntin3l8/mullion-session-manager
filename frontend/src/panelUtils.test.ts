@@ -5,6 +5,7 @@ import {
   openTimelinePanel,
   openBrowserPanePanel,
   openTaskDetailPanel,
+  openOrFocusProjectPanel,
   closeLegacyPanels,
   dropSessionPanel,
   hasTiledPanels,
@@ -441,6 +442,120 @@ describe("openTaskDetailPanel", () => {
       }),
     );
     expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+});
+
+// PR 34h — generalizes the six near-identical project-scoped `onOpen*`
+// callbacks App.tsx used to declare inline (GitHub, Git, Agent Rules, Dock
+// Config, Skills, Browser). Same open-or-focus/float-if-tiled shape as
+// openTaskDetailPanel above, keyed by project id with a config table instead
+// of six hardcoded copies.
+describe("openOrFocusProjectPanel", () => {
+  const GITHUB_CONFIG = { kind: "github", titleLabel: "GitHub", applyDesktopPositioning: true };
+
+  it("focuses an existing panel without creating a new one (desktop)", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "github-1", component: "github", params: {} });
+    const existing = api.getPanel("github-1")!;
+    existing.api.setActive = vi.fn();
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
+  });
+
+  it("focuses an existing panel and maximizes it on mobile", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "github-1", component: "github", params: {} });
+    const existing = api.getPanel("github-1")!;
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, true, GITHUB_CONFIG);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
+  });
+
+  it("docks full-screen into an empty workspace, titled from the matching project", () => {
+    const api = mockDockviewApi();
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "github-1",
+        component: "github",
+        title: "GitHub: project-alpha",
+        params: { projectId: 1 },
+        position: { direction: "right" },
+      }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("floats (peeks) when a tiled panel already exists", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "github-1", floating: true }),
+    );
+  });
+
+  it("does not float on mobile when creating a new panel; maximizes instead", () => {
+    const api = mockDockviewApi();
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, true, GITHUB_CONFIG);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("floating");
+    expect(addCall).not.toHaveProperty("position");
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the bare label when no matching project is found", () => {
+    const api = mockDockviewApi();
+
+    openOrFocusProjectPanel(api, 999, PROJECTS, false, GITHUB_CONFIG);
+
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ title: "GitHub" }));
+  });
+
+  it("derives the panel id/component from `kind`, distinctly per panel type", () => {
+    const api = mockDockviewApi();
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, false, {
+      kind: "dock-config",
+      titleLabel: "Dock",
+      applyDesktopPositioning: true,
+    });
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "dock-config-1", component: "dock-config" }),
+    );
+  });
+
+  // Regression guard for onOpenBrowser's pre-existing asymmetry (see this
+  // config field's own doc comment in panelUtils.ts): with
+  // applyDesktopPositioning: false, a newly-created desktop panel gets
+  // neither `floating` nor `position` — even when a tiled panel already
+  // exists, unlike every other panel kind.
+  it("applyDesktopPositioning: false omits both floating and position, even with a tiled panel present", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+
+    openOrFocusProjectPanel(api, 1, PROJECTS, false, {
+      kind: "browser",
+      titleLabel: "Preview",
+      applyDesktopPositioning: false,
+    });
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0];
+    expect(addCall).not.toHaveProperty("floating");
+    expect(addCall).not.toHaveProperty("position");
   });
 });
 
