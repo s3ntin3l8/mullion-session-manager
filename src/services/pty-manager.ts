@@ -1,13 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import {
-  mkdirSync,
-  existsSync,
-  unlinkSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-} from "node:fs";
+import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -74,6 +67,7 @@ import {
 } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
+import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
@@ -687,8 +681,6 @@ function hookTokenPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.token`);
 }
 
-const MAX_WRITE_DELAY_MS = 30_000;
-
 // A1 (audit finding): an actively-working agent's TUI rewrites its OSC
 // title roughly once a second (elapsed-time counters, spinner frames), and
 // prior to this fix every one of those ticks produced its own persisted +
@@ -699,26 +691,18 @@ const MAX_WRITE_DELAY_MS = 30_000;
 // bloated the DB, and drove a WS-broadcast + frontend re-render on every
 // tick. TITLE_CHANGE_EVENT_DEBOUNCE_MS/_CEILING_MS below coalesce the
 // title_change EVENT (ring buffer + DB persistence + WS broadcast) on a
-// trailing-edge debounce, mirroring scheduleStateFileWrite()'s shape —
-// see scheduleTitleChangeEvent()'s doc comment for the "detection stays
-// live, persistence gets coalesced" split this relies on.
+// trailing-edge debounce, mirroring SessionStateFile.schedule()'s shape
+// (session-state-file.ts) — see scheduleTitleChangeEvent()'s doc comment
+// for the "detection stays live, persistence gets coalesced" split this
+// relies on.
 const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;
-// Ceiling mirrors MAX_WRITE_DELAY_MS's role above: forces an eventual
+// Ceiling mirrors SessionStateFile's own ceiling-timer role
+// (session-state-file.ts's MAX_WRITE_DELAY_MS): forces an eventual
 // title_change event even under CONTINUOUS title churn, which would
 // otherwise keep resetting the trailing debounce forever and starve the
 // event feed of any title_change at all for a session that never stops
 // retitling.
 const TITLE_CHANGE_EVENT_CEILING_MS = 15_000;
-
-function stateFilePath(sessionsDir: string, id: string): string {
-  return path.join(sessionsDir, `${id}.state.json`);
-}
-
-interface StoredSessionState {
-  v: 1;
-  launchedAtVersion: string;
-  state: StoredStateFields;
-}
 
 type StoredStateFields = Pick<
   SessionInfo,
@@ -1158,20 +1142,13 @@ export class Session {
   private staleHooks: boolean = false;
   // Issue #323: the version stored in the state file at construction time.
   private restoredVersion: string | null = null;
-  // Issue #323: debounced state-file write bookkeeping.
-  private stateFileDirty = false;
-  private stateFileTimeout: ReturnType<typeof setTimeout> | null = null;
-  // Issue #323: maximum-write ceiling — tracks when the state file first
-  // became dirty so the ceiling timer can force a flush after at most
-  // MAX_WRITE_DELAY_MS, even if events continuously reset the 5s
-  // trailing-edge debounce.
-  private stateFileFirstDirtyAt: number | null = null;
-  private stateFileCeilingTimeout: ReturnType<typeof setTimeout> | null = null;
-  // A8: set at the very top of kill(), before anything that could dirty
-  // state again. See scheduleStateFileWrite()'s and kill()'s own comments —
-  // this is what stops the state file from being resurrected after
-  // terminate() deletes it.
-  private stateFileWritesDisabled = false;
+  // Issue #323: debounced, atomic persistence for this session's
+  // `<sessionsDir>/<id>.state.json` — see session-state-file.ts. Declared
+  // without an initializer and assigned in the constructor body (unlike
+  // scrollbackBuffer above, which needs no per-instance arguments): field
+  // initializers run before the constructor body, so
+  // `this.sessionsDir`/`this.id` would still be undefined at that point.
+  private readonly stateFile: SessionStateFile<StoredStateFields>;
 
   constructor(opts: {
     id: string;
@@ -1228,6 +1205,25 @@ export class Session {
     }
     this.numericId = numericId;
 
+    this.stateFile = new SessionStateFile<StoredStateFields>(
+      stateFilePath(this.sessionsDir, this.id),
+      () => {
+        // Preserve the original launch version when state was restored
+        // from a file (restoredVersion) — otherwise the write path would
+        // overwrite it with the current APP_VERSION on every write, losing
+        // the true session-launch version and making stale-hooks detection
+        // unreliable after multiple server restarts.
+        const payload: StoredSessionState<StoredStateFields> = {
+          v: 1,
+          launchedAtVersion: this.restoredVersion ?? APP_VERSION,
+          state: this.collectState(),
+        };
+        return payload;
+      },
+      () => console.warn(`[pty-manager] session ${this.id} corrupt state file, using defaults`),
+      (err) => console.error(`[pty-manager] session ${this.id} failed to write state file:`, err),
+    );
+
     // Issue #323: read persisted state from disk (e.g. after a server
     // restart the session's dtach master survived but in-memory state was
     // lost). The state file is written by the debounced flush mechanism
@@ -1258,24 +1254,8 @@ export class Session {
    * applied and stateRestored is set to true. A missing or corrupt file is
    * handled silently — defaults remain at their idle/zero values. */
   private readStateFile(): void {
-    const filePath = stateFilePath(this.sessionsDir, this.id);
-    let raw: string;
-    try {
-      raw = readFileSync(filePath, "utf8");
-    } catch {
-      // ENOENT — no prior state, this is a fresh session or the file was
-      // cleaned up on terminate. Leave all defaults in place.
-      return;
-    }
-    let parsed: StoredSessionState;
-    try {
-      parsed = JSON.parse(raw) as StoredSessionState;
-    } catch {
-      console.warn(`[pty-manager] session ${this.id} corrupt state file, using defaults`);
-      return;
-    }
-    // Defensive: only accept the current schema version.
-    if (parsed.v !== 1 || typeof parsed.state !== "object" || parsed.state === null) return;
+    const parsed = this.stateFile.read();
+    if (parsed === null) return;
 
     const s = parsed.state;
     if (s.permissionState !== undefined) this.permissionState = s.permissionState;
@@ -1383,80 +1363,6 @@ export class Session {
     };
   }
 
-  /** Mark the state file as dirty and schedule a write in 5s. The timer is
-   * reset on every call, so rapid state changes (burst of emitEvent calls)
-   * produce at most one write. */
-  private scheduleStateFileWrite(): void {
-    // A8: once kill() has run, this Session instance is permanently done
-    // with the state file — see kill()'s own comment for the full race this
-    // guards against. Without this, ptyProcess.kill() a few lines into
-    // kill() triggers node-pty's onExit -> emitEvent("status_change") ->
-    // this very method, re-arming a fresh 5s timer *after* kill()'s own
-    // flush already ran. That timer would then fire after terminate()'s
-    // unlinkSync(stateFilePath) below, resurrecting a file for a session
-    // that no longer exists. kill() is only ever reached via
-    // PtyManager.kill(id), which always removes this Session from the
-    // `sessions` map in the same call — so a subsequent reattach always
-    // constructs a brand-new Session (see getOrCreate) with a fresh
-    // `stateFileWritesDisabled = false`, meaning permanently disabling
-    // writes here can never suppress a legitimate future write for this
-    // session id, only for this now-abandoned instance.
-    if (this.stateFileWritesDisabled) return;
-    const wasAlreadyDirty = this.stateFileDirty;
-    this.stateFileDirty = true;
-    if (this.stateFileTimeout !== null) clearTimeout(this.stateFileTimeout);
-    this.stateFileTimeout = setTimeout(() => {
-      this.flushStateFile();
-    }, 5_000);
-    this.stateFileTimeout.unref();
-
-    // Set the ceiling timer only on the first dirty transition, so the
-    // state file is forced to disk at most MAX_WRITE_DELAY_MS after the
-    // first change, even if events never stop arriving.
-    if (!wasAlreadyDirty) {
-      this.stateFileFirstDirtyAt = Date.now();
-      if (this.stateFileCeilingTimeout !== null) clearTimeout(this.stateFileCeilingTimeout);
-      this.stateFileCeilingTimeout = setTimeout(() => {
-        this.flushStateFile();
-      }, MAX_WRITE_DELAY_MS);
-      this.stateFileCeilingTimeout.unref();
-    }
-  }
-
-  /** If dirty, atomically write current state to disk (write to temp file,
-   * rename) and clear the dirty flag. Safe to call directly for tests. */
-  private flushStateFile(): void {
-    if (!this.stateFileDirty) return;
-    this.stateFileDirty = false;
-    this.stateFileFirstDirtyAt = null;
-    if (this.stateFileTimeout !== null) {
-      clearTimeout(this.stateFileTimeout);
-      this.stateFileTimeout = null;
-    }
-    if (this.stateFileCeilingTimeout !== null) {
-      clearTimeout(this.stateFileCeilingTimeout);
-      this.stateFileCeilingTimeout = null;
-    }
-    const filePath = stateFilePath(this.sessionsDir, this.id);
-    const tmpPath = filePath + ".tmp";
-    const payload: StoredSessionState = {
-      v: 1,
-      // Preserve the original launch version when state was restored from
-      // a file (restoredVersion) — otherwise `flushStateFile()` would
-      // overwrite it with the current APP_VERSION on every write, losing
-      // the true session-launch version and making stale-hooks detection
-      // unreliable after multiple server restarts.
-      launchedAtVersion: this.restoredVersion ?? APP_VERSION,
-      state: this.collectState(),
-    };
-    try {
-      writeFileSync(tmpPath, JSON.stringify(payload), { mode: 0o600 });
-      renameSync(tmpPath, filePath);
-    } catch (err) {
-      console.error(`[pty-manager] session ${this.id} failed to write state file:`, err);
-    }
-  }
-
   // --- Title-change event coalescing (A1) ---
 
   /**
@@ -1472,8 +1378,9 @@ export class Session {
    * split exists to avoid (see the PR description / A1 finding).
    *
    * Trailing-edge, reset on every new title, mirroring
-   * scheduleStateFileWrite()'s shape: a per-session timer plus a ceiling
-   * timer armed only on the first pending title, so a session whose TUI
+   * SessionStateFile.schedule()'s shape (session-state-file.ts): a
+   * per-session timer plus a ceiling timer armed only on the first pending
+   * title, so a session whose TUI
    * NEVER stops retitling (the common case for an actively-working agent)
    * still gets an eventual title_change event rather than none at all.
    * Always emits the LATEST pending title at fire time, not the one that
@@ -2215,7 +2122,7 @@ export class Session {
     // Every state change flows through emitEvent (directly or via
     // emitHookEvent), so this is the single funnel point for scheduling a
     // debounced write.
-    this.scheduleStateFileWrite();
+    this.stateFile.schedule();
   }
 
   /**
@@ -3615,38 +3522,39 @@ export class Session {
     // A8 (state-file lifecycle, two bugs/one fix): this must be the very
     // first thing kill() does, before anything else runs.
     //
-    // Bug 1 — lost on restart. Both stateFileTimeout and
-    // stateFileCeilingTimeout are `.unref()`'d (see scheduleStateFileWrite),
-    // specifically so a pending debounced write can't keep the process
-    // alive on its own. That's correct for normal operation, but it means a
-    // `systemctl --user restart` drains the event loop before either timer
-    // ever fires — silently dropping the last <=5s (<=30s at the ceiling)
-    // of permissionState/gateState/promoteState/lastTurnEndedAt. Every
+    // Bug 1 — lost on restart. Both of SessionStateFile's write and ceiling
+    // timers are `.unref()`'d (see SessionStateFile.schedule() in
+    // session-state-file.ts), specifically so a pending debounced write
+    // can't keep the process alive on its own. That's correct for normal
+    // operation, but it means a `systemctl --user restart` drains the event
+    // loop before either timer ever fires — silently dropping the last
+    // <=5s (<=30s at the ceiling) of
+    // permissionState/gateState/promoteState/lastTurnEndedAt. Every
     // shutdown path (PtyManager.killAll() on graceful shutdown,
     // session-reconciler.ts, and terminate() below) routes through this
     // method, so flushing synchronously here — instead of trusting the
     // debounce timer to get there first — is what makes a restart capture
     // the true last-known state.
     //
-    // Bug 2 — resurrected on delete. stateFileWritesDisabled must be set
-    // BEFORE the flush, not after: a few lines down, ptyProcess?.kill()
+    // Bug 2 — resurrected on delete. SessionStateFile.disable() must be
+    // called BEFORE flush(), not after: a few lines down, ptyProcess?.kill()
     // triggers node-pty's onExit, which calls
-    // emitEvent("status_change") -> scheduleStateFileWrite() — re-arming a
+    // emitEvent("status_change") -> this.stateFile.schedule() — re-arming a
     // brand-new timer *after* this method's own flush already ran. Left
     // unguarded, that timer would fire after terminate()'s
-    // unlinkSync(stateFilePath) below, resurrecting a `<id>.state.json` for
-    // a session that no longer exists, and pinning this already-unmapped
+    // unlinkSync(stateFilePath(...)) below, resurrecting a `<id>.state.json`
+    // for a session that no longer exists, and pinning this already-unmapped
     // Session (with up to 1 MiB of scrollback) alive until it fires. Since
     // kill() is only ever reached via PtyManager.kill(id) — which always
     // deletes this Session from the `sessions` map in the same call — this
     // instance is permanently done afterward: a later reattach always
     // constructs a brand-new Session (see getOrCreate), so disabling writes
     // here for good can never suppress a legitimate future write.
-    this.stateFileWritesDisabled = true;
-    this.flushStateFile();
+    this.stateFile.disable();
+    this.stateFile.flush();
     // A1: flush (not drop) any still-pending, debounced title_change event
-    // for the same two reasons flushStateFile() above flushes rather than
-    // waits — (1) this Session instance is permanently retired by this call
+    // for the same two reasons this.stateFile.flush() above flushes rather
+    // than waits — (1) this Session instance is permanently retired by this call
     // (see this method's own doc comment: a later reattach always builds a
     // brand-new Session), so a `.unref()`'d timer left dangling on it would
     // either never fire (process exit drains it) or, worse, fire LATE
