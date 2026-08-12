@@ -3275,6 +3275,93 @@ describe("PtyManager", () => {
       expect(session.getEvents()).toHaveLength(0);
     });
 
+    it("PR 33a: a kind matching an Object.prototype member name is a no-op, not a crash", async () => {
+      // HOOK_HANDLERS (hook-handlers.ts) dispatches via `Map.get`, not a
+      // plain object-property lookup, specifically so a `kind` string that
+      // happens to collide with an inherited Object.prototype member
+      // (`"constructor"`, `"__proto__"`, `"toString"`, ...) can't walk the
+      // prototype chain and get invoked as if it were a real handler.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "constructor" } as unknown as HookMessage);
+      session.emitHookEvent({ kind: "__proto__" } as unknown as HookMessage);
+      session.emitHookEvent({ kind: "toString" } as unknown as HookMessage);
+
+      expect(session.getEvents()).toHaveLength(0);
+    });
+
+    it("session_start: a no-op even when it reaches emitHookEvent directly (it normally bypasses it entirely)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "session_start" });
+
+      expect(session.getEvents()).toHaveLength(0);
+    });
+
+    it("todo: emits a todo event carrying content/status/priority", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "todo",
+        content: "Fix the bug",
+        status: "pending",
+        priority: "high",
+      });
+
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("todo");
+      expect(event.payload).toEqual({
+        content: "Fix the bug",
+        status: "pending",
+        priority: "high",
+      });
+    });
+
+    it("session_diff: emits a session_diff event carrying the file list", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "session_diff",
+        files: [{ file: "src/index.ts", additions: 3, deletions: 1 }],
+      });
+
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("session_diff");
+      expect(event.payload).toEqual({
+        files: [{ file: "src/index.ts", additions: 3, deletions: 1 }],
+      });
+    });
+
     it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {
       const session = manager.getOrCreate({
         id: "1",
