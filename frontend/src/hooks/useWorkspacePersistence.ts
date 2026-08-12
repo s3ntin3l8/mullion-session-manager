@@ -34,11 +34,13 @@ export interface UseWorkspacePersistenceParams {
 export interface UseWorkspacePersistenceResult {
   // True only while a programmatic fromJSON() restore is in flight, so the
   // onDidLayoutChange events it fires aren't mistaken for a real edit and
-  // echoed back into an autosave. Read by other App.tsx effects (the
-  // auto-open-child-panel effect, the deep-link effect, and the push-message
-  // effect) that must not act while a restore is still settling — returned
-  // here (rather than kept private) so those effects can keep sharing the
-  // exact same ref this hook's own restore effect writes to.
+  // echoed back into an autosave. Read by other effects that must not act
+  // while a restore is still settling: the auto-open-child-panel effect and
+  // the push-message effect (both still in App.tsx), plus useSessionDeepLink
+  // (hooks/useSessionDeepLink.ts, PR 34g of the hook-extraction series —
+  // extracted OUT of App.tsx, but still threaded this exact ref through as a
+  // param) — returned here (rather than kept private) so those consumers can
+  // keep sharing the exact same ref this hook's own restore effect writes to.
   restoringRef: MutableRefObject<boolean>;
   // Which workspace id the grid currently reflects a restore for. Lets the
   // restore effect safely list `workspaces` as a dependency (needed so it
@@ -46,8 +48,8 @@ export interface UseWorkspacePersistenceResult {
   // first and saw an empty list) without re-restoring — and blowing away
   // in-progress edits — every time `workspaces` changes for an unrelated
   // reason (e.g. renaming some other workspace). Also read by the same set
-  // of App.tsx effects listed above, to gate on "the CURRENT workspace's
-  // saved layout has actually been applied" before acting.
+  // of consumers listed above, to gate on "the CURRENT workspace's saved
+  // layout has actually been applied" before acting.
   restoredWorkspaceIdRef: MutableRefObject<number | null>;
 }
 
@@ -57,10 +59,12 @@ export interface UseWorkspacePersistenceResult {
 // load-bearing: App.tsx calls this hook at the exact same point in its
 // render body that these two effects previously occupied, so their
 // execution order relative to every other effect in App.tsx (in particular,
-// the auto-open-child-panel/deep-link/push-message effects further down,
-// which read `restoringRef`/`restoredWorkspaceIdRef` and must observe a
-// restore that has already run) is unchanged. See those effects' own
-// comments in App.tsx for why they depend on this ordering.
+// the auto-open-child-panel/push-message effects further down in App.tsx,
+// and useSessionDeepLink's own effect — hooks/useSessionDeepLink.ts, PR 34g,
+// called from App.tsx after this hook — all of which read
+// `restoringRef`/`restoredWorkspaceIdRef` and must observe a restore that
+// has already run) is unchanged. See those consumers' own comments for why
+// they depend on this ordering.
 export function useWorkspacePersistence({
   dockviewApi,
   activeWorkspaceId,
