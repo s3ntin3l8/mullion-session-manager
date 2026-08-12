@@ -328,7 +328,7 @@ describe("DEFAULT_SETTINGS.sessions.injectAgentGuide (issue #405)", () => {
 });
 
 // Phase 5 (Track B, issue #193 5.3b) — hard cap on live children per parent
-// enforced by createSessionRecord (routes/sessions.ts), not just described
+// enforced by createSessionRecord (services/session-lifecycle.ts), not just described
 // here; this is the sanitizeSettings clamp half of that guardrail.
 describe("DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent", () => {
   it("defaults to 5", () => {

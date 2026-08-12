@@ -122,7 +122,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // just read `active`), and bootstrapMaster() spins up a brand-new
         // systemd-run scope for it. This loop then finishes and flips the
         // row to "exited" underneath that brand-new master, orphaning it
-        // exactly like A9's other call site (routes/sessions.ts's
+        // exactly like A9's other call site (session-lifecycle.ts's
         // killSession).
         //
         // Flipping unconditionally is safe because the thing PR #341's
@@ -130,7 +130,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // on it: cleanupPreviewWorktree() (git-worktree.ts) already marks a
         // failed removal `pendingRemoval` and the module's own 5s sync tick
         // retries it forever, independent of this row's `status`. That's
-        // the exact mechanism killSession (routes/sessions.ts) already
+        // the exact mechanism killSession (session-lifecycle.ts) already
         // relies on for the identical case, so this reconciler is now
         // consistent with it rather than carrying its own bespoke
         // stay-active-and-retry path.
@@ -142,7 +142,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
 
         const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
         // #182 — same teardown as the user-initiated DELETE path
-        // (routes/sessions.ts's killSession), for the auto-detected
+        // (session-lifecycle.ts's killSession), for the auto-detected
         // program-exited-on-its-own case.
         closeSessionBrowserBindings(app, row.session.id);
 

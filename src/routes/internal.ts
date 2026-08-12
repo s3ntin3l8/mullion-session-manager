@@ -1796,7 +1796,7 @@ export async function internalRoutes(app: FastifyInstance) {
   // agent has no Settings to read it from itself). An id this process has
   // never tracked (never spawned/attached here, or spawned by a since-
   // restarted process) maps to null — same "no live signal yet" semantics
-  // as routes/sessions.ts's withLiveStatus falls back to for app.pty.get
+  // as services/session-live-info.ts's withLiveStatus falls back to for app.pty.get
   // returning undefined.
   app.post<{ Body: LiveStatusBody }>(
     "/internal/sessions/live",

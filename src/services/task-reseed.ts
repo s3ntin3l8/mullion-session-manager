@@ -13,11 +13,9 @@ import type { projects } from "../db/schema.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveBackend } from "./session-backend.js";
-// Reaches into routes/ from a service, same narrow exception task-claim.ts
-// and task-reconciler.ts already document — createSessionRecord is pure
-// business logic filed under routes/ for historical colocation with
-// POST /api/sessions.
-import { createSessionRecord } from "../routes/sessions.js";
+// createSessionRecord is pure business logic filed under services/
+// (session-lifecycle.ts) precisely so a service can reuse it directly.
+import { createSessionRecord } from "./session-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;

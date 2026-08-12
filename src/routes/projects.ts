@@ -70,7 +70,7 @@ import {
   inspectImageId,
   type ComposeService,
 } from "../services/docker-service-detect.js";
-import { createSessionRecord } from "./sessions.js";
+import { createSessionRecord } from "../services/session-lifecycle.js";
 
 interface CreateProjectBody {
   name: string;
@@ -267,7 +267,7 @@ interface SessionCwdTarget {
  * detectedDevServerPort above) — a remote session's live cwd lives in that
  * agent's own PtyManager instead, out of reach from here. (The plain session
  * list's `Session.liveCwd` field, unlike this function, IS remote-aware —
- * see sessions.ts's withLiveInfo, which goes through resolveBackend(hostId)
+ * see services/session-live-info.ts's withLiveInfo, which goes through resolveBackend(hostId)
  * .liveStatus() and therefore reaches the owning host's own PtyManager
  * regardless of which host that is. Extending that same reach to this
  * function's batch git-status/diff-stats resolution would need a new

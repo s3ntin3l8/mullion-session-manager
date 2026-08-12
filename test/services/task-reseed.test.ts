@@ -7,7 +7,7 @@ const mockCreateSessionRecord = vi.fn();
 const mockTerminate = vi.fn();
 const mockResolveBackend = vi.fn(() => ({ terminate: mockTerminate }));
 
-vi.mock("../../src/routes/sessions.js", async (importOriginal) => {
+vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, createSessionRecord: mockCreateSessionRecord };
 });

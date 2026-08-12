@@ -49,7 +49,8 @@ export function listSessionBrowserBindings(
 
 /** Tears down a session's browser binding (#182: "session close kills
  * associated browser instances") — called from both killSession
- * (routes/sessions.ts, user-initiated DELETE) and reconcileExitedSessions
+ * (session-lifecycle.ts, reached via routes/sessions.ts's user-initiated
+ * DELETE) and reconcileExitedSessions
  * (session-reconciler.ts, program-exited-on-its-own), in both cases *after*
  * the session's row has already been updated to killed/exited. Deletes this
  * session's own binding row(s) first, then closes the underlying project
@@ -60,7 +61,7 @@ export function listSessionBrowserBindings(
  *
  * Never throws: both callers have already committed the session's
  * killed/exited status by the time this runs, so a DB error here must not
- * surface as an HTTP 500 on an otherwise-successful kill (routes/sessions.ts)
+ * surface as an HTTP 500 on an otherwise-successful kill (session-lifecycle.ts)
  * or abort reconcileExitedSessions' per-session loop partway through a host
  * group (session-reconciler.ts) — logged and swallowed instead, same
  * defensive posture as closeForProject's own .catch() below. */

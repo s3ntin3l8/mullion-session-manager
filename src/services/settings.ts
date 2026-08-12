@@ -17,8 +17,9 @@ export type { Theme, CursorStyle, SidebarDensity, SoundName };
 // "backend stores/replays an opaque value" philosophy as
 // `workspaces.layout` / `sessions.command` — this service is the only place
 // that actually understands its structure; src/routes/settings.ts,
-// src/routes/projects.ts, src/routes/sessions.ts, and src/plugins/pty.ts all
-// read it through `getStoredSettings` below rather than each re-implementing
+// src/routes/projects.ts, src/routes/sessions.ts,
+// src/services/session-lifecycle.ts, and src/plugins/pty.ts all read it
+// through `getStoredSettings` below rather than each re-implementing
 // "read the singleton row and merge over defaults."
 //
 // Deliberately a single flat-ish object rather than one DB column per pref:
@@ -209,7 +210,7 @@ export interface AppSettings {
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the
     // sessions.spawn_child control-socket op. Enforced in
-    // createSessionRecord (routes/sessions.ts), not just at the socket
+    // createSessionRecord (services/session-lifecycle.ts), not just at the socket
     // layer, so a direct full-scope sessions.create call carrying a
     // parentSessionId is bound by the same limit. The control socket is
     // deliberately exempt from the app-wide rate limiter (see

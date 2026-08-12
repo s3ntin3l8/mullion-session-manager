@@ -4,10 +4,9 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
-// Reaches into routes/ from a service, same narrow exception task-claim.ts
-// already documents — createSessionRecord is pure business logic filed
-// under routes/ for historical colocation with POST /api/sessions.
-import { createSessionRecord } from "../routes/sessions.js";
+// createSessionRecord is pure business logic filed under services/
+// (session-lifecycle.ts) precisely so a service can reuse it directly.
+import { createSessionRecord } from "./session-lifecycle.js";
 import { resolveBackend } from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";

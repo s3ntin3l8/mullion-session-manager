@@ -2628,7 +2628,7 @@ describe("internal routes (agent role, issue #26)", () => {
 
       // Numeric-looking id — matches production reality (a session id on
       // the agent side is always the primary's stringified DB row id, see
-      // sessions.ts's spawn() call), and NotificationEvent.sessionId is
+      // session-lifecycle.ts's spawn() call), and NotificationEvent.sessionId is
       // typed `number` (pty-manager.ts), derived via Number(this.id).
       // fakePtyChildren accumulates across every test in this file — snapshot
       // its length first (same pattern the /internal/ws/attach test above

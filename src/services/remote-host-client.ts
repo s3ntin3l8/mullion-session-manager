@@ -546,7 +546,7 @@ export class RemoteHostClient {
    * `{cwd, baseRef, seed, branchName?}` -> `{path, branch} | null` shape.
    * Unlike the read-only git methods above, a `null` result here isn't
    * folded into an empty/absent value by the caller — it means creation
-   * genuinely failed and the caller (routes/sessions.ts) must not proceed
+   * genuinely failed and the caller (session-lifecycle.ts) must not proceed
    * to spawn a session against a worktree that doesn't exist. */
   resolveCreateWorktree(
     cwd: string,
