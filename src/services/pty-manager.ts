@@ -36,7 +36,6 @@ import { buildSessionEnv } from "./session-env.js";
 import type {
   HookMessageKind,
   HookMessage,
-  PromoteRequestHookMessage,
   PermissionRequestHookMessage,
   ToolDoneHookMessage,
   StopFailureHookMessage,
@@ -2321,22 +2320,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "promote_request": {
-        // Same TS-narrowing reasoning as the review_gate case above: safe to
-        // assert narrow since hook-protocol.ts's validatePromoteRequest only
-        // ever produces a real PromoteRequestHookMessage for this kind.
-        const promote = message as PromoteRequestHookMessage;
-        this.promoteState = "pending";
-        this.promoteAt = Date.now();
-        this.promoteSummary = promote.summary;
-        this.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
-        this.emitEvent("promote_request", {
-          summary: promote.summary,
-          suggestedBaseRef: promote.suggestedBaseRef ?? null,
-        });
-        this.emitAttentionSignalWithExtras("promoteRequest", { summary: promote.summary });
-        return;
-      }
       case "session_start":
         // Answered directly by hooks.ts (it needs app.pty.consumeSeed, which
         // this Session-scoped method has no access to) — never reaches here.

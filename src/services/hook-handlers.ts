@@ -31,6 +31,7 @@ import type {
   ProgressHookMessage,
   FileChangeHookMessage,
   ReviewGateHookMessage,
+  PromoteRequestHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -318,6 +319,24 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         ctx.gateAt = null;
         ctx.clearIfConfirmedKind("reviewGate");
       }
+    },
+  ],
+  [
+    "promote_request",
+    (ctx, message) => {
+      // Same TS-narrowing reasoning as the review_gate case above: safe to
+      // assert narrow since hook-protocol.ts's validatePromoteRequest only
+      // ever produces a real PromoteRequestHookMessage for this kind.
+      const promote = message as PromoteRequestHookMessage;
+      ctx.promoteState = "pending";
+      ctx.promoteAt = Date.now();
+      ctx.promoteSummary = promote.summary;
+      ctx.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
+      ctx.emitEvent("promote_request", {
+        summary: promote.summary,
+        suggestedBaseRef: promote.suggestedBaseRef ?? null,
+      });
+      ctx.emitAttentionSignalWithExtras("promoteRequest", { summary: promote.summary });
     },
   ],
 ]);
