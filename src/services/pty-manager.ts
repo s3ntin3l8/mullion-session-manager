@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  SessionEndHookMessage,
   PlanReadyHookMessage,
   GitBranchHookMessage,
   CwdChangedHookMessage,
@@ -2317,13 +2316,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "session_end": {
-        const se = message as SessionEndHookMessage;
-        this.endedReason = se.reason;
-        this.exitCode = se.exitCode ?? null;
-        this.emitEvent("session_end", { reason: se.reason, exitCode: se.exitCode ?? null });
-        return;
-      }
       case "plan_ready": {
         const plan = message as PlanReadyHookMessage;
         this.planState = "pending";

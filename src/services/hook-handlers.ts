@@ -35,6 +35,7 @@ import type {
   PermissionRequestHookMessage,
   StopFailureHookMessage,
   ToolFailureHookMessage,
+  SessionEndHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -414,6 +415,15 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         title: `Tool failed: ${tf.tool}`,
         body: tf.error,
       });
+    },
+  ],
+  [
+    "session_end",
+    (ctx, message) => {
+      const se = message as SessionEndHookMessage;
+      ctx.endedReason = se.reason;
+      ctx.exitCode = se.exitCode ?? null;
+      ctx.emitEvent("session_end", { reason: se.reason, exitCode: se.exitCode ?? null });
     },
   ],
 ]);
