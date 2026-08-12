@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  CwdChangedHookMessage,
   CompactHookMessage,
   SubagentHookMessage,
   ElicitationHookMessage,
@@ -2314,21 +2313,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "cwd_changed": {
-        // Issue: sidebar worktree detection — an agent reports a working
-        // directory change via structured hooks instead of OSC 7 (Claude
-        // Code's CwdChanged, agy's PreToolUse Cwd, Codex's common cwd).
-        // Update _liveCwd so the cwd-resolution pipeline (resolveSessionCwdTargets,
-        // readGitBranch, getGitStatus) picks up the new location. Emit a
-        // status_change event so consumers don't need to wait for the next
-        // polling cycle to see the updated directory.
-        const cwdMsg = message as CwdChangedHookMessage;
-        if (cwdMsg.cwd !== this._liveCwd) {
-          this._liveCwd = cwdMsg.cwd;
-          this.emitEvent("status_change", { phase: "done" });
-        }
-        return;
-      }
       case "turn_start": {
         // Issue: extend surfaced session statuses — a deterministic "a new
         // turn genuinely started" signal (Claude Code's UserPromptSubmit,

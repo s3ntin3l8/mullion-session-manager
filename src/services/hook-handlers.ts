@@ -38,6 +38,7 @@ import type {
   SessionEndHookMessage,
   PlanReadyHookMessage,
   GitBranchHookMessage,
+  CwdChangedHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -461,6 +462,23 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         ctx.liveCwd = gitBranch.worktree;
       }
       ctx.emitEvent("status_change", { phase: "done" });
+    },
+  ],
+  [
+    "cwd_changed",
+    (ctx, message) => {
+      // Issue: sidebar worktree detection — an agent reports a working
+      // directory change via structured hooks instead of OSC 7 (Claude
+      // Code's CwdChanged, agy's PreToolUse Cwd, Codex's common cwd).
+      // Update _liveCwd so the cwd-resolution pipeline (resolveSessionCwdTargets,
+      // readGitBranch, getGitStatus) picks up the new location. Emit a
+      // status_change event so consumers don't need to wait for the next
+      // polling cycle to see the updated directory.
+      const cwdMsg = message as CwdChangedHookMessage;
+      if (cwdMsg.cwd !== ctx.liveCwd) {
+        ctx.liveCwd = cwdMsg.cwd;
+        ctx.emitEvent("status_change", { phase: "done" });
+      }
     },
   ],
 ]);
