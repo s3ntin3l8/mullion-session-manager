@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
-import type { Host } from "../../api/index.js";
+import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
@@ -23,6 +23,12 @@ describe("Settings -> Hosts", () => {
   // "which URL(s)" message, rather than only the promise-rejection message
   // from wherever the app happened to swallow it (Hermes review, PR #36).
   let unexpectedCalls: string[];
+  // Issue #647 / roadmap 7.8 — per-host update status this fake backend
+  // returns; defaults every host to "up to date" so the four pre-existing
+  // tests below (none of which care about updates) see no extra button/
+  // text in the row. Individual #647 tests below override an entry before
+  // rendering.
+  let updateInfoDb: Record<string, HostUpdateStatus>;
 
   beforeEach(() => {
     hostsDb = [
@@ -39,6 +45,18 @@ describe("Settings -> Hosts", () => {
         hasProjects: true,
       },
     ];
+    updateInfoDb = {
+      "remote-1": {
+        hostVersion: "0.2.20",
+        primaryVersion: "0.2.20",
+        upToDate: true,
+        updatable: false,
+        unavailableReason: null,
+        assetUrl: null,
+        checksumUrl: null,
+        status: { phase: "idle" },
+      },
+    };
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/hosts": () => jsonResponse(200, hostsDb),
@@ -64,6 +82,14 @@ describe("Settings -> Hosts", () => {
           crsConfigDir: params.id === "local" ? "/home/me/.config/crs" : "/remote/.config/crs",
           browserEnabled: false,
         }),
+      "GET /api/hosts/:id/update": ({ params }) => jsonResponse(200, updateInfoDb[params.id]),
+      "POST /api/hosts/:id/update/apply": ({ params }) => {
+        updateInfoDb[params.id] = {
+          ...updateInfoDb[params.id],
+          status: { phase: "downloading", version: "0.2.20" },
+        };
+        return jsonResponse(202, { phase: "downloading", version: "0.2.20" });
+      },
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -146,5 +172,66 @@ describe("Settings -> Hosts", () => {
       "/api/hosts/remote-1/config",
       expect.objectContaining({ credentials: "same-origin" }),
     );
+  });
+
+  // Issue #647 / roadmap 7.8.
+  describe("agent updates", () => {
+    it("shows 'up to date' with no Update button when the agent matches the primary's version", async () => {
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      expect(await within(row).findByText(/up to date/)).toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    });
+
+    it("shows the version skew and lets the user trigger an update, reflecting the in-flight phase", async () => {
+      updateInfoDb["remote-1"] = {
+        hostVersion: "0.2.18",
+        primaryVersion: "0.2.20",
+        upToDate: false,
+        updatable: true,
+        unavailableReason: null,
+        assetUrl: "https://github.com/x/y/a.tgz",
+        checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+        status: { phase: "idle" },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      expect(await within(row).findByText("v0.2.18 → v0.2.20")).toBeInTheDocument();
+
+      await user.click(within(row).getByRole("button", { name: "Update" }));
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/hosts/remote-1/update/apply",
+        expect.objectContaining({ method: "POST" }),
+      );
+      // Optimistically disabled the instant the click fires (applyingUpdate
+      // is set synchronously, before the POST resolves), then reflects the
+      // agent's real in-flight phase once the response — and the next
+      // status poll — land.
+      await waitFor(() =>
+        expect(within(row).getByRole("button", { name: /downloading/ })).toBeDisabled(),
+      );
+    });
+
+    it("shows 'update unavailable' with no button when the primary's own release has no asset yet", async () => {
+      updateInfoDb["remote-1"] = {
+        hostVersion: "0.2.18",
+        primaryVersion: "0.2.20",
+        upToDate: false,
+        updatable: false,
+        unavailableReason: "The primary's own release has no downloadable asset yet.",
+        assetUrl: null,
+        checksumUrl: null,
+        status: { phase: "idle" },
+      };
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      expect(await within(row).findByText("update unavailable")).toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    });
   });
 });

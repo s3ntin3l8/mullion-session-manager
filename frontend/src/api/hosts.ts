@@ -2,7 +2,7 @@
 // reading the config of a remote Mullion host. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
-import type { Host, HostConfig } from "./types.js";
+import type { Host, HostConfig, HostUpdateStatus, UpdateStatus } from "./types.js";
 
 export const hostsApi = {
   listHosts: () => request<Host[]>("/api/hosts"),
@@ -34,4 +34,13 @@ export const hostsApi = {
     request<{ online: boolean }>(`/api/hosts/${encodeURIComponent(id)}/ping`, { method: "POST" }),
 
   getHostConfig: (id: string) => request<HostConfig>(`/api/hosts/${encodeURIComponent(id)}/config`),
+
+  // Issue #647 / roadmap 7.8.
+  getHostUpdateStatus: (id: string) =>
+    request<HostUpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update`),
+
+  applyHostUpdate: (id: string) =>
+    request<UpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update/apply`, {
+      method: "POST",
+    }),
 };

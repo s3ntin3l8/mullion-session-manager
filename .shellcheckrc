@@ -1,0 +1,11 @@
+# Issue #647 / roadmap 7.8 — project-level config for the shellcheck
+# pre-commit hook (.pre-commit-config.yaml), so it gates real bugs without
+# forcing an unrelated style rewrite of already-reviewed scripts.
+#
+# SC2129 (style: prefer `{ cmd1; cmd2; } >> file` over individual redirects)
+# — deploy/install.sh's env-file writers mix a heredoc and printf appends
+# deliberately (see that file's own PR #529 comments on why interpolated
+# vs. printf-escaped content is split the way it is); a style rewrite here
+# is out of scope for this feature and risks re-litigating already-reviewed
+# hardening.
+disable=SC2129
