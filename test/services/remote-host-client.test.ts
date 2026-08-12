@@ -197,6 +197,75 @@ describe("RemoteHostClient", () => {
     });
   });
 
+  // Issue #647 / roadmap 7.8.
+  describe("agent self-update (getUpdateStatus / applyUpdate)", () => {
+    it("resolves this agent's update status via GET /internal/updates/status", async () => {
+      const status = { phase: "idle" as const };
+      fetchMock.mockResolvedValue(jsonResponse(200, status));
+      await expect(client().getUpdateStatus()).resolves.toEqual(status);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/updates/status",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        }),
+      );
+    });
+
+    it("POSTs the version/assetUrl/checksumUrl body to /internal/updates/apply", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(202, { phase: "downloading", version: "0.1.5" }));
+      const body = {
+        version: "0.1.5",
+        assetUrl: "https://github.com/x/y/a.tgz",
+        checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+      };
+
+      await expect(client().applyUpdate(body)).resolves.toEqual({
+        phase: "downloading",
+        version: "0.1.5",
+      });
+
+      const [url, init] = fetchMock.mock.calls[0] as [
+        string,
+        { method: string; body: string; headers: Record<string, string> },
+      ];
+      expect(url).toBe("http://example.invalid:1234/internal/updates/apply");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body)).toEqual(body);
+    });
+
+    it("signs applyUpdate's body for a session-credentialed client", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(202, { phase: "downloading", version: "0.1.5" }));
+      const body = {
+        version: "0.1.5",
+        assetUrl: "https://github.com/x/y/a.tgz",
+        checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+      };
+
+      await sessionClient("the-secret").applyUpdate(body);
+
+      const [, init] = fetchMock.mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      const canonicalString = buildCanonicalString({
+        method: "POST",
+        requestTarget: "/internal/updates/apply",
+        timestamp: init.headers[TIMESTAMP_HEADER],
+        nonce: init.headers[NONCE_HEADER],
+        bodyHashed: true,
+        bodyHash: hashBody(init.body),
+      });
+      expect(verify("the-secret", canonicalString, init.headers[SIGNATURE_HEADER])).toBe(true);
+    });
+
+    it("surfaces a 404 apply response as HostRequestError (old agent build signal)", async () => {
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+      await expect(
+        client().applyUpdate({ version: "0.1.5", assetUrl: "https://x", checksumUrl: "https://x" }),
+      ).rejects.toThrow(HostRequestError);
+    });
+  });
+
   it("resolves this agent's effective config via /internal/config (issue #247)", async () => {
     const config = {
       role: "agent" as const,

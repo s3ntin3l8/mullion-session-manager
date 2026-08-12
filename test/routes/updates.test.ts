@@ -428,4 +428,38 @@ describe("updates route", () => {
       await app.close();
     });
   });
+
+  // Issue #647 / roadmap 7.8 — the invariant the whole feature's security
+  // posture rests on: updatesRoute (this file) is registered ONLY on the
+  // primary branch of src/app.ts. An agent's equivalent surface lives under
+  // /internal/updates/* instead (test/routes/internal.test.ts), behind that
+  // file's own bearer/session/signature gate — never here, since the agent
+  // role never registers authPlugin at all.
+  describe("agent role (issue #647 — /api/updates/* must not exist)", () => {
+    afterEach(() => {
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
+    });
+
+    it("404s /api/updates/check, /api/updates/status, and /api/updates/apply", async () => {
+      process.env.MULLION_ROLE = "agent";
+      process.env.MULLION_AGENT_TOKEN = "test-agent-token";
+      const app = await buildApp();
+
+      const check = await app.inject({ method: "GET", url: "/api/updates/check" });
+      const status = await app.inject({ method: "GET", url: "/api/updates/status" });
+      const apply = await app.inject({
+        method: "POST",
+        url: "/api/updates/apply",
+        payload: { version: "0.1.5", assetUrl: VALID_ASSET_URL, checksumUrl: VALID_CHECKSUM_URL },
+      });
+
+      expect(check.statusCode).toBe(404);
+      expect(status.statusCode).toBe(404);
+      expect(apply.statusCode).toBe(404);
+      expect(spawnMock).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+  });
 });

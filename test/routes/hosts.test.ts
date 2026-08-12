@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import http from "node:http";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { appVersion } from "../../src/routes/server-info.js";
+import { clearUpdateCheckCacheForTests } from "../../src/services/update-checker.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-test-${process.pid}.db`);
 
@@ -443,6 +445,374 @@ describe("hosts route (issue #26)", () => {
     } finally {
       await new Promise<void>((resolve) => stubServer.close(() => resolve()));
     }
+  });
+
+  // Issue #647 / roadmap 7.8 — proxied host-update status/apply. Every
+  // scenario needs a real listening agent stub (like the /config tests
+  // above), routed by path since a single check touches both
+  // /internal/config and /internal/updates/status; `updatable`/apply
+  // scenarios also need MULLION_UPDATE_REPO's GitHub lookup
+  // (resolveReleaseByTag) mocked via global fetch.
+  describe("GET /api/hosts/:id/update and POST /api/hosts/:id/update/apply", () => {
+    // A plain vi.stubGlobal("fetch", ...) here would ALSO intercept
+    // RemoteHostClient's own calls to the real stub agent server below —
+    // both go through the global fetch. Routed by URL instead: only a
+    // https://api.github.com/* call is faked (via the githubResponses
+    // queue); everything else — including every call this describe block
+    // makes to its own startStubAgent servers — passes through to the real
+    // fetch untouched.
+    const realFetch = globalThis.fetch;
+    let githubResponses: Response[];
+    let githubCallCount: number;
+
+    beforeEach(() => {
+      githubResponses = [];
+      githubCallCount = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (url.startsWith("https://api.github.com")) {
+            githubCallCount++;
+            const next = githubResponses.shift();
+            if (!next) throw new Error("unexpected GitHub API call in test");
+            return Promise.resolve(next);
+          }
+          return realFetch(input, init);
+        }),
+      );
+      clearUpdateCheckCacheForTests();
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function jsonResponse(status: number, body: unknown): Response {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    async function startStubAgent(
+      routes: Record<string, { status: number; body: unknown }>,
+    ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+      const server = http.createServer((req, res) => {
+        const path = (req.url ?? "").split("?")[0];
+        const route = routes[path];
+        if (!route) {
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(JSON.stringify({ message: "no such route" }));
+          return;
+        }
+        res.writeHead(route.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(route.body));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+      return {
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+      };
+    }
+
+    it("400s the local host for both routes", async () => {
+      const app = await buildApp();
+      const status = await app.inject({ method: "GET", url: "/api/hosts/local/update" });
+      const apply = await app.inject({ method: "POST", url: "/api/hosts/local/update/apply" });
+      expect(status.statusCode).toBe(400);
+      expect(apply.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("404s an unknown host for both routes", async () => {
+      const app = await buildApp();
+      const status = await app.inject({ method: "GET", url: "/api/hosts/does-not-exist/update" });
+      const apply = await app.inject({
+        method: "POST",
+        url: "/api/hosts/does-not-exist/update/apply",
+      });
+      expect(status.statusCode).toBe(404);
+      expect(apply.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("reports upToDate when the agent is already on the primary's version, skipping the release lookup", async () => {
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: appVersion, projectsRoots: [], sessionsDir: "/x" },
+        },
+        "/internal/updates/status": { status: 200, body: { phase: "idle" } },
+      });
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "same-version-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/update` });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({
+          hostVersion: appVersion,
+          primaryVersion: appVersion,
+          upToDate: true,
+          updatable: false,
+          unavailableReason: null,
+          assetUrl: null,
+          checksumUrl: null,
+          status: { phase: "idle" },
+        });
+        // upToDate short-circuits the GitHub release lookup entirely.
+        expect(githubCallCount).toBe(0);
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
+
+    it("reports updatable: true with resolved release assets when the agent is behind", async () => {
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: "0.0.1", projectsRoots: [], sessionsDir: "/x" },
+        },
+        "/internal/updates/status": { status: 200, body: { phase: "idle" } },
+      });
+      githubResponses.push(
+        jsonResponse(200, {
+          tag_name: `v${appVersion}`,
+          html_url: "https://github.com/x/y/releases/tag/vX",
+          assets: [
+            {
+              name: `mullion-${appVersion}.tgz`,
+              browser_download_url: "https://github.com/x/y/a.tgz",
+            },
+            {
+              name: `mullion-${appVersion}.tgz.sha256`,
+              browser_download_url: "https://github.com/x/y/a.tgz.sha256",
+            },
+          ],
+        }),
+      );
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "behind-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/update` });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          hostVersion: "0.0.1",
+          primaryVersion: appVersion,
+          upToDate: false,
+          updatable: true,
+          unavailableReason: null,
+          assetUrl: "https://github.com/x/y/a.tgz",
+          checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+        });
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
+
+    it("reports updatable: false with a reason when the primary's own release has no asset yet", async () => {
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: "0.0.1", projectsRoots: [], sessionsDir: "/x" },
+        },
+        "/internal/updates/status": { status: 200, body: { phase: "idle" } },
+      });
+      githubResponses.push(
+        jsonResponse(200, { tag_name: `v${appVersion}`, html_url: "https://x", assets: [] }),
+      );
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "no-asset-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/update` });
+
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.updatable).toBe(false);
+        expect(body.unavailableReason).toEqual(expect.any(String));
+        expect(body.assetUrl).toBeNull();
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
+
+    // The #647 "old agent build" signal — a 404 specifically from
+    // /internal/updates/status (not /internal/config, which this agent DOES
+    // have — it just predates the update routes) must read as "update this
+    // agent by hand once," never "unreachable" (host-git.ts's own
+    // statusCode === 404 discipline, applied here).
+    it("surfaces a 404 from /internal/updates/status as updatable: false, not unreachable", async () => {
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: "0.0.1", projectsRoots: [], sessionsDir: "/x" },
+        },
+      });
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "old-build-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/update` });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ hostVersion: "0.0.1", updatable: false });
+        expect(githubCallCount).toBe(0);
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
+
+    it("503s when the agent is unreachable", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "unreachable-agent", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/update` });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+
+    it("apply 400s when the primary's own release has no downloadable asset yet", async () => {
+      githubResponses.push(
+        jsonResponse(200, { tag_name: `v${appVersion}`, html_url: "https://x", assets: [] }),
+      );
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "no-asset-agent-2", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({ method: "POST", url: `/api/hosts/${id}/update/apply` });
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("proxies a valid apply to the agent's own applyUpdate and returns its 202", async () => {
+      const agent = await startStubAgent({
+        "/internal/updates/apply": {
+          status: 202,
+          body: { phase: "downloading", version: appVersion },
+        },
+      });
+      githubResponses.push(
+        jsonResponse(200, {
+          tag_name: `v${appVersion}`,
+          html_url: "https://x",
+          assets: [
+            {
+              name: `mullion-${appVersion}.tgz`,
+              browser_download_url: "https://github.com/x/y/a.tgz",
+            },
+            {
+              name: `mullion-${appVersion}.tgz.sha256`,
+              browser_download_url: "https://github.com/x/y/a.tgz.sha256",
+            },
+          ],
+        }),
+      );
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "apply-target-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "POST", url: `/api/hosts/${id}/update/apply` });
+
+        expect(res.statusCode).toBe(202);
+        expect(res.json()).toEqual({ phase: "downloading", version: appVersion });
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
+
+    it("forwards a genuine 404 apply response from an old agent build, not a misleading 503", async () => {
+      const agent = await startStubAgent({});
+      githubResponses.push(
+        jsonResponse(200, {
+          tag_name: `v${appVersion}`,
+          html_url: "https://x",
+          assets: [
+            {
+              name: `mullion-${appVersion}.tgz`,
+              browser_download_url: "https://github.com/x/y/a.tgz",
+            },
+            {
+              name: `mullion-${appVersion}.tgz.sha256`,
+              browser_download_url: "https://github.com/x/y/a.tgz.sha256",
+            },
+          ],
+        }),
+      );
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "old-build-apply-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "POST", url: `/api/hosts/${id}/update/apply` });
+
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toMatchObject({ message: "no such route" });
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
   });
 
   // Issue #246 — GET /api/hosts merges the heartbeat tracker's live status

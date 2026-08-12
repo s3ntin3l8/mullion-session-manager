@@ -82,6 +82,7 @@ export type {
   HostHealthStatus,
   Host,
   HostConfig,
+  HostUpdateStatus,
   GitHubAppStatus,
   SetGitHubAppResult,
   GitHubIntegration,
