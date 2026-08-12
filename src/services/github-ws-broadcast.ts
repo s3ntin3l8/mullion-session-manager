@@ -6,58 +6,34 @@ import type { WebSocket } from "@fastify/websocket";
 // parse (see store.ts's own comment). Re-exported below so every existing
 // backend importer of this module keeps working unchanged.
 import type { GitHubWSEvent } from "../shared/ws-protocol.js";
+import { createKeyedBroadcastChannel } from "./ws-broadcast.js";
 
 export type { GitHubWSEvent };
 
-const subscribers = new Map<string, Set<WebSocket>>();
+// Built on ws-broadcast.ts's createKeyedBroadcastChannel — the same shared
+// subscriber-set/cleanup/fan-out/backpressure primitive task-events.ts uses,
+// keyed here per-project (a subscriber only ever receives events for the
+// one project it subscribed to) rather than that file's global/unkeyed
+// shape. This also means every subscriber now gets the 4 MiB
+// `bufferedAmount` backpressure guard task-events.ts always had and this
+// file previously lacked — a slow/stuck subscriber has its delivery
+// dropped instead of buffering unboundedly, without losing its
+// subscription.
+const channel = createKeyedBroadcastChannel<GitHubWSEvent, string>();
 
 export function subscribeToProject(projectId: string, socket: WebSocket): void {
-  if (!subscribers.has(projectId)) {
-    subscribers.set(projectId, new Set());
-  }
-  subscribers.get(projectId)!.add(socket);
-
-  socket.on("close", () => {
-    const subs = subscribers.get(projectId);
-    if (subs) {
-      subs.delete(socket);
-      if (subs.size === 0) subscribers.delete(projectId);
-    }
-  });
-
-  socket.on("error", () => {
-    const subs = subscribers.get(projectId);
-    if (subs) {
-      subs.delete(socket);
-      if (subs.size === 0) subscribers.delete(projectId);
-    }
-  });
+  channel.subscribe(projectId, socket);
 }
 
 export function broadcastToProject(projectId: string, event: GitHubWSEvent): void {
-  const subs = subscribers.get(projectId);
-  if (!subs || subs.size === 0) return;
-
-  const payload = JSON.stringify(event);
-  for (const socket of subs) {
-    if (socket.readyState === socket.OPEN) {
-      try {
-        socket.send(payload);
-      } catch {
-        subs.delete(socket);
-      }
-    } else {
-      subs.delete(socket);
-    }
-  }
-  if (subs.size === 0) subscribers.delete(projectId);
+  channel.broadcast(projectId, event);
 }
 
 /** Test-only introspection. */
 export function getSubscriberCountForTests(projectId: string): number {
-  return subscribers.get(projectId)?.size ?? 0;
+  return channel.getSubscriberCountForTests(projectId);
 }
 
 export function clearSubscribersForTests(): void {
-  subscribers.clear();
+  channel.clearSubscribersForTests();
 }
