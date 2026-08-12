@@ -3,18 +3,10 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
 import { useDashboardStore } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
-import { ConfirmButton } from "./ConfirmButton.js";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
-import type {
-  BackgroundTask,
-  DiscoveredProject,
-  Host,
-  Project,
-  Session,
-  SubagentInfo,
-} from "./api.js";
+import type { DiscoveredProject, Host, Project, Session } from "./api.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
 import {
   formatStatusLabel,
@@ -22,7 +14,6 @@ import {
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
-import { formatRelativeAge } from "./relativeTime.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./ui/primitives.js";
 import {
@@ -39,7 +30,6 @@ import {
   CloseIcon,
   FileTextIcon,
   FolderIcon,
-  GitBranchIcon,
   HostsIcon,
   LayersIcon,
   PlusIcon,
@@ -49,23 +39,17 @@ import {
 } from "./icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
-import { useAsyncData } from "./hooks/useAsyncData.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
 import { columnForSession } from "./kanban.js";
 import type { KanbanColumnId } from "./kanban.js";
 import { sessionDisplayTitle, sessionMatchesSearch } from "./lib/sessionDisplay.js";
-import {
-  backgroundTaskLetter,
-  fileChangeDotClass,
-  fileChangeLetter,
-  isSubagentLive,
-  sessionGitDotClass,
-  sessionPrDotClass,
-  subagentDotClass,
-  summarizeFileChanges,
-} from "./lib/sidebarStatus.js";
+import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
+import { Header } from "./session-row/Header.js";
+import { GitLine } from "./session-row/GitLine.js";
+import { FileChanges } from "./session-row/FileChanges.js";
+import { Chips } from "./session-row/Chips.js";
 
 // U3's three status filter chips. Deliberately only 3 of kanban.ts's 5
 // severity-derived columns (not "Finished"/"Idle") — matches the finding's
@@ -1186,170 +1170,27 @@ function setSessionRowExpanded(sessionId: number, expanded: boolean): void {
   writeJSON(STORAGE_KEYS.expandedSessionRows, [...expandedSessionRows]);
 }
 
-// Row 5 (Phase 5 Track A, #195/5.5a) — per-subagent detail expand/collapse,
-// same persisted-across-reload convention as readExpandedSessionRows's
-// git-details toggle above, but keyed by a `${sessionId}:${agentId}` string:
-// readExpandedSessionRows's own reader actively discards non-number
-// entries, and a session can host several
-// subagents at once, so a bare Set<number> can't disambiguate which one a
-// given entry refers to.
-function readExpandedSubagentRows(): Set<string> {
-  const parsed = readJSON<unknown>(STORAGE_KEYS.expandedSubagentRows, []);
-  return new Set(Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : []);
-}
-
-const expandedSubagentRows = readExpandedSubagentRows();
-
-function subagentRowKey(sessionId: number, agentId: string): string {
-  return `${sessionId}:${agentId}`;
-}
-
-function setSubagentRowExpanded(sessionId: number, agentId: string, expanded: boolean): void {
-  const key = subagentRowKey(sessionId, agentId);
-  if (expanded) expandedSubagentRows.add(key);
-  else expandedSubagentRows.delete(key);
-  writeJSON(STORAGE_KEYS.expandedSubagentRows, [...expandedSubagentRows]);
-}
-
-// isSubagentLive/subagentDotClass (both pure) moved to lib/sidebarStatus.ts
-// (PR 27 phase 1) — imported above.
-
-interface SubagentChipProps {
-  sessionId: number;
-  subagent: SubagentInfo;
-}
-
-// One subagent's collapsed chip (type/id, live/finished dot, elapsed time)
-// plus its click-to-expand detail (summary + file/tool-failure counts) —
-// same two-tier shape as row 4's file-change chip/SessionFileDiff above, but
-// a small standalone component (rather than inline state in the .map() body)
-// since expand state here is per-item and .map() can't call useState per
-// iteration with a varying subagent count across renders.
-function SubagentChip({ sessionId, subagent }: SubagentChipProps) {
-  const [expanded, setExpanded] = useState(() =>
-    expandedSubagentRows.has(subagentRowKey(sessionId, subagent.agentId)),
-  );
-  const toggleExpanded = useCallback(() => {
-    setExpanded((prev) => {
-      const next = !prev;
-      setSubagentRowExpanded(sessionId, subagent.agentId, next);
-      return next;
-    });
-  }, [sessionId, subagent.agentId]);
-
-  const label = subagent.agentType ?? subagent.agentId.slice(0, 8);
-  const live = isSubagentLive(subagent);
-  const ageLabel = formatRelativeAge(
-    live ? subagent.startedAt : (subagent.endedAt ?? subagent.startedAt),
-  );
-
-  return (
-    <>
-      <button
-        type="button"
-        className="session-subagent-chip"
-        title={subagent.agentId}
-        onClick={(e) => {
-          e.stopPropagation();
-          toggleExpanded();
-        }}
-      >
-        <span className={`github-panel-ci-dot ${subagentDotClass(subagent)}`} />
-        <span className="session-subagent-name">{label}</span>
-        <span className="session-subagent-age">
-          {live ? "started" : "finished"} {ageLabel}
-        </span>
-      </button>
-      {expanded && (
-        <div className="session-subagent-detail" onClick={(e) => e.stopPropagation()}>
-          {subagent.summary && <span className="session-subagent-summary">{subagent.summary}</span>}
-          <span className="session-subagent-detail-meta">
-            {subagent.fileChanges} file{subagent.fileChanges === 1 ? "" : "s"}
-            {subagent.toolFailures > 0 &&
-              ` · ${subagent.toolFailures} tool failure${subagent.toolFailures === 1 ? "" : "s"}`}
-          </span>
-        </div>
-      )}
-    </>
-  );
-}
-
-// backgroundTaskLetter (pure) moved to lib/sidebarStatus.ts (PR 27 phase
-// 1) — imported above; same one-glyph-badge convention as fileChangeLetter,
-// also in that module now.
-
-interface BackgroundTaskChipProps {
-  task: BackgroundTask;
-}
-
-// One outstanding background task's chip — deliberately simpler than
-// SubagentChip above: no expand/collapse (a background task has no
-// file-change/tool-failure counters to reveal), just the description with a
-// title carrying whichever of command/agent_type/server the task reported,
-// mirroring row 4's file-change letter+path convention.
-function BackgroundTaskChip({ task }: BackgroundTaskChipProps) {
-  const detail = task.command ?? task.agent_type ?? task.server ?? task.tool ?? task.name;
-  const title = detail ? `${task.type}: ${detail}` : task.type;
-  return (
-    <span className="session-background-task-chip" title={title}>
-      <span className="session-background-task-letter">{backgroundTaskLetter(task.type)}</span>
-      <span className="session-background-task-desc">{task.description}</span>
-    </span>
-  );
-}
-
-// sessionGitDotClass/sessionPrDotClass/summarizeFileChanges/
-// fileChangeDotClass/fileChangeLetter (all pure, plus the FileChangeSummary
-// type they share) moved to lib/sidebarStatus.ts (PR 27 phase 1) — imported
-// above. ProjectHeader's own gitStatus handling above stays inlined rather
-// than routed through sessionGitDotClass (matches git-refs.ts's own "small
-// guards get duplicated, not shared" precedent elsewhere in this codebase).
+// Row 5 (subagents)/row 6 (background tasks) chips, and row 4's file-change
+// chips + expanded diff (SessionFileDiff), all extracted to
+// ./session-row/Chips.tsx and ./session-row/FileChanges.tsx respectively
+// (PR 27 phase 2, Wave 5 of .claude/plans/can-we-do-a-warm-cocke.md) — see
+// each file's own header comment. That includes the subagent-row
+// expand/collapse localStorage persistence helpers (mirrors
+// readExpandedSessionRows/setSessionRowExpanded above, but keyed by
+// `${sessionId}:${agentId}` — see Chips.tsx) and isSubagentLive/
+// subagentDotClass/backgroundTaskLetter/fileChangeDotClass/fileChangeLetter
+// (all pure, moved to lib/sidebarStatus.ts in PR 27 phase 1).
+//
+// sessionGitDotClass/sessionPrDotClass/summarizeFileChanges (also
+// lib/sidebarStatus.ts) power row 3 (git details, ./session-row/GitLine.tsx)
+// — summarizeFileChanges itself stays called from SessionRow below (its
+// input, sessionEvents, is also row 2's eventLine source, so it isn't a
+// FileChanges-only concern). ProjectHeader's own gitStatus handling above
+// stays inlined rather than routed through sessionGitDotClass (matches
+// git-refs.ts's own "small guards get duplicated, not shared" precedent
+// elsewhere in this codebase).
 
 const FILE_CHANGE_MAX_SHOWN = 5;
-
-import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
-
-interface SessionFileDiffProps {
-  sessionId: number;
-  filePath: string;
-}
-
-function SessionFileDiff({ sessionId, filePath }: SessionFileDiffProps) {
-  const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
-
-  useAsyncData(
-    () => api.getSessionGitFileDiff(sessionId, filePath),
-    (r) => setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null),
-    () => setDiffLines(null),
-    [sessionId, filePath],
-  );
-
-  if (diffLines === undefined) {
-    return (
-      <div className="session-file-change-diff">
-        <span className="session-diff-spinner">…</span>
-      </div>
-    );
-  }
-
-  if (diffLines === null || diffLines.length === 0) {
-    return (
-      <div className="session-file-change-diff">
-        <span className="session-diff-empty">No changes</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="session-file-change-diff" onClick={(e) => e.stopPropagation()}>
-      {diffLines.map((line, i) => (
-        <span key={i} className={`session-diff-line session-diff-${line.type}`}>
-          {line.text}
-        </span>
-      ))}
-    </div>
-  );
-}
 
 export function SessionRow({
   session,
@@ -1393,10 +1234,12 @@ export function SessionRow({
   // renders (project → session → child session, so only 0 or 1 is possible
   // today: nesting is capped at one level server-side, see
   // createSessionRecord's "parent-is-child" rejection). An explicit prop
-  // rather than recursion: SessionRow is ~450 lines and shared verbatim by
-  // UnifiedBoard.tsx's ad-hoc lane (which never passes this, so its cards
-  // stay flat for free) — recursing here would force that lane to opt out of
-  // a second thing instead of just not knowing this prop exists at all.
+  // rather than recursion: SessionRow (now this orchestrator plus its
+  // Header/GitLine/FileChanges/Chips sub-components under ./session-row/,
+  // split in PR 27 phase 2) is shared verbatim by UnifiedBoard.tsx's ad-hoc
+  // lane (which never passes this, so its cards stay flat for free) —
+  // recursing here would force that lane to opt out of a second thing
+  // instead of just not knowing this prop exists at all.
   depth?: number;
 }) {
   const isTerminal = session.status === "killed";
@@ -1424,14 +1267,17 @@ export function SessionRow({
 
   // Row 4 (issue #177) — recent file changes, derived from the same
   // sessionEvents slice as row 2's eventLine above (no separate fetch).
+  // Passed down to ./session-row/FileChanges.tsx as a prop rather than
+  // computed there — it stays here because sessionEvents (its input) is
+  // ALSO row 2's eventLine source above, so this can't become a
+  // FileChanges-only concern without either re-subscribing to the same
+  // store slice twice or splitting sessionEvents itself across two
+  // components. FileChanges owns `expandedFilePath` itself, though —
+  // nothing outside its own chip row + detail pairing ever reads that.
   const fileChanges = useMemo(
     () => summarizeFileChanges(sessionEvents).slice(0, FILE_CHANGE_MAX_SHOWN),
     [sessionEvents],
   );
-  const [expandedFilePath, setExpandedFilePath] = useState<string | null>(null);
-  const expandedFileChange = expandedFilePath
-    ? fileChanges.find((fc) => fc.path === expandedFilePath)
-    : undefined;
 
   // Row 3's data (issue #202) — worktree/branch/PR/diff-stats. Selector-based
   // per field (not one selector returning an object) so a live update to a
@@ -1465,6 +1311,11 @@ export function SessionRow({
   // Initializer covers a row that mounts already "pending" (e.g. a page
   // refresh while a request is mid-flight); the render-time check below
   // covers a later transition into "pending" on an already-mounted row.
+  //
+  // Stays here (not pushed into Header, where the "promote" kebab item
+  // lives) because PromoteDialog itself renders as a SIBLING of the
+  // `.session-item` div below, not inside Header's own region — Header only
+  // gets a bound `onPromote` callback to open it.
   const [promoteOpen, setPromoteOpen] = useState(() => session.promoteState === "pending");
   const [prevPromoteState, setPrevPromoteState] = useState(session.promoteState);
   if (session.promoteState !== prevPromoteState) {
@@ -1472,6 +1323,9 @@ export function SessionRow({
     if (session.promoteState === "pending") setPromoteOpen(true);
   }
 
+  // Stays here (not pushed into Header) because it gates whether GitLine
+  // renders at all, below — Header only owns the toggle *button*, not the
+  // line it controls.
   const [gitLineExpanded, setGitLineExpanded] = useState(() => expandedSessionRows.has(session.id));
   const toggleGitLineExpanded = useCallback(() => {
     setGitLineExpanded((prev) => {
@@ -1482,14 +1336,12 @@ export function SessionRow({
   }, [session.id]);
   const gitExpanded = alwaysExpandGit || gitLineExpanded;
 
-  const [renaming, setRenaming] = useState(false);
-  const [draftName, setDraftName] = useState("");
-  const suppressBlurRef = useRef(false);
-  const renameInputRef = useRef<HTMLInputElement>(null);
   // P9 — surfaces a failed `onEnd()` inline (see that prop's own doc
   // comment for why the type stays `void | Promise<void>`) instead of the
   // rejection just vanishing, same "an inline error near the control that
   // triggered the request" shape as ProjectHeader's deleteError above.
+  // Stays here (not pushed into Header) because the error line itself
+  // renders as a sibling of Header below, not inside it.
   const [endError, setEndError] = useState<string | null>(null);
   const handleEnd = () => {
     setEndError(null);
@@ -1497,21 +1349,6 @@ export function SessionRow({
       console.debug("[Sidebar] end session failed", err);
       setEndError(err instanceof Error ? err.message : "Failed to end session — try again.");
     });
-  };
-
-  useEffect(() => {
-    if (renaming) {
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
-    }
-  }, [renaming]);
-
-  const commitRename = () => {
-    const value = draftName.trim();
-    suppressBlurRef.current = true;
-    setRenaming(false);
-    if (!value) return;
-    void renameSession(session.id, value);
   };
 
   // Matched against this project's own worktree list — `undefined`/no match
@@ -1664,129 +1501,28 @@ export function SessionRow({
           }
         }}
       >
-        <div className="session-item-row">
-          {dot}
-          {agentLogo && (
-            <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
-          )}
-          {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
-          {renaming ? (
-            <input
-              ref={renameInputRef}
-              className="session-rename-input"
-              value={draftName}
-              // P10 — matches WorkspaceSwitcher.tsx's own rename inputs
-              // (`.workspace-rename-input`): without this, clicking into the
-              // field to place the cursor also bubbles up as a click on the
-              // row and fires `onOpen`, same class of bug the row's
-              // `onKeyDown` guard exists to prevent for the keyboard case.
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => setDraftName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename();
-                else if (e.key === "Escape") {
-                  suppressBlurRef.current = true;
-                  setRenaming(false);
-                }
-              }}
-              onBlur={() => {
-                if (!suppressBlurRef.current) commitRename();
-                suppressBlurRef.current = false;
-              }}
-            />
-          ) : (
-            <span
-              className={`session-name${showCommand ? " mono" : ""}`}
-              title={title}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                suppressBlurRef.current = false;
-                setDraftName(title);
-                setRenaming(true);
-              }}
-            >
-              {title}
-            </span>
-          )}
-          {statusLabel}
-          {/* Row 3's toggle (issue #202) — only rendered once there's a
-            fetched, non-null git status for this session's effective cwd;
-            "nothing to show" (not a repo, or not fetched yet) means no
-            toggle at all, not a toggle that expands to an empty row.
-            Suppressed entirely when `alwaysExpandGit` is set (a caller with
-            room to always show details) — there's nothing to toggle then. */}
-          {gitStatus != null && !alwaysExpandGit && (
-            <span onClick={(e) => e.stopPropagation()}>
-              <button
-                className="session-git-toggle"
-                title={gitLineExpanded ? "Hide git details" : "Show git details"}
-                onClick={toggleGitLineExpanded}
-              >
-                <ChevronDownIcon
-                  size={11}
-                  className={gitLineExpanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
-                />
-              </button>
-            </span>
-          )}
-          {!isTerminal && (
-            <span onClick={(e) => e.stopPropagation()}>
-              <KebabMenu
-                title="More…"
-                items={[
-                  ...(onOpenAsFloat
-                    ? [
-                        {
-                          key: "open-as-float",
-                          label: "Open as new window",
-                          onClick: onOpenAsFloat,
-                        } as const,
-                      ]
-                    : []),
-                  {
-                    key: "rename",
-                    label: "Rename",
-                    icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
-                    onClick: () => {
-                      suppressBlurRef.current = false;
-                      setDraftName(title);
-                      setRenaming(true);
-                    },
-                  } as const,
-                  {
-                    key: "promote",
-                    label: "Promote to worktree…",
-                    icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
-                    onClick: () => setPromoteOpen(true),
-                  } as const,
-                ]}
-              />
-            </span>
-          )}
-          {!isTerminal && (
-            <span onClick={(e) => e.stopPropagation()}>
-              <ConfirmButton
-                title={
-                  childCount > 0
-                    ? `End this session — ${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
-                    : "End this session (the program will be terminated)"
-                }
-                onConfirm={handleEnd}
-                // Phase 5 (Track B, issue #196 5.6) — always require the
-                // arm-then-confirm step when this session has live
-                // children, regardless of the global "confirm before
-                // kill" setting. Ending it always defaults to detach (see
-                // killSession), never a silent cascade-kill, but a user
-                // with that setting off should still see the child count
-                // before it fires — that's the one thing skipConfirm would
-                // otherwise skip entirely.
-                skipConfirm={!confirmBeforeKill && childCount === 0}
-              >
-                <CloseIcon size={11} />
-              </ConfirmButton>
-            </span>
-          )}
-        </div>
+        <Header
+          title={title}
+          showCommand={showCommand}
+          agentLogo={agentLogo}
+          showAgentFallback={showAgentFallback}
+          agentBinary={agentBinary}
+          dot={dot}
+          statusLabel={statusLabel}
+          gitStatus={gitStatus}
+          alwaysExpandGit={alwaysExpandGit}
+          gitLineExpanded={gitLineExpanded}
+          onToggleGitLineExpanded={toggleGitLineExpanded}
+          isTerminal={isTerminal}
+          onOpenAsFloat={onOpenAsFloat}
+          onPromote={() => setPromoteOpen(true)}
+          onRename={(value) => {
+            void renameSession(session.id, value);
+          }}
+          childCount={childCount}
+          confirmBeforeKill={confirmBeforeKill}
+          onConfirmEnd={handleEnd}
+        />
         {eventLine && (
           <span
             className={`session-event-line${eventLine.attention ? " attention" : ""}`}
@@ -1812,131 +1548,35 @@ export function SessionRow({
         {/* Show git info when the row is expanded AND there's either
           per-session git status or a hook-reported liveBranch to show. */}
         {gitExpanded && (gitStatus != null || displayBranch) ? (
-          <div className="session-git-line">
-            <span
-              className={`project-git-dot ${gitStatus ? sessionGitDotClass(gitStatus) : "none"}`}
-              title={
-                gitStatus
-                  ? gitStatus.hasConflicts
-                    ? `${displayBranch}: unresolved merge conflicts`
-                    : gitStatus.isClean
-                      ? `${displayBranch}: clean`
-                      : `${displayBranch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`
-                  : (displayBranch ?? "")
-              }
-            />
-            <span className="session-git-branch" title={displayBranch ?? ""}>
-              {displayBranch}
-            </span>
-            {worktreeLabel && (
-              <span className="session-git-worktree" title={effectiveCwd}>
-                @ {worktreeLabel}
-              </span>
-            )}
-            {matchedPr && (
-              <a
-                href={matchedPr.htmlUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="session-git-pr"
-                title={matchedPr.title}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
-                {matchedPr.number}
-              </a>
-            )}
-            {diffStats && diffStats.filesChanged > 0 && (
-              <span className="session-git-diffstat">
-                {diffStats.filesChanged} file{diffStats.filesChanged === 1 ? "" : "s"}{" "}
-                <span className="session-git-ins">+{diffStats.insertions}</span>{" "}
-                <span className="session-git-del">-{diffStats.deletions}</span>
-              </span>
-            )}
-          </div>
+          <GitLine
+            gitStatus={gitStatus}
+            displayBranch={displayBranch}
+            worktreeLabel={worktreeLabel}
+            effectiveCwd={effectiveCwd}
+            matchedPr={matchedPr}
+            diffStats={diffStats}
+          />
         ) : null}
         {/* Row 4 (issue #177) — recent file changes from the structured hook
           channel (Phase 2), not the git working-tree diff row 3 shows above.
           Always visible once there's at least one file_change event, same
           ungated posture as row 2 — not nested inside the git-details
           toggle, since an agent can emit these without the session's cwd
-          even being a git repo. */}
-        {fileChanges.length > 0 && (
-          <div className="session-file-changes-line">
-            {fileChanges.map((fc) => {
-              const filename = fc.path.split("/").pop() || fc.path;
-              return (
-                <button
-                  key={fc.path}
-                  type="button"
-                  className="session-file-change-chip"
-                  title={fc.path}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setExpandedFilePath((prev) => (prev === fc.path ? null : fc.path));
-                  }}
-                >
-                  <span className={`github-panel-ci-dot ${fileChangeDotClass(fc.action)}`} />
-                  <span className="session-file-change-letter">{fileChangeLetter(fc.action)}</span>
-                  <span className="session-file-change-name">{filename}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {/* Click-to-expand detail (issue #177's explicit scope: path + action
-          + occurrence count, no actual diff content — see the follow-up
-          issue filed alongside this PR for real diff rendering). */}
-        {expandedFileChange && (
-          <>
-            <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
-              <span className="session-file-change-detail-path" title={expandedFileChange.path}>
-                {expandedFileChange.path}
-              </span>
-              <span className="session-file-change-detail-meta">
-                {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
-                {expandedFileChange.count === 1 ? "" : "s"}
-              </span>
-            </div>
-            <SessionFileDiff
-              key={`${session.id}\0${expandedFileChange.path}`}
-              sessionId={session.id}
-              filePath={expandedFileChange.path}
-            />
-          </>
-        )}
-        {/* Row 5 (Phase 5 Track A, #195/5.5a) — named subagents built from
-          agentId-bearing hook messages (see pty-manager.ts's SubagentInfo).
-          No kill button — there is no handle for a Task-tool subagent, only
-          monitor/review (see #196). Ungated by any expand toggle at the
-          section level, same "always visible once there's something to
-          show" posture as row 4's file changes above; each chip's own detail
-          is independently, persistently expandable (SubagentChip). */}
-        {showSubagentsRow && (
-          <div className="session-subagents-line" onClick={(e) => e.stopPropagation()}>
-            {session.subagents.map((subagent) => (
-              <SubagentChip key={subagent.agentId} sessionId={session.id} subagent={subagent} />
-            ))}
-          </div>
-        )}
-        {/* Row 6 (issue #428) — outstanding entries from the Stop/
-          SubagentStop hook's own `backgroundTasks` field (a background Bash
-          job, MCP-backed task, or background subagent not already covered by
-          Row 5's own named-subagent chips). Same "always visible once
-          there's something to show" posture as Row 5 above; no per-chip
-          expand — see BackgroundTaskChip's own doc comment for why. */}
-        {showBackgroundTasksRow && (
-          <div className="session-background-tasks-line" onClick={(e) => e.stopPropagation()}>
-            {session.outstandingBackgroundTasks.map((task, index) => (
-              // Index folded into the key (Hermes review, PR #453) —
-              // hook-protocol.ts's validateBackgroundTasksField only
-              // guarantees each element is a non-null object, not that
-              // `id` is present or unique, so `task.id` alone could
-              // produce an undefined or duplicate React key.
-              <BackgroundTaskChip key={`${index}:${task.id}`} task={task} />
-            ))}
-          </div>
-        )}
+          even being a git repo. Owns its own expand/collapse state and the
+          expanded-diff fetch internally — see FileChanges.tsx. */}
+        <FileChanges sessionId={session.id} fileChanges={fileChanges} />
+        {/* Row 5 (Phase 5 Track A, #195/5.5a, subagents) and row 6 (issue
+          #428, background tasks) — both "always visible once there's
+          something to show" chip strips, gated on session.hookEmits via
+          isStatusReachable above (a sessionStatus.ts concern, so it stays
+          here rather than moving into Chips.tsx). See Chips.tsx. */}
+        <Chips
+          sessionId={session.id}
+          showSubagentsRow={showSubagentsRow}
+          subagents={session.subagents}
+          showBackgroundTasksRow={showBackgroundTasksRow}
+          outstandingBackgroundTasks={session.outstandingBackgroundTasks}
+        />
       </div>
       {promoteOpen && (
         <PromoteDialog session={session} project={project} onClose={() => setPromoteOpen(false)} />
