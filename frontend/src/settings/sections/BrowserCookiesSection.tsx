@@ -10,6 +10,7 @@ import {
   SecondaryButton,
   StyledList,
 } from "../../ui/primitives.js";
+import { ErrorText } from "../../ui/ErrorText.js";
 
 // Phase 3, issue #184 — lets an operator import cookies from a host Chrome
 // or Firefox profile so a project's pooled browser (see browser-manager.ts)
@@ -250,11 +251,7 @@ export function BrowserCookiesSection() {
             </div>
           </div>
 
-          {error && (
-            <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
-              {error}
-            </div>
-          )}
+          {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
         </>
       )}
     </>

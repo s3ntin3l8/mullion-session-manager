@@ -3,6 +3,7 @@ import { api, ApiError } from "./api.js";
 import type { SkillAgent, SkillInfo, SkillScope } from "./api.js";
 import { SkillIcon } from "./icons.js";
 import { Toggle } from "./ui/primitives.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 
 export interface SkillsPanelParams {
   projectId: number;
@@ -108,23 +109,23 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
   if (skills === undefined) {
     if (loadError) {
       return (
-        <div className="github-panel-empty">
+        <EmptyStateNote>
           <div>Couldn't load skills.</div>
           <button className="git-panel-fetch-btn" onClick={() => void fetchSkills()}>
             Retry
           </button>
-        </div>
+        </EmptyStateNote>
       );
     }
-    return <div className="github-panel-empty">Loading…</div>;
+    return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
 
   if (skills.length === 0) {
     return (
-      <div className="github-panel-empty">
+      <EmptyStateNote>
         <SkillIcon size={20} />
         <div>No skills found for this project or its host.</div>
-      </div>
+      </EmptyStateNote>
     );
   }
 
@@ -158,10 +159,10 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
 
       <div className="agent-rules-panel-editor">
         {!selected ? (
-          <div className="github-panel-empty">
+          <EmptyStateNote>
             <SkillIcon size={20} />
             <div>Select a skill to view its details.</div>
-          </div>
+          </EmptyStateNote>
         ) : (
           <>
             <div className="agent-rules-panel-editor-header">

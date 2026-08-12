@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type AuthStatus } from "./api.js";
 import { App } from "./App.js";
+import { ErrorText } from "./ui/ErrorText.js";
 
 type GateState = "loading" | "unauthenticated" | "authenticated";
 
@@ -190,11 +191,7 @@ function Login({
             </label>
           )}
 
-          {error && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-              {error}
-            </div>
-          )}
+          {error && <ErrorText>{error}</ErrorText>}
         </div>
 
         {methods.token && (

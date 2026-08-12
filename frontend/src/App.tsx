@@ -16,7 +16,8 @@ import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { GridIcon, RefreshIcon, ServerRackIcon, SpinnerIcon, CloseIcon } from "./icons.js";
+import { GridIcon, RefreshIcon, ServerRackIcon, CloseIcon } from "./icons.js";
+import { Spinner } from "./ui/Spinner.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
@@ -99,7 +100,7 @@ function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
         aria-label="Settings"
         style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
       >
-        <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
+        <Spinner variant="connecting" />
       </div>
     </div>
   );

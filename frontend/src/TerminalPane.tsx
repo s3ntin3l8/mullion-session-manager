@@ -15,9 +15,9 @@ import {
   KillIcon,
   RefreshIcon,
   SearchIcon,
-  SpinnerIcon,
   WifiOffIcon,
 } from "./icons.js";
+import { Spinner } from "./ui/Spinner.js";
 import { useDashboardStore } from "./store.js";
 import { buildSearchDecorations, buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
 import { api, type AppSettings } from "./api.js";
@@ -1456,14 +1456,14 @@ export function TerminalPane(props: {
         <div className={`terminal-status-overlay ${status}`}>
           {status === "connecting" && (
             <>
-              <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
+              <Spinner variant="connecting" />
               <span className="terminal-status-text">Connecting…</span>
               <span className="terminal-status-subtext">attaching to host</span>
             </>
           )}
           {status === "reconnecting" && (
             <>
-              <SpinnerIcon size={22} className="terminal-status-spinner reconnecting" />
+              <Spinner variant="reconnecting" />
               <span className="terminal-status-text">
                 Reconnecting… <span style={{ color: "var(--muted)" }}>({reconnectAttempt})</span>
               </span>

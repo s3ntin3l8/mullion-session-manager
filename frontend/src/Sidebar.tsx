@@ -28,6 +28,13 @@ import {
 import { formatRelativeAge } from "./relativeTime.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./ui/primitives.js";
+import {
+  EmptyState,
+  EmptyStateActions,
+  EmptyStateBody,
+  EmptyStateIcon,
+  EmptyStateTitle,
+} from "./ui/EmptyState.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import {
@@ -430,26 +437,26 @@ export function Sidebar({
         </div>
       )}
       {projects.length === 0 ? (
-        <div className="empty-state">
-          <MullionMark size={32} className="empty-state-mark" />
-          <div className="empty-state-title">Welcome to Mullion</div>
-          <div className="empty-state-body">
+        <EmptyState>
+          <MullionMark size={32} className="ui-empty-state-mark" />
+          <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
+          <EmptyStateBody>
             Add a project folder to start — sessions run there and survive across restarts.
-          </div>
-          <div className="empty-state-actions">
-            <button className="empty-state-btn-primary" onClick={() => setAddProjectOpen(true)}>
+          </EmptyStateBody>
+          <EmptyStateActions>
+            <button className="ui-empty-state-btn-primary" onClick={() => setAddProjectOpen(true)}>
               <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
               Add a project
             </button>
             <button
-              className="empty-state-btn-secondary"
+              className="ui-empty-state-btn-secondary"
               onClick={() => setDiscoverCollapsed(false)}
             >
               <SearchIcon size={12} strokeWidth={2} />
               Scan for repos
             </button>
-          </div>
-        </div>
+          </EmptyStateActions>
+        </EmptyState>
       ) : (
         <>
           {/* U3 — the live GitHub CI subscription used to live inside
@@ -464,12 +471,12 @@ export function Sidebar({
             <ProjectGitHubSubscription key={project.id} projectId={project.id} />
           ))}
           {filterActive && visibleProjects.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-title">No sessions match</div>
-              <div className="empty-state-body">
+            <EmptyState>
+              <EmptyStateTitle>No sessions match</EmptyStateTitle>
+              <EmptyStateBody>
                 Try a different search, or clear the status filters above.
-              </div>
-            </div>
+              </EmptyStateBody>
+            </EmptyState>
           ) : shouldVirtualize ? (
             <VirtualizedProjectTree
               rows={flatRows}
@@ -2149,30 +2156,30 @@ function DiscoverProjects({
   if (remaining.length === 0) {
     return (
       <div className="discover-block">
-        <div className="empty-state">
-          <span className="empty-state-icon warn">
+        <EmptyState>
+          <EmptyStateIcon variant="warn">
             <SearchAlertIcon size={18} />
-          </span>
-          <div className="empty-state-title">
+          </EmptyStateIcon>
+          <EmptyStateTitle>
             {discoverError ? "Discovery failed" : "No repositories found"}
-          </div>
-          <div className="empty-state-body">
+          </EmptyStateTitle>
+          <EmptyStateBody>
             {discoverError
               ? "Couldn't reach the selected host to scan for repositories. Check that it's online and try again."
               : "Mullion scanned your search roots but found no git projects. Point it at a folder that contains your repos."}
-          </div>
+          </EmptyStateBody>
           {hostPicker && <div style={{ marginTop: 8 }}>{hostPicker}</div>}
-          <div className="empty-state-actions">
+          <EmptyStateActions>
             {!discoverError && (
-              <button className="empty-state-btn-primary" onClick={onOpenSettingsProjects}>
+              <button className="ui-empty-state-btn-primary" onClick={onOpenSettingsProjects}>
                 Configure search roots
               </button>
             )}
-            <button className="empty-state-btn-secondary" onClick={() => load(selectedHostId)}>
+            <button className="ui-empty-state-btn-secondary" onClick={() => load(selectedHostId)}>
               {discoverError ? "Retry" : "Rescan"}
             </button>
-          </div>
-        </div>
+          </EmptyStateActions>
+        </EmptyState>
       </div>
     );
   }

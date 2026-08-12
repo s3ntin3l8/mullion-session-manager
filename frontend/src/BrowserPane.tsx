@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshIcon, SpinnerIcon, WifiOffIcon } from "./icons.js";
+import { RefreshIcon, WifiOffIcon } from "./icons.js";
+import { Spinner } from "./ui/Spinner.js";
 
 export interface BrowserPaneParams {
   sessionId: number;
@@ -279,13 +280,13 @@ export function BrowserPane(props: {
           <div className={`terminal-status-overlay ${status}`}>
             {status === "connecting" && (
               <>
-                <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
+                <Spinner variant="connecting" />
                 <span className="terminal-status-text">Connecting…</span>
               </>
             )}
             {status === "reconnecting" && (
               <>
-                <SpinnerIcon size={22} className="terminal-status-spinner reconnecting" />
+                <Spinner variant="reconnecting" />
                 <span className="terminal-status-text">
                   Reconnecting… <span style={{ color: "var(--muted)" }}>({reconnectAttempt})</span>
                 </span>

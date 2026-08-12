@@ -3,6 +3,7 @@ import { HostsIcon, CloseIcon } from "./icons.js";
 import { api } from "./api.js";
 import type { HostConfig } from "./api.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
+import { ErrorText } from "./ui/ErrorText.js";
 
 interface HostConfigModalProps {
   hostId: string;
@@ -51,9 +52,7 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
         <div className="create-modal-body">
           {error && (
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ fontSize: 12, color: "var(--r)", flex: 1 }} role="alert">
-                {error}
-              </div>
+              <ErrorText style={{ flex: 1 }}>{error}</ErrorText>
               <button
                 className="create-modal-cancel"
                 onClick={() => {

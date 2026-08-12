@@ -3,6 +3,7 @@ import { api, ApiError } from "./api.js";
 import type { AgentRuleTarget } from "./api.js";
 import { FileTextIcon } from "./icons.js";
 import { ConfirmButton } from "./ConfirmButton.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 
 export interface AgentRulesPanelParams {
   projectId: number;
@@ -183,15 +184,15 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
       // once, on mount). A manual retry button is both more honest and
       // more useful than just rewording the copy.
       return (
-        <div className="github-panel-empty">
+        <EmptyStateNote>
           <div>Couldn't load agent rules.</div>
           <button className="git-panel-fetch-btn" onClick={() => void fetchTargets()}>
             Retry
           </button>
-        </div>
+        </EmptyStateNote>
       );
     }
-    return <div className="github-panel-empty">Loading…</div>;
+    return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
 
   return (
@@ -228,10 +229,10 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
 
       <div className="agent-rules-panel-editor">
         {!selected ? (
-          <div className="github-panel-empty">
+          <EmptyStateNote>
             <FileTextIcon size={20} />
             <div>Select a file to view or edit it.</div>
-          </div>
+          </EmptyStateNote>
         ) : (
           <>
             <div className="agent-rules-panel-editor-header">
@@ -296,10 +297,10 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
               )
             }
             {selected.truncated ? (
-              <div className="github-panel-empty">
+              <EmptyStateNote>
                 This file is over the 512 KB edit limit ({formatSize(selected.size)}) — too large to
                 edit here.
-              </div>
+              </EmptyStateNote>
             ) : (
               <textarea
                 className="agent-rules-panel-textarea"

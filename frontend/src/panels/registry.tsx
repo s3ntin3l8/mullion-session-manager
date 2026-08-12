@@ -22,7 +22,7 @@ import { TaskDetail } from "../TaskDetail.js";
 import type { TaskDetailParams } from "../TaskDetail.js";
 import { ErrorBoundary } from "../ErrorBoundary.js";
 import { PaneTab } from "../PaneTab.js";
-import { SpinnerIcon } from "../icons.js";
+import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store.js";
 import type { Session } from "../api.js";
 import { formatPaneTitle } from "../paneTitle.js";
@@ -56,8 +56,9 @@ const LazyBrowserPane = lazy(() =>
 // Shared Suspense fallback for the lazy dockview panels above (the Browser
 // panel/pane and the Kanban board overlay, all absolutely-positioned within
 // their container) — reuses the existing terminal-connecting spinner
-// vocabulary (SpinnerIcon + .terminal-status-spinner's cmuxSpin keyframe,
-// styles.css) instead of inventing a second loading affordance.
+// vocabulary (`ui/Spinner.tsx`'s SpinnerIcon + .terminal-status-spinner's
+// cmuxSpin keyframe, styles.css) instead of inventing a second loading
+// affordance.
 function LazyPanelFallback() {
   return (
     <div
@@ -69,7 +70,7 @@ function LazyPanelFallback() {
         justifyContent: "center",
       }}
     >
-      <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
+      <Spinner variant="connecting" />
     </div>
   );
 }

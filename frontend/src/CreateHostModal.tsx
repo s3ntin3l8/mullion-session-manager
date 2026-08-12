@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { HostsIcon, CloseIcon } from "./icons.js";
+import { ErrorText } from "./ui/ErrorText.js";
 
 interface CreateHostModalProps {
   onClose: () => void;
@@ -132,11 +133,7 @@ export function CreateHostModal({
             </span>
           </label>
 
-          {error && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-              {error}
-            </div>
-          )}
+          {error && <ErrorText>{error}</ErrorText>}
         </div>
 
         <div className="create-modal-footer">
