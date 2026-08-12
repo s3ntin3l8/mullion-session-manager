@@ -256,11 +256,21 @@ export async function hostsRoute(app: FastifyInstance) {
 
     const upToDate = hostVersion === appVersion;
     let release: ReleaseByTagResult | null = null;
+    // Independent review — distinguished from "no asset yet" below: a
+    // failed lookup (GitHub unreachable, rate-limited, ...) is a different,
+    // transient condition, and reporting it with the "no asset yet, wait
+    // for the build" message actively misleads an operator into waiting on
+    // a build that already finished. resolveReleaseByTag itself now caches
+    // this failure briefly (see its own FAILURE_CACHE_TTL_MS comment), so
+    // this route's own 4s poll interval no longer hammers GitHub while this
+    // branch is hit repeatedly.
+    let releaseLookupFailed = false;
     if (!upToDate) {
       try {
         release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
       } catch (err) {
         if (!(err instanceof UpdateCheckError)) throw err;
+        releaseLookupFailed = true;
         app.log.warn(
           { repo: app.config.MULLION_UPDATE_REPO, statusCode: err.statusCode },
           "release lookup unavailable for host update",
@@ -275,9 +285,11 @@ export async function hostsRoute(app: FastifyInstance) {
       updatable: !upToDate && Boolean(release?.assetUrl) && Boolean(release?.checksumUrl),
       unavailableReason: upToDate
         ? null
-        : (release?.assetUrl ?? null) === null
-          ? "The primary's own release has no downloadable asset yet — try again once its build finishes, or update the fleet by hand."
-          : null,
+        : releaseLookupFailed
+          ? "Could not check the primary's own release right now — this is usually transient (a GitHub outage or rate limit); try again shortly."
+          : (release?.assetUrl ?? null) === null
+            ? "The primary's own release has no downloadable asset yet — try again once its build finishes, or update the fleet by hand."
+            : null,
       assetUrl: release?.assetUrl ?? null,
       checksumUrl: release?.checksumUrl ?? null,
       status,
@@ -297,6 +309,23 @@ export async function hostsRoute(app: FastifyInstance) {
       return reply.badRequest("the local host updates from Settings -> Server info, not here");
     }
     if (!getHostRow(app, id)) return reply.notFound();
+    const client = getRemoteHostClient(app, id);
+
+    // Independent review — the frontend only renders the Update button when
+    // the GET route above reported `updatable: true`, but this route has no
+    // server-side equivalent check: a stale poll response, a direct API
+    // call, or a race could otherwise trigger a redundant re-install/
+    // restart on an already-current agent.
+    try {
+      const hostVersion = (await client.resolveConfig()).version;
+      if (hostVersion === appVersion) {
+        return reply.badRequest("this host is already on the primary's version");
+      }
+    } catch (err) {
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
+      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+    }
 
     let release;
     try {
@@ -312,7 +341,7 @@ export async function hostsRoute(app: FastifyInstance) {
     }
 
     try {
-      const status = await getRemoteHostClient(app, id).applyUpdate({
+      const status = await client.applyUpdate({
         version: appVersion,
         assetUrl: release.assetUrl,
         checksumUrl: release.checksumUrl,

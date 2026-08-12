@@ -466,4 +466,59 @@ describe("resolveReleaseByTag", () => {
     expect(second?.version).toBe("0.1.6");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  // Independent review — a network failure or non-404 GitHub error used to
+  // re-fetch on EVERY call with nothing cached; a poller hitting this every
+  // 4s (routes/hosts.ts's GET /api/hosts/:id/update) could hammer GitHub's
+  // 60/hr unauthenticated budget within minutes during an outage.
+  describe("failure caching", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("caches a network failure briefly and does not refetch within the cooldown", async () => {
+      fetchMock.mockRejectedValueOnce(new Error("boom"));
+
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("caches a non-404 GitHub error response briefly too", async () => {
+      fetchMock.mockResolvedValueOnce(new Response("rate limited", { status: 429 }));
+
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refetches once the failure cooldown expires", async () => {
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      vi.advanceTimersByTime(61_000);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { tag_name: "v0.1.5", html_url: "https://x", assets: [] }),
+      );
+      const result = await resolveReleaseByTag("owner/repo", "0.1.5");
+
+      expect(result).toMatchObject({ version: "0.1.5" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not let a cached failure for one version block a different version", async () => {
+      fetchMock.mockRejectedValueOnce(new Error("boom"));
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { tag_name: "v0.1.6", html_url: "https://x", assets: [] }),
+      );
+      const result = await resolveReleaseByTag("owner/repo", "0.1.6");
+
+      expect(result).toMatchObject({ version: "0.1.6" });
+    });
+  });
 });

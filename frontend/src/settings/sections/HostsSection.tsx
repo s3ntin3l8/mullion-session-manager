@@ -80,6 +80,13 @@ export function HostsSection() {
   usePolling(
     () => {
       for (const id of remoteHostIds.split(",").filter(Boolean)) {
+        // Independent review — a host currently applying is owned by the
+        // in-flight poll below instead. Without this, an in-flight
+        // response from THIS 4s loop can land after that 2s loop has
+        // already observed a terminal "done"/"failed" phase, overwriting
+        // updateInfo back to an earlier phase and re-arming the in-flight
+        // UI for an update that already finished.
+        if (applyingUpdate[id]) continue;
         refreshHostUpdate(id);
       }
     },

@@ -722,26 +722,66 @@ describe("hosts route (issue #26)", () => {
       await app.close();
     });
 
+    it("apply 400s when the host is already on the primary's version, without spending a GitHub call", async () => {
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: appVersion, projectsRoots: [], sessionsDir: "/x" },
+        },
+      });
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "already-current-agent", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
+
+        const res = await app.inject({ method: "POST", url: `/api/hosts/${id}/update/apply` });
+        expect(res.statusCode).toBe(400);
+        expect(githubCallCount).toBe(0);
+
+        await app.close();
+      } finally {
+        await agent.close();
+      }
+    });
+
     it("apply 400s when the primary's own release has no downloadable asset yet", async () => {
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: "0.0.1", projectsRoots: [], sessionsDir: "/x" },
+        },
+      });
       githubResponses.push(
         jsonResponse(200, { tag_name: `v${appVersion}`, html_url: "https://x", assets: [] }),
       );
-      const app = await buildApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "no-asset-agent-2", baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
-      const { id } = created.json();
+      try {
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "no-asset-agent-2", baseUrl: agent.baseUrl, token: "t" },
+        });
+        const { id } = created.json();
 
-      const res = await app.inject({ method: "POST", url: `/api/hosts/${id}/update/apply` });
-      expect(res.statusCode).toBe(400);
+        const res = await app.inject({ method: "POST", url: `/api/hosts/${id}/update/apply` });
+        expect(res.statusCode).toBe(400);
 
-      await app.close();
+        await app.close();
+      } finally {
+        await agent.close();
+      }
     });
 
     it("proxies a valid apply to the agent's own applyUpdate and returns its 202", async () => {
       const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: "0.0.1", projectsRoots: [], sessionsDir: "/x" },
+        },
         "/internal/updates/apply": {
           status: 202,
           body: { phase: "downloading", version: appVersion },
@@ -784,7 +824,16 @@ describe("hosts route (issue #26)", () => {
     });
 
     it("forwards a genuine 404 apply response from an old agent build, not a misleading 503", async () => {
-      const agent = await startStubAgent({});
+      // /internal/config succeeds (an older build still has it — #647 only
+      // ever added the update routes) so this genuinely reaches — and
+      // 404s at — POST /internal/updates/apply specifically, not the
+      // up-to-date guard's own resolveConfig() call.
+      const agent = await startStubAgent({
+        "/internal/config": {
+          status: 200,
+          body: { role: "agent", version: "0.0.1", projectsRoots: [], sessionsDir: "/x" },
+        },
+      });
       githubResponses.push(
         jsonResponse(200, {
           tag_name: `v${appVersion}`,
