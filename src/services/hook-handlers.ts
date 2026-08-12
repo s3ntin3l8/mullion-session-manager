@@ -481,6 +481,45 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       }
     },
   ],
+  [
+    "turn_start",
+    (ctx) => {
+      // Issue: extend surfaced session statuses — a deterministic "a new
+      // turn genuinely started" signal (Claude Code's UserPromptSubmit,
+      // remapped — see forwarder-core.mjs). Releases every observational
+      // "awaiting_*" latch and the `finished` latch, same set
+      // progress:done already releases (permissionState/planState) plus
+      // the ones only this event can authoritatively clear
+      // (elicitationState, lastTurnEndedAt). Mirrors progress:done's own
+      // choice NOT to force-clear the attention machine's confirmedKind
+      // directly — see that case's own comment for why (moreAuthoritativeKind
+      // already keeps an immune kind from being silently downgraded;
+      // session-status.ts's precedence order is what actually protects
+      // against a stale confirmedKind here, not an explicit clear).
+      ctx.permissionState = "idle";
+      ctx.permissionAt = null;
+      ctx.pendingPermissionTool = null;
+      ctx.planState = "idle";
+      ctx.planAt = null;
+      ctx.elicitationState = "idle";
+      ctx.elicitationServer = null;
+      ctx.elicitationAt = null;
+      ctx.questionState = "idle";
+      ctx.questionHeader = null;
+      ctx.questionAt = null;
+      ctx.errorState = "idle";
+      ctx.errorAt = null;
+      ctx.errorDetail = null;
+      ctx.lastTurnEndedAt = null;
+      ctx.turnEndPingSent = false;
+      // Issue #428 — a new turn invalidates the previous Stop's
+      // backgroundTasks snapshot; Claude Code re-sends the full list on
+      // the next Stop regardless, so there's nothing to preserve here.
+      ctx.backgroundTasks = [];
+      ctx.backgroundTasksAt = null;
+      ctx.emitEvent("status_change", { phase: "generating" });
+    },
+  ],
 ]);
 
 export type { HookMessageKind };

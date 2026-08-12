@@ -2313,43 +2313,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "turn_start": {
-        // Issue: extend surfaced session statuses — a deterministic "a new
-        // turn genuinely started" signal (Claude Code's UserPromptSubmit,
-        // remapped — see forwarder-core.mjs). Releases every observational
-        // "awaiting_*" latch and the `finished` latch, same set
-        // progress:done already releases (permissionState/planState) plus
-        // the ones only this event can authoritatively clear
-        // (elicitationState, lastTurnEndedAt). Mirrors progress:done's own
-        // choice NOT to force-clear the attention machine's confirmedKind
-        // directly — see that case's own comment for why (moreAuthoritativeKind
-        // already keeps an immune kind from being silently downgraded;
-        // session-status.ts's precedence order is what actually protects
-        // against a stale confirmedKind here, not an explicit clear).
-        this.permissionState = "idle";
-        this.permissionAt = null;
-        this.pendingPermissionTool = null;
-        this.planState = "idle";
-        this.planAt = null;
-        this.elicitationState = "idle";
-        this.elicitationServer = null;
-        this.elicitationAt = null;
-        this.questionState = "idle";
-        this.questionHeader = null;
-        this.questionAt = null;
-        this.errorState = "idle";
-        this.errorAt = null;
-        this.errorDetail = null;
-        this.lastTurnEndedAt = null;
-        this.turnEndPingSent = false;
-        // Issue #428 — a new turn invalidates the previous Stop's
-        // backgroundTasks snapshot; Claude Code re-sends the full list on
-        // the next Stop regardless, so there's nothing to preserve here.
-        this.backgroundTasks = [];
-        this.backgroundTasksAt = null;
-        this.emitEvent("status_change", { phase: "generating" });
-        return;
-      }
       case "compact": {
         const compact = message as CompactHookMessage;
         this.compactState = compact.state === "started" ? "compacting" : "idle";
