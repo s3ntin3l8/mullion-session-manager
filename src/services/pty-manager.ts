@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  CompactHookMessage,
   SubagentHookMessage,
   ElicitationHookMessage,
   QuestionHookMessage,
@@ -2313,20 +2312,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "compact": {
-        const compact = message as CompactHookMessage;
-        this.compactState = compact.state === "started" ? "compacting" : "idle";
-        if (compact.state === "started") {
-          this.compactAt = Date.now();
-        } else {
-          this.compactAt = null;
-        }
-        this.emitEvent("status_change", {
-          compacting: this.compactState === "compacting",
-          trigger: compact.trigger ?? null,
-        });
-        return;
-      }
       case "subagent": {
         const subagent = message as SubagentHookMessage;
         // Clamped at 0 defensively — a SubagentStop this session never saw a

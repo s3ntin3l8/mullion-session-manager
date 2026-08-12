@@ -39,6 +39,7 @@ import type {
   PlanReadyHookMessage,
   GitBranchHookMessage,
   CwdChangedHookMessage,
+  CompactHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -518,6 +519,22 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.backgroundTasks = [];
       ctx.backgroundTasksAt = null;
       ctx.emitEvent("status_change", { phase: "generating" });
+    },
+  ],
+  [
+    "compact",
+    (ctx, message) => {
+      const compact = message as CompactHookMessage;
+      ctx.compactState = compact.state === "started" ? "compacting" : "idle";
+      if (compact.state === "started") {
+        ctx.compactAt = Date.now();
+      } else {
+        ctx.compactAt = null;
+      }
+      ctx.emitEvent("status_change", {
+        compacting: ctx.compactState === "compacting",
+        trigger: compact.trigger ?? null,
+      });
     },
   ],
 ]);
