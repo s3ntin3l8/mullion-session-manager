@@ -18,6 +18,7 @@ import {
   TerminalPromptIcon,
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
+import { useGitBranches } from "./hooks/useGitBranches.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { Dropdown } from "./ui/primitives.js";
 import { matchesQuery } from "./matchQuery.js";
@@ -200,46 +201,19 @@ export function CommandPalette({
   // Issue #271, option 1 — the launcher's opt-in "isolate this session"
   // toggle: launch directly into a fresh worktree instead of the target
   // project's own cwd. Off by default; the base-ref picker only fetches
-  // once the toggle is switched on, not on every palette open.
+  // once the toggle is switched on, not on every palette open (`enabled`
+  // below).
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
-  const [worktreeBranches, setWorktreeBranches] = useState<string[]>([]);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
-  // P9 — the fetch below used to have no `.catch` at all: a failure left the
-  // base-ref dropdown permanently empty with nothing but an unhandled
-  // rejection in the console, no different from the toggle silently doing
-  // nothing. Own local error state (UnifiedBoard.tsx's TasksToolbar is this
-  // codebase's own model for "an inline error near the control that
-  // triggered the request," not a global toast).
-  const [worktreeBranchesError, setWorktreeBranchesError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!worktreeEnabled || effectiveProjectId === null) return;
-    let cancelled = false;
-    api
-      .getProjectGitBranches(effectiveProjectId)
-      .then((result) => {
-        if (cancelled || !result) return;
-        setWorktreeBranchesError(null);
-        const local = result.branches.map((b) => b.name);
-        setWorktreeBranches([...local, ...result.remoteBranches]);
-        const current = result.branches.find((b) => b.isCurrent)?.name ?? null;
-        setWorktreeBaseRef((prev) => prev || current || local[0] || "");
-      })
-      .catch((err: unknown) => {
-        // Same `cancelled` guard as the success path — a stale rejection
-        // from a toggle-off/project-switch that already tore this effect
-        // down must not paint an error for a request nobody's waiting on
-        // anymore.
-        if (cancelled) return;
-        console.debug("[CommandPalette] getProjectGitBranches failed", err);
-        setWorktreeBranchesError(
-          err instanceof Error ? err.message : "Failed to load branches — try again.",
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [worktreeEnabled, effectiveProjectId]);
+  const { branches: worktreeBranches, error: worktreeBranchesError } = useGitBranches(
+    effectiveProjectId,
+    {
+      enabled: worktreeEnabled,
+      onLoaded: ({ branches, currentBranch }) => {
+        setWorktreeBaseRef((prev) => prev || currentBranch || branches[0] || "");
+      },
+    },
+  );
 
   useEffect(() => {
     if (effectiveProjectId === null) return;

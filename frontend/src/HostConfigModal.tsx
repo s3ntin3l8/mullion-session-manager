@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { HostsIcon, CloseIcon } from "./icons.js";
 import { api } from "./api.js";
 import type { HostConfig } from "./api.js";
+import { useAsyncData } from "./hooks/useAsyncData.js";
 
 interface HostConfigModalProps {
   hostId: string;
@@ -22,20 +23,12 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
   // closing and reopening the modal).
   const [attempt, setAttempt] = useState(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .getHostConfig(hostId)
-      .then((result) => {
-        if (!cancelled) setConfig(result);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hostId, attempt]);
+  useAsyncData(
+    () => api.getHostConfig(hostId),
+    (result) => setConfig(result),
+    (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+    [hostId, attempt],
+  );
 
   return (
     <div className="create-modal-backdrop" onClick={onClose}>

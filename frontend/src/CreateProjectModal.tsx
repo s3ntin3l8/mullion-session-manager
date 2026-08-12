@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./icons.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type { Host, Launcher } from "./api.js";
+import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
 
 // Empty string represents "unset" (fall through to the next precedence
@@ -131,26 +132,23 @@ export function CreateProjectModal({
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
 
-  useEffect(() => {
-    if (!isEdit || projectId === undefined) return;
-    let cancelled = false;
-    // Clears a stale error from a previous fetch/retry before this one
-    // resolves — same "reset then fetch" shape as SkillsPanel.tsx's own
-    // fetchSkills effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLaunchersLoadError(false);
-    void api
-      .listProjectActions(projectId)
-      .then((launchers) => {
-        if (!cancelled) setAgentLaunchers(launchers.filter((l) => l.kind === "agent"));
-      })
-      .catch(() => {
-        if (!cancelled) setLaunchersLoadError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isEdit, projectId, launchersRetryToken]);
+  useAsyncData(
+    () => {
+      // Guarded by `enabled` below — `projectId` is always defined here.
+      if (projectId === undefined) return Promise.reject(new Error("unreachable: no projectId"));
+      return api.listProjectActions(projectId);
+    },
+    (launchers) => setAgentLaunchers(launchers.filter((l) => l.kind === "agent")),
+    () => setLaunchersLoadError(true),
+    [isEdit, projectId, launchersRetryToken],
+    {
+      enabled: isEdit && projectId !== undefined,
+      // Clears a stale error from a previous fetch/retry before this one
+      // resolves — same "reset then fetch" shape as SkillsPanel.tsx's own
+      // fetchSkills effect.
+      onStart: () => setLaunchersLoadError(false),
+    },
+  );
 
   // Deduped by the bare agent name (KNOWN_AGENTS-shaped) — a project can
   // define its own launcher with the same underlying binary as a detected

@@ -9,6 +9,7 @@ import type {
   GitHubStatus,
 } from "./api.js";
 import { ChevronDownIcon, GitHubIcon } from "./icons.js";
+import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store.js";
 
 export interface GitHubPanelParams {
@@ -238,31 +239,19 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
   // Use store's real-time PRs when available (from WS), fall back to fetched data
   const effectivePrs = storePrs ?? prsStatus;
 
-  useEffect(() => {
-    let cancelled = false;
+  useAsyncData(
+    () => api.getProjectGitHub(params.projectId),
+    (s) => setStatus(s ?? null),
+    () => setStatus(null),
+    [params.projectId, prsRefreshTrigger],
+  );
 
-    api
-      .getProjectGitHub(params.projectId)
-      .then((s) => {
-        if (!cancelled) setStatus(s ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setStatus(null);
-      });
-
-    api
-      .getProjectGitHubPRs(params.projectId)
-      .then((s) => {
-        if (!cancelled) setPrsStatus(s ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setPrsStatus(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [params.projectId, prsRefreshTrigger]);
+  useAsyncData(
+    () => api.getProjectGitHubPRs(params.projectId),
+    (s) => setPrsStatus(s ?? null),
+    () => setPrsStatus(null),
+    [params.projectId, prsRefreshTrigger],
+  );
 
   // Subscribe to real-time GitHub WS updates for this project
   useEffect(() => {

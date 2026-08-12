@@ -55,6 +55,8 @@ import {
 } from "./panelUtils.js";
 import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./useVisualViewportInset.js";
+import { useDragResize } from "./hooks/useDragResize.js";
+import { usePolling } from "./hooks/usePolling.js";
 import {
   pickNewNotifiableEvents,
   notificationChannelEnabled,
@@ -816,12 +818,7 @@ export function App() {
   // Every store call below is deliberately via getState() — a mount-once
   // effect action-caller, not a value this component reacts to (see this
   // component's own selector block above for why).
-  useEffect(() => {
-    const checkForUpdates = () => useDashboardStore.getState().checkForUpdates();
-    checkForUpdates();
-    const timer = setInterval(checkForUpdates, 30 * 60 * 1000);
-    return () => clearInterval(timer);
-  }, []);
+  usePolling(() => useDashboardStore.getState().checkForUpdates(), 30 * 60 * 1000);
 
   // Codex `/hooks` trust check (issue #259) — same on-mount + poll shape as
   // the update check above, but on a much shorter cadence: unlike an update,
@@ -830,12 +827,7 @@ export function App() {
   // Settings, which force-refreshes on demand) to see the banner clear. The
   // backend's own agent-detect cache (60s) already bounds how often this
   // actually re-probes the filesystem.
-  useEffect(() => {
-    const checkCodexHookTrust = () => useDashboardStore.getState().checkCodexHookTrust();
-    checkCodexHookTrust();
-    const timer = setInterval(checkCodexHookTrust, 60 * 1000);
-    return () => clearInterval(timer);
-  }, []);
+  usePolling(() => useDashboardStore.getState().checkCodexHookTrust(), 60 * 1000);
 
   // Starts the ~4s session-status poll once (paused while the tab is
   // hidden) so status badges reflect the backend without a mutation.
@@ -1782,50 +1774,18 @@ export function App() {
   }, [isMobile, sidebarCollapsed]);
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
-  const sidebarWidthRef = useRef(sidebarWidth);
-  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
-  const [sidebarResizing, setSidebarResizing] = useState(false);
-
-  const onSidebarResizeMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    sidebarDragRef.current = { startX: e.clientX, startW: sidebarWidthRef.current };
-    setSidebarResizing(true);
-  }, []);
-
-  useEffect(() => {
-    if (!sidebarResizing) return;
-    const onMove = (e: MouseEvent) => {
-      const d = sidebarDragRef.current;
-      if (!d) return;
-      const w = Math.max(
-        SIDEBAR_MIN_WIDTH,
-        Math.min(SIDEBAR_MAX_WIDTH, d.startW + (e.clientX - d.startX)),
-      );
-      sidebarWidthRef.current = w;
-      setSidebarWidthLocal(w);
-    };
-    const onUp = () => {
-      const w = sidebarWidthRef.current;
-      useDashboardStore.getState().setSidebarWidth(w);
-      setSidebarResizing(false);
-      sidebarDragRef.current = null;
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-    };
-  }, [sidebarResizing]);
-
-  // Keep the ref in sync with the local state (initial load, reload, etc.)
-  useEffect(() => {
-    sidebarWidthRef.current = sidebarWidth;
-  }, [sidebarWidth]);
+  // Persists on drag end only, via the store action (not a direct
+  // `writeNumber` call the way Dock/UnifiedBoard persist — `setSidebarWidth`
+  // already does that internally).
+  const { dragging: sidebarResizing, onMouseDown: onSidebarResizeMouseDown } = useDragResize({
+    axis: "x",
+    min: SIDEBAR_MIN_WIDTH,
+    getMax: () => SIDEBAR_MAX_WIDTH,
+    value: sidebarWidth,
+    onChange: setSidebarWidthLocal,
+    onCommit: (w) => useDashboardStore.getState().setSidebarWidth(w),
+    cursor: "col-resize",
+  });
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency

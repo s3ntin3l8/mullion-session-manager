@@ -25,6 +25,8 @@ import { TerminalPane } from "./TerminalPane.js";
 import { CustomSelect } from "./CustomSelect.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStatus.js";
+import { useDragResize } from "./hooks/useDragResize.js";
+import { usePolling } from "./hooks/usePolling.js";
 import {
   STORAGE_KEYS,
   readBool,
@@ -231,59 +233,30 @@ export function Dock({
   ).length;
 
   // ---- Dock region height (drag handle on the top border) ----
-  const heightDragRef = useRef<{ startY: number; startH: number; maxH: number } | null>(null);
-  const [heightDragging, setHeightDragging] = useState(false);
-
-  const onHeightHandleMouseDown = (e: ReactMouseEvent) => {
-    e.preventDefault();
-    const dockEl = dockRef.current;
-    // Measure the two flex siblings directly (not the shared parent's
-    // clientHeight, which also includes the mobile-only tab bar / sidebar
-    // toggle) so the available-space math stays correct regardless of
-    // which of those happen to be rendered.
-    const dockviewEl = dockEl?.parentElement?.querySelector<HTMLElement>(".dockview-container");
-    const available = (dockEl?.clientHeight ?? 0) + (dockviewEl?.clientHeight ?? 0);
-    const maxH = Math.max(DOCK_MIN_HEIGHT, available - GRID_MIN_HEIGHT);
-    heightDragRef.current = { startY: e.clientY, startH: height, maxH };
-    setHeightDragging(true);
-  };
-
-  useEffect(() => {
-    if (!heightDragging) return;
-    const onMove = (e: MouseEvent) => {
-      const d = heightDragRef.current;
-      if (!d) return;
-      // Handle sits on the TOP border: dragging up (clientY decreases) grows
-      // the dock, matching the direction the border itself moves.
-      setHeight(clamp(d.startH + (d.startY - e.clientY), DOCK_MIN_HEIGHT, d.maxH));
-    };
-    const onUp = () => setHeightDragging(false);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "ns-resize";
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-    };
-  }, [heightDragging]);
-
-  const heightMountedRef = useRef(false);
-  useEffect(() => {
-    // Skip the initial mount (heightDragging starts false) so a user who
-    // never touches the resize handle doesn't get the clamped/defaulted
-    // height silently written back to localStorage — persist on drag end
-    // only. Reads the latest `height` intentionally, so this can't be keyed
-    // on it too.
-    if (!heightMountedRef.current) {
-      heightMountedRef.current = true;
-      return;
-    }
-    if (!heightDragging) writeNumber(STORAGE_KEYS.dockHeight, height);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- persist-on-drag-end, height read intentionally
-  }, [heightDragging]);
+  // Handle sits on the TOP border: dragging up (clientY decreases) grows
+  // the dock, matching the direction the border itself moves — hence
+  // `invert: true`. Persists on drag end only via `onCommit` (never fires
+  // on mount, so no separate "skip the initial mount" guard is needed the
+  // way the pre-extraction effect had by hand).
+  const { onMouseDown: onHeightHandleMouseDown } = useDragResize({
+    axis: "y",
+    invert: true,
+    min: DOCK_MIN_HEIGHT,
+    getMax: () => {
+      const dockEl = dockRef.current;
+      // Measure the two flex siblings directly (not the shared parent's
+      // clientHeight, which also includes the mobile-only tab bar /
+      // sidebar toggle) so the available-space math stays correct
+      // regardless of which of those happen to be rendered.
+      const dockviewEl = dockEl?.parentElement?.querySelector<HTMLElement>(".dockview-container");
+      const available = (dockEl?.clientHeight ?? 0) + (dockviewEl?.clientHeight ?? 0);
+      return Math.max(DOCK_MIN_HEIGHT, available - GRID_MIN_HEIGHT);
+    },
+    value: height,
+    onChange: setHeight,
+    onCommit: (v) => writeNumber(STORAGE_KEYS.dockHeight, v),
+    cursor: "ns-resize",
+  });
 
   // ---- Column divider resize ----
   const widthDragRef = useRef<{
@@ -596,40 +569,36 @@ function DockColumn({
   const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
   const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null>(null);
 
-  useEffect(() => {
-    // `cancelled` guard (issue #73) — this effect now also re-fires on an
-    // interval (below), so a slow response from a stale tick landing after a
-    // newer one must not clobber it; same pattern as the GitHub effect right
-    // below this one.
-    let cancelled = false;
-    const load = () => {
+  // Polls so a discovered Docker service's container state/image tag stays
+  // live without the user toggling anything — this component only renders
+  // while the dock itself is expanded (Dock's own `!collapsed` guard
+  // unmounts every DockColumn otherwise), so the interval is implicitly
+  // paused/cleared for free whenever the dock is collapsed.
+  //
+  // `dockConfigRefreshTrigger` in `deps` means a save in DockConfigPanel
+  // restarts this poll immediately (same "bump a shared counter,
+  // subscribers refetch" shape as GitHubPanel's own `prsRefreshTrigger`
+  // dependency below), instead of waiting out DOCKER_POLL_INTERVAL_MS or a
+  // page reload — docs/dock.md's own troubleshooting note calls that wait
+  // out explicitly. Unlike most other usePolling call sites, this one's
+  // `deps` genuinely can restart mid-lifetime (a save while a request is
+  // still in flight is plausible, not just a defensive-programming
+  // formality), so `isCancelled()` guards the response same as the
+  // pre-extraction `cancelled` flag did (issue #73).
+  usePolling(
+    (isCancelled) => {
       api
         .listProjectDock(projectId)
         .then((next) => {
-          if (!cancelled) setControls(next);
+          if (!isCancelled()) setControls(next);
         })
         .catch(() => {
-          if (!cancelled) setControls([]);
+          if (!isCancelled()) setControls([]);
         });
-    };
-    load();
-    // Polls so a discovered Docker service's container state/image tag
-    // stays live without the user toggling anything — this component only
-    // renders while the dock itself is expanded (Dock's own `!collapsed`
-    // guard unmounts every DockColumn otherwise), so the interval is
-    // implicitly paused/cleared for free whenever the dock is collapsed.
-    const interval = setInterval(load, DOCKER_POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-    // U4 — dockConfigRefreshTrigger in the dependency array means a save in
-    // DockConfigPanel re-runs this effect immediately (same "bump a shared
-    // counter, subscribers refetch" shape as GitHubPanel's own
-    // prsRefreshTrigger dependency), instead of waiting out the
-    // DOCKER_POLL_INTERVAL_MS poll above or a page reload — docs/dock.md's
-    // own troubleshooting note calls that wait out explicitly.
-  }, [projectId, dockConfigRefreshTrigger]);
+    },
+    DOCKER_POLL_INTERVAL_MS,
+    { deps: [projectId, dockConfigRefreshTrigger] },
+  );
 
   useEffect(() => {
     // Guards against a stale response on a fast project switch — same

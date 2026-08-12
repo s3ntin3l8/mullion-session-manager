@@ -3,6 +3,7 @@ import { api, ApiError } from "./api.js";
 import type { DockviewPanelApi } from "dockview-react";
 import type { ProjectUrl, ServerInfo } from "./api.js";
 import { useDashboardStore } from "./store.js";
+import { usePolling } from "./hooks/usePolling.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
 
@@ -287,30 +288,31 @@ export function BrowserPanel({
   // Dev server status indicator
   const [devServerOnline, setDevServerOnline] = useState<boolean | null>(null);
 
-  useEffect(() => {
-    if (isExternal || !projectId || !devServerUrl) return;
-
-    let cancelled = false;
-
-    const checkStatus = () => {
+  // Behavior note: the pre-extraction effect's own dependency array was
+  // `[isExternal, projectId]` only — `devServerUrl` gated the early return
+  // but wasn't a listed dependency, so a `devServerUrl` that went from
+  // falsy to truthy without `isExternal`/`projectId` also changing left
+  // this poll permanently un-started until one of those two DID change.
+  // `enabled` below recomputes (and, via usePolling's own restart-on-
+  // `enabled`-change behavior, correctly starts the poll) whenever any of
+  // the three flips — a small, deliberate fix riding along with this
+  // extraction, not a silent behavior change: this is strictly "the poll
+  // now starts in a case it previously wouldn't have", never the reverse.
+  usePolling(
+    (isCancelled) => {
+      if (!projectId) return;
       api
         .getDevServerStatus(projectId)
         .then((res: { online: boolean }) => {
-          if (!cancelled) setDevServerOnline(res.online);
+          if (!isCancelled()) setDevServerOnline(res.online);
         })
         .catch(() => {
-          if (!cancelled) setDevServerOnline(false);
+          if (!isCancelled()) setDevServerOnline(false);
         });
-    };
-
-    checkStatus();
-    const timer = setInterval(checkStatus, 5000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [isExternal, projectId]);
+    },
+    5000,
+    { enabled: !isExternal && !!projectId && !!devServerUrl, deps: [isExternal, projectId] },
+  );
 
   const navigateToSavedUrl = (id: number, url: string, label: string) => {
     setFollowAgent(false);
