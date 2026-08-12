@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
 import { realpathSync } from "node:fs";
 import { Readable } from "node:stream";
@@ -663,6 +663,59 @@ function resolveWithinRoots(app: FastifyInstance, cwd: string): string | null {
   return withinRoots ? resolved : null;
 }
 
+/**
+ * The call-site half of resolveWithinRoots: resolves `value` and, on
+ * failure, sends the standard 400 ("<field> must be within this agent's
+ * PROJECTS_ROOTS") and returns null — replacing the identical
+ * `const resolvedX = resolveWithinRoots(...); if (!resolvedX) return
+ * reply.badRequest(...);` block this file used to repeat at every one of
+ * its ~37 call sites. The idiom at each call site becomes:
+ * `const resolvedX = requireWithinRoots(app, reply, x, "x"); if (resolvedX
+ * === null) return;` — the same early-return-after-sending-a-reply shape
+ * already used elsewhere in this file (e.g. the mullionSignatureSecret
+ * check above). `field` is required, not defaulted — every one of this
+ * file's ~37 call sites passes it explicitly (Hermes review, PR #626), so a
+ * default would only ever mask a call site that forgot to name its own
+ * field, not save anyone real typing.
+ */
+function requireWithinRoots(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  value: string,
+  field: string,
+): string | null {
+  const resolved = resolveWithinRoots(app, value);
+  if (!resolved) {
+    reply.badRequest(`${field} must be within this agent's PROJECTS_ROOTS`);
+    return null;
+  }
+  return resolved;
+}
+
+/**
+ * requireWithinRoots for an array of paths — used by
+ * /internal/git-worktree/prune's orphanPaths loop. Stops at the FIRST
+ * entry outside PROJECTS_ROOTS, same as the loop it replaces: the rest of
+ * `values` is never resolved once one entry fails.
+ */
+function requireAllWithinRoots(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  values: string[],
+  field: string,
+): string[] | null {
+  const resolved: string[] = [];
+  for (const value of values) {
+    const resolvedValue = resolveWithinRoots(app, value);
+    if (!resolvedValue) {
+      reply.badRequest(`${field} entry must be within this agent's PROJECTS_ROOTS: ${value}`);
+      return null;
+    }
+    resolved.push(resolvedValue);
+  }
+  return resolved;
+}
+
 // Same shape as projects.ts's DEV_SERVER_PORT_ONLY — a bare 1-65535 port,
 // nothing else. Used for both /internal/preview/:port/* and
 // /internal/ws/preview's ?port= (issue #28 phase 6).
@@ -1000,8 +1053,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       const globalPresets = await resolveGlobalPresets(app);
       return resolveProjectActions(resolvedCwd, globalPresets);
     },
@@ -1013,8 +1066,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return resolveProjectDock(resolvedCwd, app.config.CRS_CONFIG_DIR);
     },
   );
@@ -1033,8 +1086,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       try {
         return readDockConfig(resolvedCwd);
       } catch (err) {
@@ -1057,8 +1110,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       let controls;
       try {
         controls = validateDockConfig({ controls: request.body.controls });
@@ -1100,8 +1153,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       try {
         return await listAgentRules(resolvedCwd);
       } catch (err) {
@@ -1122,8 +1175,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       const target = resolveTarget(request.params.target);
       if (!target) return reply.badRequest("Unknown agent-rules target");
       try {
@@ -1151,8 +1204,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       const target = resolveTarget(request.params.target);
       if (!target) return reply.badRequest("Unknown agent-rules target");
       try {
@@ -1180,8 +1233,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return listExistingProjectRuleFileNames(resolvedCwd);
     },
   );
@@ -1197,8 +1250,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       try {
         return await listProjectSkills(resolvedCwd);
       } catch (err) {
@@ -1229,8 +1282,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       const { agent, name, enabled } = request.body;
       try {
         return await toggleSkillEnabled(resolvedCwd, agent, name, enabled);
@@ -1271,8 +1324,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return parseGitRemote(resolvedCwd);
     },
   );
@@ -1293,8 +1346,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       reply.type("application/json");
       return JSON.stringify(readGitBranch(resolvedCwd));
     },
@@ -1328,8 +1381,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd, fresh } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, status: null };
       }
@@ -1350,8 +1403,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd, base } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, stats: null };
       }
@@ -1371,8 +1424,8 @@ export async function internalRoutes(app: FastifyInstance) {
       const { cwd, path: filePath, base } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
       if (!filePath) return reply.badRequest("path query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       if (!isGitRepo(resolvedCwd)) return { patch: null };
 
       const resolvedPath = path.isAbsolute(filePath)
@@ -1396,8 +1449,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd, detail } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       const [branches, worktrees, remoteBranches] = await Promise.all([
         listBranches(resolvedCwd, { detail: detail === "1" }),
         listWorktrees(resolvedCwd),
@@ -1421,8 +1474,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await runGitFetch(resolvedCwd);
     },
   );
@@ -1440,8 +1493,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       const baseRef = await resolveDefaultBaseRef(resolvedCwd);
       const sha = await resolveCommitSha(resolvedCwd, baseRef);
       return { baseRef, sha };
@@ -1463,8 +1516,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitPushSchema },
     async (request, reply) => {
       const { cwd, branch, token } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await pushBranch(resolvedCwd, branch, token);
     },
   );
@@ -1480,8 +1533,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return { dirs: listTaskWorktreeDirs(resolvedCwd) };
     },
   );
@@ -1498,8 +1551,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeResumeSchema },
     async (request, reply) => {
       const { cwd, branchName } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await resumeTaskWorktree(resolvedCwd, branchName);
     },
   );
@@ -1519,8 +1572,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeCreateSchema },
     async (request, reply) => {
       const { cwd, baseRef, seed, branchName } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await createWorktree({ cwd: resolvedCwd, baseRef, seed, branchName });
     },
   );
@@ -1535,15 +1588,12 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeRemoveSchema },
     async (request, reply) => {
       const { worktreePath, parentCwd } = request.body;
-      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
-      if (!resolvedWorktreePath) {
-        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
-      }
+      const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
+      if (resolvedWorktreePath === null) return;
       let resolvedParentCwd: string | undefined;
       if (parentCwd) {
-        const resolved = resolveWithinRoots(app, parentCwd);
-        if (!resolved)
-          return reply.badRequest("parentCwd must be within this agent's PROJECTS_ROOTS");
+        const resolved = requireWithinRoots(app, reply, parentCwd, "parentCwd");
+        if (resolved === null) return;
         resolvedParentCwd = resolved;
       }
       return await removeWorktreeIfClean(resolvedWorktreePath, resolvedParentCwd);
@@ -1562,8 +1612,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeCheckoutSchema },
     async (request, reply) => {
       const { cwd, branch } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await checkoutBranchWorktree(resolvedCwd, branch);
     },
   );
@@ -1581,15 +1631,12 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeForceRemoveSchema },
     async (request, reply) => {
       const { worktreePath, parentCwd } = request.body;
-      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
-      if (!resolvedWorktreePath) {
-        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
-      }
+      const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
+      if (resolvedWorktreePath === null) return;
       let resolvedParentCwd: string | undefined;
       if (parentCwd) {
-        const resolved = resolveWithinRoots(app, parentCwd);
-        if (!resolved)
-          return reply.badRequest("parentCwd must be within this agent's PROJECTS_ROOTS");
+        const resolved = requireWithinRoots(app, reply, parentCwd, "parentCwd");
+        if (resolved === null) return;
         resolvedParentCwd = resolved;
       }
       const removed = await removeWorktree(resolvedWorktreePath, resolvedParentCwd);
@@ -1607,10 +1654,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeSyncSchema },
     async (request, reply) => {
       const { worktreePath, branch } = request.body;
-      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
-      if (!resolvedWorktreePath) {
-        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
-      }
+      const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
+      if (resolvedWorktreePath === null) return;
       const synced = await syncWorktree(resolvedWorktreePath, branch);
       return { synced };
     },
@@ -1626,12 +1671,10 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeClearOrphanSchema },
     async (request, reply) => {
       const { cwd, worktreePath, branchName } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
-      if (!resolvedWorktreePath) {
-        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
-      }
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
+      if (resolvedWorktreePath === null) return;
       return await clearOrphanedTaskWorktree(resolvedCwd, resolvedWorktreePath, branchName);
     },
   );
@@ -1647,18 +1690,10 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreePruneSchema },
     async (request, reply) => {
       const { cwd, orphanPaths } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      const resolvedOrphanPaths: string[] = [];
-      for (const orphanPath of orphanPaths) {
-        const resolved = resolveWithinRoots(app, orphanPath);
-        if (!resolved) {
-          return reply.badRequest(
-            `orphanPaths entry must be within this agent's PROJECTS_ROOTS: ${orphanPath}`,
-          );
-        }
-        resolvedOrphanPaths.push(resolved);
-      }
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      const resolvedOrphanPaths = requireAllWithinRoots(app, reply, orphanPaths, "orphanPaths");
+      if (resolvedOrphanPaths === null) return;
       return await pruneWorktrees(resolvedCwd, resolvedOrphanPaths);
     },
   );
@@ -1673,8 +1708,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitBranchDeleteSchema },
     async (request, reply) => {
       const { cwd, name, force } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await deleteBranch(resolvedCwd, name, { force });
     },
   );
@@ -1688,12 +1723,10 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeRemoveListedSchema },
     async (request, reply) => {
       const { cwd, worktreePath, force } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
-      if (!resolvedWorktreePath) {
-        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
-      }
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
+      if (resolvedWorktreePath === null) return;
       return await removeListedWorktree(resolvedCwd, resolvedWorktreePath, { force });
     },
   );
@@ -1706,8 +1739,8 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreePruneMetadataSchema },
     async (request, reply) => {
       const { cwd } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       return await pruneWorktreeMetadata(resolvedCwd);
     },
   );
@@ -1939,8 +1972,8 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { cwd, mime } = request.query;
       if (!cwd || !mime) return reply.badRequest("cwd and mime query params are required");
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
       if (!extensionForMime(mime)) return reply.badRequest(`Unsupported image type: ${mime}`);
       if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
       // Content check, not just Content-Type: rejects a body whose actual
