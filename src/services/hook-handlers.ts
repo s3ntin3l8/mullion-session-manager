@@ -32,6 +32,7 @@ import type {
   FileChangeHookMessage,
   ReviewGateHookMessage,
   PromoteRequestHookMessage,
+  PermissionRequestHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -356,6 +357,20 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // its own (an auto-approved permission) — see
       // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
       ctx.clearIfConfirmedKind("hookNotification");
+    },
+  ],
+  [
+    "permission_request",
+    (ctx, message) => {
+      const pr = message as PermissionRequestHookMessage;
+      ctx.permissionState = "pending";
+      ctx.permissionAt = Date.now();
+      ctx.pendingPermissionTool = pr.tool;
+      ctx.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
+      ctx.emitAttentionSignalWithExtras("permissionRequest", {
+        tool: pr.tool,
+        summary: pr.summary,
+      });
     },
   ],
 ]);

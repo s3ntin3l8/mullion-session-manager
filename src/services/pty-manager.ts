@@ -36,7 +36,6 @@ import { buildSessionEnv } from "./session-env.js";
 import type {
   HookMessageKind,
   HookMessage,
-  PermissionRequestHookMessage,
   ToolDoneHookMessage,
   StopFailureHookMessage,
   ToolFailureHookMessage,
@@ -2320,18 +2319,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "permission_request": {
-        const pr = message as PermissionRequestHookMessage;
-        this.permissionState = "pending";
-        this.permissionAt = Date.now();
-        this.pendingPermissionTool = pr.tool;
-        this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
-        this.emitAttentionSignalWithExtras("permissionRequest", {
-          tool: pr.tool,
-          summary: pr.summary,
-        });
-        return;
-      }
       case "stop_failure": {
         const sf = message as StopFailureHookMessage;
         this.errorState = "api_error";
