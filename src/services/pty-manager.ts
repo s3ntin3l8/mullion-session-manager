@@ -2320,12 +2320,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "session_start":
-        // Answered directly by hooks.ts (it needs app.pty.consumeSeed, which
-        // this Session-scoped method has no access to) — never reaches here.
-        // See markHooksProven() below for how THIS kind still latches
-        // `hooksProven`, despite bypassing this method entirely.
-        return;
       case "notification_resolved":
         // Follow-up to #275 (gap #2) — opencode's permission.replied,
         // resolving a hookNotification-confirmed flag with no keystroke of

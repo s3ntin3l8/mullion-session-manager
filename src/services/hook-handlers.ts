@@ -339,6 +339,15 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.emitAttentionSignalWithExtras("promoteRequest", { summary: promote.summary });
     },
   ],
+  [
+    "session_start",
+    () => {
+      // Answered directly by hooks.ts (it needs app.pty.consumeSeed, which
+      // this Session-scoped method has no access to) — never reaches here.
+      // See markHooksProven() below for how THIS kind still latches
+      // `hooksProven`, despite bypassing this method entirely.
+    },
+  ],
 ]);
 
 export type { HookMessageKind };
