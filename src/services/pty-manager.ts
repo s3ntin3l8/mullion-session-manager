@@ -71,6 +71,7 @@ import {
   listSessionProcesses as listSessionProcessesProcess,
 } from "./session-process.js";
 import { buildLaunchPlan } from "./launch-plan.js";
+import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
 // Re-exported so existing importers (src/routes/agents.ts, this module's own
 // tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
 // their actual definitions into launch-plan.ts, alongside buildLaunchPlan().
@@ -2050,6 +2051,260 @@ export class Session {
    * layer already accepts verbatim (extensibility) is likewise a no-op here
    * until a later phase teaches this method about it.
    */
+  /**
+   * PR 33a (Wave 6) — builds the narrow `SessionHookContext` facade the
+   * HOOK_HANDLERS table (hook-handlers.ts) operates over, one per
+   * emitHookEvent() call. A plain `this` can't be passed directly: Session's
+   * state fields/methods below are `private`, and TypeScript refuses to
+   * assign a class instance to a structurally-matching external interface
+   * when the class has private members the interface doesn't know about
+   * (confirmed empirically — `Session` is "not assignable" to
+   * `SessionHookContext` with `this` passed raw). Each accessor here is a
+   * thin proxy onto the real private field/method — this is the ONE place
+   * that boundary is crossed, so every handler in hook-handlers.ts stays
+   * provably scoped to just what's declared on SessionHookContext, not
+   * Session's full surface.
+   */
+  private buildHookContext(): SessionHookContext {
+    // The object literal's own get/set accessors below each have their OWN
+    // dynamic `this` (bound to the ctx object itself, not this Session) —
+    // an arrow function is the only way to close over the real Session
+    // instance from inside them, hence capturing it under a plain name here.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      get id() {
+        return self.id;
+      },
+      get cwd() {
+        return self.cwd;
+      },
+      get liveCwd() {
+        return self._liveCwd;
+      },
+      set liveCwd(v: string | null) {
+        self._liveCwd = v;
+      },
+      get liveBranch() {
+        return self._liveBranch;
+      },
+      set liveBranch(v: string | null) {
+        self._liveBranch = v;
+      },
+      get fileChangeQueue() {
+        return self.fileChangeQueue;
+      },
+      set fileChangeQueue(v: Promise<void>) {
+        self.fileChangeQueue = v;
+      },
+      get gitIgnoreDirCache() {
+        return self.gitIgnoreDirCache;
+      },
+      get gateState() {
+        return self.gateState;
+      },
+      set gateState(v) {
+        self.gateState = v;
+      },
+      get gatePrompt() {
+        return self.gatePrompt;
+      },
+      set gatePrompt(v) {
+        self.gatePrompt = v;
+      },
+      get gateAt() {
+        return self.gateAt;
+      },
+      set gateAt(v) {
+        self.gateAt = v;
+      },
+      get promoteState() {
+        return self.promoteState;
+      },
+      set promoteState(v) {
+        self.promoteState = v;
+      },
+      get promoteSummary() {
+        return self.promoteSummary;
+      },
+      set promoteSummary(v) {
+        self.promoteSummary = v;
+      },
+      get promoteSuggestedBaseRef() {
+        return self.promoteSuggestedBaseRef;
+      },
+      set promoteSuggestedBaseRef(v) {
+        self.promoteSuggestedBaseRef = v;
+      },
+      get promoteAt() {
+        return self.promoteAt;
+      },
+      set promoteAt(v) {
+        self.promoteAt = v;
+      },
+      get permissionState() {
+        return self.permissionState;
+      },
+      set permissionState(v) {
+        self.permissionState = v;
+      },
+      get permissionAt() {
+        return self.permissionAt;
+      },
+      set permissionAt(v) {
+        self.permissionAt = v;
+      },
+      get pendingPermissionTool() {
+        return self.pendingPermissionTool;
+      },
+      set pendingPermissionTool(v) {
+        self.pendingPermissionTool = v;
+      },
+      get planState() {
+        return self.planState;
+      },
+      set planState(v) {
+        self.planState = v;
+      },
+      get planAt() {
+        return self.planAt;
+      },
+      set planAt(v) {
+        self.planAt = v;
+      },
+      get questionState() {
+        return self.questionState;
+      },
+      set questionState(v) {
+        self.questionState = v;
+      },
+      get questionHeader() {
+        return self.questionHeader;
+      },
+      set questionHeader(v) {
+        self.questionHeader = v;
+      },
+      get questionAt() {
+        return self.questionAt;
+      },
+      set questionAt(v) {
+        self.questionAt = v;
+      },
+      get elicitationState() {
+        return self.elicitationState;
+      },
+      set elicitationState(v) {
+        self.elicitationState = v;
+      },
+      get elicitationServer() {
+        return self.elicitationServer;
+      },
+      set elicitationServer(v) {
+        self.elicitationServer = v;
+      },
+      get elicitationAt() {
+        return self.elicitationAt;
+      },
+      set elicitationAt(v) {
+        self.elicitationAt = v;
+      },
+      get errorState() {
+        return self.errorState;
+      },
+      set errorState(v) {
+        self.errorState = v;
+      },
+      get errorAt() {
+        return self.errorAt;
+      },
+      set errorAt(v) {
+        self.errorAt = v;
+      },
+      get errorDetail() {
+        return self.errorDetail;
+      },
+      set errorDetail(v) {
+        self.errorDetail = v;
+      },
+      get lastAssistantMessage() {
+        return self.lastAssistantMessage;
+      },
+      set lastAssistantMessage(v) {
+        self.lastAssistantMessage = v;
+      },
+      get lastTurnEndedAt() {
+        return self.lastTurnEndedAt;
+      },
+      set lastTurnEndedAt(v) {
+        self.lastTurnEndedAt = v;
+      },
+      get turnEndPingSent() {
+        return self.turnEndPingSent;
+      },
+      set turnEndPingSent(v) {
+        self.turnEndPingSent = v;
+      },
+      get backgroundTasks() {
+        return self.backgroundTasks;
+      },
+      set backgroundTasks(v) {
+        self.backgroundTasks = v;
+      },
+      get backgroundTasksAt() {
+        return self.backgroundTasksAt;
+      },
+      set backgroundTasksAt(v) {
+        self.backgroundTasksAt = v;
+      },
+      get compactState() {
+        return self.compactState;
+      },
+      set compactState(v) {
+        self.compactState = v;
+      },
+      get compactAt() {
+        return self.compactAt;
+      },
+      set compactAt(v) {
+        self.compactAt = v;
+      },
+      get subagentCount() {
+        return self.subagentCount;
+      },
+      set subagentCount(v) {
+        self.subagentCount = v;
+      },
+      get subagentCountAt() {
+        return self.subagentCountAt;
+      },
+      set subagentCountAt(v) {
+        self.subagentCountAt = v;
+      },
+      get endedReason() {
+        return self.endedReason;
+      },
+      set endedReason(v) {
+        self.endedReason = v;
+      },
+      get exitCode() {
+        return self.exitCode;
+      },
+      set exitCode(v) {
+        self.exitCode = v;
+      },
+      emitEvent: (kind, payload) => self.emitEvent(kind, payload),
+      emitAttentionSignalWithExtras: (kind, extras) =>
+        self.emitAttentionSignalWithExtras(kind, extras),
+      clearIfConfirmedKind: (kind) => self.clearIfConfirmedKind(kind),
+      resolveDeferredTurnEnd: () => self.resolveDeferredTurnEnd(),
+      setBackgroundTasks: (tasks) => self.setBackgroundTasks(tasks),
+      bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
+      recordSubagentStart: (agentId, agentType, now) =>
+        self.recordSubagentStart(agentId, agentType, now),
+      recordSubagentStop: (agentId, summary, now) => self.recordSubagentStop(agentId, summary, now),
+    };
+  }
+
   emitHookEvent(message: HookMessage): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
     // "progress"/"done" — proves this session's hook pipeline genuinely
@@ -2058,13 +2313,18 @@ export class Session {
     // this can't be the ONLY place it latches (Claude Code's own first hook,
     // SessionStart, never reaches this method at all — see markHooksProven).
     this.hooksProven = true;
+    // PR 33a (Wave 6) — HOOK_HANDLERS (hook-handlers.ts) is populated one
+    // case at a time as the roadmap's "one case per commit" migration
+    // proceeds; a kind already migrated dispatches here and returns, a kind
+    // still on the switch below falls through unchanged. Once every case has
+    // migrated, this table lookup is this method's entire body and the
+    // switch is deleted (tracked as the final commit of this migration).
+    const handler = HOOK_HANDLERS.get(message.kind);
+    if (handler) {
+      handler(this.buildHookContext(), message);
+      return;
+    }
     switch (message.kind) {
-      case "notification":
-        this.emitAttentionSignalWithExtras("hookNotification", {
-          title: message.title,
-          body: message.body,
-        });
-        return;
       case "progress": {
         // Same TS-narrowing gap the review_gate/promote_request cases below
         // document: `UnknownHookMessage`'s `kind: string` (not a literal)
