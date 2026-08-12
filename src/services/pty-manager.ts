@@ -28,10 +28,9 @@ import {
   INITIAL_MOUSE_TRACKING_STATE,
   INITIAL_ATTENTION_STATE,
   type MouseTrackingState,
-  type AttentionMachineState,
   type AttentionSignalKind,
-  type AttentionTransition,
 } from "./attention-detect.js";
+import { AttentionTracker } from "./attention-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
 import type { HookMessageKind, HookMessage, BackgroundTask } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
@@ -933,12 +932,21 @@ export class Session {
   private lastSeenSeq = 0;
   private lastActivityAt: number | null = null;
   private activityStreakStart: number | null = null;
-  // The attention state machine's own state (issue #171/#98) — see
-  // advanceAttention() in attention-detect.ts. Replaces the old bare
-  // `attentionAt: number | null` field entirely: `attentionState.confirmedAt`
-  // IS this session's public attentionAt (see toInfo()), folded into the
-  // machine's state so there's only ever one timestamp to keep in sync.
-  private attentionState: AttentionMachineState = INITIAL_ATTENTION_STATE;
+  // PR 33b (Wave 6) — the attention state machine's own live state
+  // (`attention.state`, issue #171/#98) plus issue #428's outstanding-
+  // background-task tracking (`backgroundTasks`/`backgroundTasksAt`/
+  // `lastTurnEndedAt`/`turnEndPingSent`) and the methods that mutate them
+  // (applyAttentionTransition/clearIfConfirmedKind/
+  // emitAttentionSignalWithExtras/setBackgroundTasks/resolveDeferredTurnEnd)
+  // now live on this composed AttentionTracker instance — see
+  // attention-tracker.ts's own header comment for the full rationale
+  // (mirrors RedrawNudge's "hand it callbacks, don't reach into Session's
+  // private fields" shape) and for why bumpSubagentActivity/
+  // recordSubagentStart/recordSubagentStop stay on Session instead, despite
+  // being reached through the same SessionHookContext. Constructed in the
+  // constructor body below (not as a field initializer) so `this.id` is
+  // already assigned by the time it's built.
+  private readonly attention: AttentionTracker;
   // Minimal review gate (Phase 2, issue #178) — see SessionInfo.gateState's
   // doc comment for the state meanings. Set from emitHookEvent's
   // "review_gate" case and from resolveGate() below; read by toInfo().
@@ -995,21 +1003,13 @@ export class Session {
   private questionState: "idle" | "pending" = "idle";
   private questionHeader: string | null = null;
   private questionAt: number | null = null;
-  private lastTurnEndedAt: number | null = null;
-  // Issue #428 — see SessionInfo.backgroundTasks/.backgroundTasksAt's own
-  // doc comments.
-  private backgroundTasks: BackgroundTask[] = [];
-  private backgroundTasksAt: number | null = null;
-  // Issue #428 — one-shot guard for resolveDeferredTurnEnd()'s `agentIdle`
-  // ping (Hermes review, PR #453): without this, a repeated hook message
-  // reporting the SAME already-drained (or already-empty) backgroundTasks
-  // state — a late/reordered SubagentStop, or a second progress:done with
-  // no new information — would call resolveDeferredTurnEnd() again while
-  // lastTurnEndedAt is still latched, re-firing a duplicate "Finished" ping
-  // for a turn that already got its one. Scoped to the CURRENT latch: reset
-  // to false everywhere lastTurnEndedAt is freshly set OR cleared, so the
-  // next genuine turn end gets its own single ping.
-  private turnEndPingSent = false;
+  // lastTurnEndedAt/backgroundTasks/backgroundTasksAt/turnEndPingSent moved
+  // to the composed AttentionTracker (this.attention) above — issue #428's
+  // outstanding-background-task tracking is part of the attention machine's
+  // own coupled state (resolveDeferredTurnEnd's whole job is deciding when
+  // a deferred `agentIdle` ping fires off of exactly these four fields), not
+  // a Session-level concern. See attention-tracker.ts for their doc comments
+  // moved verbatim.
   // Issue #404 — the port most recently detected pending accept/dismiss; see
   // SessionInfo.pendingDevServerPort's own doc comment. In-memory only, same
   // resets-on-restart posture as gateState/promoteState above.
@@ -1136,6 +1136,17 @@ export class Session {
     this.skipPermissions = opts.skipPermissions ?? false;
     this.initialPrompt = opts.initialPrompt;
     this.projectId = opts.projectId ?? null;
+    // Built here (constructor body), not as a field initializer, so
+    // `this.id` above is already assigned — the host object's `sessionId`
+    // is captured once (readonly `id` is never reassigned, same posture as
+    // every other readonly-id capture in this constructor); `emitEvent` is
+    // a deferred closure, same as RedrawNudge's own `resize`/`getSize`
+    // callbacks below, so it's safe regardless of ordering. Must exist
+    // before readStateFile() below, which drives it directly.
+    this.attention = new AttentionTracker({
+      sessionId: this.id,
+      emitEvent: (kind, payload) => this.emitEvent(kind, payload),
+    });
     // Issue #351 — compute hookEmits on every construction (including reattach
     // after server restart) so toInfo() always reflects the adapter that
     // matches this.session.command, not just the one bootstrapMaster() saw at
@@ -1225,13 +1236,13 @@ export class Session {
     if (s.promoteSuggestedBaseRef !== undefined)
       this.promoteSuggestedBaseRef = s.promoteSuggestedBaseRef;
     if (s.attentionKind !== undefined) {
-      const ak = this.attentionState;
+      const ak = this.attention.state;
       if (s.attentionKind === null) {
         // Explicitly cleared — keep the machine state as-is (already idle).
       } else {
         // We can't fully reconstruct the attention machine, but setting
         // confirmedKind signals to the UI what was pending.
-        this.applyAttentionTransition(
+        this.attention.applyAttentionTransition(
           advanceAttention(ak, { type: "signal", kind: s.attentionKind, now: Date.now() }),
         );
       }
@@ -1251,7 +1262,7 @@ export class Session {
     if (s.questionState !== undefined) this.questionState = s.questionState;
     if (s.questionHeader !== undefined) this.questionHeader = s.questionHeader;
     if (s.questionAt !== undefined) this.questionAt = s.questionAt;
-    if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
+    if (s.lastTurnEndedAt !== undefined) this.attention.lastTurnEndedAt = s.lastTurnEndedAt;
     if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
     // Issue #428 — the persisted `backgroundTasksAt` timestamp itself is
     // NOT restored (same posture as subagentCountAt above — a restored
@@ -1262,7 +1273,7 @@ export class Session {
     // always false and a restored outstanding set could never be swept at
     // all until some unrelated turn_start/keystroke/hook event happened to
     // touch it (Hermes review, PR #453).
-    if (Array.isArray(s.backgroundTasks)) this.setBackgroundTasks(s.backgroundTasks);
+    if (Array.isArray(s.backgroundTasks)) this.attention.setBackgroundTasks(s.backgroundTasks);
     // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
     // not in StoredStateFields, same as backgroundTasksAt), so it would
     // otherwise always restore to its class-field default of `false`. That's
@@ -1276,8 +1287,9 @@ export class Session {
     // as already-pinged on restore exactly when it's both latched AND has
     // nothing outstanding — the same condition resolveDeferredTurnEnd()
     // itself checks before firing.
-    if (this.lastTurnEndedAt !== null) {
-      this.turnEndPingSent = filterOutstandingBackgroundTasks(this.backgroundTasks).length === 0;
+    if (this.attention.lastTurnEndedAt !== null) {
+      this.attention.turnEndPingSent =
+        filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length === 0;
     }
 
     this.stateRestored = true;
@@ -1303,7 +1315,7 @@ export class Session {
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
-      attentionKind: this.attentionState.confirmedKind,
+      attentionKind: this.attention.state.confirmedKind,
       compactState: this.compactState,
       subagentCount: this.subagentCount,
       subagents: Array.from(this.subagents.values()),
@@ -1312,9 +1324,9 @@ export class Session {
       questionState: this.questionState,
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
-      lastTurnEndedAt: this.lastTurnEndedAt,
+      lastTurnEndedAt: this.attention.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
-      backgroundTasks: this.backgroundTasks,
+      backgroundTasks: this.attention.backgroundTasks,
     };
   }
 
@@ -1473,11 +1485,11 @@ export class Session {
     this.questionState = "idle";
     this.questionHeader = null;
     this.questionAt = null;
-    this.lastTurnEndedAt = null;
-    this.turnEndPingSent = false;
-    this.backgroundTasks = [];
-    this.backgroundTasksAt = null;
-    this.attentionState = INITIAL_ATTENTION_STATE;
+    this.attention.lastTurnEndedAt = null;
+    this.attention.turnEndPingSent = false;
+    this.attention.backgroundTasks = [];
+    this.attention.backgroundTasksAt = null;
+    this.attention.state = INITIAL_ATTENTION_STATE;
     // Re-apply restored state if we had it, so the UI sees the known
     // pre-restart state until hooks catch up with fresh data.
     if (savedState) {
@@ -1505,20 +1517,21 @@ export class Session {
       this.questionState = savedState.questionState;
       this.questionHeader = savedState.questionHeader;
       this.questionAt = savedState.questionAt;
-      this.lastTurnEndedAt = savedState.lastTurnEndedAt;
+      this.attention.lastTurnEndedAt = savedState.lastTurnEndedAt;
       this.lastAssistantMessage = savedState.lastAssistantMessage;
       // The persisted backgroundTasksAt itself is NOT restored — going
       // through setBackgroundTasks() re-stamps it to NOW instead, same
       // reasoning as the state-file restore path's own comment above.
       if (Array.isArray(savedState.backgroundTasks)) {
-        this.setBackgroundTasks(savedState.backgroundTasks);
+        this.attention.setBackgroundTasks(savedState.backgroundTasks);
       }
       // Fresh-review finding — same turnEndPingSent derivation as the
       // state-file restore path's own comment above: a respawn (re-applying
       // savedState after the fresh reset a few lines up) needs the same
       // "already-pinged" inference, not the reset's unconditional `false`.
-      if (this.lastTurnEndedAt !== null) {
-        this.turnEndPingSent = filterOutstandingBackgroundTasks(this.backgroundTasks).length === 0;
+      if (this.attention.lastTurnEndedAt !== null) {
+        this.attention.turnEndPingSent =
+          filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length === 0;
       }
       // attentionKind is restored from state file via readStateFile but
       // NOT re-applied here — the attention machine has its own timing
@@ -1802,12 +1815,12 @@ export class Session {
       // real "userInput" or a superseding resolution does (see
       // advanceAttention's "attention" + "output" case).
       if (candidateKind !== null) {
-        this.applyAttentionTransition(
-          advanceAttention(this.attentionState, { type: "signal", kind: candidateKind, now }),
+        this.attention.applyAttentionTransition(
+          advanceAttention(this.attention.state, { type: "signal", kind: candidateKind, now }),
         );
       } else if (!this.redrawNudge.suppressingOutput) {
-        this.applyAttentionTransition(
-          advanceAttention(this.attentionState, { type: "output", now }),
+        this.attention.applyAttentionTransition(
+          advanceAttention(this.attention.state, { type: "output", now }),
         );
       }
 
@@ -1898,62 +1911,11 @@ export class Session {
     this.stateFile.schedule();
   }
 
-  /**
-   * Apply one advanceAttention() result: adopt the new machine state, turn
-   * any `log` entries into debug lines (the issue's "add debug logging on
-   * attention state transitions" ask — matches this file's existing
-   * console.error(...) logging shape; Session has no Fastify logger to hang
-   * this off, see spawn()'s own console.error call), and turn any `emit`
-   * entries into real emitEvent("attention", ...) calls. The one place
-   * onData/tick() ever touch `this.attentionState` — keeps every call site
-   * from having to duplicate this bookkeeping.
-   */
-  private applyAttentionTransition(transition: AttentionTransition): void {
-    for (const entry of transition.log) {
-      // Skip PENDING_ATTENTION churn (entering it from idle, or being
-      // cancelled back to idle from it without ever confirming) — during
-      // exactly the bursty-signal scenario issue #171 exists to fix, this
-      // is by far the highest-frequency transition, and logging every one
-      // would spam stdout at the same frequency this PR is suppressing
-      // false positives for (console.debug bypasses pino's level filter
-      // entirely — see spawn()'s console.error for why Session logs this
-      // way at all). Only the meaningful edges — a signal actually
-      // CONFIRMING attention, or a confirmed session actually CLEARING
-      // back to idle — are worth a line.
-      const isPendingChurn =
-        entry.to === "pending_attention" ||
-        (entry.from === "pending_attention" && entry.to === "idle");
-      if (isPendingChurn) continue;
-      console.debug(
-        `[pty-manager] session ${this.id} attention: ${entry.from} -> ${entry.to}` +
-          (entry.kind ? ` (${entry.kind})` : ""),
-      );
-    }
-    this.attentionState = transition.next;
-    // Spread into a plain object: AttentionEmit's fixed shape (no index
-    // signature) doesn't structurally satisfy emitEvent's deliberately
-    // loose Record<string, unknown> payload type otherwise.
-    for (const emit of transition.emit) this.emitEvent("attention", { ...emit });
-  }
-
-  /**
-   * Follow-up to #275 (gap #3): a delivered decision — resolveGate(),
-   * resolvePromote(), or a resolved `review_gate` hook message — is a
-   * superseding authoritative resolution, exactly as `userInput` is (see
-   * write()), for the ONE kind of OUTPUT_IMMUNE_KINDS confirmation it
-   * actually resolves. Gated on `kind` matching the CURRENT confirmedKind so
-   * a decision arriving after a newer, unrelated confirmed flag has already
-   * superseded it (e.g. a fresh hookNotification while a reviewGate
-   * resolution is still in flight) doesn't wrongly dismiss that newer flag.
-   * A no-op outside "attention" or for any other confirmedKind.
-   */
-  private clearIfConfirmedKind(kind: AttentionSignalKind): void {
-    if (this.attentionState.state === "attention" && this.attentionState.confirmedKind === kind) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
-      );
-    }
-  }
+  // applyAttentionTransition()/clearIfConfirmedKind() moved to the composed
+  // AttentionTracker (PR 33b, Wave 6) — see this.attention and
+  // attention-tracker.ts's own doc comments (moved verbatim). Call sites
+  // below now read `this.attention.applyAttentionTransition(...)`/
+  // `this.attention.clearIfConfirmedKind(...)`.
 
   /** Phase 5 (Track A) — creates a registry entry on SubagentStart. Evicts
    * the oldest FINISHED entry (by endedAt) if the cap is exceeded; a
@@ -2210,28 +2172,28 @@ export class Session {
         self.lastAssistantMessage = v;
       },
       get lastTurnEndedAt() {
-        return self.lastTurnEndedAt;
+        return self.attention.lastTurnEndedAt;
       },
       set lastTurnEndedAt(v) {
-        self.lastTurnEndedAt = v;
+        self.attention.lastTurnEndedAt = v;
       },
       get turnEndPingSent() {
-        return self.turnEndPingSent;
+        return self.attention.turnEndPingSent;
       },
       set turnEndPingSent(v) {
-        self.turnEndPingSent = v;
+        self.attention.turnEndPingSent = v;
       },
       get backgroundTasks() {
-        return self.backgroundTasks;
+        return self.attention.backgroundTasks;
       },
       set backgroundTasks(v) {
-        self.backgroundTasks = v;
+        self.attention.backgroundTasks = v;
       },
       get backgroundTasksAt() {
-        return self.backgroundTasksAt;
+        return self.attention.backgroundTasksAt;
       },
       set backgroundTasksAt(v) {
-        self.backgroundTasksAt = v;
+        self.attention.backgroundTasksAt = v;
       },
       get compactState() {
         return self.compactState;
@@ -2271,10 +2233,10 @@ export class Session {
       },
       emitEvent: (kind, payload) => self.emitEvent(kind, payload),
       emitAttentionSignalWithExtras: (kind, extras) =>
-        self.emitAttentionSignalWithExtras(kind, extras),
-      clearIfConfirmedKind: (kind) => self.clearIfConfirmedKind(kind),
-      resolveDeferredTurnEnd: () => self.resolveDeferredTurnEnd(),
-      setBackgroundTasks: (tasks) => self.setBackgroundTasks(tasks),
+        self.attention.emitAttentionSignalWithExtras(kind, extras),
+      clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
+      resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
+      setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks),
       bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
       recordSubagentStart: (agentId, agentType, now) =>
         self.recordSubagentStart(agentId, agentType, now),
@@ -2339,7 +2301,7 @@ export class Session {
     this.gatePrompt = null;
     this.gateAt = null;
     this.emitEvent("review_gate", { state: decision, ...(reason !== undefined ? { reason } : {}) });
-    this.clearIfConfirmedKind("reviewGate");
+    this.attention.clearIfConfirmedKind("reviewGate");
   }
 
   /**
@@ -2360,7 +2322,7 @@ export class Session {
     this.promoteSuggestedBaseRef = null;
     this.promoteAt = null;
     this.emitEvent("promote_request", { state: decision });
-    this.clearIfConfirmedKind("promoteRequest");
+    this.attention.clearIfConfirmedKind("promoteRequest");
   }
 
   /**
@@ -2427,92 +2389,13 @@ export class Session {
     return true;
   }
 
-  /**
-   * Drives the attention state machine with a zero-threshold hook signal
-   * (hookNotification/reviewGate — see ATTENTION_CONFIRM_MS) to keep
-   * `attentionState`/`SessionInfo.attention` correct, and unconditionally
-   * emits an "attention" event with `extras` merged into its payload —
-   * deliberately NOT gated on whether the transition itself produced a new
-   * `emit` entry. confirmAttention()'s `alreadyConfirmed` guard suppresses
-   * emitting again when attention was already confirmed, which is correct
-   * for the generic, content-free PTY-parsed signals applyAttentionTransition()
-   * handles (a second bell while already confirmed is genuinely nothing
-   * new) — but a hook notification's title/body (or a review_gate's prompt)
-   * is never "nothing new": each one is distinct content the event feed
-   * must surface even if the boolean itself was already true. Deliberately
-   * does NOT go through applyAttentionTransition() above for this reason,
-   * and also because AttentionEmit's fixed `{attention, signal}` shape has
-   * no room for title/body/prompt anyway — threading hook-specific display
-   * text through the otherwise-pure, byte-driven attention state machine
-   * isn't worth it for two call sites. Skips the console.debug transition
-   * logging applyAttentionTransition() does (kept only on the byte-driven
-   * path). `agentIdle` reuses this same call site (rather than getting its
-   * own): it carries no title/body/prompt of its own, but "the agent just
-   * finished" is exactly as one-shot/deliberate as a hook notification or
-   * review gate, so the same always-emit semantics apply — though unlike
-   * `hookNotification`/`reviewGate`/`promoteRequest`, `agentIdle` is NOT one
-   * of attention-detect.ts's OUTPUT_IMMUNE_KINDS (follow-up to #275, gap #3):
-   * it stays output-clearable, since it's purely informational ("turn over")
-   * rather than "blocked pending a human decision", and it's the only
-   * attention trigger opencode/codex/agy have at all.
-   */
-  private emitAttentionSignalWithExtras(
-    kind: Extract<
-      AttentionSignalKind,
-      | "hookNotification"
-      | "reviewGate"
-      | "agentIdle"
-      | "promoteRequest"
-      | "permissionRequest"
-      | "planReady"
-      | "elicitation"
-      | "question"
-    >,
-    extras: Record<string, unknown>,
-  ): void {
-    const transition = advanceAttention(this.attentionState, {
-      type: "signal",
-      kind,
-      now: Date.now(),
-    });
-    this.attentionState = transition.next;
-    this.emitEvent("attention", { attention: true, signal: kind, ...extras });
-  }
-
-  /** Issue #428 — the ONLY place `backgroundTasks`/`backgroundTasksAt` are
-   * written. Called from both the "progress" and "subagent" hook cases,
-   * each with their own present-only-update guard around the call (a
-   * message with no `backgroundTasks` field must leave a previously-latched
-   * outstanding set untouched). Re-stamps `backgroundTasksAt` on every call
-   * that still has outstanding work, matching subagentCountAt's own
-   * re-stamp-on-every-start (not just the initial idle -> busy transition)
-   * precedent — the staleness sweep's silence window should reset on each
-   * fresh report, not just the first. */
-  private setBackgroundTasks(tasks: BackgroundTask[]): void {
-    this.backgroundTasks = tasks;
-    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? Date.now() : null;
-  }
-
-  /** Issue #428 — fires the deferred "turn really is over" attention ping.
-   * `progress:done` always latches `lastTurnEndedAt` (see its own doc
-   * comment: that stays an honest "the Stop hook fired" signal regardless
-   * of outstanding background work), but firing `agentIdle` right then would
-   * be the premature ping issue #428 is about, when a background
-   * `Agent`/`Task` call from this same turn hasn't returned yet. No-op
-   * unless the turn has already ended, nothing outstanding remains, AND the
-   * ping for THIS latch hasn't already fired (`turnEndPingSent` — see its
-   * own doc comment; Hermes review, PR #453) — safe to call unconditionally
-   * after any `backgroundTasks` update (a plain Stop with no background work
-   * resolves it immediately; a SubagentStop or the staleness sweep resolves
-   * it late instead of never; a repeated report of the same already-drained
-   * state is a no-op instead of a duplicate ping). */
-  private resolveDeferredTurnEnd(): void {
-    if (this.lastTurnEndedAt === null) return;
-    if (this.turnEndPingSent) return;
-    if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
-    this.turnEndPingSent = true;
-    this.emitAttentionSignalWithExtras("agentIdle", {});
-  }
+  // emitAttentionSignalWithExtras()/setBackgroundTasks()/
+  // resolveDeferredTurnEnd() moved to the composed AttentionTracker (PR 33b,
+  // Wave 6) — see this.attention and attention-tracker.ts's own doc
+  // comments (moved verbatim, including the `emitAttentionSignalWithExtras`
+  // "deliberately does NOT go through applyAttentionTransition()" rationale
+  // and the `resolveDeferredTurnEnd` three-guard ordering). Call sites below
+  // now read `this.attention.emitAttentionSignalWithExtras(...)` etc.
 
   /**
    * The attention state machine's time-based half (issue #171/#98) — called
@@ -2563,7 +2446,9 @@ export class Session {
    * test/services/pty-manager.test.ts.
    */
   tick(now: number = Date.now()): void {
-    this.applyAttentionTransition(advanceAttention(this.attentionState, { type: "tick", now }));
+    this.attention.applyAttentionTransition(
+      advanceAttention(this.attention.state, { type: "tick", now }),
+    );
 
     const hadSustainedStreak =
       this.activityStreakStart !== null &&
@@ -2573,9 +2458,9 @@ export class Session {
     const silentLongEnough =
       this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
 
-    if (this.attentionState.state === "idle" && hadSustainedStreak && silentLongEnough) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "signal", kind: "silence", now }),
+    if (this.attention.state.state === "idle" && hadSustainedStreak && silentLongEnough) {
+      this.attention.applyAttentionTransition(
+        advanceAttention(this.attention.state, { type: "signal", kind: "silence", now }),
       );
     }
   }
@@ -2748,22 +2633,22 @@ export class Session {
     // confirmedKind and for idle/pending states (advanceAttention's
     // "userInput" cases).
     if (isGenuineUserInput(data)) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
+      this.attention.applyAttentionTransition(
+        advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
       );
       // Rich statuses — a genuine keystroke means the user has responded to
       // (or moved past) the last finished turn; clear the `finished` latch
       // so the next poll doesn't keep reporting a turn that's no longer the
       // current one. See SessionInfo.lastTurnEndedAt's doc comment.
-      let changed = this.lastTurnEndedAt !== null;
-      this.lastTurnEndedAt = null;
-      this.turnEndPingSent = false;
+      let changed = this.attention.lastTurnEndedAt !== null;
+      this.attention.lastTurnEndedAt = null;
+      this.attention.turnEndPingSent = false;
       // Issue #428 — same reasoning as turn_start's own clear: a genuine
       // keystroke means the user has moved past the finished turn, so its
       // backgroundTasks snapshot is stale too.
-      if (this.backgroundTasks.length > 0) changed = true;
-      this.backgroundTasks = [];
-      this.backgroundTasksAt = null;
+      if (this.attention.backgroundTasks.length > 0) changed = true;
+      this.attention.backgroundTasks = [];
+      this.attention.backgroundTasksAt = null;
       // Follow-up to fix: status-clearing-semantics — a genuine keystroke
       // into a session showing a stale error IS the retry; typing is as
       // authoritative an "unblocking action" as the agent's own recovery
@@ -2927,11 +2812,11 @@ export class Session {
     // still degrades correctly on the next poll (deriveSessionStatus reads
     // the now-empty outstandingBackgroundTasks), just without a false ping.
     if (
-      filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0 &&
-      isStale(this.backgroundTasksAt, busyMaxAgeMs)
+      filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length > 0 &&
+      isStale(this.attention.backgroundTasksAt, busyMaxAgeMs)
     ) {
-      this.backgroundTasks = [];
-      this.backgroundTasksAt = null;
+      this.attention.backgroundTasks = [];
+      this.attention.backgroundTasksAt = null;
       this.emitEvent("status_change", {
         reason: "stale_blocked_cleared",
         state: "backgroundTasks",
@@ -3140,8 +3025,8 @@ export class Session {
       subscriberCount: this.subscriberCount,
       lastActivityAt: this.lastActivityAt,
       activity,
-      attention: this.attentionState.confirmedAt !== null,
-      attentionAt: this.attentionState.confirmedAt,
+      attention: this.attention.state.confirmedAt !== null,
+      attentionAt: this.attention.state.confirmedAt,
       lastTitle: this.lastTitle,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
@@ -3162,7 +3047,7 @@ export class Session {
       // Rich statuses — attentionKind mirrors attentionState.confirmedKind
       // directly (see its own SessionInfo doc comment for why), same
       // posture as attention/attentionAt just above.
-      attentionKind: this.attentionState.confirmedKind,
+      attentionKind: this.attention.state.confirmedKind,
       errorDetail: this.errorDetail,
       lastAssistantMessage: this.lastAssistantMessage,
       compactState: this.compactState,
@@ -3176,10 +3061,10 @@ export class Session {
       questionState: this.questionState,
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
-      lastTurnEndedAt: this.lastTurnEndedAt,
-      backgroundTasks: this.backgroundTasks,
-      backgroundTasksAt: this.backgroundTasksAt,
-      outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.backgroundTasks),
+      lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      backgroundTasks: this.attention.backgroundTasks,
+      backgroundTasksAt: this.attention.backgroundTasksAt,
+      outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.attention.backgroundTasks),
       // Issue #323: state file persistence metadata.
       stateRestored: this.stateRestored,
       staleHooks: this.staleHooks,
