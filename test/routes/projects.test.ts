@@ -951,6 +951,13 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("400s for a non-integer project id (loadProjectRepoContext's own validation)", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/not-a-number/github" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("404s for an unknown project", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/999999/github" });

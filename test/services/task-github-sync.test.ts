@@ -18,7 +18,7 @@ vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
   getIntegration: mockGetIntegration,
 }));
-vi.mock("../../src/services/github-webhook.js", () => ({
+vi.mock("../../src/services/host-git.js", () => ({
   resolveRepoRef: mockResolveRepoRef,
 }));
 vi.mock("../../src/services/github-write.js", () => ({

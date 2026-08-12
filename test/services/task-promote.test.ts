@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { GitHubApiError } from "../../src/services/github.js";
 import type * as GithubWrite from "../../src/services/github-write.js";
+import type * as HostGit from "../../src/services/host-git.js";
 import type { tasks, projects } from "../../src/db/schema.js";
 
 const mockGetToken = vi.fn();
@@ -21,9 +22,6 @@ const mockGetRemoteHostClient = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
-}));
-vi.mock("../../src/services/github-webhook.js", () => ({
-  resolveRepoRef: mockResolveRepoRef,
 }));
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubWrite>();
@@ -44,6 +42,17 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
   recordGithubSyncError: mockRecordGithubSyncError,
   clearGithubSyncError: mockClearGithubSyncError,
 }));
+// host-git.ts's own resolveHostGitStatus/resolveHostBaseRef/pushHostBranch
+// stay real (task-promote.ts imports all four of host-git.ts's exports
+// from this one module) — only resolveRepoRef is swapped for the mock, via
+// `importOriginal`, now that it lives here (moved from github-webhook.ts).
+vi.mock("../../src/services/host-git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof HostGit>();
+  return {
+    ...actual,
+    resolveRepoRef: mockResolveRepoRef,
+  };
+});
 // #484 — host-git.ts's remote branch (for a project whose hostId isn't
 // "local") resolves a real client via getRemoteHostClient(app, hostId),
 // which needs a registered `hosts` row this file's fake `app` doesn't

@@ -26,7 +26,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
 import { getIntegration, resolveGitHubToken } from "./github-integration.js";
-import { resolveRepoRef } from "./github-webhook.js";
+import { resolveRepoRef } from "./host-git.js";
 import {
   addLabels,
   removeLabel,

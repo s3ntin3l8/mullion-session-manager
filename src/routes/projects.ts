@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
 import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -18,7 +18,8 @@ import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
-import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
+import type { GitHubRepoRef } from "../services/git-remote.js";
+import { resolveRepoRefResult } from "../services/host-git.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
@@ -563,6 +564,106 @@ async function maybeRegisterProjectWebhook(
   }
 }
 
+interface ProjectRepoContext {
+  project: typeof projects.$inferSelect;
+  repoRef: GitHubRepoRef;
+  token: string;
+}
+
+interface LoadProjectRepoContextOptions {
+  /** Folded into the "host unreachable"/"agent rejected" log messages
+   * below, e.g. "github status", "jobs", "logs" — mirrors each route's own
+   * previous per-site wording. */
+  unavailableLabel: string;
+  /** How to turn a resolved `repoRef` into a token. Defaults to the
+   * `resolveGitHubToken(app, repoRef, "read")` (#489) App-token-with-PAT-
+   * fallback path every GitHub route below uses — except `/github/prs`,
+   * which has always read the shared PAT directly via `getToken(app)`
+   * instead (no `#489 remaining scope` comment ever covered it). That's a
+   * pre-existing inconsistency, not something this refactor fixes — it's
+   * preserved as-is via this override rather than silently normalized. */
+  resolveToken?: (repoRef: GitHubRepoRef) => Promise<string | null>;
+}
+
+/**
+ * The ~28-line preamble every `/api/projects/:id/github*` route below
+ * shared verbatim (project lookup, host-aware repo-ref resolution, token
+ * resolution), each with its own 400/404/503/204 short-circuits. Sends the
+ * appropriate reply and returns `null` the moment any step comes up short;
+ * returns the fully-resolved `{ project, repoRef, token }` otherwise.
+ *
+ * Repo-ref resolution goes through `resolveRepoRefResult` (host-git.ts) —
+ * NOT the null-collapsing `resolveRepoRef` used elsewhere — because these
+ * routes are the one place that needs to tell "host unreachable" (503)
+ * apart from "no github.com remote configured" (204); see host-git.ts's
+ * own doc comments on both functions.
+ */
+async function loadProjectRepoContext(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  projectId: number,
+  options: LoadProjectRepoContextOptions,
+): Promise<ProjectRepoContext | null> {
+  if (!Number.isInteger(projectId)) {
+    reply.badRequest("Invalid project id");
+    return null;
+  }
+
+  const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+  if (!project) {
+    reply.notFound();
+    return null;
+  }
+
+  const result = await resolveRepoRefResult(app, project);
+  if (!result.ok) {
+    // "unsupported" (an old agent build predating the resolveGitHubRepo
+    // route — a bare 404) vs. "unreachable" (anything else: a real
+    // transport failure, or the agent responding with a non-404 rejection)
+    // — both were collapsed into a single unconditional "host unreachable"
+    // 503 by every one of these routes before this refactor except
+    // `/github/prs` (Hermes review, PR #244), which alone distinguished
+    // *any* agent-level rejection (`HostRequestError`, any status) from a
+    // real connectivity failure. That's narrower than what `/github/prs`
+    // used to do — a non-404 rejection now logs as "unreachable" rather
+    // than "agent rejected" — but the debugging value survives: `detail`
+    // carries the agent's own `HTTP <status>` message either way (see
+    // `HostRequestError`'s constructor, remote-host-client.ts), and every
+    // site now gets the 404-vs-everything-else split in its log message,
+    // not just `/github/prs`. The 503 response itself is unchanged either
+    // way, for every reason.
+    const message =
+      result.reason === "unsupported"
+        ? `agent rejected github-repo request, ${options.unavailableLabel} unavailable`
+        : `host unreachable, ${options.unavailableLabel} unavailable`;
+    app.log.warn(
+      {
+        hostId: project.hostId,
+        reason: result.reason,
+        detail: result.reason === "unreachable" ? result.detail : undefined,
+      },
+      message,
+    );
+    reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+    return null;
+  }
+
+  const repoRef = result.value;
+  if (!repoRef) {
+    reply.code(204);
+    return null;
+  }
+
+  const resolveToken = options.resolveToken ?? ((ref) => resolveGitHubToken(app, ref, "read"));
+  const token = await resolveToken(repoRef);
+  if (!token) {
+    reply.code(204);
+    return null;
+  }
+
+  return { project, repoRef, token };
+}
+
 export async function projectsRoute(app: FastifyInstance) {
   // detectedDevServerPort is derived, not persisted (see dev-server-detect.ts):
   // a project's own devServerUrl column is the sole authoritative value, this
@@ -1002,38 +1103,11 @@ export async function projectsRoute(app: FastifyInstance) {
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
-
-      let repoRef: GitHubRepoRef | null;
-      if (project.hostId === LOCAL_HOST_ID) {
-        repoRef = parseGitRemote(project.cwd);
-      } else {
-        try {
-          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
-        } catch (err) {
-          app.log.warn(
-            { hostId: project.hostId, err },
-            "host unreachable, github status unavailable",
-          );
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
-      }
-      if (!repoRef) {
-        reply.code(204);
-        return;
-      }
-
-      // #489 remaining scope — "read" scope (Actions/PR/Metadata read),
-      // repoRef is already resolved on the line above. Falls back to the
-      // shared PAT when no App covers this repo or none is configured.
-      const token = await resolveGitHubToken(app, repoRef, "read");
-      if (!token) {
-        reply.code(204);
-        return;
-      }
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "github status",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
 
       try {
         return await getRepoStatus(token, repoRef.owner, repoRef.repo);
@@ -1076,46 +1150,22 @@ export async function projectsRoute(app: FastifyInstance) {
     },
     async (request, reply) => {
       const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
-
-      let repoRef: GitHubRepoRef | null;
-      if (project.hostId === LOCAL_HOST_ID) {
-        repoRef = parseGitRemote(project.cwd);
-      } else {
-        // Remote-hosted projects (issue #222, follow-up to #102): resolve
-        // owner/repo via the agent, same as the /github endpoint above. The
-        // per-PR cache is still keyed by owner/repo and populated by the
-        // primary-side poller — this route only needs the ref to look it up.
-        try {
-          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
-        } catch (err) {
-          // 503 either way (this route has no way to serve PR status without
-          // the ref, and "the agent rejected the request" isn't recoverable
-          // by retrying here) — but the log message distinguishes "agent
-          // never responded" from "agent responded and said no," since
-          // those point a debugger in different directions (Hermes review,
-          // PR #244).
-          const message =
-            err instanceof HostRequestError
-              ? "agent rejected github-repo request, github prs status unavailable"
-              : "host unreachable, github prs status unavailable";
-          app.log.warn({ hostId: project.hostId, err }, message);
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
-      }
-      if (!repoRef) {
-        reply.code(204);
-        return;
-      }
-
-      const token = getToken(app);
-      if (!token) {
-        reply.code(204);
-        return;
-      }
+      // Remote-hosted projects (issue #222, follow-up to #102): repoRef
+      // resolution goes via the agent, same as the /github endpoint above.
+      // The per-PR cache is still keyed by owner/repo and populated by the
+      // primary-side poller — this route only needs the ref to look it up.
+      //
+      // Token: deliberately `getToken(app)` (the shared PAT), NOT
+      // `resolveGitHubToken(app, repoRef, "read")` like every other route
+      // here — a pre-existing inconsistency (no `#489 remaining scope`
+      // comment ever covered this route), preserved as-is rather than
+      // silently normalized by this refactor.
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "github prs status",
+        resolveToken: () => Promise.resolve(getToken(app)),
+      });
+      if (!ctx) return;
+      const { repoRef } = ctx;
 
       const status = getPRsStatus(repoRef.owner, repoRef.repo);
       if (!status || status.prs.length === 0) {
@@ -1143,33 +1193,11 @@ export async function projectsRoute(app: FastifyInstance) {
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
-
-      let repoRef: GitHubRepoRef | null;
-      if (project.hostId === LOCAL_HOST_ID) {
-        repoRef = parseGitRemote(project.cwd);
-      } else {
-        try {
-          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
-        } catch (err) {
-          app.log.warn({ hostId: project.hostId, err }, "host unreachable, jobs unavailable");
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
-      }
-      if (!repoRef) {
-        reply.code(204);
-        return;
-      }
-
-      // #489 remaining scope — see the /github endpoint's own comment above.
-      const token = await resolveGitHubToken(app, repoRef, "read");
-      if (!token) {
-        reply.code(204);
-        return;
-      }
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "jobs",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
 
       const runId = Number(request.params.runId);
       if (!Number.isInteger(runId)) return reply.badRequest("runId must be an integer");
@@ -1189,33 +1217,11 @@ export async function projectsRoute(app: FastifyInstance) {
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
-
-      let repoRef: GitHubRepoRef | null;
-      if (project.hostId === LOCAL_HOST_ID) {
-        repoRef = parseGitRemote(project.cwd);
-      } else {
-        try {
-          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
-        } catch (err) {
-          app.log.warn({ hostId: project.hostId, err }, "host unreachable, logs unavailable");
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
-      }
-      if (!repoRef) {
-        reply.code(204);
-        return;
-      }
-
-      // #489 remaining scope — see the /github endpoint's own comment above.
-      const token = await resolveGitHubToken(app, repoRef, "read");
-      if (!token) {
-        reply.code(204);
-        return;
-      }
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "logs",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
 
       const runId = Number(request.params.runId);
       const jobId = Number(request.params.jobId);
@@ -1266,33 +1272,11 @@ export async function projectsRoute(app: FastifyInstance) {
     },
     async (request, reply) => {
       const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
-
-      let repoRef: GitHubRepoRef | null;
-      if (project.hostId === LOCAL_HOST_ID) {
-        repoRef = parseGitRemote(project.cwd);
-      } else {
-        try {
-          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
-        } catch (err) {
-          app.log.warn({ hostId: project.hostId, err }, "host unreachable, logs unavailable");
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
-      }
-      if (!repoRef) {
-        reply.code(204);
-        return;
-      }
-
-      // #489 remaining scope — see the /github endpoint's own comment above.
-      const token = await resolveGitHubToken(app, repoRef, "read");
-      if (!token) {
-        reply.code(204);
-        return;
-      }
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "logs",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
 
       const runId = Number(request.query.runId);
       const jobId = Number(request.query.jobId);

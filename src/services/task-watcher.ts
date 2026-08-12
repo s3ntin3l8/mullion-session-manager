@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { resolveGitHubToken } from "./github-integration.js";
-import { resolveRepoRef } from "./github-webhook.js";
+import { resolveRepoRef } from "./host-git.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
 import { getIssueState } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";

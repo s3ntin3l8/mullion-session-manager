@@ -13,6 +13,7 @@ const mockIsGitRepo = vi.fn();
 const mockResolveDefaultBaseRef = vi.fn();
 const mockResolveCommitSha = vi.fn();
 const mockPushBranch = vi.fn();
+const mockParseGitRemote = vi.fn();
 const mockGetRemoteHostClient = vi.fn();
 
 vi.mock("../../src/services/git-status.js", () => ({
@@ -25,6 +26,9 @@ vi.mock("../../src/services/git-refs.js", () => ({
 }));
 vi.mock("../../src/services/git-push.js", () => ({
   pushBranch: mockPushBranch,
+}));
+vi.mock("../../src/services/git-remote.js", () => ({
+  parseGitRemote: mockParseGitRemote,
 }));
 vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: mockGetRemoteHostClient,
@@ -46,8 +50,13 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
   },
 }));
 
-const { resolveHostGitStatus, resolveHostBaseRef, pushHostBranch } =
-  await import("../../src/services/host-git.js");
+const {
+  resolveHostGitStatus,
+  resolveHostBaseRef,
+  pushHostBranch,
+  resolveRepoRefResult,
+  resolveRepoRef,
+} = await import("../../src/services/host-git.js");
 const { HostRequestError, HostUnreachableError } =
   await import("../../src/services/remote-host-client.js");
 
@@ -259,6 +268,108 @@ describe("host-git.ts", () => {
       );
 
       expect(result).toEqual({ ok: false, reason: "unsupported" });
+    });
+  });
+
+  // Moved here from github-webhook.ts as part of routes/projects.ts's
+  // GitHub-route dedup — routes/projects.ts's `loadProjectRepoContext`
+  // needs the 3-way `ok:true/value:null` vs. `ok:false` split
+  // `resolveRepoRefResult` gives it (unlike the null-collapsing
+  // `resolveRepoRef` below, which every other caller — webhook
+  // registration/sync, Task Master's promote/sync/watcher paths — uses
+  // instead).
+  describe("resolveRepoRefResult", () => {
+    it("local: ok:true with parseGitRemote's resolved owner/repo", async () => {
+      mockParseGitRemote.mockReturnValue({ owner: "acme", repo: "widgets" });
+
+      const result = await resolveRepoRefResult(fakeApp, { cwd: "/project", hostId: "local" });
+
+      expect(mockParseGitRemote).toHaveBeenCalledWith("/project");
+      expect(result).toEqual({ ok: true, value: { owner: "acme", repo: "widgets" } });
+    });
+
+    it("local: ok:true with value:null when there's no github.com remote — not an error", async () => {
+      mockParseGitRemote.mockReturnValue(null);
+
+      const result = await resolveRepoRefResult(fakeApp, { cwd: "/project", hostId: "local" });
+
+      expect(result).toEqual({ ok: true, value: null });
+    });
+
+    it("remote: proxies to the remote client's resolveGitHubRepo", async () => {
+      const mockResolveGitHubRepo = vi.fn().mockResolvedValue({ owner: "acme", repo: "widgets" });
+      mockGetRemoteHostClient.mockReturnValue({ resolveGitHubRepo: mockResolveGitHubRepo });
+
+      const result = await resolveRepoRefResult(fakeApp, {
+        cwd: "/remote/project",
+        hostId: "remote-host-1",
+      });
+
+      expect(mockResolveGitHubRepo).toHaveBeenCalledWith("/remote/project");
+      expect(result).toEqual({ ok: true, value: { owner: "acme", repo: "widgets" } });
+    });
+
+    it("remote: an unreachable host maps to reason 'unreachable', not a thrown error", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitHubRepo: vi
+          .fn()
+          .mockRejectedValue(new HostUnreachableError("h1", new Error("ECONNREFUSED"))),
+      });
+
+      const result = await resolveRepoRefResult(fakeApp, {
+        cwd: "/remote/project",
+        hostId: "remote-host-1",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("unreachable");
+    });
+
+    it("remote: an old agent build (404) maps to reason 'unsupported'", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitHubRepo: vi.fn().mockRejectedValue(new HostRequestError("h1", 404, "")),
+      });
+
+      const result = await resolveRepoRefResult(fakeApp, {
+        cwd: "/remote/project",
+        hostId: "remote-host-1",
+      });
+
+      expect(result).toEqual({ ok: false, reason: "unsupported" });
+    });
+  });
+
+  // The null-collapsing wrapper every non-projects.ts caller uses.
+  describe("resolveRepoRef", () => {
+    it("local: unwraps ok:true to the resolved repoRef", async () => {
+      mockParseGitRemote.mockReturnValue({ owner: "acme", repo: "widgets" });
+
+      const result = await resolveRepoRef(fakeApp, { cwd: "/project", hostId: "local" });
+
+      expect(result).toEqual({ owner: "acme", repo: "widgets" });
+    });
+
+    it("local: unwraps ok:true/value:null to null", async () => {
+      mockParseGitRemote.mockReturnValue(null);
+
+      const result = await resolveRepoRef(fakeApp, { cwd: "/project", hostId: "local" });
+
+      expect(result).toBeNull();
+    });
+
+    it("remote: collapses ok:false (any reason) to null, matching the pre-move bare catch's behavior", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitHubRepo: vi
+          .fn()
+          .mockRejectedValue(new HostUnreachableError("h1", new Error("timeout"))),
+      });
+
+      const result = await resolveRepoRef(fakeApp, {
+        cwd: "/remote/project",
+        hostId: "remote-host-1",
+      });
+
+      expect(result).toBeNull();
     });
   });
 });

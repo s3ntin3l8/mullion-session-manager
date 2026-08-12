@@ -4,9 +4,7 @@ import { eq } from "drizzle-orm";
 import { integrations, projects, webhookRegistrations } from "../db/schema.js";
 import { getToken, GITHUB_PROVIDER } from "./github-integration.js";
 import { validateGitHubRepoRef } from "./github.js";
-import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
-import { getRemoteHostClient } from "./remote-host-client.js";
+import { resolveRepoRef } from "./host-git.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -155,20 +153,6 @@ export async function unregisterHook(
         },
       ).catch(() => {});
     }
-  }
-}
-
-export async function resolveRepoRef(
-  app: FastifyInstance,
-  row: { cwd: string; hostId: string },
-): Promise<GitHubRepoRef | null> {
-  if (row.hostId === LOCAL_HOST_ID) {
-    return parseGitRemote(row.cwd);
-  }
-  try {
-    return await getRemoteHostClient(app, row.hostId).resolveGitHubRepo(row.cwd);
-  } catch {
-    return null;
   }
 }
 
