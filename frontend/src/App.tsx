@@ -484,18 +484,13 @@ export function App() {
   // /ws/events arrival (issue #170), and keeps the backgrounded-tab
   // document.title/favicon badge current — extracted to
   // useAttentionNotifications (hooks/useAttentionNotifications.ts). Called
-  // here, right after the `onDidActivePanelChange` effect above (not
-  // immediately adjacent in the diff only because the update-check/Codex-
-  // hook-trust polls, useAppStreams, hydrateSettings, and startThemeWatch
-  // effects sit between them — none of which this hook reads from or writes
-  // to) and specifically BELOW that effect: `activePanelId` is a
-  // store-subscribed value (not a ref) written by that effect's
-  // `setActivePanelId` call, and this hook's desktop-notification effect
-  // needs the up-to-date value on the same flush dockviewApi first becomes
-  // non-null, not a stale `null` from before. See that hook's own header
-  // comment for the full ordering/coupling analysis, including why the
-  // title/favicon effect's own position (originally further down this file)
-  // safely moved here too.
+  // here, at the desktop-notification effect's original position in this
+  // component's body, purely to keep the diff minimal and the file's effect
+  // ordering easy to audit — like useDockviewDrop/useGlobalShortcuts/
+  // useAppStreams before it, this call-site position is NOT load-bearing.
+  // See that hook's own header comment for the full ordering/coupling
+  // analysis, including why the title/favicon effect's own position
+  // (originally further down this file) safely moved here too.
   useAttentionNotifications({ events, sessions, settings, activePanelId });
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
@@ -1397,9 +1392,10 @@ export function App() {
   // terminal session is the active mobile pane (not the timeline/Agent
   // Browser/task-detail/git/github panels, which don't accept keystrokes).
   // `session-${id}` is the terminal panel's own id format everywhere else in
-  // this file (e.g. the sessionIsActive check in the auto-focus-on-attention
-  // effect above) — reused here rather than inspecting dockview's internal
-  // component-type metadata. Also requires `status === "active"` (Hermes
+  // this file (e.g. the `#98 item 4` auto-focus effect's own
+  // `` `session-${s.id}` === panelId `` lookup above) — reused here rather
+  // than inspecting dockview's internal component-type metadata. Also
+  // requires `status === "active"` (Hermes
   // review, PR #616 round 1): a killed/exited session's pane can still be
   // the active one (closing is a separate, explicit action from the program
   // exiting — see PaneTab.tsx's own close-vs-kill distinction), and there's

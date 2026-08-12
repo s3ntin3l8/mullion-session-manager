@@ -61,20 +61,18 @@ export interface UseAttentionNotificationsParams {
 //   behavior change: nothing in between ever depended on it having run yet,
 //   and it never depended on anything those effects produce.
 //
-// - Relative to the REST of App.tsx: also independent, with one exception.
-//   `activePanelId` (a store-subscribed value, not a ref) is written by
-//   App.tsx's `onDidActivePanelChange` effect (issue #322), which calls
-//   `useDashboardStore.getState().setActivePanelId(...)` synchronously on
-//   the commit where `dockviewApi` first becomes non-null. Because this
-//   hook's own effect reads `activePanelId` as a normal subscribed prop
-//   (not a ref), calling this hook AFTER that effect — the exact position
-//   App.tsx calls it at — means a notification evaluated on that same flush
-//   already sees the up-to-date `activePanelId` rather than a stale `null`
-//   from before dockviewApi was ready. This is preserved by keeping the call
-//   site below `onDidActivePanelChange`'s effect in App.tsx, same as before
-//   this extraction; it is NOT a requirement to keep this hook itself
-//   between any of the OTHER effects that used to sit between the two
-//   extracted effects' original positions (see the point above).
+// - Relative to the REST of App.tsx: also independent — this hook's own
+//   call-site position doesn't matter, same conclusion useDockviewDrop/
+//   useGlobalShortcuts/useAppStreams (PRs 34c/34d/34e) reached for their own
+//   effects. `activePanelId` is passed in as an ordinary render-time prop
+//   (App.tsx's `onDidActivePanelChange` effect writes it into the store,
+//   which triggers a re-render — not a same-flush mutation this hook's
+//   closure could observe mid-commit); this effect's dependency array
+//   already re-runs it on the next render once that store write lands, same
+//   as any other subscribed value, regardless of where in App.tsx this hook
+//   is called relative to that effect. App.tsx calls it at the desktop-
+//   notification effect's original position purely to keep the diff minimal
+//   and the file's effect ordering easy to audit.
 //
 // - `events`/`sessions` get a fresh array/object identity on effectively
 //   every relevant tick (the live /ws/events push and the ~4s sessions poll,
