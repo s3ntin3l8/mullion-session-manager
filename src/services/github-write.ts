@@ -22,6 +22,7 @@
 // this reason, and this file now matches that precedent.
 
 import { GitHubApiError, validateGitHubRepoRef } from "./github.js";
+import { githubApiFetch } from "./github-fetch.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -296,8 +297,6 @@ export async function closePullRequest(
   await githubRequest(token, owner, repo, "PATCH", `/pulls/${number}`, { state: "closed" });
 }
 
-const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
-
 /**
  * Minimal GraphQL POST — this repo's first GraphQL call (every other write
  * in this file is REST). Needed because REST's `PATCH /pulls/:number` has
@@ -313,25 +312,14 @@ async function githubGraphQL<T>(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(GITHUB_GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-      },
-      body: JSON.stringify({ query, variables }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    throw new GitHubApiError(
-      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
-      0,
-    );
-  }
+  const res = await githubApiFetch("/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
 
   if (!res.ok) {
     const responseBody = await res.text().catch(() => "");

@@ -12,6 +12,7 @@ import {
 } from "./github-app.js";
 import { DecryptionError } from "./encryption.js";
 import { GitHubApiError } from "./github.js";
+import { githubApiFetch } from "./github-fetch.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -22,12 +23,6 @@ import { GitHubApiError } from "./github.js";
 // DB_ENCRYPTION_KEY is set.
 
 export const GITHUB_PROVIDER = "github";
-
-const GITHUB_API_BASE = "https://api.github.com";
-const REQUEST_TIMEOUT_MS = 5_000;
-// GitHub's REST API 400s any request with no User-Agent — this identifies
-// the app the way its own README does, not a per-install/user value.
-const USER_AGENT = "mullion-session-manager";
 
 export class InvalidTokenError extends Error {
   constructor(message: string) {
@@ -497,25 +492,21 @@ interface GitHubUserValidation {
 async function validateToken(token: string): Promise<GitHubUserValidation> {
   let res: Response;
   try {
-    res = await fetch(`${GITHUB_API_BASE}/user`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      // Unlike RemoteHostClient's SSRF-sensitive `redirect: "manual"` (a
-      // user-supplied baseUrl there), this always targets the fixed,
-      // trusted api.github.com host — no reason to reject a redirect (e.g.
-      // an API mirror/CDN) rather than follow it. Left as "manual" here,
-      // a 3xx would leave `res.ok === false` and surface as a misleading
-      // "GitHub rejected this token" for a perfectly valid one (Hermes
-      // review, PR #38).
+    // Unlike RemoteHostClient's SSRF-sensitive `redirect: "manual"` (a
+    // user-supplied baseUrl there), this always targets the fixed,
+    // trusted api.github.com host — no reason to reject a redirect (e.g.
+    // an API mirror/CDN) rather than follow it. Left as "manual" here,
+    // a 3xx would leave `res.ok === false` and surface as a misleading
+    // "GitHub rejected this token" for a perfectly valid one (Hermes
+    // review, PR #38).
+    res = await githubApiFetch("/user", {
+      headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
-    throw new InvalidTokenError(
-      `Could not reach GitHub to validate the token: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    // githubApiFetch's own GitHubApiError message already reads "Could not
+    // reach GitHub: ...", so it's reused as-is here rather than wrapped
+    // again.
+    throw new InvalidTokenError(err instanceof Error ? err.message : String(err));
   }
   if (!res.ok) {
     throw new InvalidTokenError(`GitHub rejected this token (HTTP ${res.status})`);

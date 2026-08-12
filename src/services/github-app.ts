@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { validateGitHubRepoRef } from "./github.js";
+import { githubApiFetch } from "./github-fetch.js";
 
 // #489 — GitHub App installation tokens, configured independently of the
 // shared PAT/OAuth token in github-integration.ts. This is a deliberate,
@@ -21,9 +22,6 @@ import { validateGitHubRepoRef } from "./github.js";
 // minted fresh per task, limited to that task's repo and the minimum
 // permission set, short-lived (~1h), not a token bound to one issue number.
 
-const GITHUB_API_BASE = "https://api.github.com";
-const USER_AGENT = "mullion-session-manager";
-const REQUEST_TIMEOUT_MS = 5_000;
 // GitHub rejects an app JWT with `exp` more than 10 minutes out; 9 minutes
 // leaves margin for clock skew between this host and GitHub's.
 const APP_JWT_TTL_SECONDS = 9 * 60;
@@ -113,13 +111,8 @@ interface InstallationSummary {
 export async function listInstallations(appJwt: string): Promise<InstallationSummary[]> {
   let res: Response;
   try {
-    res = await fetch(`${GITHUB_API_BASE}/app/installations?per_page=100`, {
-      headers: {
-        Authorization: `Bearer ${appJwt}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    res = await githubApiFetch("/app/installations?per_page=100", {
+      headers: { Authorization: `Bearer ${appJwt}` },
     });
   } catch (err) {
     // Hermes review, PR #504 (round 7): a raw network failure or the
@@ -167,13 +160,8 @@ export interface AuthenticatedApp {
 export async function getAuthenticatedApp(appJwt: string): Promise<AuthenticatedApp> {
   let res: Response;
   try {
-    res = await fetch(`${GITHUB_API_BASE}/app`, {
-      headers: {
-        Authorization: `Bearer ${appJwt}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    res = await githubApiFetch("/app", {
+      headers: { Authorization: `Bearer ${appJwt}` },
     });
   } catch (err) {
     // Same reason as listInstallations/mintInstallationToken above — every
@@ -277,19 +265,16 @@ export async function mintInstallationToken(
   // mints a token scoped to nothing, cached for ~1h, 404ing every write.
   let res: Response;
   try {
-    res = await fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
+    res = await githubApiFetch(`/app/installations/${installationId}/access_tokens`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${appJwt}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         repositories: [repo],
         permissions: scope === "write" ? WRITE_PERMISSIONS : READ_PERMISSIONS,
       }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     // See the matching comment in listInstallations above — same reason.
