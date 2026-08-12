@@ -2307,11 +2307,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "plan_resolved":
-        this.planState = "idle";
-        this.planAt = null;
-        this.clearIfConfirmedKind("planReady");
-        return;
       case "tool_done": {
         // Fix: status-clearing-semantics — a completed tool call is forward-
         // progress evidence: it means the agent is running again, which

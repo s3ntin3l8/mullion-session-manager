@@ -678,6 +678,14 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.clearIfConfirmedKind("permissionRequest");
     },
   ],
+  [
+    "plan_resolved",
+    (ctx) => {
+      ctx.planState = "idle";
+      ctx.planAt = null;
+      ctx.clearIfConfirmedKind("planReady");
+    },
+  ],
 ]);
 
 export type { HookMessageKind };
