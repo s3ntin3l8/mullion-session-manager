@@ -101,9 +101,13 @@ import {
   ClaudeCodeSkillPluginSourcedError,
 } from "./hook-adapters/claude-code-skills.js";
 import { assertSafeSkillName, InvalidSkillNameError } from "./hook-adapters/skill-name.js";
+// SkillAgent/SkillScope/SkillInfo now physically live in src/shared/types.ts
+// (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
+// re-export). Re-exported below so every existing backend importer of this
+// module keeps working unchanged.
+import type { SkillAgent, SkillScope, SkillInfo } from "../shared/types.js";
 
-export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
-export type SkillScope = "builtin" | "global" | "project";
+export type { SkillAgent, SkillScope, SkillInfo };
 
 // Kept in one place so skills.ts, the routes, and the writer-selection
 // switch never drift apart on which agents actually support a write. agy is
@@ -112,24 +116,6 @@ export type SkillScope = "builtin" | "global" | "project";
 // attachEnabledByAgent/resolveSkillForToggle still gate individual skills
 // out (builtin scope, basename collisions) below.
 const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode", "claude-code"];
-
-export interface SkillInfo {
-  name: string;
-  description: string;
-  sourceDir: string;
-  scope: SkillScope;
-  agents: SkillAgent[];
-  // `null` means "not toggleable for this skill/agent pair." Reasons vary by
-  // agent (see the file header and attachEnabledByAgent): agy never
-  // supports a write at all; codex/opencode are null when the name is
-  // ambiguous across directories or their config couldn't be read
-  // (malformed config.toml/opencode.json); claude-code is additionally
-  // null for a builtin-scope (plugin-sourced) skill, a directory-basename
-  // collision across scopes, or when read from the cwd-less global route.
-  // A config-read failure degrades to "not toggleable" for that one agent —
-  // it never fails the whole request.
-  enabledByAgent: Partial<Record<SkillAgent, boolean | null>>;
-}
 
 // tessera's MAX_MEMORY_FILE_BYTES/MAX_MEMORY_FILES guards, ported the same
 // way agent-rules.ts already ported them — a SKILL.md's frontmatter is

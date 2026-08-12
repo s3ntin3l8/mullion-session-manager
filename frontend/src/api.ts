@@ -1,3 +1,56 @@
+// A handful of type shapes below used to be hand-mirrored 1:1 copies of a
+// backend declaration (each annotated "Mirrors src/services/X.ts's Y 1:1"),
+// kept in sync by hand with zero compiler enforcement. Those now physically
+// live in src/shared/types.ts (repo root, NOT this frontend workspace — see
+// that file's own header) and are just re-exported here, so every existing
+// import of them from "./api.js" elsewhere in the frontend keeps working
+// unchanged.
+import type {
+  SessionStatus,
+  SessionSeverity,
+  NotificationEvent,
+  SkillAgent,
+  SkillScope,
+  SkillInfo,
+  GitBranchInfo,
+  GitWorktreeInfo,
+  GitFileStatusCode,
+  GitFileStatus,
+  GitStatus,
+  GitDiffStats,
+  LauncherKind,
+  Launcher,
+  DockerServiceInfo,
+  DockControl,
+  Theme,
+  CursorStyle,
+  SidebarDensity,
+  SoundName,
+} from "../../src/shared/types.js";
+
+export type {
+  SessionStatus,
+  SessionSeverity,
+  NotificationEvent,
+  SkillAgent,
+  SkillScope,
+  SkillInfo,
+  GitBranchInfo,
+  GitWorktreeInfo,
+  GitFileStatusCode,
+  GitFileStatus,
+  GitStatus,
+  GitDiffStats,
+  LauncherKind,
+  Launcher,
+  DockerServiceInfo,
+  DockControl,
+  Theme,
+  CursorStyle,
+  SidebarDensity,
+  SoundName,
+};
+
 // Mirrors src/routes/auth.ts's GET /api/auth/me response. `methods` reports
 // each in-process auth mechanism independently (not a single mode string)
 // since issue #19's shared token and issue #30's OIDC login are additive —
@@ -346,72 +399,25 @@ export interface Session {
   pendingDevServerPort: string | null;
 }
 
-// Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1
-// — see that file's own doc comments for what each value means and the
-// precedence order between them. frontend/src/sessionStatus.ts's
-// STATUS_PRESENTATION table is the ONE place these render into a color/icon/
-// label; nothing else should re-derive a status from the raw live fields
-// above (that's what stopped this codebase's twelve-plus parallel status
-// enums from growing a thirteenth — see the plan doc's Context section).
-export type SessionStatus =
-  | "exited"
-  | "api_error"
-  | "tool_failure"
-  | "awaiting_permission"
-  | "awaiting_plan"
-  | "awaiting_review_gate"
-  | "awaiting_promote"
-  | "awaiting_question"
-  | "awaiting_elicitation"
-  | "finished"
-  | "needs_input"
-  | "compacting"
-  | "subagent"
-  | "background"
-  | "working"
-  | "idle";
+// SessionStatus/SessionSeverity now physically live in src/shared/types.ts
+// and are re-exported at the top of this file — see that file's own doc
+// comments for what each value means and the precedence order between them.
+// frontend/src/sessionStatus.ts's STATUS_PRESENTATION table is the ONE place
+// these render into a color/icon/label; nothing else should re-derive a
+// status from the raw live fields above (that's what stopped this
+// codebase's twelve-plus parallel status enums from growing a thirteenth —
+// see the plan doc's Context section).
 
-export type SessionSeverity =
-  "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant";
-
-// Phase 1's notification event model (issue #166) — mirrors
-// src/services/pty-manager.ts's NotificationEvent 1:1. `seq` is per-session
-// (not globally unique — two different sessions can both have `seq: 1`), so
-// a consumer keys read/unread state off (sessionId, seq) together, never
-// seq alone. Streamed over the new /ws/events channel (eventsClient.ts);
-// the existing `attention`/`activity`/`lastTitle` fields on Session above
-// stay poll-derived and unchanged — this is purely additive. `file_change`
-// and `review_gate` (Phase 2, issue #176) are the first two kinds sourced
-// from the structured agent hook channel rather than PTY parsing.
-export interface NotificationEvent {
-  seq: number;
-  sessionId: number;
-  kind:
-    | "attention"
-    | "status_change"
-    | "title_change"
-    | "file_change"
-    | "review_gate"
-    | "promote_request"
-    | "permission_request"
-    | "stop_failure"
-    | "tool_failure"
-    | "session_end"
-    | "plan_ready"
-    // Rich statuses — the one new NotificationEvent kind added alongside
-    // this feature (see pty-manager.ts's matching doc comment for why
-    // turn_start/compact/subagent are routed through "status_change"
-    // instead of getting their own kinds).
-    | "elicitation"
-    | "question"
-    | "todo"
-    | "session_diff"
-    // Issue #404 — mirrors src/services/pty-manager.ts's NotificationEvent
-    // 1:1 (see that file's matching doc comment).
-    | "dev_server_detected";
-  ts: number;
-  payload: Record<string, unknown>;
-}
+// Phase 1's notification event model (issue #166) — NotificationEvent now
+// physically lives in src/shared/types.ts and is re-exported at the top of
+// this file. `seq` is per-session (not globally unique — two different
+// sessions can both have `seq: 1`), so a consumer keys read/unread state off
+// (sessionId, seq) together, never seq alone. Streamed over the /ws/events
+// channel (eventsClient.ts); the existing `attention`/`activity`/`lastTitle`
+// fields on Session above stay poll-derived and unchanged — this is purely
+// additive. `file_change` and `review_gate` (Phase 2, issue #176) are the
+// first two kinds sourced from the structured agent hook channel rather
+// than PTY parsing.
 
 // Issue #213 (roadmap 4.7) — a row from the persisted `session_events` table
 // (src/db/schema.ts / src/services/event-history.ts's StoredEventRow),
@@ -463,18 +469,6 @@ export interface Group {
   collapsed: boolean;
   position: number;
   createdAt: string;
-}
-
-export type LauncherKind = "shell" | "agent" | "npm-script" | "task" | "custom";
-
-export interface Launcher {
-  id: string;
-  title: string;
-  command: string;
-  cwd?: string;
-  icon?: string;
-  kind: LauncherKind;
-  skipPermissions?: boolean;
 }
 
 export type CodexHookTrust = "trusted" | "pending" | "not-installed";
@@ -588,55 +582,14 @@ export interface WebhookRegistrationResult {
   reposFailed: number;
 }
 
-// Mirrors src/services/git-status.ts's GitStatus 1:1 (issue #76).
-// GET /api/projects/:id/git-status returns 204 (no body) for every "not
-// applicable" case (not a git repo, or `git` itself failed) — callers treat
-// that identically to `null`, same rule as GitHubStatus above.
-export type GitFileStatusCode = "M" | "A" | "D" | "U" | "?";
-
-export interface GitFileStatus {
-  path: string;
-  status: GitFileStatusCode;
-}
-
-export interface GitStatus {
-  branch: string;
-  hash: string | null;
-  ahead: number;
-  behind: number;
-  files: GitFileStatus[];
-  isClean: boolean;
-  hasConflicts: boolean;
-}
-
-// Mirrors src/services/git-refs.ts's GitBranchInfo/GitWorktreeInfo 1:1 (issue
-// #162). GET /api/projects/:id/git-branches returns 204 for the same "not
-// applicable" cases as git-status above — fetched on demand when the
-// GitPanel opens, not on the sidebar's 4s live-refresh tick (branch/worktree
-// lists change far less often than working-tree status).
-export interface GitBranchInfo {
-  name: string;
-  isCurrent: boolean;
-  // Issue #442 — GitPanel branch-management enrichment. All optional, same
-  // "old primary / new agent (or the reverse) must degrade" reasoning as
-  // the rest of this interface — see src/services/git-refs.ts's own doc
-  // comment.
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  upstreamGone?: boolean;
-  lastCommitRelative?: string;
-  // Only populated when fetched with `detail: true` (GET .../git-branches
-  // ?detail=1) — undefined both when detail wasn't requested and when the
-  // base-ref chain fell through to plain HEAD (no remote configured).
-  isMerged?: boolean;
-}
-
-export interface GitWorktreeInfo {
-  path: string;
-  branch: string | null;
-  isMain: boolean;
-}
+// GitFileStatusCode/GitFileStatus/GitStatus and GitBranchInfo/GitWorktreeInfo
+// now physically live in src/shared/types.ts and are re-exported at the top
+// of this file. GET /api/projects/:id/git-status and .../git-branches both
+// return 204 (no body) for every "not applicable" case (not a git repo, or
+// `git` itself failed) — callers treat that identically to `null`, same rule
+// as GitHubStatus above. Branch/worktree lists are fetched on demand when
+// the GitPanel opens, not on the sidebar's 4s live-refresh tick (they change
+// far less often than working-tree status).
 
 export interface GitBranchesResult {
   branches: GitBranchInfo[];
@@ -714,35 +667,6 @@ export interface AgentRuleTarget {
   isSymlink: boolean;
 }
 
-// Mirrors src/services/skills.ts's SkillInfo 1:1 (issue #432, discovery
-// slice; issue #463 added enabledByAgent). No `content`/body field,
-// deliberately — the backend never reads a skill's body past its
-// frontmatter, only name/description (see that module's own header comment
-// on why).
-export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
-export type SkillScope = "builtin" | "global" | "project";
-
-export interface SkillInfo {
-  name: string;
-  description: string;
-  sourceDir: string;
-  scope: SkillScope;
-  agents: SkillAgent[];
-  // `null` means "not toggleable for this agent" — see skills.ts's own doc
-  // comment on SkillInfo.enabledByAgent for every reason that can be true
-  // (agent not supported yet, ambiguous name, unreadable config).
-  enabledByAgent: Partial<Record<SkillAgent, boolean | null>>;
-}
-
-// Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,
-// greenfield) — files-changed + insertions/deletions against HEAD for a
-// session's own effective cwd (its own cwd override, or its project's).
-export interface GitDiffStats {
-  filesChanged: number;
-  insertions: number;
-  deletions: number;
-}
-
 // Mirrors GET /api/projects/git-file-diff's response (issue #262) — the raw
 // unified diff patch for a single file in a session's working tree, or null
 // when there's no change to show (clean file, not a repo, not found).
@@ -759,31 +683,6 @@ export interface GitFileDiffResponse {
 export interface GitStatusesBatchResult {
   projects: Record<string, GitStatus | null>;
   sessions: Record<string, GitStatus | null>;
-}
-
-export interface DockerServiceInfo {
-  composeProject: string;
-  service: string;
-  containerName: string;
-  state: string;
-  status: string;
-  imageRef: string;
-  imageId: string;
-  buildOnly: boolean;
-}
-
-export interface DockControl {
-  id: string;
-  title: string;
-  command: string;
-  cwd?: string;
-  height?: number;
-  env?: Record<string, string>;
-  worktreeRefresh?: boolean;
-  /** "docker" for a control auto-discovered from a running Compose service
-   * (issue #73); absent/"config" for one read from dock.json. */
-  source?: "config" | "docker";
-  docker?: DockerServiceInfo;
 }
 
 // U4 — mirrors src/services/dock-config.ts's DockConfigReadResult 1:1. The
@@ -1039,15 +938,12 @@ export interface UpdateStatus {
   error?: string;
 }
 
-// Mirrors src/services/settings.ts's AppSettings 1:1 — duplicated rather
-// than shared across the workspace boundary (frontend/ is its own npm
-// workspace with its own tsconfig), same pattern as Project/Session/etc.
-// above already being independent copies of the backend's row shapes.
-export type Theme = "dark" | "light" | "system";
-export type CursorStyle = "block" | "bar" | "underline";
-export type SidebarDensity = "comfortable" | "compact";
-export type SoundName = "ping" | "chime" | "blip";
-
+// AppSettings itself stays hand-mirrored rather than shared — its
+// notifications.notificationMatrix field is a real, deliberate type
+// divergence from the backend's settings.ts (see src/shared/types.ts's own
+// doc comment on Theme/CursorStyle/SidebarDensity/SoundName, which DO move,
+// for the full rationale). AppSettings is otherwise still a duplicate of
+// the backend's row shape, same pattern as Project/Session/etc. above.
 export interface AppSettings {
   theme: Theme;
   terminal: {

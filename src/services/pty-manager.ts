@@ -76,6 +76,13 @@ import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
+// NotificationEvent now physically lives in src/shared/types.ts
+// (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
+// re-export). Re-exported below so every existing backend importer of this
+// module keeps working unchanged.
+import type { NotificationEvent } from "../shared/types.js";
+
+export type { NotificationEvent };
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -406,58 +413,12 @@ export interface SessionInfo {
 type DataListener = (chunk: Buffer) => void;
 type ExitListener = () => void;
 
-// Phase 1's notification event model (issue #166) — a structured, replayable
-// record of the byte-driven "something happened" moments a session produces,
-// distinct from `SessionInfo`'s poll-derived snapshot fields above. `seq` is
-// per-session and monotonic (starts at 1), not globally unique — a consumer
-// keys read/unread state off (sessionId, seq) together, never seq alone
-// (two different sessions both legitimately have a seq:1). `file_change` and
-// `review_gate` (Phase 2, issue #176) are the first two kinds sourced from
-// the structured hook channel (src/plugins/hooks.ts) rather than PTY
-// parsing — exactly the extension the original closed set anticipated, with
-// no shape change needed here. Deliberately does NOT include a
+// NotificationEvent (Phase 1's notification event model, issue #166) now
+// physically lives in src/shared/types.ts — see that file for the full doc
+// comment (the byte-driven "something happened" model, `seq`'s per-session
+// keying, and each `kind`'s own rationale). Deliberately does NOT include a
 // `working`/`idle` kind — see Session.onData's own comment on why activity
 // stays poll-derived.
-export interface NotificationEvent {
-  seq: number;
-  sessionId: number;
-  kind:
-    | "attention"
-    | "status_change"
-    | "title_change"
-    | "file_change"
-    | "review_gate"
-    | "promote_request"
-    | "permission_request"
-    | "stop_failure"
-    | "tool_failure"
-    | "session_end"
-    | "plan_ready"
-    // Rich statuses — the one new NotificationEvent kind added alongside
-    // this feature: elicitation is a "blocked pending a human decision"
-    // event, same tier as review_gate/promote_request/permission_request/
-    // plan_ready above, so it gets its own dedicated kind the same way they
-    // did. turn_start/compact/subagent are lower-signal state transitions —
-    // routed through the existing "status_change" kind instead (same
-    // reasoning progress/git_branch/cwd_changed already use it for), not
-    // given their own kinds.
-    | "elicitation"
-    | "question"
-    | "todo"
-    | "session_diff"
-    // Issue #404 — a background, PTY-scrollback-derived signal that a plain
-    // (non-dock) session's dev server just started listening (see
-    // dev-server-detect.ts's parseDevServerPort and
-    // PtyManager.sweepDevServerDetection). Its own dedicated kind, same tier
-    // as review_gate/promote_request/plan_ready above ("pending a human
-    // decision" — accept wires the port into the project's devServerUrl +
-    // preview, dismiss suppresses it), not folded into status_change. Unlike
-    // review_gate/promote_request, nothing blocks on this: it's purely
-    // backend-detected, never holds an agent's hook-socket connection open.
-    | "dev_server_detected";
-  ts: number;
-  payload: Record<string, unknown>;
-}
 
 type EventListener = (event: NotificationEvent) => void;
 

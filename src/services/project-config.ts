@@ -1,6 +1,17 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Launcher/LauncherKind/DockControl now physically live in
+// src/shared/types.ts (hand-mirrored 1:1 on the frontend — see
+// frontend/src/api.ts's own re-export). Re-exported below so every existing
+// backend importer of this module keeps working unchanged. DockControl's
+// `docker` field is typed against shared/types.ts's own DockerServiceInfo,
+// but this module never named that type itself (it was an inline object
+// literal here) — no back-compat re-export needed for a name nothing ever
+// imported.
+import type { Launcher, LauncherKind, DockControl } from "../shared/types.js";
+
+export type { Launcher, LauncherKind, DockControl };
 
 // Resolves the "launcher" abstraction the plan unifies vision items #5
 // (bash/zsh/agent shortcuts), #6 (autodetected AI CLIs — see
@@ -14,48 +25,6 @@ import path from "node:path";
 // normal case (most projects have no .crs/ dir at all), and a malformed one
 // must never break the API it feeds — so every read is wrapped and reduced
 // to an empty result plus a logged warning, never a thrown error.
-
-export type LauncherKind = "shell" | "agent" | "npm-script" | "task" | "custom";
-
-export interface Launcher {
-  id: string;
-  title: string;
-  command: string;
-  cwd?: string;
-  icon?: string;
-  kind: LauncherKind;
-  skipPermissions?: boolean;
-}
-
-export interface DockControl {
-  id: string;
-  title: string;
-  command: string;
-  cwd?: string;
-  height?: number;
-  env?: Record<string, string>;
-  /** When true, a worktree created for this monitor is periodically synced
-   * to the branch's latest commit via `git reset --hard`. Useful for HMR
-   * dev servers where the agent works in the main checkout. Default: the
-   * global settings.dock.defaultWorktreeRefresh preference. */
-  worktreeRefresh?: boolean;
-  /** "docker" for a control synthesized from a discovered Compose service
-   * (docker-service-detect.ts); absent/"config" for one read from
-   * dock.json. Deliberately NOT handled by normalizeRawControl() below —
-   * see that function's comment — so a project's own dock.json can never
-   * forge these fields. */
-  source?: "config" | "docker";
-  docker?: {
-    composeProject: string;
-    service: string;
-    containerName: string;
-    state: string;
-    status: string;
-    imageRef: string;
-    imageId: string;
-    buildOnly: boolean;
-  };
-}
 
 interface RawActionsFile {
   // When true, this file's actions REPLACE the auto-read package.json/
