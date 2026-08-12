@@ -187,7 +187,7 @@ class LocalBackend implements SessionBackend {
     // kicked off internally, awaited here instead of discarded. This is what
     // lets a genuine local spawn failure (missing systemd-run/dtach, a
     // vanished cwd, a scope-name collision) actually reject this call and
-    // reach routes/sessions.ts's existing rollback `catch` block — before
+    // reach session-lifecycle.ts's existing rollback `catch` block — before
     // this fix, that block was dead code for the local-spawn path: a real
     // failure returned 201 with a live-looking row, a created worktree never
     // registered for cleanup, and no program actually running (the row only

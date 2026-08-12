@@ -33,7 +33,7 @@ vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   // Issue #271's worktree tests need real `git` subprocesses (git-worktree.ts's
-  // createWorktree, invoked via routes/sessions.ts) — only the
+  // createWorktree, invoked via session-lifecycle.ts) — only the
   // systemd-run/dtach bootstrap child_process.spawn call (pty-manager.ts's
   // bootstrapMaster) is faked, same reasoning as node-pty's mock above.
   return mockChildProcessSpawn(actual, { passthrough: ["git"] });
@@ -114,7 +114,7 @@ describe("sessions route", () => {
 
   // Regression test for the bug that shipped in PR #300: SessionInfo grew
   // permissionState/planState/errorState/endedReason, but withLiveInfo
-  // (routes/sessions.ts) hand-enumerated which live fields to copy onto each
+  // (session-live-info.ts) hand-enumerated which live fields to copy onto each
   // row and was never updated, leaving those four permanently absent from
   // every REST response — which in turn left Sidebar.tsx's "Needs
   // permission"/"Plan ready"/"API error"/"Tool failure" branches unreachable
@@ -181,7 +181,7 @@ describe("sessions route", () => {
     ]);
 
     // POST /api/sessions' own response shares the same withLiveInfo via
-    // withLiveStatus (routes/sessions.ts) — assert it isn't a second,
+    // withLiveStatus (session-live-info.ts) — assert it isn't a second,
     // possibly-drifting copy of the field list.
     expect(created.json()).toMatchObject({
       permissionState: "idle",
@@ -420,7 +420,7 @@ describe("sessions route", () => {
     await app.close();
   });
 
-  // Perf audit finding A6 — withLiveInfo (routes/sessions.ts) used to call
+  // Perf audit finding A6 — withLiveInfo (session-live-info.ts) used to call
   // resolveProjectHostId(app, row.projectId) itself, re-running the exact
   // per-project SELECT the route handler had already batched into
   // `projectHostIds` just above it — one redundant synchronous
@@ -1400,7 +1400,7 @@ describe("sessions route", () => {
       // session-backend.ts/pty-manager.ts's Session.spawn()). Forcing the
       // underlying `systemd-run` bootstrap to fail here proves the fix: the
       // spawn now genuinely rejects, this route's existing rollback catch
-      // block (createSessionRecord, routes/sessions.ts) actually runs, and
+      // block (createSessionRecord, session-lifecycle.ts) actually runs, and
       // nothing — row or worktree — is left behind.
       it("rolls back the DB row and the worktree when the local spawn genuinely fails (B6)", async () => {
         const app = await buildApp();

@@ -18,7 +18,7 @@ import { resolveBackend } from "./session-backend.js";
 // forgetting to add a newly-added SessionInfo field to `buildLiveInfo` is a
 // `make typecheck` failure, not silent dead UI. This is the exact bug that
 // shipped in PR #300: permissionState/planState/errorState/endedReason were
-// added to SessionInfo but never wired into this route, leaving
+// added to SessionInfo but never wired into buildLiveInfo, leaving
 // Sidebar.tsx's "Needs permission"/"Plan ready"/"API error"/"Tool failure"
 // branches unreachable — see the plan doc for the full incident writeup.
 // `errorAt` is also excluded: a backend-internal TTL timestamp for the

@@ -47,7 +47,7 @@ export type ClaimTaskOutcome =
  * only conditionally UPDATE afterward, which is why a losing concurrent
  * request's worktree was left orphaned — the spawn had already happened
  * before the loss was detected. Here, one `app.db.transaction(...)` (
- * synchronous, better-sqlite3 — same shape as routes/sessions.ts's own
+ * synchronous, better-sqlite3 — same shape as session-lifecycle.ts's own
  * child-cap reservation) counts tasks in `claimed`/`in_progress` against
  * `MULLION_TASK_MAX_CONCURRENT`, then conditionally flips this task to
  * "claimed" — both checks succeed or fail together, so neither the
@@ -130,7 +130,7 @@ export async function claimTask(
     if (!current || current.status !== "ready") {
       return { reserved: false as const, currentStatus: current?.status };
     }
-    // Same "select + .length" cap-check shape as routes/sessions.ts's own
+    // Same "select + .length" cap-check shape as session-lifecycle.ts's own
     // child-session cap reservation (createSessionRecord's maxChildren
     // check) — a plain row count, not a raw SQL count(*) template.
     const inFlight = tx
@@ -290,7 +290,7 @@ export async function claimTask(
     // result.row.cwd below, once the spawn succeeds). Identical today: the
     // `worktree: {...}` intent passed to createSessionRecord just below
     // carries this same `branchName` as its seed, and createWorktree's own
-    // path resolution (routes/sessions.ts's resolveWorktreeCwd) runs
+    // path resolution (session-lifecycle.ts's resolveWorktreeCwd) runs
     // through that same deriveWorktreePath call (git-worktree.ts) — so the
     // path the agent is told and the path it actually runs in are the same
     // function applied to the same inputs, not two independent guesses

@@ -1564,7 +1564,7 @@ export class Session {
    * `LocalBackend.spawn` (session-backend.ts) is the one caller that DOES
    * await it, specifically so a genuine first-attempt failure (missing
    * systemd-run/dtach, a vanished cwd, a scope-name collision) can finally
-   * propagate to routes/sessions.ts's existing rollback `catch` block
+   * propagate to session-lifecycle.ts's existing rollback `catch` block
    * instead of silently returning 201 with a dead session and an
    * unregistered worktree (see this method's git history / issue tracker
    * for the full incident this closes).
@@ -2973,7 +2973,7 @@ export class Session {
    * here). `projectId` is passed in by the caller rather than read off
    * `this.projectId`, since the latter is only reliably populated for a
    * session spawned fresh in this process's own lifetime (see
-   * routes/sessions.ts's createSessionRecord) — a session reattached via
+   * session-lifecycle.ts's createSessionRecord) — a session reattached via
    * /ws/terminal after a restart never threads it through — while the
    * caller's own DB query (joining sessions -> projects) always has the
    * real value.
@@ -4193,7 +4193,7 @@ export class PtyManager {
    * class's own terminate() (below), the exited-session reconciler
    * (session-reconciler.ts, once isMasterAlive confirms the process is
    * actually gone), and the local-spawn-failure rollback
-   * (routes/sessions.ts, where the session row itself is deleted right
+   * (session-lifecycle.ts, where the session row itself is deleted right
    * after). None of those has any live process left that could ever fire a
    * SessionStart hook again.
    */
@@ -4219,7 +4219,7 @@ export class PtyManager {
     // and the program inside it survive that, same reasoning as hookTokens'
     // own non-clearing treatment just below. Callers that DO know `id` is
     // genuinely done (terminate(), the exited-session reconciler,
-    // routes/sessions.ts's spawn-failure rollback) call
+    // session-lifecycle.ts's spawn-failure rollback) call
     // discardPendingSeed(id) themselves alongside this method.
     // A killed session's in-memory Session object is discarded here, but —
     // unlike before hook-token persistence — its hookToken is NOT: this

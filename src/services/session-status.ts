@@ -14,7 +14,7 @@
 //
 // Pure, no I/O — same testability posture as attention-detect.ts. Called at
 // the route layer, where the two axes are already merged (see
-// routes/sessions.ts's withLiveInfo/buildLiveInfo), NOT inside
+// session-live-info.ts's withLiveInfo/buildLiveInfo), NOT inside
 // PtyManager.toInfo(): the Session class has no notion of the DB's kill/exit
 // intent, only of whether its own in-memory ptyProcess handle is alive right
 // now — deriving the FULL status needs both.
@@ -37,7 +37,7 @@ export type { SessionStatus, SessionSeverity };
 
 // Assigning this object literal directly to a `Record<SessionStatus, ...>`-
 // typed const makes it exhaustive at the type level, same technique
-// routes/sessions.ts's `LiveInfoKey`/`buildLiveInfo` use: a `SessionStatus`
+// session-live-info.ts's `LiveInfoKey`/`buildLiveInfo` use: a `SessionStatus`
 // added above without a matching entry here fails `make typecheck` instead
 // of leaving a status with an undefined severity at runtime.
 const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
@@ -138,7 +138,7 @@ export interface DeriveSessionStatusInput {
 }
 
 // Idle/no-signal defaults for `DeriveSessionStatusInput["info"]` — a
-// narrower sibling of routes/sessions.ts's own `buildLiveInfo`, which
+// narrower sibling of session-live-info.ts's own `buildLiveInfo`, which
 // defaults the FULL `SessionInfo` (browserUrl, gatePrompt, previewBranch,
 // ...) for the REST session-row response; this one only needs to satisfy
 // the specific fields `deriveSessionStatus` reads. Lives here rather than
@@ -147,7 +147,7 @@ export interface DeriveSessionStatusInput {
 // added to `DeriveSessionStatusInput["info"]` without a matching default
 // here is a `make typecheck` failure, not a silently-undefined field for a
 // caller (like task-reconciler.ts's background poller) that never went
-// through routes/sessions.ts's own merge path.
+// through session-live-info.ts's own merge path.
 export function defaultDeriveStatusInfo(
   info: SessionInfo | null | undefined,
 ): DeriveSessionStatusInput["info"] {

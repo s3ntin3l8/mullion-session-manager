@@ -10,7 +10,7 @@ import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
 // Claiming a task spawns a real session (routes/tasks.ts's claim endpoint
-// reuses sessions.ts's createSessionRecord) — faked the same way
+// reuses session-lifecycle.ts's createSessionRecord) — faked the same way
 // test/routes/sessions.test.ts fakes node-pty/systemd-run/dtach for its own
 // worktree-isolation tests, so this file exercises the route/DB layer
 // without depending on a real systemd --user session existing in CI. `git`

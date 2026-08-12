@@ -34,6 +34,14 @@ export interface WorktreeIntent {
   branch?: string;
 }
 
+// Field-for-field mirror of routes/sessions.ts's `createSessionSchema`
+// (the Fastify JSON-schema validator for POST /api/sessions' body). The two
+// live in different files — this interface here so createSessionRecord and
+// its Task Master callers get real typing, the JSON schema there so Fastify
+// can validate the wire body before this function ever sees it — and
+// nothing enforces they stay in sync: adding a field to one without the
+// other either silently drops it (schema only) or lets an unvalidated field
+// through (type only). Update both together.
 export interface CreateSessionBody {
   projectId: number;
   command: string;
@@ -137,8 +145,10 @@ export type CreateSessionParams = CreateSessionBody & {
   // Task Master only (task-claim.ts/task-reconciler.ts) — a prompt to start
   // the spawned agent's first turn with, see pty-manager.ts's
   // CreateSessionOptions.initialPrompt for the full delivery chain.
-  // Deliberately NOT part of CreateSessionBody/createSessionSchema below: an
-  // ordinary caller of POST /api/sessions never gets to set this, since
+  // Deliberately NOT part of CreateSessionBody above (or routes/sessions.ts's
+  // createSessionSchema, which mirrors it field-for-field — see that
+  // interface's own doc comment): an ordinary caller of POST /api/sessions
+  // never gets to set this, since
   // createSessionRecord's internal Task Master callers invoke it directly as
   // a TS function, bypassing route body validation entirely — the public
   // launcher/promote flows have no equivalent of an unattended "first turn."

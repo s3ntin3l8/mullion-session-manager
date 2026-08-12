@@ -50,6 +50,9 @@ const worktreeIntentSchema = {
   oneOf: [{ required: ["baseRef"] }, { required: ["branch"] }],
 } as const;
 
+// Field-for-field mirror of services/session-lifecycle.ts's `CreateSessionBody`
+// TS interface — see that interface's own doc comment for why the two live
+// in different files and why nothing but code review keeps them in sync.
 const createSessionSchema = {
   body: {
     type: "object",
@@ -676,8 +679,9 @@ export async function sessionsRoute(app: FastifyInstance) {
           mime,
         );
       } catch (err) {
-        // Same posture as POST /api/sessions' own spawn-rollback catch above:
-        // an unreachable host or an agent-side rejection is a gateway
+        // Same posture as createSessionRecord's own spawn-rollback catch
+        // (session-lifecycle.ts, reached via POST /api/sessions): an
+        // unreachable host or an agent-side rejection is a gateway
         // failure, never a 500 — there's no row here to roll back.
         app.log.error({ err, sessionId, hostId: project.hostId }, "session image upload failed");
         return reply.badGateway("Failed to upload image to host");

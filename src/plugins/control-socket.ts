@@ -483,7 +483,7 @@ const OPS: Record<string, OpSpec> = {
   // session has no business spawning an UNRELATED one" — a same-project
   // child of the caller's own session is precisely the case that leaves
   // open). Same-project and one-level-of-nesting are enforced in
-  // createSessionRecord (routes/sessions.ts), not here — this handler's
+  // createSessionRecord (services/session-lifecycle.ts), not here — this handler's
   // only job is resolving WHICH session is the parent, deriving that
   // parent's own project via a real GET (never trusting a body-supplied
   // projectId), and stamping both onto the forwarded POST /api/sessions
@@ -563,7 +563,7 @@ const OPS: Record<string, OpSpec> = {
   // implicit "self" the way sessions.get/scrollback/rename have), since
   // full-scope is the only scope that ever reaches this handler.
   // `body.cascade` ("detach"|"kill", default "detach" — see
-  // routes/sessions.ts's killSession) rides through as a querystring on the
+  // services/session-lifecycle.ts's killSession) rides through as a querystring on the
   // proxied DELETE, same transport reasoning as that route's own comment.
   "sessions.kill": {
     scopes: ["full"],

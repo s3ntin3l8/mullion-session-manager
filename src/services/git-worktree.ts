@@ -124,7 +124,7 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
 
 // Same absolute-path + no-".."-segment guard as git-refs.ts/git-status.ts —
 // every cwd/baseDir/worktreePath this module touches is always an
-// already-resolved project cwd (routes/sessions.ts, same trust tier as
+// already-resolved project cwd (session-lifecycle.ts, same trust tier as
 // project.cwd itself) or an agent-side value already passed through
 // resolveWithinRoots (routes/internal.ts), never a raw, unauthenticated
 // request value.
@@ -333,7 +333,7 @@ export async function checkoutBranchWorktree(
 
 // ── Per-path serialization ────────────────────────────────────────────────
 // The 5s sync tick (below) and every removal path (killSession,
-// cleanupPreviewWorktree, routes/sessions.ts's spawn-failure rollback) can
+// cleanupPreviewWorktree, session-lifecycle.ts's spawn-failure rollback) can
 // target the same preview worktree at the same time — `git worktree remove
 // --force` racing a `git reset --hard` on the same path can corrupt the
 // worktree's administrative files or half-delete it mid-reset. Lock
