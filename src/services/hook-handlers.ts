@@ -44,6 +44,7 @@ import type {
   ElicitationHookMessage,
   QuestionHookMessage,
   TodoHookMessage,
+  SessionDiffHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -653,6 +654,13 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         status: todo.status,
         priority: todo.priority,
       });
+    },
+  ],
+  [
+    "session_diff",
+    (ctx, message) => {
+      const sd = message as SessionDiffHookMessage;
+      ctx.emitEvent("session_diff", { files: sd.files });
     },
   ],
 ]);

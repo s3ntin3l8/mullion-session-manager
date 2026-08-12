@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  SessionDiffHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
@@ -2308,11 +2307,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "session_diff": {
-        const sd = message as SessionDiffHookMessage;
-        this.emitEvent("session_diff", { files: sd.files });
-        return;
-      }
       case "permission_resolved":
         // See PermissionResolvedHookMessage's doc comment (hook-protocol.ts)
         // — a possible EXTRA release path for a pending permission_request,
