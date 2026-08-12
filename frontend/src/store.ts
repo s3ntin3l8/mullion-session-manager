@@ -34,10 +34,17 @@ import { resolveTaskMaster } from "./taskConfig.js";
 // narrow connectGitHubWS's incoming message instead of hand-inspecting an
 // `unknown`-typed parse.
 import type { GitHubWSEvent } from "../../src/shared/ws-protocol.js";
+import {
+  STORAGE_KEYS,
+  readBool,
+  readNumber,
+  readString,
+  removeItem,
+  writeBool,
+  writeNumber,
+  writeString,
+} from "./lib/persistedState.js";
 
-// Which workspace was last active survives a reload via localStorage (not
-// the DB — it's a per-browser UI preference, not shared server state).
-const ACTIVE_WORKSPACE_STORAGE_KEY = "crs.activeWorkspaceId";
 // How often the live-refresh loop re-fetches sessions so status badges
 // (activity/attention/exited) reflect the backend without waiting on a
 // mutation. Paused while the tab is hidden (visibilitychange) — no point
@@ -141,47 +148,17 @@ let gitDiffStatsRefreshInFlight: Promise<void> | null = null;
 // list refresh (issue #202) — see refreshGitRefs's own doc comment for why
 // this runs on a different cadence than the two above.
 let gitRefsRefreshInFlight: Promise<void> | null = null;
-// Desktop-only persistent collapse (distinct from the mobile-only
-// `sidebarOpen` overlay flag App.tsx owns locally — different semantics per
-// breakpoint: mobile is a closed-by-default overlay, desktop is an
-// open-by-default panel the user can choose to hide).
-const SIDEBAR_COLLAPSED_KEY = "crs.sidebarCollapsed";
-// Persisted sidebar width (drag-to-resize, same pattern as dock height).
-const SIDEBAR_WIDTH_KEY = "crs.sidebarWidth";
 export const SIDEBAR_MIN_WIDTH = 288;
 export const SIDEBAR_MAX_WIDTH = 500;
 function readStoredSidebarWidth(): number {
-  const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-  const parsed = raw ? Number(raw) : NaN;
-  if (isNaN(parsed)) return SIDEBAR_MIN_WIDTH;
+  const parsed = readNumber(STORAGE_KEYS.sidebarWidth, SIDEBAR_MIN_WIDTH);
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, parsed));
 }
-// A thin first-paint mirror of the *resolved* theme only — settings.theme
-// itself (dark/light/system) is server-persisted (see hydrateSettings
-// below), but waiting on that fetch before the very first render would
-// flash the wrong theme. This one key is written every time the resolved
-// theme changes and read once, synchronously, at module load.
-const THEME_HINT_KEY = "crs.themeHint";
-const DISMISSED_UPDATE_KEY = "crs.dismissedUpdateVersion";
-// Dismiss-until-next-version, same convention as DISMISSED_UPDATE_KEY above —
-// keyed on currentVersion rather than a hookTrust-specific token since
-// (post issue #259's stable-path fix) a pending grant is expected to
-// correlate with a version bump, not recur within one.
-const DISMISSED_CODEX_HOOK_TRUST_KEY = "crs.dismissedCodexHookTrustVersion";
-// Issue #211's list/Kanban view switcher — a client-only UI preference, same
-// localStorage-not-server-settings treatment as sidebarCollapsed/sidebarWidth
-// above (there's no backend field for this, and this is a frontend-only PR).
-const VIEW_MODE_KEY = "crs.viewMode";
-// Phase 5 (Track B, issue #195 5.5b) — flat (today's tree, all sessions
-// independent) vs hierarchical (child sessions nested under their parent).
-// Same client-only, localStorage-not-server-settings treatment as
-// VIEW_MODE_KEY above — this is a presentation preference, not something a
-// second browser/device needs to see synced.
-const HIERARCHICAL_VIEW_KEY = "crs.hierarchicalView";
 
+// Which workspace was last active survives a reload via localStorage (not
+// the DB — it's a per-browser UI preference, not shared server state).
 function readStoredActiveWorkspaceId(): number | null {
-  const raw = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
-  const parsed = raw ? Number(raw) : NaN;
+  const parsed = readNumber(STORAGE_KEYS.activeWorkspaceId, NaN);
   return Number.isInteger(parsed) ? parsed : null;
 }
 
@@ -191,15 +168,18 @@ function readStoredActiveWorkspaceId(): number | null {
 // merged with 6.5/#218's TasksPanel), rendered as an overlay over the
 // dockview grid area (App.tsx) — see that file's own comment for why it
 // lives there rather than inside the sidebar (a global, cross-project board
-// needs more width than the sidebar's SIDEBAR_MAX_WIDTH affords).
+// needs more width than the sidebar's SIDEBAR_MAX_WIDTH affords). Client-only
+// UI preference (localStorage, no backend field) — same for
+// readStoredHierarchicalView below (Phase 5 Track B, issue #195 5.5b: flat
+// vs hierarchical child-session nesting).
 export type ViewMode = "list" | "kanban";
 
 function readStoredViewMode(): ViewMode {
-  return localStorage.getItem(VIEW_MODE_KEY) === "kanban" ? "kanban" : "list";
+  return readString(STORAGE_KEYS.viewMode, "list") === "kanban" ? "kanban" : "list";
 }
 
 function readStoredHierarchicalView(): boolean {
-  return localStorage.getItem(HIERARCHICAL_VIEW_KEY) === "1";
+  return readBool(STORAGE_KEYS.hierarchicalView, false);
 }
 
 // The *resolved* theme — what's actually painted (dockview class, root
@@ -222,8 +202,13 @@ function resolveTheme(pref: ThemePreference): Theme {
   return pref;
 }
 
+// A thin first-paint mirror of the *resolved* theme only — settings.theme
+// itself (dark/light/system) is server-persisted (see hydrateSettings
+// below), but waiting on that fetch before the very first render would
+// flash the wrong theme. This one key is written every time the resolved
+// theme changes and read once, synchronously, at module load.
 function readThemeHint(): Theme {
-  return localStorage.getItem(THEME_HINT_KEY) === "light" ? "light" : "dark";
+  return readString(STORAGE_KEYS.themeHint, "dark") === "light" ? "light" : "dark";
 }
 
 // Back-compat alias other files already import from store.ts.
@@ -814,7 +799,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         get().taskMasterEnv ?? FALLBACK_TASK_MASTER_ENV,
       ).enabled,
     });
-    localStorage.setItem(THEME_HINT_KEY, resolveTheme(next.theme));
+    writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
   return {
@@ -842,7 +827,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     theme: readThemeHint(),
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
-    sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
+    // Desktop-only persistent collapse (distinct from the mobile-only
+    // `sidebarOpen` overlay flag App.tsx owns locally — different semantics
+    // per breakpoint: mobile is a closed-by-default overlay, desktop is an
+    // open-by-default panel the user can choose to hide).
+    sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
     viewMode: readStoredViewMode(),
     hierarchicalView: readStoredHierarchicalView(),
@@ -857,9 +846,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     backendReachable: true,
     currentVersion: null,
     updateCheck: null,
-    dismissedUpdateVersion: localStorage.getItem(DISMISSED_UPDATE_KEY),
+    dismissedUpdateVersion: readString(STORAGE_KEYS.dismissedUpdateVersion, null),
     codexHookTrust: null,
-    dismissedCodexHookTrustVersion: localStorage.getItem(DISMISSED_CODEX_HOOK_TRUST_KEY),
+    dismissedCodexHookTrustVersion: readString(STORAGE_KEYS.dismissedCodexHookTrustVersion, null),
     highlightedPanelId: null,
     activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
@@ -1293,9 +1282,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     setActiveWorkspaceId: (id) => {
       set({ activeWorkspaceId: id });
       if (id === null) {
-        localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+        removeItem(STORAGE_KEYS.activeWorkspaceId);
       } else {
-        localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, String(id));
+        writeNumber(STORAGE_KEYS.activeWorkspaceId, id);
       }
     },
 
@@ -1430,22 +1419,22 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     },
 
     setSidebarCollapsed: (value) => {
-      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? "1" : "0");
+      writeBool(STORAGE_KEYS.sidebarCollapsed, value);
       set({ sidebarCollapsed: value });
     },
 
     setSidebarWidth: (value) => {
-      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(value));
+      writeNumber(STORAGE_KEYS.sidebarWidth, value);
       set({ sidebarWidth: value });
     },
 
     setViewMode: (value) => {
-      localStorage.setItem(VIEW_MODE_KEY, value);
+      writeString(STORAGE_KEYS.viewMode, value);
       set({ viewMode: value });
     },
 
     setHierarchicalView: (value) => {
-      localStorage.setItem(HIERARCHICAL_VIEW_KEY, value ? "1" : "0");
+      writeBool(STORAGE_KEYS.hierarchicalView, value);
       set({ hierarchicalView: value });
     },
 
@@ -1676,7 +1665,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         if (get().settings.theme !== "system") return;
         const resolved = resolveTheme("system");
         set({ theme: resolved });
-        localStorage.setItem(THEME_HINT_KEY, resolved);
+        writeString(STORAGE_KEYS.themeHint, resolved);
       };
       media.addEventListener("change", onChange);
       return () => media.removeEventListener("change", onChange);
@@ -1697,7 +1686,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     dismissUpdate: () => {
       const version = get().updateCheck?.latestVersion;
       if (version) {
-        localStorage.setItem(DISMISSED_UPDATE_KEY, version);
+        writeString(STORAGE_KEYS.dismissedUpdateVersion, version);
       }
       set({ dismissedUpdateVersion: version ?? null });
     },
@@ -1713,10 +1702,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       }
     },
 
+    // Dismiss-until-next-version, same convention as dismissUpdate above —
+    // keyed on currentVersion rather than a hookTrust-specific token since
+    // (post issue #259's stable-path fix) a pending grant is expected to
+    // correlate with a version bump, not recur within one.
     dismissCodexHookTrust: () => {
       const version = get().currentVersion;
       if (version) {
-        localStorage.setItem(DISMISSED_CODEX_HOOK_TRUST_KEY, version);
+        writeString(STORAGE_KEYS.dismissedCodexHookTrustVersion, version);
       }
       set({ dismissedCodexHookTrustVersion: version ?? null });
     },

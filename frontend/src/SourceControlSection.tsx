@@ -6,8 +6,7 @@ import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { Dropdown } from "./settings/primitives.js";
 import { ChevronDownIcon, GitBranchIcon } from "./icons.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
-
-const SOURCE_CONTROL_COLLAPSED_KEY = "crs.sourceControlCollapsed";
+import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
 
 // Sentinel Dropdown value meaning "go back to following the active panel" —
 // distinct from any real project id (Dropdown is generic over string, and
@@ -120,13 +119,13 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
   const gitStatuses = useDashboardStore((s) => s.gitStatuses);
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
 
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(SOURCE_CONTROL_COLLAPSED_KEY) !== "0",
+  const [collapsed, setCollapsed] = useState(() =>
+    readBool(STORAGE_KEYS.sourceControlCollapsed, true),
   );
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
-      localStorage.setItem(SOURCE_CONTROL_COLLAPSED_KEY, next ? "1" : "0");
+      writeBool(STORAGE_KEYS.sourceControlCollapsed, next);
       return next;
     });
   }, []);
