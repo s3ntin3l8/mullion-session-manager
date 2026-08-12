@@ -1,29 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "./api.js";
-import type {
-  DockControl,
-  DockerUpdateCheckResult,
-  GitBranchesResult,
-  GitHubPRsStatus,
-  GitHubStatus,
-  Project,
-  Session,
-} from "./api.js";
+import type { DockControl, DockerUpdateCheckResult, GitBranchesResult } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
-import {
-  ChevronDownIcon,
-  ContainerIcon,
-  DockIcon,
-  GitHubIcon,
-  GlobeIcon,
-  PlusIcon,
-  RefreshIcon,
-} from "./icons.js";
-import { TerminalPane } from "./TerminalPane.js";
-import { CustomSelect } from "./CustomSelect.js";
-import { KebabMenu } from "./KebabMenu.js";
+import { ChevronDownIcon, DockIcon, GlobeIcon } from "./icons.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStatus.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { usePolling } from "./hooks/usePolling.js";
@@ -36,6 +17,13 @@ import {
   writeJSON,
   writeNumber,
 } from "./lib/persistedState.js";
+import { clamp, isDockPreviewPath, resolveSelectedValue } from "./dock/dockHelpers.js";
+import { useDockGithubStatus } from "./dock/useDockGithubStatus.js";
+import { DockGithubRow } from "./dock/DockGithubRow.js";
+import { useArmedKill } from "./dock/useArmedKill.js";
+import { useTransientStatus } from "./dock/useTransientStatus.js";
+import { DockMonitor } from "./dock/DockMonitor.js";
+import { AddColumnControl } from "./dock/AddColumnControl.js";
 
 // Issue #73 — how often a column with at least one discovered Docker
 // control re-fetches GET .../dock while the dock is expanded, so a
@@ -46,25 +34,6 @@ import {
 // column.
 const DOCKER_POLL_INTERVAL_MS = 15_000;
 
-/** Last path segment, then the tag after its final `:` — "latest" when the
- * ref carries no explicit tag (compose's own default). A `name@sha256:...`
- * digest reference is handled first (Hermes review — splitting on `:`
- * alone would wrongly return the bare string "sha256" for one), shown as a
- * short digest prefix instead. Not exhaustive beyond that (doesn't handle a
- * registry host with a literal port, e.g. "host:5000/repo" with no tag),
- * but good enough for a compact pill; the full ref is always available via
- * the pill's own title attribute. */
-function imageTag(imageRef: string): string {
-  const lastSegment = imageRef.split("/").pop() ?? imageRef;
-  const atIndex = lastSegment.indexOf("@");
-  if (atIndex !== -1) {
-    const digest = lastSegment.slice(atIndex + 1);
-    return digest.length > 19 ? digest.slice(0, 19) : digest; // "sha256:" + 12 hex chars
-  }
-  const colonIndex = lastSegment.lastIndexOf(":");
-  return colonIndex === -1 ? "latest" : lastSegment.slice(colonIndex + 1);
-}
-
 const DEFAULT_DOCK_HEIGHT = 220;
 const DOCK_MIN_HEIGHT = 120;
 // Must equal .dockview-container's min-height in styles.css — the resize
@@ -72,77 +41,6 @@ const DOCK_MIN_HEIGHT = 120;
 // wins and the drag looks like it stopped responding partway through.
 const GRID_MIN_HEIGHT = 160;
 const COLUMN_MIN_WIDTH = 200;
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(Math.max(n, min), max);
-}
-
-// Maps the aggregate CI read (src/services/github.ts's computeCiStatus) to
-// the same 3-color dot language GitHubPanel.tsx's Actions section uses
-// (issue #27 phase 5) — `null` (Actions disabled/no runs) renders nothing
-// at all, not a neutral dot, so this is only called when non-null.
-function ciDotClass(status: "success" | "failure" | "in_progress"): "good" | "bad" | "pending" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  return "pending";
-}
-
-// Mirrors src/services/git-worktree.ts's isDockPreviewWorktree/
-// DOCK_PREVIEW_PREFIX — keep the two in sync. A dock preview worktree is
-// transient and checked out with a DETACHED HEAD (PR #341 review), so
-// listWorktrees reports its `branch` as null, meaning it no longer gets
-// filtered out of the branch dropdown's own "<branch> (preview)" options
-// (correct — that entry must stay available) but WOULD otherwise show up a
-// second time in the worktree options, labeled with its raw path. Filtering
-// it out here also closes a pre-existing gap: selecting a preview worktree
-// by path created a session with a plain `cwd` and no `worktree` intent, so
-// the backend never tracked it for sync/cleanup.
-function isDockPreviewPath(worktreePath: string): boolean {
-  return (worktreePath.split("/").pop() ?? "").startsWith("dock-preview-");
-}
-
-/**
- * Resolves which option value a monitor's worktree/branch `<select>` should
- * show. The result is always a member of `optionValues` when one exists at
- * all — a dock-preview worktree is deliberately absent from those options
- * (see `isDockPreviewPath`), so naively preferring a running session's raw
- * `cwd` would render the select blank whenever that cwd happens to be a
- * preview path. Order of preference:
- *
- * 1. A running preview session's `previewBranch`, re-expressed as the
- *    `branch:<name>` option value — the only way to resolve a running
- *    preview session back to an option, since its `cwd` is never one.
- * 2. A running session's `cwd`, when that cwd matches a real option (the
- *    common case: running in the main checkout or a real worktree).
- * 3. The user's last manual selection, when it still matches an option.
- * 4. An escape hatch for the moment right after a launch, before
- *    `refreshGitRefs` has picked up a brand-new worktree/branch — but never
- *    for a dock-preview path, which must never be the select's value.
- * 5. The main checkout, then the control's own configured cwd, then "".
- */
-function resolveSelectedValue(params: {
-  running: Session | undefined;
-  storedValue: string | undefined;
-  optionValues: Set<string>;
-  mainCheckoutPath: string | undefined;
-  controlCwd: string | undefined;
-}): string {
-  const { running, storedValue, optionValues, mainCheckoutPath, controlCwd } = params;
-
-  const previewValue = running?.previewBranch ? `branch:${running.previewBranch}` : null;
-  if (previewValue && optionValues.has(previewValue)) return previewValue;
-
-  if (running?.cwd && optionValues.has(running.cwd)) return running.cwd;
-
-  if (storedValue && optionValues.has(storedValue)) return storedValue;
-
-  if (running?.cwd && !isDockPreviewPath(running.cwd)) return running.cwd;
-  if (storedValue && !storedValue.startsWith("branch:") && !isDockPreviewPath(storedValue)) {
-    return storedValue;
-  }
-
-  return mainCheckoutPath ?? controlCwd ?? "";
-}
 
 // The dock: persistent monitors (dev server, git status, logs) — distinct
 // from one-shot session launches. Config is read-only (.crs/dock.json /
@@ -159,6 +57,17 @@ function resolveSelectedValue(params: {
 // derived at render time, not persisted; only the manual additions and the
 // dock's own region height are (localStorage, same pattern as the existing
 // collapse flag below).
+//
+// Split into dock/*.tsx (Wave 5 / PR 28 of
+// .claude/plans/can-we-do-a-warm-cocke.md) — this file keeps Dock's own
+// column-list orchestration (the height/column-divider drag handles,
+// collapse, manual pinning) plus DockColumn's dock-control CRUD (fetching/
+// launching/killing monitors, the worktree-switch and check-update/
+// pull-restart handlers), while the GitHub status widget
+// (dock/DockGithubRow.tsx + dock/useDockGithubStatus.ts), the armed-kill
+// confirm gate (dock/useArmedKill.ts), the transient check-status message
+// (dock/useTransientStatus.ts), and a single monitor's own row markup
+// (dock/DockMonitor.tsx) are now focused, mostly-presentational pieces.
 export function Dock({
   workspaceProjectIds,
   onOpenGitHub,
@@ -259,6 +168,11 @@ export function Dock({
   });
 
   // ---- Column divider resize ----
+  // Deliberately NOT `useDragResize` — see that hook's own doc comment:
+  // this splits a fixed total width between two adjacent columns from one
+  // drag, not "clamp one value between a min and a max," a genuinely
+  // different shape from every other drag handle in this file (and
+  // UnifiedBoard.tsx's). Stays hand-written.
   const widthDragRef = useRef<{
     leftId: number;
     rightId: number;
@@ -372,35 +286,6 @@ export function Dock({
   );
 }
 
-function AddColumnControl({
-  projects,
-  shownIds,
-  onAdd,
-}: {
-  projects: Project[];
-  shownIds: number[];
-  onAdd: (id: number) => void;
-}) {
-  const remaining = projects.filter((p) => !shownIds.includes(p.id));
-  return (
-    <div className="dock-add-select-wrap" title="Add a project column">
-      <PlusIcon size={12} strokeLinecap="round" />
-      <CustomSelect
-        className="dock-add-select"
-        value=""
-        placeholder="Add project column"
-        label="Add project column"
-        disabled={remaining.length === 0}
-        menuPlacement="top"
-        options={remaining.map((p) => ({ value: String(p.id), label: p.name }))}
-        onChange={(v) => {
-          if (v) onAdd(Number(v));
-        }}
-      />
-    </div>
-  );
-}
-
 function DockColumn({
   projectId,
   width,
@@ -437,12 +322,13 @@ function DockColumn({
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
       // P12 — GitHubPanel.tsx's own live-updating widget already reads
-      // this (see its effect below's mirrored comment); the dock's own
-      // GitHub widget fetched once per projectId and never again, so its
-      // CI/PR counts froze at whatever they were when the panel first
-      // mounted while GitHubPanel next to it kept updating live off the
-      // same `/ws/github` push channel (store.ts's connectGitHubWS bumps
-      // this counter on every message for a subscribed project).
+      // this (see dock/useDockGithubStatus.ts's mirrored comment); the
+      // dock's own GitHub widget fetched once per projectId and never
+      // again, so its CI/PR counts froze at whatever they were when the
+      // panel first mounted while GitHubPanel next to it kept updating
+      // live off the same `/ws/github` push channel (store.ts's
+      // connectGitHubWS bumps this counter on every message for a
+      // subscribed project).
       prsRefreshTrigger: s.prsRefreshTrigger,
     })),
   );
@@ -463,85 +349,21 @@ function DockColumn({
     setEphemeralControls((prev) => [...prev.filter((c) => c.id !== control.id), control]);
   // Per-control "Check for update" result (control.id -> result), issue #73.
   const [updateChecks, setUpdateChecks] = useState<Record<string, DockerUpdateCheckResult>>({});
-  // Transient, human-readable outcome of the LAST "Check for update" click
-  // (control.id -> message), auto-cleared after a few seconds — Hermes
-  // review: `reason: "pull-failed"` (private registry, network failure, the
-  // 45s pull timeout) was stored in `updateChecks` but never surfaced
-  // anywhere, since the image pill only ever reacts to `updateAvailable`.
-  // Without this, a failed or merely up-to-date check reads as "nothing
-  // happened" after a real (and, before the timeout reduction above, up to
-  // 120s-long) network round trip.
-  const [checkStatusById, setCheckStatusById] = useState<
-    Record<string, { message: string; isError: boolean }>
-  >({});
-  const checkStatusTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const showCheckStatus = (controlId: string, message: string, isError = false) => {
-    setCheckStatusById((prev) => ({ ...prev, [controlId]: { message, isError } }));
-    const existing = checkStatusTimersRef.current[controlId];
-    if (existing) clearTimeout(existing);
-    checkStatusTimersRef.current[controlId] = setTimeout(() => {
-      setCheckStatusById((prev) => {
-        const next = { ...prev };
-        delete next[controlId];
-        return next;
-      });
-      delete checkStatusTimersRef.current[controlId];
-    }, 4000);
-  };
-  useEffect(
-    () => () => {
-      for (const timer of Object.values(checkStatusTimersRef.current)) clearTimeout(timer);
-    },
-    [],
-  );
+  // Transient, human-readable outcome of the LAST "Check for update"/kill/
+  // start action — dock/useTransientStatus.ts (Hermes review: a
+  // `reason: "pull-failed"`/up-to-date check result used to be stored but
+  // never surfaced anywhere, since the image pill only ever reacts to
+  // `updateAvailable`).
+  const { statusById: checkStatusById, show: showCheckStatus } = useTransientStatus(4000);
   // U8 — arm-then-confirm before a running monitor's header click actually
-  // kills it, gated on the same settings.sessions.confirmBeforeKill toggle
-  // Sidebar.tsx's ConfirmButton and PaneTab.tsx's own kill gate both read.
-  // Not literally the shared <ConfirmButton> component: that renders a
-  // <button>, and this header already hosts other real interactive elements
-  // (the worktree <select>, the docker kebab menu) that would become an
-  // illegal button-inside-button nest. So this mirrors the file's own
-  // `checkStatusById`/`checkStatusTimersRef` idiom just above instead — a
-  // per-control-id armed set plus a per-control-id disarm timer — rather
-  // than either inventing a third shape or forcing every control in a
-  // column to share one armed slot (which would silently disarm a SECOND
-  // monitor's confirm step the instant a first one gets armed).
+  // kills it, gated on confirmBeforeKill above — see dock/useArmedKill.ts's
+  // own doc comment for why this isn't the shared <ConfirmButton>.
   const KILL_ARM_DISARM_MS = 6000; // matches ConfirmButton.tsx's own window
-  const [killArmedIds, setKillArmedIds] = useState<Set<string>>(new Set());
-  const killArmTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  useEffect(
-    () => () => {
-      for (const timer of Object.values(killArmTimersRef.current)) clearTimeout(timer);
-    },
-    [],
-  );
-  const armKill = (controlId: string) => {
-    setKillArmedIds((prev) => new Set(prev).add(controlId));
-    const existing = killArmTimersRef.current[controlId];
-    if (existing) clearTimeout(existing);
-    killArmTimersRef.current[controlId] = setTimeout(() => {
-      setKillArmedIds((prev) => {
-        if (!prev.has(controlId)) return prev;
-        const next = new Set(prev);
-        next.delete(controlId);
-        return next;
-      });
-      delete killArmTimersRef.current[controlId];
-    }, KILL_ARM_DISARM_MS);
-  };
-  const disarmKill = (controlId: string) => {
-    const existing = killArmTimersRef.current[controlId];
-    if (existing) {
-      clearTimeout(existing);
-      delete killArmTimersRef.current[controlId];
-    }
-    setKillArmedIds((prev) => {
-      if (!prev.has(controlId)) return prev;
-      const next = new Set(prev);
-      next.delete(controlId);
-      return next;
-    });
-  };
+  const {
+    armedIds: killArmedIds,
+    arm: armKill,
+    disarm: disarmKill,
+  } = useArmedKill(KILL_ARM_DISARM_MS);
   // U5 — per-control "has the header been explicitly toggled since an
   // in-flight worktree-switch started" generation counter. The switch
   // handler below needs to know whether ITS OWN pending relaunch is still
@@ -562,12 +384,8 @@ function DockColumn({
   // current dock session; not persisted to localStorage since the worktree
   // list itself can change (worktrees are created/deleted externally).
   const [worktreePaths, setWorktreePaths] = useState<Record<string, string>>({});
-  // null covers both "still loading" and the 204 "not applicable" case
-  // (no github.com remote, no account connected, a GitHub API error) —
-  // this widget just renders nothing either way, same degrade-to-nothing
-  // rule GitHubPanel.tsx follows for the same endpoint.
-  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
-  const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null>(null);
+
+  const { githubStatus, prsStatus } = useDockGithubStatus(projectId, prsRefreshTrigger);
 
   // Polls so a discovered Docker service's container state/image tag stays
   // live without the user toggling anything — this component only renders
@@ -578,7 +396,7 @@ function DockColumn({
   // `dockConfigRefreshTrigger` in `deps` means a save in DockConfigPanel
   // restarts this poll immediately (same "bump a shared counter,
   // subscribers refetch" shape as GitHubPanel's own `prsRefreshTrigger`
-  // dependency below), instead of waiting out DOCKER_POLL_INTERVAL_MS or a
+  // dependency above), instead of waiting out DOCKER_POLL_INTERVAL_MS or a
   // page reload — docs/dock.md's own troubleshooting note calls that wait
   // out explicitly. Unlike most other usePolling call sites, this one's
   // `deps` genuinely can restart mid-lifetime (a save while a request is
@@ -599,41 +417,6 @@ function DockColumn({
     DOCKER_POLL_INTERVAL_MS,
     { deps: [projectId, dockConfigRefreshTrigger] },
   );
-
-  useEffect(() => {
-    // Guards against a stale response on a fast project switch — same
-    // `cancelled` pattern GitHubPanel.tsx uses for the same endpoint
-    // (Hermes review, PR #40).
-    let cancelled = false;
-    api
-      .getProjectGitHub(projectId)
-      .then((status) => {
-        if (!cancelled) setGithubStatus(status ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setGithubStatus(null);
-      });
-
-    api
-      .getProjectGitHubPRs(projectId)
-      .then((s) => {
-        if (!cancelled) setPrsStatus(s ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setPrsStatus(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-    // P12 — prsRefreshTrigger in the deps means a live `/ws/github` push for
-    // this project (a check completing, a new PR) re-fetches immediately,
-    // exactly matching GitHubPanel.tsx's own identical effect — before this
-    // fix the dock widget only ever fetched once per projectId and showed
-    // stale CI/PR counts frozen at whatever they were when the column first
-    // mounted, even while GitHubPanel elsewhere on the same page updated
-    // live off the same push.
-  }, [projectId, prsRefreshTrigger]);
 
   const project = projects.find((p) => p.id === projectId) ?? null;
   const dockSessions = sessions.filter(
@@ -724,30 +507,11 @@ function DockColumn({
         )}
       </div>
       {githubStatus && (
-        <button
-          className="dock-github-row"
-          onClick={() => onOpenGitHub(projectId)}
-          title={`Open GitHub panel for ${githubStatus.repo.owner}/${githubStatus.repo.repo}`}
-        >
-          <GitHubIcon size={13} />
-          <span className="dock-github-repo">
-            {githubStatus.repo.owner}/{githubStatus.repo.repo}
-          </span>
-          <span className="dock-github-stat">
-            {githubStatus.openIssues} issue{githubStatus.openIssues === 1 ? "" : "s"}
-          </span>
-          <span className="dock-github-stat">
-            {prsStatus
-              ? `${prsStatus.prSummary.pass}✅ ${prsStatus.prSummary.fail}❌ ${prsStatus.prSummary.pending}⏳${prsStatus.prSummary.unknown > 0 ? ` ${prsStatus.prSummary.unknown}❓` : ""}`
-              : `${githubStatus.openPRs} PR${githubStatus.openPRs === 1 ? "" : "s"}`}
-          </span>
-          {githubStatus.ciStatus && (
-            <span
-              className={`github-panel-ci-dot ${ciDotClass(githubStatus.ciStatus)}`}
-              title={`CI: ${githubStatus.ciStatus}`}
-            />
-          )}
-        </button>
+        <DockGithubRow
+          githubStatus={githubStatus}
+          prsStatus={prsStatus}
+          onOpen={() => onOpenGitHub(projectId)}
+        />
       )}
       <div className="dock-body">
         {configuredControls.length === 0 && dockerGroupControls.length === 0 && (
@@ -779,7 +543,8 @@ function DockColumn({
             control.worktreeRefresh ?? settings.dock?.defaultWorktreeRefresh ?? false;
 
           // Resolve the currently selected option value — see
-          // resolveSelectedValue's doc comment for the full precedence.
+          // dock/dockHelpers.ts's resolveSelectedValue doc comment for the
+          // full precedence.
           const optionValues = new Set(allOptions.map((o) => o.value));
           const selectedValue = resolveSelectedValue({
             running,
@@ -831,10 +596,10 @@ function DockColumn({
           );
           const dockerStatus = control.docker ? dockerServiceStatus(control.docker.state) : null;
 
-          // P10 — named so the header's new onKeyDown (Enter/Space) can call
+          // P10 — named so the header's onKeyDown (Enter/Space) can call
           // the exact same action as a click, rather than dispatching a
           // synthetic `.click()` at the DOM node — matching how
-          // UnifiedBoard.tsx's TaskCard and NotificationBell.tsx's EventRow
+          // unified-board/TaskCard.tsx and NotificationBell.tsx's EventRow
           // both call a plain function from both handlers.
           const handleHeaderActivate = () => {
             if (running) {
@@ -868,226 +633,100 @@ function DockColumn({
             }
           };
 
-          return (
-            <Fragment key={control.id}>
-              {isFirstDockerControl && <div className="dock-group-label">Docker</div>}
-              <div className="dock-monitor">
-                <div
-                  className="dock-monitor-header"
-                  style={{ cursor: "pointer" }}
-                  title={
-                    running
-                      ? killArmedIds.has(control.id)
-                        ? "Click again to confirm — ends the running program"
-                        : confirmBeforeKill
-                          ? "Click to end this monitor"
-                          : undefined
-                      : undefined
+          // The worktree/branch select's own onChange — stays here rather
+          // than moving into dock/DockMonitor.tsx along with the rest of
+          // the header markup: it needs worktreePaths/toggleGenRef state,
+          // launchForValue, and the deleteSession/showCheckStatus calls
+          // above, all of which are this column's own CRUD state, not a
+          // single monitor row's presentation.
+          const onWorktreeChange = (newValue: string) => {
+            setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
+            // If a monitor is running and the user switches, kill and
+            // restart in the new location.
+            if (running) {
+              // A stale armed kill from before the switch (the user armed
+              // the header, then picked a different worktree instead of
+              // confirming) must not go on reading "confirm?" for up to
+              // KILL_ARM_DISARM_MS after this delete+relaunch — this
+              // delete is a restart, not the armed kill.
+              disarmKill(control.id);
+              // Hermes review — bumped here too, BEFORE capturing
+              // genAtStart below: two rapid worktree switches on the same
+              // control each start their own delete-then-relaunch IIFE,
+              // and previously only a header click bumped this counter —
+              // so if both deletes happened to resolve, the FIRST switch's
+              // relaunch could still fire (with its now-stale path) after
+              // the SECOND switch had already moved the select on to a
+              // newer value. Bumping unconditionally on every switch means
+              // each one invalidates any still-in-flight predecessor's
+              // pending relaunch, the same way an explicit header click
+              // already did.
+              bumpToggleGen(control.id);
+              // U5 — capture the restart intent BEFORE the delete, not by
+              // re-deriving it from post-delete session state.
+              // `store.deleteSession` itself awaits `refreshSessions()`
+              // before resolving, so by the time an `await` on it here
+              // returns, this exact row already reads "killed" in the
+              // store — re-checking "is a matching session still active"
+              // at that point would always read false, making the
+              // relaunch below permanently unreachable (verified live;
+              // the original bug). `shouldRestart` is just
+              // `Boolean(running)`, read from this render's own closure,
+              // so it can't be corrupted by the delete it's about to
+              // trigger.
+              //
+              // The two cases that still have to suppress the relaunch —
+              // the user manually toggling THIS monitor (start or kill)
+              // from the header while this switch is in flight, OR a
+              // second, newer switch superseding this one — are both
+              // tracked via toggleGenRef instead of session status: any
+              // of the header's onClick, or this onChange itself (see the
+              // bump right above), bumps that counter on an actual
+              // toggle, so comparing it before/after the await detects an
+              // intervening action without depending on state the delete
+              // call itself mutates.
+              const shouldRestart = Boolean(running);
+              const genAtStart = toggleGenRef.current.get(control.id) ?? 0;
+              void (async () => {
+                try {
+                  await useDashboardStore.getState().deleteSession(running.id);
+                  const genUnchanged = (toggleGenRef.current.get(control.id) ?? 0) === genAtStart;
+                  if (shouldRestart && genUnchanged) {
+                    await launchForValue(newValue);
                   }
-                  // P10 — U8's own finding flags this same header as "one
-                  // unconfirmed click kills a running dev server," and on
-                  // top of that it was entirely unreachable from the
-                  // keyboard. Same role="button"/tabIndex/Enter-Space
-                  // pattern as Sidebar.tsx's SessionRow/ProjectHeader,
-                  // including the `e.target !== e.currentTarget` guard —
-                  // this header nests a CustomSelect (worktree picker), a
-                  // "open preview" button, and (for a Docker-backed
-                  // control) a KebabMenu, and without the guard tabbing to
-                  // any of those and pressing Enter/Space would ALSO
-                  // toggle/kill this monitor.
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${control.title} — ${running ? "click to end" : "click to start"}`}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key !== "Enter" && e.key !== " ") return;
-                    e.preventDefault();
-                    handleHeaderActivate();
-                  }}
-                  onClick={handleHeaderActivate}
-                >
-                  <span
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: "50%",
-                      background: dockerStatus
-                        ? `var(${dockerStatus.colorToken})`
-                        : running
-                          ? "var(--g)"
-                          : "var(--dim)",
-                      flexShrink: 0,
-                    }}
-                    // Same "title carries the label a bare dot can't" — the
-                    // dock-monitor-tag "on"/"off" text just below already
-                    // labels the log-STREAM session; this dot instead
-                    // reflects the CONTAINER's own state, which needs its
-                    // own accessible label (sessionStatus.ts's "never color
-                    // alone" rule) — same convention as this same header's
-                    // GitHub CI dot (title="CI: ...") further up this file.
-                    title={dockerStatus ? `Container: ${dockerStatus.label}` : undefined}
-                  />
-                  <span className="dock-monitor-name">{control.title}</span>
-                  {controlShowSelector && (
-                    <CustomSelect
-                      className="dock-monitor-worktree-select"
-                      value={selectedValue}
-                      options={allOptions}
-                      label={`${control.title} worktree`}
-                      menuPlacement="top"
-                      menuAlign="right"
-                      onChange={(newValue) => {
-                        setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
-                        // If a monitor is running and the user switches,
-                        // kill and restart in the new location.
-                        if (running) {
-                          // A stale armed kill from before the switch (the
-                          // user armed the header, then picked a different
-                          // worktree instead of confirming) must not go on
-                          // reading "confirm?" for up to
-                          // KILL_ARM_DISARM_MS after this delete+relaunch —
-                          // this delete is a restart, not the armed kill.
-                          disarmKill(control.id);
-                          // Hermes review — bumped here too, BEFORE
-                          // capturing genAtStart below: two rapid worktree
-                          // switches on the same control each start their
-                          // own delete-then-relaunch IIFE, and previously
-                          // only a header click bumped this counter — so if
-                          // both deletes happened to resolve, the FIRST
-                          // switch's relaunch could still fire (with its
-                          // now-stale path) after the SECOND switch had
-                          // already moved the select on to a newer value.
-                          // Bumping unconditionally on every switch means
-                          // each one invalidates any still-in-flight
-                          // predecessor's pending relaunch, the same way an
-                          // explicit header click already did.
-                          bumpToggleGen(control.id);
-                          // U5 — capture the restart intent BEFORE the
-                          // delete, not by re-deriving it from post-delete
-                          // session state. `store.deleteSession` itself
-                          // awaits `refreshSessions()` before resolving, so
-                          // by the time an `await` on it here returns, this
-                          // exact row already reads "killed" in the store —
-                          // re-checking "is a matching session still active"
-                          // at that point would always read false, making
-                          // the relaunch below permanently unreachable
-                          // (verified live; the original bug). `shouldRestart`
-                          // is just `Boolean(running)`, read from this
-                          // render's own closure, so it can't be corrupted
-                          // by the delete it's about to trigger.
-                          //
-                          // The two cases that still have to suppress the
-                          // relaunch — the user manually toggling THIS
-                          // monitor (start or kill) from the header while
-                          // this switch is in flight, OR a second, newer
-                          // switch superseding this one — are both tracked
-                          // via toggleGenRef instead of session status: any
-                          // of the header's onClick, or this onChange
-                          // itself (see the bump right above), bumps that
-                          // counter on an actual toggle, so comparing it
-                          // before/after the await detects an intervening
-                          // action without depending on state the delete
-                          // call itself mutates.
-                          const shouldRestart = Boolean(running);
-                          const genAtStart = toggleGenRef.current.get(control.id) ?? 0;
-                          void (async () => {
-                            try {
-                              await useDashboardStore.getState().deleteSession(running.id);
-                              const genUnchanged =
-                                (toggleGenRef.current.get(control.id) ?? 0) === genAtStart;
-                              if (shouldRestart && genUnchanged) {
-                                await launchForValue(newValue);
-                              }
-                            } catch {
-                              // Hermes review (suggestion) — reuses the same
-                              // showCheckStatus transient-message infra as
-                              // the header's own start-affordance catch
-                              // above, instead of a console-only warning, so
-                              // a failed switch is visible in the UI too.
-                              showCheckStatus(control.id, "Failed to switch — try again", true);
-                            }
-                          })();
-                        }
-                      }}
-                    />
-                  )}
-                  {project?.devServerUrl && (
-                    <button
-                      className="dock-monitor-url"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenBrowser(projectId);
-                      }}
-                      title={`Open preview for ${project.devServerUrl}`}
-                      type="button"
-                    >
-                      <GlobeIcon size={11} />
-                      <span className="dock-monitor-url-text">{project.devServerUrl}</span>
-                    </button>
-                  )}
-                  {control.docker && (
-                    <span
-                      className={`dock-monitor-url dock-monitor-image${updateAvailable ? " dock-monitor-image-update" : ""}`}
-                      title={
-                        updateAvailable
-                          ? `${control.docker.imageRef} — update available`
-                          : control.docker.imageRef
-                      }
-                    >
-                      <ContainerIcon size={11} />
-                      <span className="dock-monitor-url-text">
-                        {imageTag(control.docker.imageRef)}
-                      </span>
-                    </span>
-                  )}
-                  {control.docker && (
-                    <span onClick={(e) => e.stopPropagation()}>
-                      <KebabMenu
-                        title={`${control.title} actions`}
-                        items={[
-                          {
-                            key: "check-update",
-                            label: "Check for update",
-                            icon: <RefreshIcon size={12} />,
-                            disabled: control.docker.buildOnly,
-                            onClick: () => void handleCheckUpdate(control),
-                          },
-                          {
-                            key: "pull-restart",
-                            label: "Pull & restart stack",
-                            armLabel: "Click again — restarts the whole stack",
-                            icon: <ContainerIcon size={12} />,
-                            danger: true,
-                            confirm: true,
-                            disabled: control.docker.buildOnly,
-                            onClick: () => void handlePullAndRestart(control),
-                          },
-                        ]}
-                      />
-                    </span>
-                  )}
-                  {checkStatusById[control.id] && (
-                    <span
-                      className={`dock-monitor-tag dock-monitor-check-status${
-                        checkStatusById[control.id]!.isError ? " error" : ""
-                      }`}
-                    >
-                      {checkStatusById[control.id]!.message}
-                    </span>
-                  )}
-                  <span
-                    className={`dock-monitor-tag${killArmedIds.has(control.id) ? " armed" : ""}`}
-                  >
-                    {killArmedIds.has(control.id) ? "confirm?" : running ? "on" : "off"}
-                  </span>
-                </div>
-                {running && (
-                  <div className="dock-monitor-body">
-                    <TerminalPane params={{ sessionId: running.id }} captureCtrlC={true} />
-                  </div>
-                )}
-              </div>
-            </Fragment>
+                } catch {
+                  // Hermes review (suggestion) — reuses the same
+                  // showCheckStatus transient-message infra as the
+                  // header's own start-affordance catch above, instead of
+                  // a console-only warning, so a failed switch is visible
+                  // in the UI too.
+                  showCheckStatus(control.id, "Failed to switch — try again", true);
+                }
+              })();
+            }
+          };
+
+          return (
+            <DockMonitor
+              key={control.id}
+              control={control}
+              running={running}
+              isFirstDockerControl={isFirstDockerControl}
+              showSelector={controlShowSelector}
+              selectedValue={selectedValue}
+              worktreeOptions={allOptions}
+              onWorktreeChange={onWorktreeChange}
+              devServerUrl={project?.devServerUrl}
+              onOpenBrowser={() => onOpenBrowser(projectId)}
+              updateAvailable={updateAvailable}
+              dockerStatus={dockerStatus}
+              checkStatus={checkStatusById[control.id]}
+              armed={killArmedIds.has(control.id)}
+              confirmBeforeKill={confirmBeforeKill}
+              onHeaderActivate={handleHeaderActivate}
+              onCheckUpdate={() => void handleCheckUpdate(control)}
+              onPullAndRestart={() => void handlePullAndRestart(control)}
+            />
           );
         })}
       </div>
