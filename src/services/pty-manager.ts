@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  ToolFailureHookMessage,
   SessionEndHookMessage,
   PlanReadyHookMessage,
   GitBranchHookMessage,
@@ -2318,28 +2317,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "tool_failure": {
-        const tf = message as ToolFailureHookMessage;
-        this.errorState = "tool_failure";
-        this.errorAt = Date.now();
-        // Rich statuses — prefer the adapter's own summary; fall back to
-        // just naming the failing tool.
-        this.errorDetail = tf.summary ?? tf.tool;
-        // Phase 5 (Track A) — attribute to the subagent that hit this
-        // failure, if the hook carried one.
-        if (tf.agentId !== undefined) this.bumpSubagentActivity(tf.agentId, "tool_failure");
-        this.emitEvent("tool_failure", {
-          tool: tf.tool,
-          error: tf.error,
-          summary: tf.summary ?? null,
-          agentId: tf.agentId ?? null,
-        });
-        this.emitAttentionSignalWithExtras("hookNotification", {
-          title: `Tool failed: ${tf.tool}`,
-          body: tf.error,
-        });
-        return;
-      }
       case "session_end": {
         const se = message as SessionEndHookMessage;
         this.endedReason = se.reason;

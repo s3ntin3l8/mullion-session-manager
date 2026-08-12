@@ -34,6 +34,7 @@ import type {
   PromoteRequestHookMessage,
   PermissionRequestHookMessage,
   StopFailureHookMessage,
+  ToolFailureHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -388,6 +389,30 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.emitAttentionSignalWithExtras("hookNotification", {
         title: "API Error",
         body: sf.error,
+      });
+    },
+  ],
+  [
+    "tool_failure",
+    (ctx, message) => {
+      const tf = message as ToolFailureHookMessage;
+      ctx.errorState = "tool_failure";
+      ctx.errorAt = Date.now();
+      // Rich statuses — prefer the adapter's own summary; fall back to
+      // just naming the failing tool.
+      ctx.errorDetail = tf.summary ?? tf.tool;
+      // Phase 5 (Track A) — attribute to the subagent that hit this
+      // failure, if the hook carried one.
+      if (tf.agentId !== undefined) ctx.bumpSubagentActivity(tf.agentId, "tool_failure");
+      ctx.emitEvent("tool_failure", {
+        tool: tf.tool,
+        error: tf.error,
+        summary: tf.summary ?? null,
+        agentId: tf.agentId ?? null,
+      });
+      ctx.emitAttentionSignalWithExtras("hookNotification", {
+        title: `Tool failed: ${tf.tool}`,
+        body: tf.error,
       });
     },
   ],
