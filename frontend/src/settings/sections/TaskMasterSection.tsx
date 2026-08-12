@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useDashboardStore, FALLBACK_TASK_MASTER_ENV } from "../../store.js";
+import { useDashboardStore, FALLBACK_TASK_MASTER_ENV } from "../../store/index.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
 import { Eyebrow, NumberField, Row, SecondaryButton, Toggle } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit, clampTaskMasterFieldMax } from "../clamp.js";

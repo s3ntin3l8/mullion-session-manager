@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { ReactNode, RefObject, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useFocusTrap } from "../useFocusTrap.js";
-import { CloseIcon } from "../icons.js";
+import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { CloseIcon } from "./icons.js";
 
 // PR 24 pilot — the shared shell behind the `create-modal-*` family
 // (`CreateGroupModal`, `CreateProjectModal`, `CreateHostModal`,

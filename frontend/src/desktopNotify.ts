@@ -1,4 +1,4 @@
-import type { AppSettings, NotificationEvent, SessionStatus } from "./api.js";
+import type { AppSettings, NotificationEvent, SessionStatus } from "./api/index.js";
 import { notifyKind } from "./eventDescriptions.js";
 
 // Issue #170's client-side decision logic for the live-events-driven half of

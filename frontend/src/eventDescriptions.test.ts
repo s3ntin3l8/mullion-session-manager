@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { describeEvent, describeLatestEvent, notifyKind } from "./eventDescriptions.js";
-import type { NotificationEvent } from "./api.js";
+import type { NotificationEvent } from "./api/index.js";
 
 function makeEvent(overrides: Partial<NotificationEvent>): NotificationEvent {
   return {

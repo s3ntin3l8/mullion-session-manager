@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
-import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api.js";
+import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api/index.js";
 
 let tasks: Task[];
 let sessions: Session[];
@@ -38,7 +38,7 @@ function storeState() {
   };
 }
 
-vi.mock("./store.js", () => ({
+vi.mock("./store/index.js", () => ({
   useDashboardStore: (selector?: (s: unknown) => unknown) => {
     const state = storeState();
     return selector ? selector(state) : state;

@@ -44,7 +44,7 @@ export const useDashboardStore = create<DashboardState>()((...a) => ({
 // --- Public re-exports -----------------------------------------------
 // The exact same 11 names store.ts exported before the split (verified via
 // `grep -c '^export'` against the pre-split file) — every external
-// `from "./store.js"` import site keeps resolving the same symbols.
+// `from "./store/index.js"` import site keeps resolving the same symbols.
 export {
   LIVE_REFRESH_INTERVAL_MS,
   SIDEBAR_MIN_WIDTH,

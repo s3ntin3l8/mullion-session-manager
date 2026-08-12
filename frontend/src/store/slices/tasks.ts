@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { api } from "../../api.js";
+import { api } from "../../api/index.js";
 import { connectTasksStream } from "../../tasksClient.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
 import type { DashboardState, TasksSlice } from "../types.js";

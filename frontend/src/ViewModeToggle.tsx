@@ -1,5 +1,5 @@
-import { useDashboardStore } from "./store.js";
-import { GridIcon, ListIcon } from "./icons.js";
+import { useDashboardStore } from "./store/index.js";
+import { GridIcon, ListIcon } from "./ui/icons.js";
 
 // Issue #211's list/Kanban view switcher — split out of Toolbar.tsx into its
 // own tiny component (rather than inlined JSX there) so it's testable

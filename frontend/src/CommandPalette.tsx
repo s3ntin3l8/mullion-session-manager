@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, normalizeAgentId } from "./api.js";
-import type { Launcher, Session } from "./api.js";
-import { useDashboardStore } from "./store.js";
+import { api, normalizeAgentId } from "./api/index.js";
+import type { Launcher, Session } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDownIcon,
@@ -16,12 +16,12 @@ import {
   SearchIcon,
   SkillIcon,
   TerminalPromptIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
-import { useFocusTrap } from "./useFocusTrap.js";
+import { useFocusTrap } from "./hooks/useFocusTrap.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to

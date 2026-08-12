@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
-import type { Host } from "../../api.js";
+import type { Host } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";

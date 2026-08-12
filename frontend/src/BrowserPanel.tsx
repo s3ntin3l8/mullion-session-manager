@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError } from "./api.js";
+import { api, ApiError } from "./api/index.js";
 import type { DockviewPanelApi } from "dockview-react";
-import type { ProjectUrl, ServerInfo } from "./api.js";
-import { useDashboardStore } from "./store.js";
+import type { ProjectUrl, ServerInfo } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { usePolling } from "./hooks/usePolling.js";
-import { ChevronDownIcon, RefreshIcon, StarIcon } from "./icons.js";
+import { ChevronDownIcon, RefreshIcon, StarIcon } from "./ui/icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
 
 export interface BrowserPanelParams {

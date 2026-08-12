@@ -18,7 +18,7 @@ import type {
   Task,
   UpdateCheckResult,
   Workspace,
-} from "../api.js";
+} from "../api/index.js";
 import type { ReorderUpdate } from "../reorder.js";
 import type { KanbanColumnId } from "../kanban.js";
 
@@ -40,7 +40,7 @@ export type ViewMode = "list" | "kanban";
 // converts one to the other), which additionally allows `"system"` — this
 // is always one of the two concrete values that preference resolves to.
 // Exported under the pre-existing name so cliLogos.ts's
-// `import type { Theme } from "./store.js"` (and any other consumer
+// `import type { Theme } from "./store/index.js"` (and any other consumer
 // expecting only "dark" | "light") keeps working unchanged.
 export type Theme = "dark" | "light";
 

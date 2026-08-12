@@ -3,16 +3,16 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SourceControlSection } from "./SourceControlSection.js";
-import { useDashboardStore } from "./store.js";
-import { api, LOCAL_HOST_ID } from "./api.js";
-import type { GitStatus, Project, Session } from "./api.js";
-import type * as ApiModule from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import { api, LOCAL_HOST_ID } from "./api/index.js";
+import type { GitStatus, Project, Session } from "./api/index.js";
+import type * as ApiModule from "./api/index.js";
 
 // Uses the real zustand store (seeded via setState), same pattern as
 // SavedUrlModal.test.tsx — the component itself writes to the store
 // directly (useDashboardStore.setState in handleFetch), so a selector-mock
 // would diverge from what's actually being exercised.
-vi.mock("./api.js", async (importOriginal) => {
+vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
   return {
     ...actual,

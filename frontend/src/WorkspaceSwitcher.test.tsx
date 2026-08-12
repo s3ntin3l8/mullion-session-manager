@@ -5,9 +5,9 @@ import userEvent from "@testing-library/user-event";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import * as panelUtils from "./panelUtils.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
-import { useDashboardStore } from "./store.js";
-import { api } from "./api.js";
-import type { Group, Workspace, Session, Task } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import { api } from "./api/index.js";
+import type { Group, Workspace, Session, Task } from "./api/index.js";
 import { resetStore } from "./test/resetStore.js";
 
 // Deliberately NOT using test/fixtures.ts's makeSession/makeWorkspace here:

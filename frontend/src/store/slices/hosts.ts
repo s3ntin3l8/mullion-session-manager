@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { api } from "../../api.js";
+import { api } from "../../api/index.js";
 import type { DashboardState, HostsSlice } from "../types.js";
 
 export const createHostsSlice: StateCreator<DashboardState, [], [], HostsSlice> = (set, get) => ({

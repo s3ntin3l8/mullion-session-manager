@@ -1,4 +1,4 @@
-import type { Host } from "./api.js";
+import type { Host } from "./api/index.js";
 
 // Per-row connection-test state (Settings -> Hosts' "Test connection"
 // button) — deliberately not part of the store's `hosts` state: it's

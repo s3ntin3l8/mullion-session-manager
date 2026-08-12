@@ -1,4 +1,4 @@
-import type { NotificationEvent } from "./api.js";
+import type { NotificationEvent } from "./api/index.js";
 
 // Issue #428 — mirrors src/services/background-tasks.ts's TERMINAL_STATUSES
 // set. Duplicated rather than imported: this is a separate npm workspace

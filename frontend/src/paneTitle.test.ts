@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { formatBranchLabel, formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 
 // Minimal fixture matching api.ts's Session shape — same convention as
 // attention.test.ts's makeSession, only the title-relevant fields vary.

@@ -23,8 +23,8 @@ import {
   handleGlobalEscape,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
-import { DEFAULT_SETTINGS } from "./api.js";
-import type { Session, Task } from "./api.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
+import type { Session, Task } from "./api/index.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
 // decide float-vs-dock (issue #121): "grid" for anything actually tiled

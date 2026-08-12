@@ -4,7 +4,7 @@
 // anything.
 import { KANBAN_COLUMNS, columnForSession } from "./kanban.js";
 import type { KanbanColumnId } from "./kanban.js";
-import type { Session, Task } from "./api.js";
+import type { Session, Task } from "./api/index.js";
 
 // Every session id currently owned by a task — its worker and, when one was
 // spawned, its advisory review agent. These render nested on their task's

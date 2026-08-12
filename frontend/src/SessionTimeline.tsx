@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useDashboardStore, eventKey } from "./store.js";
+import { useDashboardStore, eventKey } from "./store/index.js";
 import { describeEvent } from "./eventDescriptions.js";
-import { api } from "./api.js";
-import type { NotificationEvent, Session, StoredEventRow } from "./api.js";
+import { api } from "./api/index.js";
+import type { NotificationEvent, Session, StoredEventRow } from "./api/index.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import {
   ALL_KINDS,

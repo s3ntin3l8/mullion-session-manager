@@ -1,4 +1,4 @@
-import { ChevronDownIcon } from "./icons.js";
+import { ChevronDownIcon } from "./ui/icons.js";
 import { getTerminalInputHandle } from "./terminalInputRegistry.js";
 import type { TerminalInputHandle } from "./terminalInputRegistry.js";
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 
 // Phase 5 (Track B, issue #195 5.5b)'s flat/hierarchical sidebar toggle
 // (HierarchyToggle.tsx) — same localStorage-round-trip precedent as

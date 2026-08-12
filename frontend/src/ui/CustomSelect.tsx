@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDownIcon } from "./icons.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "../store/index.js";
 
 export interface CustomSelectOption {
   value: string;

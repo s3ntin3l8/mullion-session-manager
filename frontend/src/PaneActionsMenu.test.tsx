@@ -3,9 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
-import { api } from "./api.js";
+import { api } from "./api/index.js";
 import type { DockviewApi, DockviewPanelApi } from "dockview";
-import type { Session, Project } from "./api.js";
+import type { Session, Project } from "./api/index.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 
 // Code review finding on PR #613 — PaneActionsMenu is now a standalone
@@ -24,7 +24,7 @@ vi.mock("./panelUtils.js", () => ({
   openBrowserPanePanel: vi.fn(),
 }));
 
-vi.mock("./api.js", () => ({
+vi.mock("./api/index.js", () => ({
   api: {
     getProjectGitBranches: vi.fn(),
   },
@@ -43,7 +43,7 @@ function storeState() {
   };
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
   useDashboardStore.getState = () => storeState();
   return { useDashboardStore };

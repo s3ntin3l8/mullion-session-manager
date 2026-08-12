@@ -1,4 +1,4 @@
-import { SpinnerIcon } from "../icons.js";
+import { SpinnerIcon } from "./icons.js";
 
 // PR 25 (frontend refactor plan) — `<SpinnerIcon size={22} className=
 // "terminal-status-spinner connecting|reconnecting" />` was hand-rolled at

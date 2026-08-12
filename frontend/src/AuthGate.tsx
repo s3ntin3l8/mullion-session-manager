@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type AuthStatus } from "./api.js";
+import { api, ApiError, type AuthStatus } from "./api/index.js";
 import { App } from "./App.js";
 import { ErrorText } from "./ui/ErrorText.js";
 

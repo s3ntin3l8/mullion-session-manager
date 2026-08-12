@@ -7,7 +7,7 @@
 // already exists separately from WorkspaceSwitcher.tsx for.
 import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 
 export type KanbanColumnId = "working" | "attention" | "finished" | "idle" | "exited";
 

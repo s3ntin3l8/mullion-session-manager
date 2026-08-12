@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
-import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./icons.js";
-import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
-import type { Host, Launcher } from "./api.js";
+import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
+import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
+import type { Host, Launcher } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
 

@@ -1,6 +1,6 @@
-import type { Project } from "../api.js";
-import { PlusIcon } from "../icons.js";
-import { CustomSelect } from "../CustomSelect.js";
+import type { Project } from "../api/index.js";
+import { PlusIcon } from "../ui/icons.js";
+import { CustomSelect } from "../ui/CustomSelect.js";
 
 // Split out of Dock.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the "+ Add project column"

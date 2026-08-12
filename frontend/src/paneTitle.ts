@@ -1,4 +1,4 @@
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 
 // Split out of App.tsx (same rationale as attention.ts) so these pure
 // title-formatting rules stay unit-testable without pulling in App.tsx's

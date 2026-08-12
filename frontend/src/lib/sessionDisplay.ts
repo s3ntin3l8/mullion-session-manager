@@ -3,7 +3,7 @@
 // pure (no hooks, no component state, no side effects), just not previously
 // reachable by a direct unit test since Sidebar.tsx only exercised them
 // indirectly through its own component tests.
-import type { Project, Session } from "../api.js";
+import type { Project, Session } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fromLiveEvent, mergeTimelineEvents, toTimelineEvent } from "./eventHistory.js";
-import type { NotificationEvent, StoredEventRow } from "./api.js";
+import type { NotificationEvent, StoredEventRow } from "./api/index.js";
 
 function makeRow(overrides: Partial<StoredEventRow> = {}): StoredEventRow {
   return {

@@ -24,7 +24,7 @@ import {
   type NotificationEvent,
   type Project,
   type Session,
-} from "./api.js";
+} from "./api/index.js";
 import { makeSession, makeProject } from "./test/fixtures.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
@@ -51,7 +51,7 @@ const renameSessionMock = vi.fn().mockResolvedValue(undefined);
 // Issue #351 — session.hookEmits (matched adapter emits surfaced on each
 // session) determines whether statusEstimated renders. Tests that don't
 // care about estimated status get hookEmits: [] from makeSession's default.
-vi.mock("./store.js", () => ({
+vi.mock("./store/index.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
       settings: { sessions: { confirmBeforeKill: false } },

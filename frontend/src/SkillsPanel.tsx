@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError } from "./api.js";
-import type { SkillAgent, SkillInfo, SkillScope } from "./api.js";
-import { SkillIcon } from "./icons.js";
+import { api, ApiError } from "./api/index.js";
+import type { SkillAgent, SkillInfo, SkillScope } from "./api/index.js";
+import { SkillIcon } from "./ui/icons.js";
 import { Toggle } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 

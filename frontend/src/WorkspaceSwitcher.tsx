@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { CreateGroupModal } from "./CreateGroupModal.js";
-import { KebabMenu } from "./KebabMenu.js";
-import { ConfirmButton } from "./ConfirmButton.js";
+import { KebabMenu } from "./ui/KebabMenu.js";
+import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
-import type { Group, Session, Workspace } from "./api.js";
+import type { Group, Session, Workspace } from "./api/index.js";
 import { extractSessionIds } from "./panelUtils.js";
 import {
   CheckIcon,
@@ -16,7 +16,7 @@ import {
   GripIcon,
   PlusIcon,
   RenameIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 
 // Workspaces (named, persistent split-layouts — Mullion's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals

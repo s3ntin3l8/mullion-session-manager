@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 // #488's /ws/tasks integration — mirrors store.events.test.ts's convention:

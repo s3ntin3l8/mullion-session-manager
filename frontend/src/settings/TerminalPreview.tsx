@@ -3,8 +3,8 @@
 // Terminal-only (see terminalSchemes.ts's header comment): selecting a
 // swatch here only ever changes settings.terminal.colorScheme, never the
 // app chrome's own dark/light tokens.
-import type { CursorStyle } from "../api.js";
-import type { Theme } from "../store.js";
+import type { CursorStyle } from "../api/index.js";
+import type { Theme } from "../store/index.js";
 import { TERMINAL_SCHEMES, getTerminalScheme } from "../terminalSchemes.js";
 
 import { schemeLabel } from "./schemeLabel.js";

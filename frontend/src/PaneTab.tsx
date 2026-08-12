@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { formatBranchLabel } from "./paneTitle.js";
-import { BellIcon, CheckIcon, CloseIcon } from "./icons.js";
+import { BellIcon, CheckIcon, CloseIcon } from "./ui/icons.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";

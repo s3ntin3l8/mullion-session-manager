@@ -24,7 +24,7 @@ import {
   type NotificationEvent,
   type Project,
   type Session,
-} from "../api.js";
+} from "../api/index.js";
 import { makeSession, makeProject } from "../test/fixtures.js";
 
 let events: Record<number, NotificationEvent[]>;
@@ -36,7 +36,7 @@ let sessions: Session[];
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
 const renameSessionMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("../store.js", () => ({
+vi.mock("../store/index.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
       settings: { sessions: { confirmBeforeKill: false } },

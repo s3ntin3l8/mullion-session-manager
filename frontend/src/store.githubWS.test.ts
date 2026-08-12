@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 
 // /ws/github integration — mirrors store.tasksStream.test.ts's own
 // convention (mock the platform WebSocket, not a client wrapper), but

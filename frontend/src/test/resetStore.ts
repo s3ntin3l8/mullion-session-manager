@@ -13,7 +13,7 @@
 // snapshot (below), then layers this call's own overrides on top in one
 // step — so every test starts from a genuinely clean baseline regardless
 // of which slice(s) a *previous* test in the same file happened to touch.
-import { useDashboardStore } from "../store.js";
+import { useDashboardStore } from "../store/index.js";
 
 type DashboardState = ReturnType<typeof useDashboardStore.getState>;
 
@@ -65,7 +65,7 @@ function deepFreeze<T>(value: T): T {
  * missing the way a hand-picked partial reset could.
  *
  * Only usable in a file that exercises the REAL store (this module imports
- * `../store.js` directly). A file that does `vi.mock("./store.js", () =>
+ * `../store.js` directly). A file that does `vi.mock("./store/index.js", () =>
  * ...)` (e.g. SessionRow.test.tsx, Sidebar.test.tsx, UnifiedBoard.test.tsx,
  * PaneTab.test.tsx — each supplies its own fake `useDashboardStore` backed
  * by local mutable `let` variables, some without a `getState` at all) must

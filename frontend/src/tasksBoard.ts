@@ -5,8 +5,8 @@
 // unit-testable without mounting anything.
 import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
-import { TASK_STATUSES } from "./api.js";
-import type { Task, TaskStatus } from "./api.js";
+import { TASK_STATUSES } from "./api/index.js";
+import type { Task, TaskStatus } from "./api/index.js";
 
 export const TASK_COLUMNS: { id: TaskStatus; title: string }[] = [
   { id: "backlog", title: "Backlog" },

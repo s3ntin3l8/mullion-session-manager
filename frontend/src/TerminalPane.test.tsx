@@ -6,12 +6,12 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
-import type { Theme } from "./store.js";
-import { useDashboardStore } from "./store.js";
+import type { Theme } from "./store/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { TerminalPane } from "./TerminalPane.js";
-import { api } from "./api.js";
-import type * as ApiModule from "./api.js";
-import type { Session } from "./api.js";
+import { api } from "./api/index.js";
+import type * as ApiModule from "./api/index.js";
+import type { Session } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -19,7 +19,7 @@ import {
 } from "./terminalRepaintRegistry.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
 
-vi.mock("./api.js", async (importOriginal) => {
+vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
   return { ...actual, api: { ...actual.api, uploadSessionImage: vi.fn() } };
 });

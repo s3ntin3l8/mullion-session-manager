@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SkillsPanel } from "./SkillsPanel.js";
-import type { SkillInfo } from "./api.js";
+import type { SkillInfo } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 function makeSkill(overrides: Partial<SkillInfo> = {}): SkillInfo {

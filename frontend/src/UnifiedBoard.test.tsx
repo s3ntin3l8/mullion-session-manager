@@ -23,7 +23,7 @@ import type {
   Project,
   Session,
   Task,
-} from "./api.js";
+} from "./api/index.js";
 import { makeProject, makeTask } from "./test/fixtures.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
@@ -82,7 +82,7 @@ function storeState() {
   };
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
     const state = storeState();
     return selector ? selector(state) : state;

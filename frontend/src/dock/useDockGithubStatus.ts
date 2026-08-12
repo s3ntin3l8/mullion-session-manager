@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "../api.js";
-import type { GitHubPRsStatus, GitHubStatus } from "../api.js";
+import { api } from "../api/index.js";
+import type { GitHubPRsStatus, GitHubStatus } from "../api/index.js";
 
 // DockColumn's GitHub status widget fetch — extracted alongside
 // dock/DockGithubRow.tsx (Wave 5 / PR 28 of

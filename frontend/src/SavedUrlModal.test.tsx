@@ -3,8 +3,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SavedUrlModal } from "./SavedUrlModal.js";
-import { useDashboardStore } from "./store.js";
-import type { ProjectUrl } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import type { ProjectUrl } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const URLS: ProjectUrl[] = [

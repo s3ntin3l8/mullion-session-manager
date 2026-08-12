@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { useDashboardStore } from "../../store.js";
-import { api, normalizeAgentId } from "../../api.js";
-import type { Agent } from "../../api.js";
+import { useDashboardStore } from "../../store/index.js";
+import { api, normalizeAgentId } from "../../api/index.js";
+import type { Agent } from "../../api/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
-import { RefreshIcon } from "../../icons.js";
+import { RefreshIcon } from "../../ui/icons.js";
 import { Dropdown, Eyebrow, Row, SecondaryButton, Toggle } from "../../ui/primitives.js";
 
 const SHELL_OPTIONS = [

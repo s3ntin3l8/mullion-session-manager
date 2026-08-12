@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, ApiError } from "../../api.js";
-import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api.js";
+import { api, ApiError } from "../../api/index.js";
+import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";

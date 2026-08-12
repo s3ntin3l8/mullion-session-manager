@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 
 // Issue #211's list/Kanban view switcher (ViewModeToggle.tsx) — a
 // client-only UI preference persisted via localStorage, same convention as

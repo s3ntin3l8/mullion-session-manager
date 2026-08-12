@@ -1,6 +1,6 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { WarningTriangleIcon } from "./icons.js";
+import { WarningTriangleIcon } from "./ui/icons.js";
 
 interface Props {
   children: ReactNode;
