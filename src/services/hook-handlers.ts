@@ -33,6 +33,7 @@ import type {
   ReviewGateHookMessage,
   PromoteRequestHookMessage,
   PermissionRequestHookMessage,
+  StopFailureHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -370,6 +371,23 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.emitAttentionSignalWithExtras("permissionRequest", {
         tool: pr.tool,
         summary: pr.summary,
+      });
+    },
+  ],
+  [
+    "stop_failure",
+    (ctx, message) => {
+      const sf = message as StopFailureHookMessage;
+      ctx.errorState = "api_error";
+      ctx.errorAt = Date.now();
+      // Rich statuses — the short, stable label (see errorType's doc
+      // comment in hook-protocol.ts), falling back to the free-text detail
+      // when the adapter couldn't classify the failure.
+      ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
+      ctx.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
+      ctx.emitAttentionSignalWithExtras("hookNotification", {
+        title: "API Error",
+        body: sf.error,
       });
     },
   ],

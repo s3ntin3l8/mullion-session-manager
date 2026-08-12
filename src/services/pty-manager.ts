@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  StopFailureHookMessage,
   ToolFailureHookMessage,
   SessionEndHookMessage,
   PlanReadyHookMessage,
@@ -2319,21 +2318,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "stop_failure": {
-        const sf = message as StopFailureHookMessage;
-        this.errorState = "api_error";
-        this.errorAt = Date.now();
-        // Rich statuses — the short, stable label (see errorType's doc
-        // comment in hook-protocol.ts), falling back to the free-text detail
-        // when the adapter couldn't classify the failure.
-        this.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
-        this.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
-        this.emitAttentionSignalWithExtras("hookNotification", {
-          title: "API Error",
-          body: sf.error,
-        });
-        return;
-      }
       case "tool_failure": {
         const tf = message as ToolFailureHookMessage;
         this.errorState = "tool_failure";
