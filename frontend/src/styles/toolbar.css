@@ -1,0 +1,203 @@
+/* ============================================================ */
+/* Toolbar                                                        */
+/* ============================================================ */
+.toolbar {
+  /* Issue #87 — unconditional, not scoped to the <700px mobile breakpoint:
+     a physical notch/Dynamic Island can be present at ANY CSS viewport
+     width (e.g. a landscape phone, which this site's own 699px breakpoint
+     treats as "desktop" layout) — env() resolves to 0px wherever there's no
+     inset to account for, so this is a no-op on every non-notched
+     device/browser. Fallback height line first: a browser with no env()
+     support at all treats the calc() line as an invalid declaration and
+     drops it entirely (not "treats env() as 0") — without a preceding
+     plain 44px, that browser would fall through to no explicit height. */
+  height: 44px;
+  height: calc(44px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.toolbar-lead {
+  width: var(--sidebar-width, 288px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  /* Issue #87 — floors at the existing 12px so a non-notched viewport keeps
+     its current spacing exactly (env() resolving to 0px must never win
+     against a real value here, only add to it). */
+  padding-left: max(12px, env(safe-area-inset-left));
+  height: 100%;
+}
+
+.toolbar-icon-btn {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 7px;
+  cursor: pointer;
+  padding: 0;
+}
+.toolbar-icon-btn:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+}
+
+/* Issue #211's list/Kanban switcher (ViewModeToggle.tsx) — a segmented pair
+   of .toolbar-icon-btn, same base look as every other toolbar icon button,
+   plus an .active state (not used by the plain toolbar-icon-btn instances
+   elsewhere, which have no persistent on/off state) to show which view is
+   selected. */
+.view-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 2px;
+}
+.view-mode-toggle .toolbar-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+/* Phase 5 (Track B, issue #195 5.5b) — hierarchical/flat sidebar toggle
+   (HierarchyToggle.tsx). Independent review finding (PR #430): this was
+   missing entirely, so the toggle rendered with no grouping/pill despite
+   the code comment claiming the same convention as .view-mode-toggle above
+   — mirror it exactly, same segmented-pair look. */
+.hierarchy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 2px;
+}
+.hierarchy-toggle .toolbar-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.toolbar-icon-btn.active {
+  background: var(--seg);
+  color: var(--fg);
+}
+
+.attention-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  background: var(--ring);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--chrome);
+  box-sizing: content-box;
+}
+
+.toolbar-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  height: 100%;
+  border-left: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toolbar-center-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-center-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  flex-shrink: 0;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  /* Issue #87 — same floor-at-12px reasoning as .toolbar-lead above. */
+  padding-right: max(12px, env(safe-area-inset-right));
+  height: 100%;
+  margin-left: auto;
+}
+
+.run-cmd-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px 0 11px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.run-cmd-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
+.kbd {
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  color: var(--dim);
+}
+
+.toolbar-version-label {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--dim);
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 5px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+.toolbar-version-label:hover {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}

@@ -1,0 +1,2064 @@
+/* ============================================================ */
+/* Empty / first-run states — ported from the design's States doc */
+/* section 03. Visual language (icon badge / headline / body copy /  */
+/* buttons) kept, but sized down from the doc's wide standalone-card */
+/* mockups to actually fit these components' real containers (the   */
+/* 288px sidebar column, a project's own collapsed body) — the doc  */
+/* only ever shows them as isolated ~450px-wide specimens.           */
+/* ============================================================ */
+/* PR 25 (frontend refactor plan) — renamed from `.empty-state*` (Sidebar's
+   original, only consumer) to `ui-empty-state*` since `ui/EmptyState.tsx`
+   now also backs the unrelated `.github-panel-empty` family below (moved to
+   the deliberately non-composable `.ui-empty-state-note`, not this class —
+   see its own comment). Declarations below are unchanged from `.empty-state*`,
+   selector strings only. */
+.ui-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 22px 16px;
+}
+.ui-empty-state-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ui-empty-state-icon.accent {
+  background: var(--accent-solid);
+}
+.ui-empty-state-icon.neutral {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--fg);
+}
+.ui-empty-state-icon.warn {
+  background: color-mix(in srgb, var(--o) 12%, transparent);
+  color: var(--o);
+}
+.ui-empty-state-mark {
+  color: var(--fg);
+  flex-shrink: 0;
+}
+.ui-empty-state-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.ui-empty-state-body {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 220px;
+}
+.ui-empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.ui-empty-state-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: var(--accent-solid);
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ui-empty-state-btn-primary:hover {
+  filter: brightness(1.08);
+}
+.ui-empty-state-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ui-empty-state-btn-secondary:hover {
+  border-color: var(--muted);
+}
+
+/* Compact alternative to .empty-state for an expanded-but-empty project row
+   (design's "03 · No sessions · compact") — a single muted line instead of
+   the full icon/title/body/CTA block used for the top-level empty states. */
+.project-empty-note {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 4px 9px 6px 32px;
+}
+
+/* Phase 6 Task Master (6.5/#218) — the sidebar's standalone nav entry that
+   opens the global Tasks panel, replacing the 2.5 thin slice's inline
+   TasksSection list. Same row density/icon-plus-label shape as a project
+   row's own header, but a single fixed row rather than an expandable
+   section. */
+.sidebar-tasks-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.sidebar-tasks-entry:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.sidebar-tasks-entry-label {
+  flex: 1;
+}
+
+/* UnifiedBoard.tsx's task-columns section (formerly TasksPanel.tsx, a
+   standalone dockview panel). The column/card grid itself reuses
+   .kanban-board/.kanban-column* wholesale (issue #211's session board) —
+   same "columns of cards" shape, just seven statuses instead of five and
+   real cross-column persistence instead of KanbanBoard's client-only
+   kanbanOrder. The .tasks-panel-* prefix on the rules below is a holdover
+   from that dockview-panel era, kept as-is rather than renamed wholesale. */
+.kanban-unified-tasks {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.tasks-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
+}
+.tasks-panel-drag-error {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.tasks-panel-new-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tasks-panel-new-btn:hover {
+  border-color: var(--accent-solid);
+  color: var(--accent-solid);
+}
+.tasks-panel-new-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 240px;
+}
+.tasks-panel-new-project,
+.tasks-panel-new-title {
+  font-size: 11.5px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+}
+.tasks-panel-new-title {
+  flex: 1;
+  min-width: 0;
+}
+.tasks-panel-new-submit {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-solid) 45%, transparent);
+  background: transparent;
+  color: var(--accent-solid);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tasks-panel-new-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.tasks-panel-empty-hint {
+  font-size: 11.5px;
+  color: var(--dim);
+  text-align: center;
+  max-width: 320px;
+}
+.kanban-unified-tasks .tasks-board {
+  flex: 1;
+  overflow: auto;
+}
+
+/* TasksPanelRedirect.tsx — the deserialization-stub tombstone for a restored
+   "tasks" panel (see its own header comment on why it stays registered). */
+.tasks-panel-redirect {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  padding: 24px 20px;
+  text-align: center;
+  color: var(--dim);
+}
+.tasks-panel-redirect-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.tasks-panel-redirect-hint {
+  font-size: 11.5px;
+  max-width: 280px;
+  line-height: 1.5;
+}
+.tasks-panel-redirect-open {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tasks-panel-redirect-open:hover {
+  border-color: var(--accent-solid);
+  color: var(--accent-solid);
+}
+
+.task-card {
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--sidebar);
+  padding: 8px 9px;
+  cursor: pointer;
+  transition: border-color 0.1s;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.task-card:hover {
+  border-color: var(--border);
+}
+/* Hermes review — rowClassNameForSeverity's three non-empty return values
+   (status-attention/status-finished/status-exited) were only ever styled
+   under the `.session-item.` compound selector above (Sidebar.tsx's own
+   rows); applying them directly to `.task-card`/`.task-card-session-strip`
+   matched nothing, silently no-op'ing the "blocked worker visible at
+   column-scan distance" mitigation UnifiedBoard.tsx's own comment
+   describes. Same tone/treatment as `.session-item`'s own rules above,
+   scoped to these two selectors instead. */
+.task-card.status-attention {
+  background: color-mix(in srgb, var(--ring) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--ring);
+}
+.task-card.status-attention:hover {
+  background: color-mix(in srgb, var(--ring) 18%, transparent);
+}
+.task-card.status-finished {
+  background: color-mix(in srgb, var(--c) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--c);
+}
+.task-card.status-finished:hover {
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+.task-card.status-exited {
+  opacity: 0.5;
+}
+.task-card.status-exited:hover {
+  opacity: 0.7;
+}
+.task-card-title {
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.task-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.task-card-project,
+.task-card-issue,
+.task-card-agent,
+.task-card-session {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--dim);
+  /* .task-card-issue is now sometimes an <a> (D2 — was always a <span>, a
+     dead end that only ever carried the issue URL as a tooltip); this and
+     its :hover below match .task-card-pr's own link treatment so an
+     unclickable label doesn't visually differ from a clickable one. */
+  text-decoration: none;
+}
+.task-card-issue:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.task-card-pr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--dim);
+  text-decoration: none;
+}
+.task-card-pr:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.task-card-age {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+.task-card-sync-error {
+  display: inline-flex;
+  align-items: center;
+  color: var(--y);
+}
+.task-card-hint {
+  font-size: 10px;
+  color: var(--y);
+}
+.task-card-failure-reason {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--r);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-review-round {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* UnifiedBoard.tsx's TaskSessionSlot — a task card's nested worker/review
+   session, compact (not SessionRow, see the component's own doc comment). */
+.task-card-session-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--dim);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.task-card-session-strip:hover {
+  border-color: var(--border);
+}
+.task-card-session-strip.status-attention {
+  border-color: color-mix(in srgb, var(--ring) 45%, transparent);
+  background: color-mix(in srgb, var(--ring) 10%, transparent);
+}
+.task-card-session-strip.status-finished {
+  border-color: color-mix(in srgb, var(--c) 45%, transparent);
+  background: color-mix(in srgb, var(--c) 10%, transparent);
+}
+.task-card-session-strip.status-exited {
+  opacity: 0.6;
+}
+.task-card-session-strip.is-gone {
+  cursor: default;
+  opacity: 0.55;
+}
+.task-card-session-strip-logo {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+.task-card-session-strip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Phase 6 Task Master (6.5/#218) — the task detail panel (TaskDetail.tsx).
+   Metadata/actions/timeline layout mirrors .agent-rules-panel's editor pane
+   (a single scrollable column), with Claim/Approve/Reject reusing
+   NotificationBell.tsx's .notif-gate-btn* styling wholesale. */
+.task-detail {
+  height: 100%;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Inside the kanban drawer (not the standalone task-detail-<id> dockview
+   panel restore path, which keeps the base height: 100% above — its own
+   container isn't necessarily a flex parent) this sits under
+   .kanban-detail-drawer-header rather than filling the whole aside, so it
+   has to size to the remaining space instead of 100% of it. */
+.kanban-detail-drawer .task-detail {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.task-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* The kanban drawer's own close button (.kanban-detail-drawer-close) is
+     absolutely positioned at top:8/right:8 over this panel, so without this
+     the status badge below — pinned right by its own flex-shrink:0 — sits
+     directly under it and gets its right edge painted over by the button's
+     opaque background. This reserves that corner so the two never overlap. */
+  padding-right: 30px;
+}
+.task-detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+}
+.task-status-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  color: var(--muted);
+  background: var(--track);
+}
+.task-status-ready,
+.task-status-claimed {
+  color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 16%, transparent);
+}
+.task-status-in_progress,
+.task-status-reviewing {
+  color: var(--y);
+  background: color-mix(in srgb, var(--y) 16%, transparent);
+}
+.task-status-done {
+  color: var(--g);
+  background: color-mix(in srgb, var(--g) 16%, transparent);
+}
+.task-status-failed {
+  color: var(--r);
+  background: color-mix(in srgb, var(--r) 16%, transparent);
+}
+.task-detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-detail-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.task-detail-link {
+  color: var(--accent-solid);
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.task-detail-link:hover {
+  text-decoration: underline;
+}
+.task-detail-body {
+  font-size: 12px;
+  color: var(--fg);
+  white-space: pre-wrap;
+}
+.task-detail-failure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--r);
+}
+.task-detail-sync-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--y);
+}
+.task-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.task-detail-hint,
+.task-detail-error {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.task-detail-error {
+  color: var(--r);
+}
+.task-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+.task-detail-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--muted);
+}
+.task-detail-review-section {
+  background: color-mix(in srgb, var(--y) 6%, transparent);
+  border-radius: 8px;
+  padding: 10px;
+  border-top: none;
+}
+.task-detail-review-hint {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.task-detail-review-noseed,
+.task-detail-noseed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--y);
+}
+.task-detail-review-round {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--y);
+}
+.task-detail-review-findings {
+  font-size: 11.5px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 8px;
+}
+.task-detail-footer {
+  font-size: 10.5px;
+  color: var(--dim);
+  border-top: 1px solid var(--border-soft);
+  padding-top: 8px;
+}
+
+/* Empty tiled grid — a dashed dropzone in the actual grid area, closer to
+   the design doc's own size since .grid-area is wide, unlike the sidebar
+   states above. */
+.empty-grid-dropzone {
+  flex: 1;
+  margin: 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  color: var(--dim);
+}
+.empty-grid-title {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.empty-grid-hint {
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+/* Issue #211's Kanban board — an opaque overlay over .dockview-container
+   (App.tsx), same positioning as .empty-grid-dropzone above but solid
+   (var(--bg)) rather than a transparent dashed hint, since this one has to
+   fully obscure the tiled grid underneath rather than sit inside its empty
+   state. */
+.kanban-board-overlay {
+  background: var(--bg);
+  overflow: auto;
+  /* Must clear dockview's own internal maximum z-index (.dv-sash at 99,
+     dockview.css) so this opaque background actually covers the grid
+     underneath — split-view separator lines, resize sashes, and each
+     terminal's upload/attach-image overlays (.terminal-upload-indicator/
+     .terminal-attach-image-btn, both z-index 10) all otherwise paint through
+     it. Safe to sit above 99 without risking app-level modals (command
+     palette, settings) because .dockview-container's own `isolation: isolate`
+     scopes all of dockview's z-indexes — and this element's — to that
+     container alone; see its comment. */
+  z-index: 100;
+}
+.kanban-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  min-height: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+.kanban-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 260px;
+  min-width: 240px;
+  max-width: 380px;
+  gap: 8px;
+}
+.kanban-column-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.kanban-column-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--muted);
+  flex: 1;
+}
+.kanban-column-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  background: var(--track);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.kanban-column-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kanban-column-empty {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 8px 4px;
+}
+.kanban-card {
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--sidebar);
+  overflow: hidden;
+  transition: border-color 0.1s;
+}
+.kanban-card-drop-target {
+  border-color: var(--accent-solid);
+  box-shadow: 0 0 0 1px var(--accent-solid);
+}
+/* SessionRow's own .session-item carries a sidebar-tree-specific left
+   margin/indent (Sidebar.tsx's .project-row-body nesting) that reads as a
+   stray gap once it's the only thing inside a standalone card — zeroed out
+   here rather than in Sidebar.tsx, which still needs it for the real
+   sidebar tree. */
+.kanban-card .session-item {
+  margin-left: 0;
+  border-radius: 0;
+}
+.kanban-card-project {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  /* Tightened from `7px 9px 0` — now that the card sizes to content (see
+     .kanban-lane-group .kanban-card above), this label's own padding is a
+     bigger share of a one-line card and read as a whole extra row of
+     chrome above it. */
+  padding: 5px 9px 0;
+}
+
+/* UnifiedBoard.tsx — the merged task+session board. Deliberately does NOT
+   touch .kanban-board/.kanban-column* above: those are shared with the task
+   columns (rendered via .kanban-board.tasks-board.kanban-unified-columns),
+   so this is a sibling family instead. */
+.kanban-unified {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.kanban-unified-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Seven task columns at .kanban-column's own min-width (240px) would need
+   ~1800px before even a drawer opens — this modifier narrows the floor to
+   200px so 7 fit before scrolling on a typical laptop. overflow-x: auto is
+   already on .kanban-board, so anything narrower still degrades honestly
+   (horizontal scroll) rather than needing hideable columns. */
+.kanban-unified-columns .kanban-column {
+  flex: 1 1 200px;
+  min-width: 200px;
+  max-width: 320px;
+}
+/* Pins each column's title/count in view while its own body scrolls past —
+   without this, a long Backlog scrolls its header out of frame and nothing
+   on screen says which column you're looking at. Scoped to
+   .kanban-unified-columns rather than the bare .kanban-column-header it
+   overrides (styles.css's own "shared session/task column family, sibling
+   modifiers only" convention — see the comment on .kanban-unified above);
+   .kanban-column-header currently has exactly one consumer (this board) but
+   keeping the modifier scoped costs nothing. `background` is required, not
+   cosmetic: the base rule only carries a border-bottom, so cards would
+   otherwise show straight through the stuck header. `.kanban-board`'s own
+   padding (16px) sits *below* the scrollport's padding edge that `top: 0`
+   pins to, so a bare `top: 0` would both leave a 16px gap above the header
+   AND make it jump upward by that much the instant it starts sticking —
+   the negative margin/padding pair below absorbs exactly that padding
+   instead of moving it off the shared .kanban-board rule. */
+.kanban-unified-columns .kanban-column-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  margin-top: -16px;
+  padding-top: 16px;
+}
+.kanban-detail-drawer {
+  position: relative;
+  /* --task-drawer-width is set inline on .kanban-unified-main
+     (UnifiedBoard.tsx) from its own drag-resizable state — the fallback is
+     this rule's own prior fixed value, so a stale/absent localStorage read
+     degrades to exactly the old behavior. */
+  flex: 0 0 var(--task-drawer-width, 380px);
+  min-width: 0;
+  border-left: 1px solid var(--border-soft);
+  /* A fixed header (.kanban-detail-drawer-header) plus TaskDetail's own
+     scrolling body underneath — was a single `overflow: auto` here with
+     .task-detail ALSO scrolling internally (a nested pair where the outer
+     never actually moved), which is harmless with no header but would let
+     a fixed one scroll away with the rest of the content. `hidden` makes
+     .task-detail the one and only scroller. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.kanban-detail-drawer-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.kanban-detail-drawer-header-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--dim);
+}
+.kanban-detail-drawer-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.kanban-detail-drawer-close:hover {
+  color: var(--fg);
+  background: var(--track);
+}
+/* UnifiedBoard.tsx's own drag-to-resize handle for the drawer — hover-
+   revealed, same shape as .dock-resize-handle above, just on the vertical
+   axis (the drawer's LEFT border, not the dock's top one). Rendered as a
+   sibling immediately before the <aside>, so this sits right on that
+   border without needing to know the drawer's own width. */
+.kanban-detail-resize-handle {
+  flex: 0 0 0;
+  position: relative;
+  width: 0;
+  cursor: col-resize;
+  z-index: 2;
+}
+.kanban-detail-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+}
+.kanban-detail-resize-handle:hover::after {
+  background: var(--ring, var(--muted));
+}
+.kanban-unified-lane {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-soft);
+}
+.kanban-lane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+.kanban-lane-collapse {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+.kanban-lane-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  background: var(--track);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.kanban-lane-body {
+  display: flex;
+  gap: 16px;
+  padding: 0 16px 12px;
+  overflow-x: auto;
+  /* No max-height (previously 40vh) — with .kanban-lane-group .kanban-card
+     below fixed at content height, the two flex-basis axes on this row
+     container (overflow-x: auto, the other axis left `visible`) computed
+     overflow-y to `auto` too, opening a second, hidden-until-hovered
+     vertical scrollbar the moment more than one or two groups filled a
+     column past the cap. The lane's own collapse toggle
+     (.kanban-lane-collapse above) is already the "this is taking up too
+     much room" affordance; a silent inner scrollbar isn't. */
+}
+.kanban-lane-empty {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 0 0 12px;
+}
+.kanban-lane-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  /* Width lives here, not on the card below — this container has no width
+     and no flex-basis of its own and sits `flex-shrink: 0` inside a
+     shrink-to-fit row, so a card sized to its own content and a group sized
+     from its children would resolve against each other (every group ending
+     up a different width, tracking whichever card inside it happens to be
+     widest). Fixing it on the group instead gives every group the same
+     width and lets the cards inside it stretch (the flex default) to match. */
+  width: 260px;
+}
+.kanban-lane-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  display: flex;
+  gap: 5px;
+}
+/* Was `flex: 0 0 280px; width: 280px` — inside this *column*-direction
+   group, flex-basis sets the vertical axis, not the horizontal one, so
+   every ad-hoc card was pinned to 280px TALL regardless of content (a
+   LaneCard is a project label + one collapsed SessionRow line, ~40px) —
+   the reported "boxes too large, no content inside" bug. Worse,
+   .kanban-card's own `overflow: hidden` silently clipped anything that
+   *did* grow past 280px (an expanded git-details line, several file-change
+   chips). `width: 280px` was the cross size and rendered correctly, which
+   is exactly why this half-looked right. `flex: none` makes both axes
+   track content; the card's width now comes from .kanban-lane-group's own
+   stretch above. */
+.kanban-lane-group .kanban-card {
+  flex: none;
+}
+
+.dock-monitor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--term);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  overflow: hidden;
+  min-width: 0;
+}
+.dock-monitor-header {
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  background: var(--pane-hd);
+  border-bottom: 1px solid var(--border-soft);
+}
+.dock-monitor-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.dock-monitor-tag {
+  font-size: 9.5px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  flex-shrink: 0;
+}
+/* U8 — armed (arm-then-confirm before killing a running monitor from its
+   header) reuses button.danger.armed's own tone/animation language (--r +
+   cmuxAttn) rather than inventing a new one. */
+.dock-monitor-tag.armed {
+  color: var(--r);
+  font-weight: 600;
+  animation: cmuxAttn 1.4s ease-out infinite;
+}
+.dock-monitor-worktree-select {
+  max-width: 120px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.dock-monitor-worktree-select .custom-select-trigger {
+  font-size: 10.5px;
+  font-family: "Geist Mono", monospace;
+  max-width: 100%;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0 4px 0 6px;
+  gap: 2px;
+}
+.dock-monitor-worktree-select .custom-select-trigger:hover {
+  border-color: var(--border);
+}
+.dock-monitor-worktree-select .custom-select-trigger .custom-select-label {
+  max-width: 90px;
+}
+.dock-monitor-url {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: "Geist Mono", monospace;
+  font-size: 10px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-solid) 20%, transparent);
+  border-radius: 5px;
+  padding: 1px 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  line-height: 1.4;
+}
+.dock-monitor-url:hover {
+  background: color-mix(in srgb, var(--accent-solid) 20%, transparent);
+  border-color: var(--accent-solid);
+  color: var(--accent-solid);
+}
+.dock-monitor-url-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Issue #73 — the discovered-service image-tag pill reuses .dock-monitor-url's
+   look (same accent-tinted badge language) but isn't itself clickable — a
+   click falls through to the monitor header's own toggle, same as the plain
+   status dot — so it resets the inherited pointer cursor. */
+.dock-monitor-image {
+  cursor: default;
+  max-width: 90px;
+}
+.dock-monitor-image:hover {
+  background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-solid) 20%, transparent);
+  color: var(--muted);
+}
+.dock-monitor-image-update {
+  background: color-mix(in srgb, var(--o) 14%, transparent);
+  border-color: color-mix(in srgb, var(--o) 30%, transparent);
+  color: var(--o);
+}
+/* A small section label ahead of the first discovered Docker control in a
+   column (issue #73) — configured dock.json controls render above it with
+   no label of their own, so this only needs to mark where the auto-
+   discovered group begins. */
+.dock-group-label {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  padding: 4px 2px 0;
+}
+/* Transient "Check for update" outcome (issue #73, Hermes review) — reuses
+   .dock-monitor-tag's sizing. "Up to date" stays neutral (--dim, the same
+   tone as the "off" tag beside it); only a genuine failure (.error) tints
+   orange — "update available" never renders here at all, since the image
+   pill's own tint already covers that case. */
+.dock-monitor-check-status {
+  color: var(--dim);
+  white-space: nowrap;
+}
+.dock-monitor-check-status.error {
+  color: var(--o);
+}
+.dock-monitor-body {
+  flex: 1;
+  min-height: 0;
+}
+
+/* GitHub panel (GitHubPanel.tsx, issue #27) — a dockview panel, opened from
+   the Dock's .dock-github-row above or CommandPalette's Integrations entry. */
+.github-panel {
+  height: 100%;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+/* PR 25 (frontend refactor plan) — was `.github-panel-empty`, borrowed
+   as-is by six other panels (GitPanel, UnifiedBoard, DockConfigPanel,
+   AgentRulesPanel, SkillsPanel, TaskDetail) plus GitHubPanel itself.
+   Renamed under `ui/EmptyState.tsx`'s shared `ui-empty-state*` prefix, but
+   kept as its own selector (`-note`, not `-compact`) rather than composed
+   with `.ui-empty-state` above — it's a plain padded text block (no flex,
+   no centering), a different rule set from the icon/title/body/actions
+   card. Declaration below is unchanged, selector string only. */
+.ui-empty-state-note {
+  padding: 20px 16px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.github-panel-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  text-decoration: none;
+  margin-bottom: 14px;
+}
+.github-panel-repo:hover {
+  color: var(--accent-solid);
+}
+.github-panel-section {
+  margin-bottom: 16px;
+}
+.github-panel-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.github-panel-empty-row {
+  font-size: 12px;
+  color: var(--dim);
+  padding: 4px 2px;
+}
+.github-panel-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 2px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 12.5px;
+  border-radius: 5px;
+}
+.github-panel-row:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.github-panel-row-number {
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.github-panel-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+/* CI status dot (GitHubPanel.tsx's Actions section + Dock.tsx's widget,
+   issue #27 phase 5) — same 3-color language as .dock-monitor's own
+   running/off dot elsewhere in this file. */
+.github-panel-ci-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dim);
+}
+.github-panel-ci-dot.good {
+  background: var(--g);
+}
+.github-panel-ci-dot.bad {
+  background: var(--r);
+}
+.github-panel-ci-dot.pending {
+  background: var(--o);
+}
+/* GitPanel.tsx's conflict callout (issue #76) — reuses the same panel
+   shell/spacing as everything above, just a distinct warning color. */
+.github-panel-conflicts {
+  color: var(--r);
+}
+
+/* GitPanel.tsx's Option A sync controls (issue #369) — the row below the
+   repo header that shows ahead/behind, manual Fetch, and the auto-fetch
+   toggle. Flex layout: ahead/behind on the left, controls on the right. */
+.git-panel-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+.git-panel-ahead-behind {
+  flex: 1;
+}
+.git-panel-sync-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.git-panel-fetch-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--dim);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.git-panel-fetch-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+}
+.git-panel-fetch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.git-panel-toggle-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.git-panel-toggle-label {
+  font-size: 11px;
+  color: var(--dim);
+}
+.git-panel-toggle-inherited {
+  font-size: 11px;
+  color: var(--dim);
+  opacity: 0.5;
+  font-style: italic;
+}
+.git-panel-toggle-reset {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.6;
+}
+.git-panel-toggle-reset:hover {
+  opacity: 1;
+  color: var(--r);
+}
+/* GitPanel.tsx's branch/worktree row action buttons (issue #442) — a
+   right-aligned group of buttons within a .github-panel-row, which is
+   already `display: flex` with `.github-panel-row-title` taking `flex: 1`
+   (pushing this group to the row's trailing edge for free). Reuses
+   .git-panel-fetch-btn/button.danger for the buttons themselves — this is
+   only the grouping container. */
+.git-panel-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Source Control sidebar section (issue #433 scope B) — an always-visible
+   complement to the dockview GitPanel, sitting between the Projects list and
+   DiscoverProjects. Reuses .sidebar-section-header/.github-panel-* wholesale
+   for the row/dot/diff vocabulary; only the bits with no existing analogue
+   (the sticky combined totals, branch row, action row) get their own
+   classes here. */
+.source-control-header {
+  cursor: pointer;
+}
+.source-control-totals {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.source-control-totals.stale .project-git-behind {
+  color: var(--r);
+  font-weight: 600;
+}
+.source-control-body {
+  padding: 4px 15px 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.source-control-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.source-control-branch-name {
+  font-family: "Geist Mono", monospace;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-control-actions {
+  display: flex;
+  gap: 6px;
+}
+.source-control-file-row {
+  width: 100%;
+  background: none;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —
+   structured expand/collapse with ciStatus dot + branch labels + run rows. */
+.github-panel-pr-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+.github-panel-pr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.github-panel-pr-header:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.github-panel-pr-author {
+  font-size: 11px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.github-panel-ci-dot.none {
+  background: var(--dim);
+  opacity: 0.35;
+}
+.github-panel-branch-labels {
+  font-size: 11px;
+  color: var(--dim);
+  padding: 0 10px 6px;
+  font-family: "Geist Mono", monospace;
+}
+.github-panel-branch-arrow {
+  color: var(--accent-solid);
+}
+.github-panel-collapsible-body {
+  border-top: 1px solid var(--border);
+}
+.github-panel-run-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.github-panel-run-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.github-panel-run-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.github-panel-run-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+
+.github-panel-run-group {
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-run-group .github-panel-run-row {
+  padding-left: 16px;
+}
+
+.github-panel-job-row {
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-job-row .github-panel-run-row {
+  padding-left: 24px;
+  font-size: 11.5px;
+}
+
+.github-panel-jobs {
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-log {
+  margin: 0;
+  padding: 8px 16px 8px 24px;
+  font-size: 10.5px;
+  font-family: "Geist Mono", monospace;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-log-truncated {
+  display: block;
+  padding-top: 4px;
+  font-size: 10px;
+  color: var(--dim);
+  font-style: italic;
+}
+
+/* Session timeline panel (SessionTimeline.tsx, issue #212) — a dockview
+   panel over one session's full structured event history, filterable by
+   kind and searchable. Same base panel/empty-state language as
+   .github-panel above (padding, scroll, --dim empty text), a fresh set of
+   classes since the row shape (time + kind badge + text, three columns)
+   doesn't match .github-panel-row's dot+number+title shape. */
+.session-timeline {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.session-timeline-empty {
+  padding: 20px 16px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.session-timeline-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.session-timeline-search {
+  flex: 1;
+  min-width: 140px;
+  font-size: 12px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+}
+.session-timeline-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+/* Phase 5 (Track A, #195/5.5a) — subagent filter chips, same shape/behavior
+   as .session-timeline-kinds above (and reusing .session-timeline-kind-chip
+   itself), just a second row so the two filter dimensions (kind vs. subagent)
+   stay visually distinct. */
+.session-timeline-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.session-timeline-kind-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-timeline-kind-chip:hover {
+  color: var(--fg);
+}
+.session-timeline-kind-chip.active {
+  color: var(--accent-solid);
+  border-color: color-mix(in srgb, var(--accent-solid) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
+}
+.session-timeline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 14px 14px;
+}
+.session-timeline-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 2px;
+  font-size: 12.5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-timeline-row-time {
+  flex-shrink: 0;
+  width: 56px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+}
+.session-timeline-row-kind {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  width: 60px;
+}
+.session-timeline-row-kind.kind-attention {
+  color: var(--ring);
+}
+.session-timeline-row-kind.kind-review_gate {
+  color: var(--o);
+}
+.session-timeline-row-kind.kind-file_change {
+  color: var(--g);
+}
+.session-timeline-row-kind.kind-permission_request {
+  color: #c084fc;
+}
+.session-timeline-row-kind.kind-stop_failure,
+.session-timeline-row-kind.kind-tool_failure {
+  color: var(--r);
+}
+.session-timeline-row-kind.kind-session_end {
+  color: var(--dim);
+}
+.session-timeline-row-kind.kind-plan_ready {
+  color: var(--o);
+}
+.session-timeline-row-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+  overflow-wrap: break-word;
+}
+/* Issue #213 (roadmap 4.7) — persisted-history additions: the search-scope
+   and persistence-off hints (both flex-shrink: 0 banners between the
+   controls and the list), the orphaned-row marker (a session_events row
+   whose session was deleted — onDelete: "set null"), and the "load older"
+   pager button below the list. */
+.session-timeline-search-hint,
+.session-timeline-persistence-hint {
+  flex-shrink: 0;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: var(--dim);
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-timeline-row-orphan {
+  color: var(--dim);
+  font-style: italic;
+}
+.session-timeline-load-older {
+  flex-shrink: 0;
+  margin: 8px 14px 12px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-timeline-load-older:hover:not(:disabled) {
+  color: var(--fg);
+}
+.session-timeline-load-older:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Hermes review, PR #560 — "Load older events" previously failed silently. */
+.session-timeline-load-older-error {
+  flex-shrink: 0;
+  margin: -4px 14px 12px;
+  font-size: 11px;
+  color: var(--r);
+}
+/* Hermes review, PR #560 (round 2) — a failed INITIAL history fetch was
+   invisible whenever the timeline had other content to show (live events,
+   or another requested session's history). Rendered unconditionally, same
+   flex-shrink: 0 banner shape as the hints above it. */
+.session-timeline-error-hint {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: var(--r);
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-timeline-error-retry {
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--r) 45%, transparent);
+  background: transparent;
+  color: var(--r);
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-timeline-error-retry:hover {
+  background: color-mix(in srgb, var(--r) 14%, transparent);
+}
+
+/* Browser preview panel (BrowserPanel.tsx, issue #28) — a dockview panel
+   embedding a project's proxied dev server, opened from the Dock's own row
+   or CommandPalette's Integrations entry, same as the GitHub panel above. */
+.browser-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.browser-panel-empty {
+  padding: 20px 16px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.browser-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.browser-panel-url {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.browser-panel-reload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.browser-panel-reload:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+/* External pane's editable address bar (BrowserPanel.tsx / issue #28's
+   "general-purpose browser tile") — .browser-panel-url above is read-only
+   display for a project's own dev server URL; this is its editable sibling. */
+.browser-panel-address {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: var(--fg);
+}
+.browser-panel-go {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 5px;
+  border: none;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+.browser-panel-go:hover {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
+.browser-panel-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+}
+
+.browser-panel-dropdown {
+  position: relative;
+  flex-shrink: 0;
+}
+.browser-panel-dropdown-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.browser-panel-dropdown-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.browser-panel-dropdown-label {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-panel-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 180px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  padding: 4px;
+}
+.browser-panel-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-panel-dropdown-item:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.browser-panel-dropdown-item.active {
+  background: color-mix(in srgb, var(--accent-solid) 15%, transparent);
+  color: var(--accent-solid);
+}
+.browser-panel-dropdown-star {
+  margin-right: 4px;
+  color: var(--y);
+}
+.browser-panel-dropdown-project {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 6px;
+}
+.browser-panel-dropdown-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border-soft);
+}
+
+/* CDP-controlled browser pane (BrowserPane.tsx, Phase 3 / issue #181) —
+   distinct from .browser-panel above (the iframe-based preview): this
+   renders a <canvas> painted from streamed JPEG frames, not an iframe.
+   Reuses .browser-panel-toolbar/-reload/-address/-go for the URL bar so
+   both panel types look consistent. */
+.browser-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.browser-pane-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #1a1a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.browser-pane-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  outline: none;
+  cursor: default;
+}
+.browser-pane-error-toast {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--r) 20%, var(--sidebar));
+  color: var(--fg);
+  border: 1px solid var(--r);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-url-modal {
+  position: absolute;
+  inset: 40px 60px;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 200;
+}
+.saved-url-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.saved-url-modal-header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.saved-url-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.saved-url-modal-close:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.saved-url-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+.saved-url-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.saved-url-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: var(--fg);
+}
+.saved-url-input:focus {
+  outline: none;
+  border-color: var(--ring);
+}
+.saved-url-add-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent-solid);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.saved-url-add-btn:hover {
+  opacity: 0.85;
+}
+.saved-url-cancel-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.saved-url-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.saved-url-error {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--r) 15%, transparent);
+  color: var(--r);
+  font-size: 12px;
+}
+.saved-url-empty {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--dim);
+  font-size: 12px;
+}
+.saved-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.saved-url-row-order {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.saved-url-order-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 14px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 8px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.saved-url-order-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.saved-url-order-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.saved-url-fav-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 15px;
+  cursor: pointer;
+  color: var(--dim);
+}
+.saved-url-fav-btn.favorited {
+  color: var(--y);
+}
+.saved-url-fav-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.saved-url-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.saved-url-label {
+  font-size: 12.5px;
+  color: var(--fg);
+  font-weight: 500;
+}
+.saved-url-value {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-url-edit-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.saved-url-edit-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.saved-url-del-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.saved-url-del-btn:hover {
+  background: color-mix(in srgb, var(--r) 15%, transparent);
+  color: var(--r);
+}
+.saved-url-edit-fields {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}

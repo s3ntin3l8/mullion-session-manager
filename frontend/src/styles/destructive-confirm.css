@@ -1,0 +1,237 @@
+/* ============================================================ */
+/* Destructive confirm (arm-then-confirm)                        */
+/* ============================================================ */
+
+.terminal-status-overlay {
+  position: absolute;
+  inset: 31px 0 0;
+  background: color-mix(in srgb, var(--term) 82%, transparent);
+  backdrop-filter: blur(1px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  text-align: center;
+  padding: 16px;
+}
+.terminal-status-overlay.failed {
+  background: color-mix(in srgb, var(--term) 88%, transparent);
+  backdrop-filter: none;
+}
+.terminal-status-spinner.connecting {
+  color: var(--muted);
+  animation: cmuxSpin 1s linear infinite;
+}
+.terminal-status-spinner.reconnecting {
+  color: var(--o);
+  animation: cmuxSpin 1.4s linear infinite;
+}
+.terminal-status-text {
+  font-size: 12.5px;
+  color: var(--fg);
+  font-weight: 600;
+}
+.terminal-status-subtext {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--dim);
+}
+.terminal-status-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  background: var(--chrome);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 6px 13px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.terminal-status-retry:hover {
+  border-color: var(--muted);
+}
+
+/* Crashed pane, isolated — design States doc section 04 ("Crashed pane —
+   isolated"). Red-tinted throughout, matching the doc's own tile. */
+.crashed-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 14px;
+  text-align: center;
+  background: var(--term);
+}
+.crashed-pane-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.crashed-pane-subtitle {
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.crashed-pane-reload {
+  border: 1px solid color-mix(in srgb, var(--r) 35%, transparent);
+  background: transparent;
+  color: var(--r);
+  border-radius: 7px;
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.crashed-pane-reload:hover {
+  background: color-mix(in srgb, var(--r) 12%, transparent);
+}
+
+.terminal-copy-indicator {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  translate: -50% 0;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--term) 82%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--g);
+  z-index: 10;
+  pointer-events: none;
+  animation: terminalCopyFadeOut 1.5s ease-out forwards;
+}
+
+@keyframes terminalCopyFadeOut {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Issue #68: image-upload toast (paste or the "attach image" button) — same
+   spot/shape as .terminal-copy-indicator above but state-driven rather than
+   a fixed-duration fade, since "uploading" must stay visible for as long as
+   the request is actually in flight. */
+.terminal-upload-indicator {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  translate: -50% 0;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--term) 82%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg);
+  z-index: 10;
+  pointer-events: none;
+}
+.terminal-upload-indicator.error {
+  color: var(--r);
+}
+
+.terminal-attach-image-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+}
+
+/* Scrollback find bar (U1) — top-left, so it never collides with the
+   always-visible attach-image button in the opposite corner (above). Same
+   translucent/blurred "floating over the terminal" treatment as
+   .terminal-copy-indicator/.terminal-upload-indicator, just anchored as a
+   bar instead of a centered toast. */
+.terminal-find-bar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 44px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: color-mix(in srgb, var(--term) 88%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.terminal-find-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.terminal-find-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 2px 0;
+}
+.terminal-find-input:focus {
+  outline: none;
+}
+.terminal-find-count {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.terminal-find-btn {
+  flex-shrink: 0;
+  padding: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.terminal-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button {
+  background: var(--track);
+  border: 1px solid var(--border-soft);
+  color: var(--fg);
+  border-radius: 7px;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+button:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+button.danger:hover {
+  background: color-mix(in srgb, var(--r) 15%, transparent);
+  border-color: color-mix(in srgb, var(--r) 40%, transparent);
+  color: var(--r);
+}
+button.danger.armed {
+  background: color-mix(in srgb, var(--r) 15%, transparent);
+  border-color: var(--r);
+  color: var(--r);
+  font-weight: 600;
+  animation: cmuxAttn 1.4s ease-out infinite;
+}
