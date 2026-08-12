@@ -26,16 +26,12 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "./api/index.js";
 import { getSchemeBackground } from "./terminalTheme.js";
-import { randomPanelId } from "./random-id.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { components, tabComponents, KanbanBoardOverlay } from "./panels/registry.js";
 import {
-  hasTiledPanels,
   openSessionPanel,
-  openTimelinePanel,
   attentionTransitionPanelIds,
-  findSessionWorkspace,
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
@@ -51,6 +47,7 @@ import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useAppStreams } from "./hooks/useAppStreams.js";
 import { useAttentionNotifications } from "./hooks/useAttentionNotifications.js";
+import { usePanelOpener } from "./hooks/usePanelOpener.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { ensurePushSubscribed } from "./pushClient.js";
 
@@ -700,55 +697,42 @@ export function App() {
     }
   }, [sessions, dockviewApi]);
 
-  const onOpenSession = useCallback(
-    (session: Session) => {
-      if (!dockviewApi) return;
-      const panelId = `session-${session.id}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        useDashboardStore.getState().triggerPanelHighlight(panelId);
-      } else {
-        const wsId = findSessionWorkspace(session.id, workspaces);
-        if (wsId != null && wsId !== activeWorkspaceId) {
-          useDashboardStore.getState().triggerPanelHighlight(panelId);
-          useDashboardStore.getState().setActiveWorkspaceId(wsId);
-        } else {
-          openSessionPanel(dockviewApi, session, isMobile, projects);
-        }
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, isMobile, projects, workspaces, activeWorkspaceId],
-  );
-
-  // Sidebar kebab "Open as new window" — always opens as float in the
-  // current workspace regardless of which workspace the session belongs to.
-  const onOpenSessionAsFloat = useCallback(
-    (session: Session) => {
-      if (!dockviewApi) return;
-      openSessionPanel(dockviewApi, session, isMobile, projects);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, isMobile, projects],
-  );
-
-  // Issue #270 — notification-row click opens the timeline instead of the
-  // terminal (see NotificationBell.tsx's own onOpenTimeline doc). Hoisted
-  // into a stable useCallback, same shape as onOpenSession/
-  // onOpenSessionAsFloat above, specifically so it doesn't skip
-  // setSidebarOpen(false) the way an inline JSX-computed closure did in an
-  // earlier version of this change — on mobile the notification bell stays
-  // reachable above the open sidebar's scrim, so a row tap without this
-  // left the timeline opening BEHIND the still-open sidebar overlay.
-  const onOpenTimeline = useCallback(
-    (session: Session) => {
-      if (!dockviewApi) return;
-      openTimelinePanel(dockviewApi, session);
-      setSidebarOpen(false);
-    },
-    [dockviewApi],
-  );
+  // The 12 `onOpen*` panel-opening callbacks (session/session-as-float/
+  // timeline/GitHub/Git/Agent Rules/Dock Config/Skills/Browser/Tasks/
+  // Browser-URL/Blank-Browser) used to be declared individually here and
+  // further down (immediately before the split-launch handler) — extracted
+  // to usePanelOpener (hooks/usePanelOpener.ts). Called here, at
+  // onOpenSession's own former position, because that's a closure-order
+  // requirement, not an effect-ordering one: this hook registers no effects
+  // at all (every value it returns is a useCallback), so unlike
+  // useWorkspacePersistence/useMobileLayout/useSessionDeepLink above, WHERE
+  // in this component's body it's called doesn't affect behavior — but
+  // onOpenSession itself must still be defined before useSessionDeepLink's
+  // call and the onOpenSessionRef mirroring effect below, both of which
+  // read it. See that hook's own header comment for the full design
+  // rationale (why 6 of the 12 share one generic helper and 6 don't, and
+  // why the actual count is 12 rather than the roadmap's estimated 16).
+  const {
+    onOpenSession,
+    onOpenSessionAsFloat,
+    onOpenTimeline,
+    onOpenGitHub,
+    onOpenGit,
+    onOpenAgentRules,
+    onOpenDockConfig,
+    onOpenSkills,
+    onOpenBrowser,
+    onOpenTasks,
+    onOpenBrowserUrl,
+    onOpenBlankBrowser,
+  } = usePanelOpener({
+    dockviewApi,
+    isMobile,
+    projects,
+    workspaces,
+    activeWorkspaceId,
+    setSidebarOpen,
+  });
 
   // `?session=<id>` deep-link effect (issue #95 prerequisite) — extracted to
   // useSessionDeepLink (hooks/useSessionDeepLink.ts). Called here rather than
@@ -960,240 +944,6 @@ export function App() {
     },
     [dockviewApi],
   );
-
-  // Opens (or focuses an already-open) GitHub panel for a project — one
-  // stable panel id per project, so re-triggering this (Dock widget click,
-  // CommandPalette's Integrations entry) never duplicates the tab, same
-  // "existing ? focus : addPanel" shape as onOpenSession above.
-  const onOpenGitHub = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `github-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "github",
-          title: project ? `GitHub: ${project.name}` : "GitHub",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) the git status panel for a project (issue #76) —
-  // same open-or-focus-by-stable-id shape as onOpenGitHub above, just a
-  // distinct "git-<projectId>" panel id/component so it never collides with
-  // the GitHub integration's own panel for the same project.
-  const onOpenGit = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `git-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "git",
-          title: project ? `Git: ${project.name}` : "Git",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) the agent-rules editor for a project (issue #431) —
-  // same open-or-focus-by-stable-id shape as onOpenGit above.
-  const onOpenAgentRules = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `agent-rules-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "agent-rules",
-          title: project ? `Agent Rules: ${project.name}` : "Agent Rules",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // U4 — opens (or focuses) the dock-config editor for a project, same
-  // open-or-focus-by-stable-id shape as onOpenAgentRules above.
-  const onOpenDockConfig = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `dock-config-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "dock-config",
-          title: project ? `Dock: ${project.name}` : "Dock",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) the (read-only) skills panel for a project (issue
-  // #432) — same open-or-focus-by-stable-id shape as onOpenAgentRules above.
-  const onOpenSkills = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `skills-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "skills",
-          title: project ? `Skills: ${project.name}` : "Skills",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) a browser preview pane for a project's dev server
-  // (issue #28) — same open-or-focus-by-stable-id shape as onOpenGitHub
-  // above. BrowserPanel itself resolves/creates the preview and handles the
-  // "not configured"/"not enabled" states, so this handler doesn't need to
-  // pre-check anything (see BrowserPanel.tsx's own comment on why params
-  // only ever need to carry projectId).
-  const onOpenBrowser = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `browser-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "browser",
-          title: project ? `Preview: ${project.name}` : "Preview",
-          params: { projectId },
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // The task board is no longer a dockview panel — it's the unified Kanban
-  // view (UnifiedBoard.tsx). Both entry points (Sidebar's Tasks nav row,
-  // CommandPalette -> Tasks) now switch views rather than opening a panel;
-  // the old "tasks" panel id survives only as a deserialization stub (see
-  // TasksPanelRedirect.tsx) so an already-saved workspace layout referencing
-  // it doesn't throw on restore.
-  const onOpenTasks = useCallback(() => {
-    useDashboardStore.getState().setViewMode("kanban");
-    setSidebarOpen(false);
-  }, []);
-
-  // Issue #109: opens a browser pane for a specific favorited URL. Creates
-  // an external pane pre-filled with the URL, same shape as onOpenBlankBrowser
-  // but with a specific target and label so there's nothing to type.
-  const onOpenBrowserUrl = useCallback(
-    (projectId: number, url: string, label: string) => {
-      if (!dockviewApi) return;
-      const panel = dockviewApi.addPanel({
-        id: `browser-url-${projectId}-${randomPanelId()}`,
-        component: "browser",
-        title: label,
-        params: { kind: "external", url, projectId },
-      });
-      if (isMobile) dockviewApi.maximizeGroup(panel);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, isMobile],
-  );
-
-  // Issue #28's general-purpose browser tile: the CommandPalette's "New
-  // browser tab" entry — an empty external browser pane (nothing typed
-  // into its address bar yet; BrowserPanel's own "empty" state, address
-  // bar auto-focused), reachable straight from +/⌘K. No preview to
-  // pre-create (there's no URL yet, and the subdomain proxy — when
-  // configured — only ever gets involved once BrowserPanel's own mount
-  // effect creates one for whatever URL the user navigates to), so this
-  // never touches the network itself. Always opens a fresh pane rather than
-  // open-or-focus: unlike a project (at most one preview pane makes sense),
-  // opening a second blank tab is a reasonable, ordinary thing to want; id
-  // has no natural stable identity to derive from, so it's random —
-  // randomPanelId() rather than a bare crypto.randomUUID() since this pane
-  // exists specifically to support the plain-http LAN/Tailscale deployment
-  // docs/browser-previews.md documents, which is not a secure context (see
-  // that helper's own comment).
-  const onOpenBlankBrowser = useCallback(() => {
-    if (!dockviewApi) return;
-    const panel = dockviewApi.addPanel({
-      id: `browser-ext-${randomPanelId()}`,
-      component: "browser",
-      title: "Preview",
-      params: { kind: "external" },
-    });
-    if (isMobile) dockviewApi.maximizeGroup(panel);
-    setSidebarOpen(false);
-  }, [dockviewApi, isMobile]);
 
   const openGlobalLauncher = useCallback(() => {
     setPalette({ open: true, scope: "global", projectId: null });

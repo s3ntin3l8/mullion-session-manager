@@ -353,6 +353,69 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
   if (isMobile) api.maximizeGroup(panel);
 }
 
+// PR 34h of the hook-extraction series — App.tsx used to declare six
+// near-identical `onOpen*` callbacks inline (GitHub, Git, Agent Rules, Dock
+// Config, Skills, Browser), each opening (or focusing) a single project-
+// scoped tooling panel: same open-or-focus-by-`<kind>-<projectId>` shape as
+// openSessionPanel/openTimelinePanel/openBrowserPanePanel/openTaskDetailPanel
+// above, just keyed by project id instead of session/task id, and with a
+// project-derived title instead of a session/task-derived one. Generalized
+// here (usePanelOpener.ts, hooks/usePanelOpener.ts, wraps each call in its
+// own useCallback) rather than six separate copies.
+export interface ProjectPanelKindConfig {
+  // Both the dockview panel-id prefix (`<kind>-<projectId>`) and the
+  // registered `component` name in panels/registry.tsx — identical for
+  // every one of these six panel kinds today, so one field covers both.
+  kind: string;
+  // Prefixed to the matching project's name for the panel's title (e.g.
+  // "GitHub" -> "GitHub: my-project"), and used verbatim as the title when
+  // no matching project is found (deleted project, or a stale/racing
+  // lookup) — every one of the six original callbacks used the identical
+  // label for both cases (e.g. onOpenGitHub: `GitHub: ${project.name}` /
+  // "GitHub"), so a single field covers both rather than two.
+  titleLabel: string;
+  // Whether to apply the float-if-tiled-else-dock desktop positioning
+  // (`hasTiledPanels(api) ? { floating: true } : { position: { direction:
+  // "right" } }`) when creating a NEW panel. True for every kind except
+  // `browser`: App.tsx's pre-existing onOpenBrowser never carried this
+  // spread — a genuine asymmetry from the other five, not an oversight in
+  // this generalization — so usePanelOpener.ts's onOpenBrowser passes
+  // `false` here specifically to preserve that exact (surprising but
+  // load-bearing "zero behavior change") quirk. See that hook's own
+  // onOpenBrowser doc comment.
+  applyDesktopPositioning: boolean;
+}
+
+export function openOrFocusProjectPanel(
+  api: DockviewApi,
+  projectId: number,
+  projects: { id: number; name: string | null }[],
+  isMobile: boolean,
+  config: ProjectPanelKindConfig,
+): void {
+  const project = projects.find((p) => p.id === projectId);
+  const panelId = `${config.kind}-${projectId}`;
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.api.setActive();
+    if (isMobile) api.maximizeGroup(existing);
+    return;
+  }
+
+  const panel = api.addPanel({
+    id: panelId,
+    component: config.kind,
+    title: project ? `${config.titleLabel}: ${project.name}` : config.titleLabel,
+    params: { projectId },
+    ...(config.applyDesktopPositioning && !isMobile
+      ? hasTiledPanels(api)
+        ? { floating: true }
+        : { position: { direction: "right" } }
+      : {}),
+  });
+  if (isMobile) api.maximizeGroup(panel);
+}
+
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
   return {
