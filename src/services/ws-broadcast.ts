@@ -105,9 +105,7 @@ export interface KeyedBroadcastChannel<TEvent, TKey> {
   clearSubscribersForTests(): void;
 }
 
-export function createKeyedBroadcastChannel<TEvent, TKey>(
-  options: BroadcastChannelOptions = {},
-): KeyedBroadcastChannel<TEvent, TKey> {
+export function createKeyedBroadcastChannel<TEvent, TKey>(): KeyedBroadcastChannel<TEvent, TKey> {
   const channels = new Map<TKey, BroadcastChannel<TEvent>>();
 
   function getOrCreate(key: TKey): BroadcastChannel<TEvent> {
@@ -119,15 +117,20 @@ export function createKeyedBroadcastChannel<TEvent, TKey>(
       // subscriber leaves (matching the prior hand-rolled
       // `if (subs.size === 0) subscribers.delete(projectId)` behavior).
       //
-      // The `channels.get(key) === thisChannel` check guards against a
-      // stale close/error handler from a channel instance that was
-      // orphaned by clearSubscribersForTests() (or, in principle, any
-      // other direct replacement of this key's entry): without it, that
-      // old instance's onEmpty would fire after a *new* channel has
-      // already been installed at this key and delete the new one's live
-      // entry out from under it.
+      // The `channels.get(key) === thisChannel` check is belt-and-braces,
+      // not currently load-bearing via any real call path: today,
+      // clearSubscribersForTests() below already empties each channel's
+      // own subscriber set before clearing this map, so a stale socket's
+      // close/error handler hits createBroadcastChannel's own `remove()`
+      // early-return (`if (!subscribers.delete(socket)) return`) before
+      // onEmpty would even fire — see this file's regression test in
+      // github-ws-broadcast.test.ts, which passes via that path today.
+      // Kept as cheap insurance against a future change (e.g. a caller
+      // clearing this map directly, or replacing a key's entry some other
+      // way) reintroducing the race: without it, an orphaned instance's
+      // onEmpty firing after a NEW channel has been installed at this key
+      // would delete that new one's live entry out from under it.
       const thisChannel: BroadcastChannel<TEvent> = createBroadcastChannel<TEvent>({
-        ...options,
         onEmpty: () => {
           if (channels.get(key) === thisChannel) channels.delete(key);
         },
