@@ -159,15 +159,28 @@ export function TerminalPane(props: {
   // `searchAddonRef`/`setMatchState` in their own attachKeyConflictHandler
   // calls. The one real consequence: this hook's own two internal effects
   // (incremental-search, findOpen-transition-focus) now register — and
-  // therefore fire, each commit — BEFORE the captureCtrlC-sync and
-  // settings-sync effects, instead of after (their pre-extraction position).
-  // Confirmed benign: the incremental-search effect only touches the
-  // SearchAddon's decorations via buildSearchDecorations (plain hex colors
-  // passed as addon options) — it never reads/writes `term.options.theme`
-  // or the WebGL glyph texture atlas, the two things this file's other
-  // ordering-sensitive comments (atlas clear/rebuild/repaint, OSC dispatch
-  // order) actually depend on, so the two effect groups operate on disjoint
-  // subsystems regardless of which fires first.
+  // therefore fire, each commit — BEFORE the mount, captureCtrlC-sync, AND
+  // settings-sync effects, instead of after all three (their pre-extraction
+  // position, registered near the very end of the component). On first
+  // mount specifically this is inert: `findOpen` starts false so
+  // incremental-search returns immediately, and findOpen-transition-focus
+  // hits neither of its branches (`prevFindOpenRef` also starts false) and
+  // only writes its two refs — `searchAddonRef` is still null at that point
+  // regardless (the mount effect hasn't constructed the addon yet). The
+  // findOpenRef write itself still lands before the pane-activation effect
+  // (further down) ever reads it, preserving that invariant. Confirmed
+  // benign on every later commit too: the incremental-search effect only
+  // touches the SearchAddon's decorations via buildSearchDecorations (plain
+  // hex colors passed as addon options) — it never reads/writes
+  // `term.options.theme` or the WebGL glyph texture atlas, the two things
+  // this file's other ordering-sensitive comments (atlas clear/rebuild/
+  // repaint, OSC dispatch order) actually depend on, so the two effect
+  // groups operate on disjoint subsystems regardless of which fires first.
+  // One interaction is reasoned-through rather than test-covered (a mocked
+  // Terminal in tests can't observe decoration survival across a
+  // term.options.theme reassignment): open the find bar with a query that
+  // has matches, then toggle dark/light — highlights should persist and
+  // recolor. Worth a manual spot-check if this area is touched again.
   const {
     findOpen,
     setFindOpen,
