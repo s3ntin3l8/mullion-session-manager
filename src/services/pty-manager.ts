@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  ElicitationHookMessage,
   QuestionHookMessage,
   TodoHookMessage,
   SessionDiffHookMessage,
@@ -2311,26 +2310,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "elicitation": {
-        const elicitation = message as ElicitationHookMessage;
-        if (elicitation.state === "started") {
-          this.elicitationState = "pending";
-          this.elicitationAt = Date.now();
-          this.elicitationServer = elicitation.server ?? null;
-          this.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
-          this.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
-        } else {
-          this.elicitationState = "idle";
-          this.elicitationServer = null;
-          this.elicitationAt = null;
-          this.emitEvent("elicitation", { state: "finished" });
-          // Same "resolution over the hook channel itself is as
-          // authoritative as a REST decision" reasoning as review_gate's own
-          // non-waiting branch above.
-          this.clearIfConfirmedKind("elicitation");
-        }
-        return;
-      }
       case "question": {
         const q = message as QuestionHookMessage;
         if (q.state === "started") {

@@ -41,6 +41,7 @@ import type {
   CwdChangedHookMessage,
   CompactHookMessage,
   SubagentHookMessage,
+  ElicitationHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -594,6 +595,28 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       }
       ctx.emitEvent("status_change", subagentExtras);
       if (carriesBackgroundTasks) ctx.resolveDeferredTurnEnd();
+    },
+  ],
+  [
+    "elicitation",
+    (ctx, message) => {
+      const elicitation = message as ElicitationHookMessage;
+      if (elicitation.state === "started") {
+        ctx.elicitationState = "pending";
+        ctx.elicitationAt = Date.now();
+        ctx.elicitationServer = elicitation.server ?? null;
+        ctx.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
+        ctx.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
+      } else {
+        ctx.elicitationState = "idle";
+        ctx.elicitationServer = null;
+        ctx.elicitationAt = null;
+        ctx.emitEvent("elicitation", { state: "finished" });
+        // Same "resolution over the hook channel itself is as
+        // authoritative as a REST decision" reasoning as review_gate's own
+        // non-waiting branch above.
+        ctx.clearIfConfirmedKind("elicitation");
+      }
     },
   ],
 ]);
