@@ -48,7 +48,10 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 // real user edit would.
 function makeMockApi() {
   const layoutChangeListeners: Array<() => void> = [];
-  const panels = new Map<string, unknown>();
+  const panels = new Map<
+    string,
+    { id: string; params?: Record<string, unknown>; api: { close: ReturnType<typeof vi.fn> } }
+  >();
   const api = {
     clear: vi.fn(),
     fromJSON: vi.fn(),
@@ -70,7 +73,27 @@ function makeMockApi() {
   return {
     api: api as unknown as DockviewApi,
     fireLayoutChange: () => layoutChangeListeners.forEach((cb) => cb()),
+    // Seeds a panel as if fromJSON() had just restored it — the restore
+    // effect's stale-panel sweep reads `dockviewApi.panels` synchronously
+    // right after its (mocked, no-op) fromJSON() call, so tests populate
+    // this map directly to stand in for what a real restore would produce.
+    addPanel: (id: string, params?: Record<string, unknown>) => {
+      const panel = { id, params, api: { close: vi.fn() } };
+      panels.set(id, panel);
+      return panel;
+    },
   };
+}
+
+// A real `useState` setter invokes a functional updater with the previous
+// state to compute the next value — this feeds the updater a fixed previous
+// value the same way, so the hook's own `(v) => v + 1` updater body actually
+// executes under test (a bare `vi.fn()` would just record the updater
+// function as an argument without ever calling it).
+function makeSetPanelsVersion() {
+  return vi.fn((updater: number | ((prev: number) => number)) => {
+    if (typeof updater === "function") updater(0);
+  });
 }
 
 beforeEach(() => {
@@ -87,7 +110,7 @@ describe("useWorkspacePersistence", () => {
     vi.useFakeTimers();
     const { api } = makeMockApi();
     const workspace = makeWorkspace();
-    const setPanelsVersion = vi.fn();
+    const setPanelsVersion = makeSetPanelsVersion();
 
     const { result } = renderHook(() =>
       useWorkspacePersistence({
@@ -115,7 +138,7 @@ describe("useWorkspacePersistence", () => {
     vi.useFakeTimers();
     const { api } = makeMockApi();
     const workspace = makeWorkspace();
-    const setPanelsVersion = vi.fn();
+    const setPanelsVersion = makeSetPanelsVersion();
 
     const { rerender } = renderHook(
       ({ workspaces }: { workspaces: Workspace[] }) =>
@@ -143,7 +166,7 @@ describe("useWorkspacePersistence", () => {
     vi.useFakeTimers();
     const { api, fireLayoutChange } = makeMockApi();
     const workspace = makeWorkspace();
-    const setPanelsVersion = vi.fn();
+    const setPanelsVersion = makeSetPanelsVersion();
 
     renderHook(() =>
       useWorkspacePersistence({
@@ -179,7 +202,7 @@ describe("useWorkspacePersistence", () => {
     const { api, fireLayoutChange } = makeMockApi();
     const ws1 = makeWorkspace({ id: 1, layout: { ws: 1 } });
     const ws2 = makeWorkspace({ id: 2, layout: { ws: 2 } });
-    const setPanelsVersion = vi.fn();
+    const setPanelsVersion = makeSetPanelsVersion();
 
     const { rerender } = renderHook(
       ({ activeWorkspaceId, workspaces }: { activeWorkspaceId: number; workspaces: Workspace[] }) =>
@@ -222,10 +245,140 @@ describe("useWorkspacePersistence", () => {
     expect(api.fromJSON).toHaveBeenLastCalledWith(ws2.layout);
   });
 
+  it("does not restore when activeWorkspaceId isn't found in `workspaces` yet", () => {
+    vi.useFakeTimers();
+    const { api } = makeMockApi();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 99,
+        workspaces: [makeWorkspace({ id: 1 })],
+        isMobile: false,
+        setPanelsVersion,
+      }),
+    );
+
+    // `workspaces` hasn't loaded the active id yet (e.g. dockviewApi became
+    // ready before the initial refreshWorkspaces() fetch resolved) — must
+    // wait rather than clear()ing the grid against nothing.
+    expect(api.clear).not.toHaveBeenCalled();
+    expect(api.fromJSON).not.toHaveBeenCalled();
+  });
+
+  it("clears an already-pending debounce timer before arming a new one on a rapid second layout change", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        isMobile: false,
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0); // let the restore settle
+
+    fireLayoutChange();
+    vi.advanceTimersByTime(400); // halfway through the first debounce window
+    fireLayoutChange(); // a second real edit before the first save fires
+
+    vi.advanceTimersByTime(400); // 800ms since the FIRST edit, only 400ms since the second
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(400); // now 800ms since the second edit
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes stale panels for killed/exited sessions after restore, then persists the cleaned layout", () => {
+    vi.useFakeTimers();
+    const { api, addPanel } = makeMockApi();
+    sessions = [
+      { id: 1, status: "killed" },
+      { id: 2, status: "active" },
+      { id: 3, status: "exited" },
+    ];
+    // `session-*` panels only close on `killed` — `active` must survive.
+    const killedSessionPanel = addPanel("session-1", { sessionId: 1 });
+    const activeSessionPanel = addPanel("session-2", { sessionId: 2 });
+    // `timeline-*`/`browserPane-*` panels also close on `exited`, or when
+    // the referenced session is gone entirely.
+    const exitedTimelinePanel = addPanel("timeline-3", { sessionId: 3 });
+    // No `params.sessionId` — falls back to parsing the id itself; session 4
+    // isn't in `sessions` at all, so this must close as an orphan.
+    const orphanBrowserPanePanel = addPanel("browserPane-4");
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        isMobile: false,
+        setPanelsVersion,
+      }),
+    );
+
+    expect(killedSessionPanel.api.close).toHaveBeenCalledTimes(1);
+    expect(exitedTimelinePanel.api.close).toHaveBeenCalledTimes(1);
+    expect(orphanBrowserPanePanel.api.close).toHaveBeenCalledTimes(1);
+    expect(activeSessionPanel.api.close).not.toHaveBeenCalled();
+
+    // The closes above happened while restoringRef.current was still true,
+    // so they weren't autosaved via the normal onDidLayoutChange path — the
+    // restore effect must explicitly persist the cleaned-up layout itself
+    // once restoringRef settles, rather than silently letting the stale
+    // panels reappear on the next reload.
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(0); // restoringRef flips false; schedules the save
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+    expect(saveWorkspaceLayout).toHaveBeenCalledWith(1, { panels: {} });
+  });
+
+  it("falls back to clearing the grid and logging when fromJSON throws on a corrupt/incompatible layout blob", () => {
+    vi.useFakeTimers();
+    const { api } = makeMockApi();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = new Error("corrupt layout");
+    vi.mocked(api.fromJSON).mockImplementationOnce(() => {
+      throw error;
+    });
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        isMobile: false,
+        setPanelsVersion,
+      }),
+    );
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "[workspace] failed to restore layout, resetting to empty grid",
+      error,
+    );
+    // clear() runs once before fromJSON() throws, then again in the catch
+    // fallback — a corrupt blob must never leave a half-applied restore on
+    // screen.
+    expect(api.clear).toHaveBeenCalledTimes(2);
+
+    consoleError.mockRestore();
+  });
+
   it("does nothing when there is no dockviewApi yet, or no activeWorkspaceId", () => {
     vi.useFakeTimers();
     const { api } = makeMockApi();
-    const setPanelsVersion = vi.fn();
+    const setPanelsVersion = makeSetPanelsVersion();
 
     renderHook(() =>
       useWorkspacePersistence({
