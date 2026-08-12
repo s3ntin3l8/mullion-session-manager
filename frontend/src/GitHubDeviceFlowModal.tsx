@@ -4,6 +4,7 @@ import type { DeviceFlowStatus } from "./api.js";
 import { CloseIcon, GitHubIcon } from "./icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { SecondaryButton } from "./ui/primitives.js";
+import { ErrorText } from "./ui/ErrorText.js";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -97,11 +98,7 @@ export function GitHubDeviceFlowModal({
         </div>
 
         <div className="create-modal-body">
-          {error && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-              {error}
-            </div>
-          )}
+          {error && <ErrorText>{error}</ErrorText>}
           {!error && !state && <div className="settings-readonly-value">Starting device flow…</div>}
           {!error && state?.status === "pending" && (
             <>
@@ -126,19 +123,15 @@ export function GitHubDeviceFlowModal({
             </>
           )}
           {!error && state?.status === "expired" && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-              This code expired before it was used — close this and try again.
-            </div>
+            <ErrorText>This code expired before it was used — close this and try again.</ErrorText>
           )}
           {!error && state?.status === "denied" && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-              Authorization was denied on GitHub.
-            </div>
+            <ErrorText>Authorization was denied on GitHub.</ErrorText>
           )}
           {!error && state?.status === "error" && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
+            <ErrorText>
               {state.errorMessage ?? "Something went wrong connecting to GitHub."}
-            </div>
+            </ErrorText>
           )}
         </div>
 

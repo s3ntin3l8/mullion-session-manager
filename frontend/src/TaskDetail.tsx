@@ -7,6 +7,7 @@ import type { GitHubCiStatus, Session, Task } from "./api.js";
 import { commandToBinary } from "./cliLogos.js";
 import { BotIcon, GitHubIcon, TerminalPromptIcon, WarningTriangleIcon } from "./icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 
 export interface TaskDetailParams {
   taskId: number;
@@ -55,7 +56,7 @@ export function TaskDetail({
   }, [refreshTasks]);
 
   if (!task) {
-    return <div className="github-panel-empty">Task not found.</div>;
+    return <EmptyStateNote>Task not found.</EmptyStateNote>;
   }
 
   const workerSession =

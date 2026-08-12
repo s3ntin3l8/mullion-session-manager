@@ -9,6 +9,7 @@ import { KebabMenu } from "../../KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../icons.js";
 import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
+import { ErrorText } from "../../ui/ErrorText.js";
 
 export function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
@@ -183,9 +184,7 @@ export function HostsSection() {
         </div>
       )}
       {deleteError && !cascadePrompt && (
-        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
-          {deleteError}
-        </div>
+        <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>
       )}
 
       <div style={{ marginTop: 10 }}>

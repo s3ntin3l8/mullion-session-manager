@@ -11,6 +11,7 @@ import type {
 import { ChevronDownIcon, GitHubIcon } from "./icons.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 
 export interface GitHubPanelParams {
   projectId: number;
@@ -260,15 +261,15 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
   }, [params.projectId, subscribeToGitHubProject, unsubscribeFromGitHubProject]);
 
   if (status === undefined && prsStatus === undefined) {
-    return <div className="github-panel-empty">Loading…</div>;
+    return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
 
   if (status === null && prsStatus === null) {
     return (
-      <div className="github-panel-empty">
+      <EmptyStateNote>
         No GitHub status available for this project. Connect an account in Settings → Integrations,
         and make sure this project's <code>origin</code> remote points at github.com.
-      </div>
+      </EmptyStateNote>
     );
   }
 

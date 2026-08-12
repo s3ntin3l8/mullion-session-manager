@@ -4,6 +4,7 @@ import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
+import { ErrorText } from "../../ui/ErrorText.js";
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -175,11 +176,7 @@ function UpdatesSubsection() {
     <>
       <Eyebrow title="Updates" desc="Checks this project's GitHub releases for a newer version." />
 
-      {checkError && (
-        <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-          {checkError}
-        </div>
-      )}
+      {checkError && <ErrorText>{checkError}</ErrorText>}
 
       {!checkError && !check && <div className="settings-readonly-value">Checking…</div>}
 
@@ -255,16 +252,12 @@ function UpdatesSubsection() {
       )}
 
       {status?.phase === "failed" && (
-        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
+        <ErrorText style={{ marginTop: 8 }}>
           Update failed: {status.error || "unknown error"}
-        </div>
+        </ErrorText>
       )}
       {status?.phase === "done" && <div className="settings-footer-note">Updated — reloading…</div>}
-      {applyError && (
-        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
-          {applyError}
-        </div>
-      )}
+      {applyError && <ErrorText style={{ marginTop: 8 }}>{applyError}</ErrorText>}
     </>
   );
 }

@@ -4,6 +4,7 @@ import type { DockControlInput } from "./api.js";
 import { PlusIcon, CloseIcon, DockIcon } from "./icons.js";
 import { ConfirmButton } from "./ConfirmButton.js";
 import { Row } from "./ui/primitives.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 import { useDashboardStore } from "./store.js";
 
 export interface DockConfigPanelParams {
@@ -191,15 +192,15 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
   if (controls === undefined) {
     if (loadError) {
       return (
-        <div className="github-panel-empty">
+        <EmptyStateNote>
           <div>Couldn't load dock.json.</div>
           <button className="git-panel-fetch-btn" onClick={() => void fetchConfig()}>
             Retry
           </button>
-        </div>
+        </EmptyStateNote>
       );
     }
-    return <div className="github-panel-empty">Loading…</div>;
+    return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
 
   return (
@@ -275,10 +276,10 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
 
         <div className="agent-rules-panel-editor">
           {!selected ? (
-            <div className="github-panel-empty">
+            <EmptyStateNote>
               <DockIcon size={20} />
               <div>Select a monitor to edit it, or add a new one.</div>
-            </div>
+            </EmptyStateNote>
           ) : (
             <>
               <div className="dock-config-panel-monitor-header">

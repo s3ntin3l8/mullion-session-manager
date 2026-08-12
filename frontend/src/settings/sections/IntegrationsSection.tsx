@@ -12,6 +12,7 @@ import {
   StyledList,
   Toggle,
 } from "../../ui/primitives.js";
+import { ErrorText } from "../../ui/ErrorText.js";
 import { BrowserCookiesSection } from "./BrowserCookiesSection.js";
 
 // One credential for the whole install (issue #27), not per-project — see
@@ -128,11 +129,7 @@ export function IntegrationsSection() {
         </div>
       )}
 
-      {error && (
-        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
-          {error}
-        </div>
-      )}
+      {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
 
       {integration && !integration.deviceFlowAvailable && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
@@ -375,11 +372,7 @@ function GitHubAppSection({
         </div>
       )}
 
-      {error && (
-        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
-          {error}
-        </div>
-      )}
+      {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
     </div>
   );
 }
@@ -457,11 +450,7 @@ function WebhooksSection({ integration }: { integration: GitHubIntegration | nul
         </StyledList>
       </div>
 
-      {webhookError && (
-        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
-          {webhookError}
-        </div>
-      )}
+      {webhookError && <ErrorText style={{ marginTop: 8 }}>{webhookError}</ErrorText>}
     </>
   );
 }

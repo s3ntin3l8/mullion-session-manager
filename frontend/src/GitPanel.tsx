@@ -5,6 +5,7 @@ import { GitBranchIcon } from "./icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
 import { Toggle } from "./ui/primitives.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 import { ConfirmButton } from "./ConfirmButton.js";
 
 export interface GitPanelParams {
@@ -429,14 +430,14 @@ export function GitPanel({
   }, [params.projectId]);
 
   if (status === undefined) {
-    return <div className="github-panel-empty">Loading…</div>;
+    return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
 
   if (status === null) {
     // Only reached via the durable 204 now — a transient failure (503, or
     // any other fetch error) is handled above by simply not calling
     // setStatus, so it never lands here.
-    return <div className="github-panel-empty">Not a git repository.</div>;
+    return <EmptyStateNote>Not a git repository.</EmptyStateNote>;
   }
 
   return (

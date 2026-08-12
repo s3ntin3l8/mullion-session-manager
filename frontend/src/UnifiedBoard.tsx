@@ -40,6 +40,7 @@ import { ApiError } from "./api.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
+import { EmptyStateNote } from "./ui/EmptyState.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
@@ -369,14 +370,14 @@ export function UnifiedBoard({
               on every board open, since the mount effect above always
               starts from tasks === [] until its own refreshTasks() lands. */}
           {tasksLoaded && tasks.length === 0 && (
-            <div className="github-panel-empty">
+            <EmptyStateNote>
               <LayersIcon size={20} />
               <div>No tasks yet.</div>
               <div className="tasks-panel-empty-hint">
                 Label a GitHub issue <code>mullion-task</code>, or use "New task" above to create
                 one locally.
               </div>
-            </div>
+            </EmptyStateNote>
           )}
           <div className="kanban-board tasks-board kanban-unified-columns">
             {TASK_COLUMNS.map((column) => {
