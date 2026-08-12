@@ -33,13 +33,11 @@ import {
   type AttentionTransition,
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
-import { isPathGitIgnoredCached } from "./git-ignore.js";
 import type {
   HookMessageKind,
   HookMessage,
   ReviewGateHookMessage,
   PromoteRequestHookMessage,
-  FileChangeHookMessage,
   PermissionRequestHookMessage,
   ToolDoneHookMessage,
   StopFailureHookMessage,
@@ -2324,51 +2322,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "file_change": {
-        // Issue: sidebar worktree display's Part B — a git-ignored path (most
-        // commonly something under this repo's own `.claude/`, per that
-        // issue's motivating case) shouldn't surface as a Row 4 chip.
-        // `message.path` isn't normalized by the forwarder (Claude Code sends
-        // an absolute path, Codex's apply_patch-derived one is relative —
-        // see forwarder-core.mjs) — isPathGitIgnoredCached resolves it
-        // against `root` itself. `root` prefers the live cwd (a worktree the
-        // shell has since `cd`'d into) over the static spawn cwd, same
-        // precedence as everywhere else liveCwd overrides cwd.
-        // `UnknownHookMessage`'s fallback shape (`kind: string`) means TS
-        // can't discriminate this down to `FileChangeHookMessage` from
-        // `message.kind` alone — same explicit-cast gap the `review_gate`
-        // case below documents; safe for the same reason (hook-protocol.ts's
-        // validateFileChange only ever produces a real FileChangeHookMessage
-        // for this kind).
-        const fileChange = message as FileChangeHookMessage;
-        const root = this._liveCwd ?? this.cwd;
-        const { path: filePath, action, agentId } = fileChange;
-        this.fileChangeQueue = this.fileChangeQueue
-          .then(async () => {
-            // B8(3) — memoized (gitIgnoreDirCache, this session's whole
-            // lifetime) instead of a fresh `git check-ignore` subprocess
-            // spawn every single call — see isPathGitIgnoredCached's own
-            // doc comment for exactly what is and isn't safe to cache.
-            const ignored = await isPathGitIgnoredCached(root, filePath, this.gitIgnoreDirCache);
-            if (ignored) return;
-            // Phase 5 (Track A) — attribute to the subagent that made this
-            // change, if the hook carried one. Skipped for an ignored path
-            // so the registry's fileChanges count matches what actually
-            // surfaces in the sidebar/timeline.
-            if (agentId !== undefined) this.bumpSubagentActivity(agentId, "file_change");
-            this.emitEvent("file_change", { path: filePath, action, agentId: agentId ?? null });
-          })
-          // isPathGitIgnoredCached itself never rejects, but a listener this
-          // event fans out to (emitEvent's eventListeners) might throw
-          // synchronously — without this, that would leave
-          // `fileChangeQueue` permanently rejected, silently dropping every
-          // later file_change for this session (each new `.then()` on an
-          // already-rejected promise stays rejected too).
-          .catch((err) => {
-            console.error(`[pty-manager] session ${this.id} file_change filter failed:`, err);
-          });
-        return;
-      }
       case "review_gate": {
         // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
         // (not a literal) plus a `[key: string]: unknown` index signature,
