@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  SubagentHookMessage,
   ElicitationHookMessage,
   QuestionHookMessage,
   TodoHookMessage,
@@ -2312,65 +2311,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "subagent": {
-        const subagent = message as SubagentHookMessage;
-        // Clamped at 0 defensively — a SubagentStop this session never saw a
-        // matching SubagentStart for (e.g. one that started just before this
-        // process restarted) must not drive the count negative.
-        this.subagentCount = Math.max(
-          0,
-          this.subagentCount + (subagent.state === "started" ? 1 : -1),
-        );
-        if (subagent.state === "started" && this.subagentCount > 0) {
-          this.subagentCountAt = Date.now();
-        } else if (subagent.state !== "started" && this.subagentCount === 0) {
-          this.subagentCountAt = null;
-        }
-        // Phase 5 (Track A) — the registry is purely additive: it's only
-        // populated when the hook carried an agentId (OpenCode's own
-        // "subagent" events never do), so subagentCount above stays the
-        // authoritative running count regardless of registry coverage.
-        if (subagent.agentId !== undefined) {
-          if (subagent.state === "started") {
-            this.recordSubagentStart(subagent.agentId, subagent.agentType ?? null, Date.now());
-          } else {
-            this.recordSubagentStop(subagent.agentId, subagent.summary ?? null, Date.now());
-          }
-        }
-        const subagentExtras: Record<string, unknown> = {
-          subagentCount: this.subagentCount,
-          agentType: subagent.agentType ?? null,
-          agentId: subagent.agentId ?? null,
-          // Named distinctly from the stale-blocked-clear branch's own
-          // `state: "subagentCount"` (which names the FIELD that was
-          // cleared, not a transition) — this one is the subagent's own
-          // started/finished transition, so eventDescriptions.ts can
-          // render it without the two meanings colliding on one key.
-          subagentState: subagent.state,
-        };
-        // Issue #428 — SubagentStop is the ONLY drain signal for a
-        // background subagent's own outstanding work: the parent's turn has
-        // already ended by the time this fires (that's the whole point of a
-        // background Agent/Task call), so no further "progress" message
-        // will ever report the list shrinking. Same present-only-update
-        // guard as the "progress" case — and the same reason
-        // resolveDeferredTurnEnd() is called ONLY inside this guard, not
-        // unconditionally for every subagent message: a plain
-        // "started"/"finished" event with no backgroundTasks field (the
-        // ordinary case) changes nothing about outstanding work, so calling
-        // it unconditionally would re-fire `agentIdle` for an
-        // already-resolved turn end the moment any unrelated subagent
-        // activity arrives afterward (Hermes review, PR #453).
-        let carriesBackgroundTasks = false;
-        if (subagent.backgroundTasks !== undefined) {
-          carriesBackgroundTasks = true;
-          subagentExtras.backgroundTasks = subagent.backgroundTasks;
-          this.setBackgroundTasks(subagent.backgroundTasks);
-        }
-        this.emitEvent("status_change", subagentExtras);
-        if (carriesBackgroundTasks) this.resolveDeferredTurnEnd();
-        return;
-      }
       case "elicitation": {
         const elicitation = message as ElicitationHookMessage;
         if (elicitation.state === "started") {
