@@ -37,6 +37,7 @@ import type {
   ToolFailureHookMessage,
   SessionEndHookMessage,
   PlanReadyHookMessage,
+  GitBranchHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -441,6 +442,25 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.emitAttentionSignalWithExtras("planReady", {
         summary: plan.summary ?? plan.plan.slice(0, 100),
       });
+    },
+  ],
+  [
+    "git_branch",
+    (ctx, message) => {
+      // Issue: sidebar worktree detection — an agent reports its current
+      // branch (opencode's vcs.branch.updated, or a Bash tool intercept
+      // detecting git worktree add from any agent). Same TS-narrowing
+      // reasoning as the review_gate case above.
+      const gitBranch = message as GitBranchHookMessage;
+      ctx.liveBranch = gitBranch.branch;
+      // When the hook also carries a worktree path, update _liveCwd so
+      // the cwd-resolution pipeline (resolveSessionCwdTargets,
+      // getGitStatus) can resolve the branch from the worktree's actual
+      // git state on the next poll cycle.
+      if (gitBranch.worktree && gitBranch.worktree !== ctx.liveCwd) {
+        ctx.liveCwd = gitBranch.worktree;
+      }
+      ctx.emitEvent("status_change", { phase: "done" });
     },
   ],
 ]);

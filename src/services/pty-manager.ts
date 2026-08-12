@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  GitBranchHookMessage,
   CwdChangedHookMessage,
   CompactHookMessage,
   SubagentHookMessage,
@@ -2315,23 +2314,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "git_branch": {
-        // Issue: sidebar worktree detection — an agent reports its current
-        // branch (opencode's vcs.branch.updated, or a Bash tool intercept
-        // detecting git worktree add from any agent). Same TS-narrowing
-        // reasoning as the review_gate case above.
-        const gitBranch = message as GitBranchHookMessage;
-        this._liveBranch = gitBranch.branch;
-        // When the hook also carries a worktree path, update _liveCwd so
-        // the cwd-resolution pipeline (resolveSessionCwdTargets,
-        // getGitStatus) can resolve the branch from the worktree's actual
-        // git state on the next poll cycle.
-        if (gitBranch.worktree && gitBranch.worktree !== this._liveCwd) {
-          this._liveCwd = gitBranch.worktree;
-        }
-        this.emitEvent("status_change", { phase: "done" });
-        return;
-      }
       case "cwd_changed": {
         // Issue: sidebar worktree detection — an agent reports a working
         // directory change via structured hooks instead of OSC 7 (Claude
