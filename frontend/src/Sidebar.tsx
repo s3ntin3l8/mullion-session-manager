@@ -43,6 +43,7 @@ import {
   SearchAlertIcon,
   SearchIcon,
 } from "./icons.js";
+import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
@@ -539,8 +540,8 @@ function ProjectGitHubSubscription({ projectId }: { projectId: number }) {
 // "you're working from a very stale checkout".
 const BEHIND_STALE_THRESHOLD = 10;
 
-// U3 — persisted per-project collapse state. Same key-naming/serialization/
-// hydrate-once-at-module-load shape as EXPANDED_SESSION_ROWS_KEY below (read
+// U3 — persisted per-project collapse state. Same serialization/
+// hydrate-once-at-module-load shape as readExpandedSessionRows below (read
 // that block first) — the one difference is the data structure: expand
 // state there only ever needs "is this id in the set of expanded rows"
 // (absence == collapsed, the default), but collapse here has a THIRD state
@@ -550,23 +551,15 @@ const BEHIND_STALE_THRESHOLD = 10;
 // overrides it). A bare `Set<id>` can't distinguish "explicitly expanded"
 // from "never touched" the way a `Record<id, boolean>` can, so this uses the
 // latter instead of mirroring the Set shape verbatim.
-const PROJECT_COLLAPSED_KEY = "crs.projectCollapsed";
-
 function readProjectCollapsedState(): Record<number, boolean> {
-  try {
-    const raw = localStorage.getItem(PROJECT_COLLAPSED_KEY);
-    if (!raw) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const result: Record<number, boolean> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      const id = Number(key);
-      if (Number.isFinite(id) && typeof value === "boolean") result[id] = value;
-    }
-    return result;
-  } catch {
-    return {};
+  const parsed = readJSON<unknown>(STORAGE_KEYS.projectCollapsed, {});
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const result: Record<number, boolean> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const id = Number(key);
+    if (Number.isFinite(id) && typeof value === "boolean") result[id] = value;
   }
+  return result;
 }
 
 // Read once at module load (mirrors expandedSessionRows's own shape below)
@@ -576,7 +569,7 @@ const projectCollapsedState = readProjectCollapsedState();
 
 function setProjectCollapsedPersisted(projectId: number, collapsed: boolean): void {
   projectCollapsedState[projectId] = collapsed;
-  localStorage.setItem(PROJECT_COLLAPSED_KEY, JSON.stringify(projectCollapsedState));
+  writeJSON(STORAGE_KEYS.projectCollapsed, projectCollapsedState);
 }
 
 // U3 — the flattened row shape `VirtualizedProjectTree` windows over.
@@ -1203,23 +1196,15 @@ function estimateSidebarRowHeight(row: SidebarFlatRow | undefined): number {
 
 // Row 3's expand/collapse toggle (issue #202) persists per session, same
 // single-localStorage-key convention as the sidebar's own collapse/width
-// state (store.ts's SIDEBAR_COLLAPSED_KEY/SIDEBAR_WIDTH_KEY) rather than one
-// key per session — there's no existing per-*session* persisted-UI-state
+// state (store.ts's STORAGE_KEYS.sidebarCollapsed/sidebarWidth) rather than
+// one key per session — there's no existing per-*session* persisted-UI-state
 // precedent to follow instead (ProjectSection's own collapse above is
 // in-memory `useState`, derived fresh each mount). Module-level (not store
 // state) since this is pure, session-scoped UI state no other component
 // needs to read.
-const EXPANDED_SESSION_ROWS_KEY = "crs.expandedSessionRows";
-
 function readExpandedSessionRows(): Set<number> {
-  try {
-    const raw = localStorage.getItem(EXPANDED_SESSION_ROWS_KEY);
-    if (!raw) return new Set();
-    const parsed: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter((n) => typeof n === "number") : []);
-  } catch {
-    return new Set();
-  }
+  const parsed = readJSON<unknown>(STORAGE_KEYS.expandedSessionRows, []);
+  return new Set(Array.isArray(parsed) ? parsed.filter((n) => typeof n === "number") : []);
 }
 
 // Read once at module load (mirrors readStoredSidebarWidth's own shape in
@@ -1230,27 +1215,19 @@ const expandedSessionRows = readExpandedSessionRows();
 function setSessionRowExpanded(sessionId: number, expanded: boolean): void {
   if (expanded) expandedSessionRows.add(sessionId);
   else expandedSessionRows.delete(sessionId);
-  localStorage.setItem(EXPANDED_SESSION_ROWS_KEY, JSON.stringify([...expandedSessionRows]));
+  writeJSON(STORAGE_KEYS.expandedSessionRows, [...expandedSessionRows]);
 }
 
 // Row 5 (Phase 5 Track A, #195/5.5a) — per-subagent detail expand/collapse,
-// same persisted-across-reload convention as EXPANDED_SESSION_ROWS_KEY's
+// same persisted-across-reload convention as readExpandedSessionRows's
 // git-details toggle above, but keyed by a `${sessionId}:${agentId}` string:
-// EXPANDED_SESSION_ROWS_KEY's own reader actively discards non-number
-// entries (see readExpandedSessionRows), and a session can host several
+// readExpandedSessionRows's own reader actively discards non-number
+// entries, and a session can host several
 // subagents at once, so a bare Set<number> can't disambiguate which one a
 // given entry refers to.
-const EXPANDED_SUBAGENT_ROWS_KEY = "crs.expandedSubagentRows";
-
 function readExpandedSubagentRows(): Set<string> {
-  try {
-    const raw = localStorage.getItem(EXPANDED_SUBAGENT_ROWS_KEY);
-    if (!raw) return new Set();
-    const parsed: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : []);
-  } catch {
-    return new Set();
-  }
+  const parsed = readJSON<unknown>(STORAGE_KEYS.expandedSubagentRows, []);
+  return new Set(Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : []);
 }
 
 const expandedSubagentRows = readExpandedSubagentRows();
@@ -1263,7 +1240,7 @@ function setSubagentRowExpanded(sessionId: number, agentId: string, expanded: bo
   const key = subagentRowKey(sessionId, agentId);
   if (expanded) expandedSubagentRows.add(key);
   else expandedSubagentRows.delete(key);
-  localStorage.setItem(EXPANDED_SUBAGENT_ROWS_KEY, JSON.stringify([...expandedSubagentRows]));
+  writeJSON(STORAGE_KEYS.expandedSubagentRows, [...expandedSubagentRows]);
 }
 
 // Live (still running) vs finished — the only two states a SubagentInfo can

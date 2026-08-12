@@ -18,6 +18,7 @@ import {
   TerminalPromptIcon,
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
+import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { Dropdown } from "./settings/primitives.js";
 import { matchesQuery } from "./matchQuery.js";
 import { useFocusTrap } from "./useFocusTrap.js";
@@ -38,8 +39,6 @@ const SOURCE_LABEL: Record<Launcher["kind"], string | null> = {
   task: "tasks.json",
   custom: ".crs/actions.json",
 };
-
-const LAST_PROJECT_KEY = "crs.lastLaunchProjectId";
 
 // Expands Settings -> Session management's naming-pattern tokens
 // ({agent} {project} {n}) into a concrete session name at launch time — see
@@ -150,7 +149,7 @@ export function CommandPalette({
   );
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
-    const stored = Number(localStorage.getItem(LAST_PROJECT_KEY));
+    const stored = readNumber(STORAGE_KEYS.lastLaunchProjectId, 0);
     return (projects.find((p) => p.id === stored) ?? projects[0] ?? null)?.id ?? null;
   });
   const [manualTargetProjectId, setManualTargetProjectId] = useState<number | null>(null);
@@ -423,7 +422,7 @@ export function CommandPalette({
 
   const launch = (launcher: Launcher) => {
     if (effectiveProjectId === null || launching) return;
-    localStorage.setItem(LAST_PROJECT_KEY, String(effectiveProjectId));
+    writeNumber(STORAGE_KEYS.lastLaunchProjectId, effectiveProjectId);
     const name = expandSessionNamePattern(settings.sessions.namePattern, {
       agent: launcher.title,
       project: target?.name ?? "",

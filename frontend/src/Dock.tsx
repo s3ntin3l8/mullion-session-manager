@@ -25,6 +25,15 @@ import { TerminalPane } from "./TerminalPane.js";
 import { CustomSelect } from "./CustomSelect.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStatus.js";
+import {
+  STORAGE_KEYS,
+  readBool,
+  readJSON,
+  readNumber,
+  writeBool,
+  writeJSON,
+  writeNumber,
+} from "./lib/persistedState.js";
 
 // Issue #73 — how often a column with at least one discovered Docker
 // control re-fetches GET .../dock while the dock is expanded, so a
@@ -54,9 +63,6 @@ function imageTag(imageRef: string): string {
   return colonIndex === -1 ? "latest" : lastSegment.slice(colonIndex + 1);
 }
 
-const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
-const DOCK_HEIGHT_KEY = "crs.dockHeight";
-const DOCK_MANUAL_KEY = "crs.dockManualProjects";
 const DEFAULT_DOCK_HEIGHT = 220;
 const DOCK_MIN_HEIGHT = 120;
 // Must equal .dockview-container's min-height in styles.css — the resize
@@ -169,20 +175,14 @@ export function Dock({
   // selectors mean this only re-renders when one of THEM changes identity.
   const projects = useDashboardStore((s) => s.projects);
   const sessions = useDashboardStore((s) => s.sessions);
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(DOCK_COLLAPSED_KEY) === "1",
-  );
+  const [collapsed, setCollapsed] = useState(() => readBool(STORAGE_KEYS.dockCollapsed, false));
   const [height, setHeight] = useState(() => {
-    const n = Number(localStorage.getItem(DOCK_HEIGHT_KEY));
+    const n = readNumber(STORAGE_KEYS.dockHeight, NaN);
     return Number.isFinite(n) && n > 0 ? clamp(n, DOCK_MIN_HEIGHT, Infinity) : DEFAULT_DOCK_HEIGHT;
   });
   const [manualIds, setManualIds] = useState<number[]>(() => {
-    try {
-      const raw: unknown = JSON.parse(localStorage.getItem(DOCK_MANUAL_KEY) ?? "[]");
-      return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
-    } catch {
-      return [];
-    }
+    const raw = readJSON<unknown>(STORAGE_KEYS.dockManualProjects, []);
+    return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
   });
   // Column widths from divider drags — ephemeral (not persisted): the
   // column set itself is mostly derived, so a stored width map would just
@@ -194,7 +194,7 @@ export function Dock({
   const toggleCollapsed = () => {
     setCollapsed((v) => {
       const next = !v;
-      localStorage.setItem(DOCK_COLLAPSED_KEY, next ? "1" : "0");
+      writeBool(STORAGE_KEYS.dockCollapsed, next);
       return next;
     });
   };
@@ -212,7 +212,7 @@ export function Dock({
 
   const persistManual = (next: number[]) => {
     setManualIds(next);
-    localStorage.setItem(DOCK_MANUAL_KEY, JSON.stringify(next));
+    writeJSON(STORAGE_KEYS.dockManualProjects, next);
   };
   const addColumn = (id: number) => {
     if (!manualIds.includes(id)) persistManual([...manualIds, id]);
@@ -281,7 +281,7 @@ export function Dock({
       heightMountedRef.current = true;
       return;
     }
-    if (!heightDragging) localStorage.setItem(DOCK_HEIGHT_KEY, String(height));
+    if (!heightDragging) writeNumber(STORAGE_KEYS.dockHeight, height);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- persist-on-drag-end, height read intentionally
   }, [heightDragging]);
 

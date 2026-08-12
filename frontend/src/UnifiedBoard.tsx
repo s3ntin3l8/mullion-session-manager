@@ -43,12 +43,12 @@ import {
 } from "./icons.js";
 import { ApiError } from "./api.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
 // Detail drawer resize (see the drag-handle logic in UnifiedBoard below) —
-// same localStorage-key naming convention as store.ts's SIDEBAR_WIDTH_KEY.
-const TASK_DRAWER_WIDTH_KEY = "crs.taskDrawerWidth";
+// same localStorage-key naming convention as store.ts's sidebarWidth.
 const DEFAULT_DRAWER_WIDTH = 380; // .kanban-detail-drawer's own prior fixed width
 const MIN_DRAWER_WIDTH = 300;
 // Reserves at least this much width for the columns behind the drawer —
@@ -292,7 +292,7 @@ export function UnifiedBoard({
   // whatever window size the drag happens to start at.
   const mainRef = useRef<HTMLDivElement>(null);
   const [drawerWidth, setDrawerWidth] = useState(() => {
-    const n = Number(localStorage.getItem(TASK_DRAWER_WIDTH_KEY));
+    const n = readNumber(STORAGE_KEYS.taskDrawerWidth, NaN);
     return Number.isFinite(n) && n > 0 ? clampDrawerWidth(n, Infinity) : DEFAULT_DRAWER_WIDTH;
   });
   const widthDragRef = useRef<{ startX: number; startW: number; maxW: number } | null>(null);
@@ -374,7 +374,7 @@ export function UnifiedBoard({
       widthMountedRef.current = true;
       return;
     }
-    if (!widthDragging) localStorage.setItem(TASK_DRAWER_WIDTH_KEY, String(drawerWidth));
+    if (!widthDragging) writeNumber(STORAGE_KEYS.taskDrawerWidth, drawerWidth);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- persist-on-drag-end, drawerWidth read intentionally
   }, [widthDragging]);
 
