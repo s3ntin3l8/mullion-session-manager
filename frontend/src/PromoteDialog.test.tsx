@@ -209,4 +209,78 @@ describe("PromoteDialog (issue #271)", () => {
     expect(promoteSessionMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
+
+  // PR 24 pilot — behavior newly added by the `ui/Modal.tsx` migration.
+  // Everything above this point exercises behavior the hand-rolled dialog
+  // already had; these cases exercise ONLY what's new: role/aria-modal,
+  // Escape-to-close (routed through `cancel`, so it must respect the
+  // pending-decline branch exactly like the header close button and
+  // backdrop click already did), and the Tab focus trap.
+  describe("ui/Modal.tsx migration (PR 24 pilot)", () => {
+    it("exposes role=dialog and aria-modal=true", async () => {
+      render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={vi.fn()} />);
+
+      const dialog = await screen.findByRole("dialog", { name: "Promote to worktree" });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+    });
+
+    it("Escape closes the dialog exactly like Cancel (human-initiated, nothing pending)", async () => {
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={onClose} />);
+
+      await screen.findByRole("combobox");
+      await user.keyboard("{Escape}");
+
+      expect(promoteSessionMock).not.toHaveBeenCalled();
+      expect(declinePromoteMock).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("Escape declines a pending promote request exactly like clicking Decline", async () => {
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <PromoteDialog
+          session={makeSession({ promoteState: "pending", promoteSummary: "seed" })}
+          project={PROJECT}
+          onClose={onClose}
+        />,
+      );
+
+      await screen.findByRole("combobox");
+      await user.keyboard("{Escape}");
+
+      expect(declinePromoteMock).toHaveBeenCalledWith(42);
+      expect(promoteSessionMock).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("focuses the first focusable element on open and traps Tab within the dialog", async () => {
+      const user = userEvent.setup();
+      render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={vi.fn()} />);
+      await screen.findByRole("combobox");
+
+      const dialog = screen.getByRole("dialog");
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>("button, select, input, textarea"),
+      );
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+
+      // No `initialFocusRef` is passed for this dialog, so `useFocusTrap`
+      // falls back to the first focusable descendant — the header's close
+      // button, since it precedes the body's Dropdown/input/textarea in DOM
+      // order.
+      expect(first).toHaveFocus();
+
+      last.focus();
+      await user.tab();
+      expect(first).toHaveFocus();
+
+      first.focus();
+      await user.tab({ shift: true });
+      expect(last).toHaveFocus();
+    });
+  });
 });

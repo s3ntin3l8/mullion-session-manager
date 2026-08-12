@@ -3,7 +3,8 @@ import type { Session, Project } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { useGitBranches } from "./hooks/useGitBranches.js";
 import { Dropdown } from "./ui/primitives.js";
-import { GitBranchIcon, CloseIcon } from "./icons.js";
+import { Modal } from "./ui/Modal.js";
+import { GitBranchIcon } from "./icons.js";
 
 // Issue #271, option 2 — "promote an existing session" into a fresh git
 // worktree. Reused for two triggers: a human's SessionRow kebab action
@@ -74,76 +75,27 @@ export function PromoteDialog({
     }
   };
 
+  // PR 24 pilot — migrated onto the shared `ui/Modal.tsx` shell. Every
+  // field/behavior below is unchanged from the hand-rolled version this
+  // replaces; the only NEW behavior is what `Modal` itself adds: Escape now
+  // closes the dialog (routed through `cancel`, so a pending promote request
+  // still declines correctly, exactly like the header close button and
+  // backdrop click already did), a Tab focus trap activates, and
+  // `role="dialog"`/`aria-modal="true"` are now present. See `Modal`'s own
+  // header comment for why `cancel` (not a bare `onClose`) is the right
+  // thing to hand it.
   return (
-    <div className="create-modal-backdrop" onClick={cancel}>
-      <div className="create-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="create-modal-header">
-          <span className="create-modal-icon">
-            <GitBranchIcon size={16} />
-          </span>
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">Promote to worktree</span>
-            <span className="create-modal-subtitle">
-              {isPending
-                ? "The agent asked to start work in an isolated worktree."
-                : "Move this session's work into a fresh, isolated worktree."}
-            </span>
-          </span>
-          <button className="create-modal-close" onClick={cancel}>
-            <CloseIcon size={15} />
-          </button>
-        </div>
-
-        <div className="create-modal-body">
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Base ref</span>
-            <span className="create-modal-input-row">
-              <GitBranchIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-              <Dropdown
-                value={baseRef}
-                onChange={setBaseRef}
-                options={branches.map((name) => ({
-                  value: name,
-                  label: name === currentBranch ? `${name} (current)` : name,
-                }))}
-              />
-            </span>
-            <span className="create-modal-field-hint">
-              The new worktree's branch is created off this ref.
-            </span>
-          </label>
-
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Branch name (optional)</span>
-            <span className="create-modal-input-row">
-              <input
-                className="mono"
-                value={branchName}
-                onChange={(e) => setBranchName(e.target.value)}
-                placeholder={`mullion/session-${session.id}`}
-              />
-            </span>
-          </label>
-
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Seed prompt (optional)</span>
-            <textarea
-              className="create-modal-textarea"
-              value={seedPrompt}
-              onChange={(e) => setSeedPrompt(e.target.value)}
-              placeholder="Context for the new session — delivered as additional context when it starts."
-              rows={4}
-            />
-          </label>
-
-          {error && (
-            <span className="create-modal-field-hint" style={{ color: "var(--r)" }}>
-              {error}
-            </span>
-          )}
-        </div>
-
-        <div className="create-modal-footer">
+    <Modal
+      onClose={cancel}
+      icon={<GitBranchIcon size={16} />}
+      title="Promote to worktree"
+      subtitle={
+        isPending
+          ? "The agent asked to start work in an isolated worktree."
+          : "Move this session's work into a fresh, isolated worktree."
+      }
+      footer={
+        <>
           <span className="create-modal-footer-hint">
             {isPending
               ? "Declining lets the agent continue on the main checkout."
@@ -155,8 +107,55 @@ export function PromoteDialog({
           <button className="create-modal-submit" disabled={submitting} onClick={confirm}>
             {submitting ? "Creating…" : "Create worktree"}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Base ref</span>
+        <span className="create-modal-input-row">
+          <GitBranchIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+          <Dropdown
+            value={baseRef}
+            onChange={setBaseRef}
+            options={branches.map((name) => ({
+              value: name,
+              label: name === currentBranch ? `${name} (current)` : name,
+            }))}
+          />
+        </span>
+        <span className="create-modal-field-hint">
+          The new worktree's branch is created off this ref.
+        </span>
+      </label>
+
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Branch name (optional)</span>
+        <span className="create-modal-input-row">
+          <input
+            className="mono"
+            value={branchName}
+            onChange={(e) => setBranchName(e.target.value)}
+            placeholder={`mullion/session-${session.id}`}
+          />
+        </span>
+      </label>
+
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Seed prompt (optional)</span>
+        <textarea
+          className="create-modal-textarea"
+          value={seedPrompt}
+          onChange={(e) => setSeedPrompt(e.target.value)}
+          placeholder="Context for the new session — delivered as additional context when it starts."
+          rows={4}
+        />
+      </label>
+
+      {error && (
+        <span className="create-modal-field-hint" style={{ color: "var(--r)" }}>
+          {error}
+        </span>
+      )}
+    </Modal>
   );
 }
