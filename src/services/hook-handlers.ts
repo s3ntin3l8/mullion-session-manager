@@ -45,6 +45,7 @@ import type {
   QuestionHookMessage,
   TodoHookMessage,
   SessionDiffHookMessage,
+  ToolDoneHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -684,6 +685,59 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.planState = "idle";
       ctx.planAt = null;
       ctx.clearIfConfirmedKind("planReady");
+    },
+  ],
+  [
+    "tool_done",
+    (ctx, message) => {
+      // Fix: status-clearing-semantics — a completed tool call is forward-
+      // progress evidence: it means the agent is running again, which
+      // clears a stale errorState (same "the agent recovered" reasoning
+      // the "progress" case above already applies), and — matched by tool
+      // NAME, since Claude Code has no dedicated "permission granted" hook
+      // — can release a pending permission/plan that was waiting on THIS
+      // tool specifically.
+      //
+      // Deliberately NOT a release for gateState/promoteState (Mullion's
+      // own dialogs, resolved over REST — see resolveGate/resolvePromote)
+      // or elicitationState (already correctly resolved by
+      // ElicitationResult — see that case above); touching either here
+      // would be premature, since the agent can genuinely still be
+      // parked inside one of those while an unrelated tool_done arrives.
+      const td = message as ToolDoneHookMessage;
+      let changed = false;
+      if (ctx.errorState !== "idle") {
+        ctx.errorState = "idle";
+        ctx.errorAt = null;
+        ctx.errorDetail = null;
+        changed = true;
+      }
+      // Tool-name matching, not a request id (the hook payloads don't
+      // carry one). Accepted residual edge: two same-named tools in one
+      // parallel batch (e.g. two concurrent Bash calls, one awaiting
+      // permission, one completing) can release early. Narrowing further
+      // would need a permission-request id Claude Code doesn't send.
+      if (
+        ctx.permissionState === "pending" &&
+        (ctx.pendingPermissionTool === null || ctx.pendingPermissionTool === td.tool)
+      ) {
+        ctx.permissionState = "idle";
+        ctx.permissionAt = null;
+        ctx.pendingPermissionTool = null;
+        ctx.clearIfConfirmedKind("permissionRequest");
+        changed = true;
+      }
+      // ExitPlanMode resolving its own plan is the release path — see the
+      // PostToolUse matcher's own comment in hook-adapters/claude-code.ts
+      // for why this is unverified as an actual Claude Code behavior; the
+      // progress:done release above still backstops planState regardless.
+      if (td.tool === "ExitPlanMode" && ctx.planState === "pending") {
+        ctx.planState = "idle";
+        ctx.planAt = null;
+        ctx.clearIfConfirmedKind("planReady");
+        changed = true;
+      }
+      if (changed) ctx.emitEvent("status_change", { reason: "tool_done", tool: td.tool });
     },
   ],
 ]);

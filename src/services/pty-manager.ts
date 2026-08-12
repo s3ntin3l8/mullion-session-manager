@@ -33,12 +33,7 @@ import {
   type AttentionTransition,
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
-import type {
-  HookMessageKind,
-  HookMessage,
-  ToolDoneHookMessage,
-  BackgroundTask,
-} from "./hook-protocol.js";
+import type { HookMessageKind, HookMessage, BackgroundTask } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { getAdapterEmits } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
@@ -2307,57 +2302,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "tool_done": {
-        // Fix: status-clearing-semantics — a completed tool call is forward-
-        // progress evidence: it means the agent is running again, which
-        // clears a stale errorState (same "the agent recovered" reasoning
-        // the "progress" case above already applies), and — matched by tool
-        // NAME, since Claude Code has no dedicated "permission granted" hook
-        // — can release a pending permission/plan that was waiting on THIS
-        // tool specifically.
-        //
-        // Deliberately NOT a release for gateState/promoteState (Mullion's
-        // own dialogs, resolved over REST — see resolveGate/resolvePromote)
-        // or elicitationState (already correctly resolved by
-        // ElicitationResult — see that case above); touching either here
-        // would be premature, since the agent can genuinely still be
-        // parked inside one of those while an unrelated tool_done arrives.
-        const td = message as ToolDoneHookMessage;
-        let changed = false;
-        if (this.errorState !== "idle") {
-          this.errorState = "idle";
-          this.errorAt = null;
-          this.errorDetail = null;
-          changed = true;
-        }
-        // Tool-name matching, not a request id (the hook payloads don't
-        // carry one). Accepted residual edge: two same-named tools in one
-        // parallel batch (e.g. two concurrent Bash calls, one awaiting
-        // permission, one completing) can release early. Narrowing further
-        // would need a permission-request id Claude Code doesn't send.
-        if (
-          this.permissionState === "pending" &&
-          (this.pendingPermissionTool === null || this.pendingPermissionTool === td.tool)
-        ) {
-          this.permissionState = "idle";
-          this.permissionAt = null;
-          this.pendingPermissionTool = null;
-          this.clearIfConfirmedKind("permissionRequest");
-          changed = true;
-        }
-        // ExitPlanMode resolving its own plan is the release path — see the
-        // PostToolUse matcher's own comment in hook-adapters/claude-code.ts
-        // for why this is unverified as an actual Claude Code behavior; the
-        // progress:done release above still backstops planState regardless.
-        if (td.tool === "ExitPlanMode" && this.planState === "pending") {
-          this.planState = "idle";
-          this.planAt = null;
-          this.clearIfConfirmedKind("planReady");
-          changed = true;
-        }
-        if (changed) this.emitEvent("status_change", { reason: "tool_done", tool: td.tool });
-        return;
-      }
       default:
         return;
     }
