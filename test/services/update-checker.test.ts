@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   checkForUpdate,
+  resolveReleaseByTag,
   UpdateCheckError,
   clearUpdateCheckCacheForTests,
   CACHE_TTL_MS,
@@ -344,5 +345,180 @@ describe("checkForUpdate", () => {
 
     expect(second.checkedAt).toBe(first.checkedAt);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #647 / roadmap 7.8 — resolves a specific tag's release (the
+// primary's own running version), not "latest". Distinct entry point from
+// checkForUpdate above, sharing only the module's private
+// findTarballAsset/findChecksumAsset helpers and UpdateCheckError.
+describe("resolveReleaseByTag", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    clearUpdateCheckCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves the release's asset/checksum/release URLs for a matching tag", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        tag_name: "v0.1.5",
+        html_url: "https://github.com/x/y/releases/tag/v0.1.5",
+        assets: [
+          { name: "mullion-0.1.5.tgz", browser_download_url: "https://github.com/x/y/a.tgz" },
+          {
+            name: "mullion-0.1.5.tgz.sha256",
+            browser_download_url: "https://github.com/x/y/a.tgz.sha256",
+          },
+        ],
+      }),
+    );
+
+    const result = await resolveReleaseByTag("some-owner/some-repo", "0.1.5");
+
+    expect(result).toEqual({
+      version: "0.1.5",
+      releaseUrl: "https://github.com/x/y/releases/tag/v0.1.5",
+      assetUrl: "https://github.com/x/y/a.tgz",
+      checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/some-owner/some-repo/releases/tags/v0.1.5",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Accept: "application/vnd.github+json",
+          "User-Agent": "mullion-session-manager",
+        }),
+      }),
+    );
+  });
+
+  it("returns a result with null asset/checksum URLs when the release has no such assets yet", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { tag_name: "v0.1.5", html_url: "https://x", assets: [] }),
+    );
+
+    const result = await resolveReleaseByTag("owner/repo", "0.1.5");
+
+    expect(result).toMatchObject({ assetUrl: null, checksumUrl: null });
+  });
+
+  it("returns null — not an error — when no release matches the tag (404)", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("not found", { status: 404 }));
+
+    const result = await resolveReleaseByTag("owner/repo", "9.9.9");
+
+    expect(result).toBeNull();
+  });
+
+  it("throws UpdateCheckError for a non-404 non-2xx response", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+
+    await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+  });
+
+  it("throws UpdateCheckError on a network failure", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+  });
+
+  it("caches a found release and does not refetch within the TTL", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { tag_name: "v0.1.5", html_url: "https://x", assets: [] }),
+    );
+
+    await resolveReleaseByTag("owner/repo", "0.1.5");
+    await resolveReleaseByTag("owner/repo", "0.1.5");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches a 404 (null) result too, so a repeatedly-checked missing tag doesn't refetch", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("not found", { status: 404 }));
+
+    const first = await resolveReleaseByTag("owner/repo", "9.9.9");
+    const second = await resolveReleaseByTag("owner/repo", "9.9.9");
+
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keys the cache by repoSlug AND version, not just repoSlug", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { tag_name: "v0.1.5", html_url: "https://x", assets: [] }),
+    );
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { tag_name: "v0.1.6", html_url: "https://x", assets: [] }),
+    );
+
+    const first = await resolveReleaseByTag("owner/repo", "0.1.5");
+    const second = await resolveReleaseByTag("owner/repo", "0.1.6");
+
+    expect(first?.version).toBe("0.1.5");
+    expect(second?.version).toBe("0.1.6");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Independent review — a network failure or non-404 GitHub error used to
+  // re-fetch on EVERY call with nothing cached; a poller hitting this every
+  // 4s (routes/hosts.ts's GET /api/hosts/:id/update) could hammer GitHub's
+  // 60/hr unauthenticated budget within minutes during an outage.
+  describe("failure caching", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("caches a network failure briefly and does not refetch within the cooldown", async () => {
+      fetchMock.mockRejectedValueOnce(new Error("boom"));
+
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("caches a non-404 GitHub error response briefly too", async () => {
+      fetchMock.mockResolvedValueOnce(new Response("rate limited", { status: 429 }));
+
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refetches once the failure cooldown expires", async () => {
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      vi.advanceTimersByTime(61_000);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { tag_name: "v0.1.5", html_url: "https://x", assets: [] }),
+      );
+      const result = await resolveReleaseByTag("owner/repo", "0.1.5");
+
+      expect(result).toMatchObject({ version: "0.1.5" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not let a cached failure for one version block a different version", async () => {
+      fetchMock.mockRejectedValueOnce(new Error("boom"));
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { tag_name: "v0.1.6", html_url: "https://x", assets: [] }),
+      );
+      const result = await resolveReleaseByTag("owner/repo", "0.1.6");
+
+      expect(result).toMatchObject({ version: "0.1.6" });
+    });
   });
 });

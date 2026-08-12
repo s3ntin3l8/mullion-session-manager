@@ -94,6 +94,12 @@ import {
 } from "../services/request-signature.js";
 import { appVersion } from "./server-info.js";
 import type { AgentConfig } from "../services/remote-host-client.js";
+import {
+  applyUpdateSchema,
+  readStatus as readUpdateStatus,
+  spawnSelfUpdate,
+  type ApplyUpdateBody,
+} from "../services/update-apply.js";
 import type { Page } from "playwright";
 import {
   executeBrowserAction,
@@ -641,6 +647,42 @@ export async function internalRoutes(app: FastifyInstance) {
   // Settings value (services/settings.ts's idleThresholdSeconds) with no
   // env-var equivalent, so an agent has no way to know it either.
   app.get("/internal/config", INTERNAL_RATE_LIMIT, async () => buildAgentConfig(app));
+
+  // Issue #647 / roadmap 7.8 — agent self-update, under /internal/ rather
+  // than mirroring the primary's /api/updates/* verbatim (as the issue text
+  // literally suggests). That distinction matters: src/app.ts's agent
+  // branch never registers authPlugin, so /internal/* (gated by this file's
+  // own onRequest bearer check, above) is the ONLY authenticated surface an
+  // agent has. Mounting an unauthenticated POST that systemd-runs a script
+  // which curls a tarball and `npm ci`s it would be remote code execution
+  // with no credential at all. Logic is shared byte-for-byte with the
+  // primary's own route via services/update-apply.ts, so there is exactly
+  // one implementation of the spawn/status contract to keep correct.
+  app.get("/internal/updates/status", INTERNAL_RATE_LIMIT, async () => {
+    const mullionHome = app.config.MULLION_HOME;
+    if (mullionHome.trim() === "") return { phase: "unavailable" };
+    return readUpdateStatus(mullionHome);
+  });
+
+  app.post<{ Body: ApplyUpdateBody }>(
+    "/internal/updates/apply",
+    {
+      schema: applyUpdateSchema,
+      // Tighter than INTERNAL_RATE_LIMIT (1000/min) — matches the primary's
+      // own /api/updates/apply limit for the same reason: each call spawns a
+      // systemd-run child that downloads a release and runs `npm ci`.
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const result = spawnSelfUpdate(app, request.body);
+      if (!result.ok) {
+        reply.code(result.status);
+        return { message: result.message };
+      }
+      reply.code(result.status);
+      return result.body;
+    },
+  );
 
   // resolveGlobalPresets (actions.ts) reads app.config.CRS_CONFIG_DIR and
   // calls getCachedAgents() — both already mean "this host's own" on an

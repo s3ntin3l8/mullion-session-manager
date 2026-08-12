@@ -155,6 +155,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "hosts", text: "remote host agent register base url token" },
   { section: "hosts", text: "test connection ping online offline" },
   { section: "hosts", text: "cascade delete host projects" },
+  { section: "hosts", text: "agent update version skew self-update" },
   { section: "launchers", text: "detected clis shells agents refresh" },
   { section: "launchers", text: "ai agents skip perms status show" },
   { section: "launchers", text: "default shell" },

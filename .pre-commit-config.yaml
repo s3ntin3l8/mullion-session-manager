@@ -42,6 +42,21 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # Issue #647 / roadmap 7.8 — added while hardening scripts/self-update.sh
+      # (the agent auto-update mechanism). Uses the already-installed system
+      # `shellcheck` binary, same "language: system" convention as every
+      # other hook in this local repo block, rather than a pre-commit-managed
+      # external repo hook that would need network access to fetch. Repo-wide
+      # `*.sh` scope (not just scripts/) so deploy/install.sh and any future
+      # shell script are covered too; see .shellcheckrc for the one
+      # project-level suppression this required.
+      - id: shellcheck
+        name: shellcheck (shell scripts)
+        entry: shellcheck
+        language: system
+        files: '\.sh$'
+        stages: [pre-commit]
+
       - id: npm-typecheck
         name: typecheck (backend)
         entry: npm run typecheck
