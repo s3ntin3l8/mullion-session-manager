@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  QuestionHookMessage,
   TodoHookMessage,
   SessionDiffHookMessage,
   BackgroundTask,
@@ -2310,27 +2309,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "question": {
-        const q = message as QuestionHookMessage;
-        if (q.state === "started") {
-          this.questionState = "pending";
-          this.questionHeader = q.header ?? null;
-          this.questionAt = Date.now();
-          this.emitEvent("question", {
-            state: "started",
-            header: q.header ?? null,
-            summary: q.summary ?? null,
-          });
-          this.emitAttentionSignalWithExtras("question", { header: q.header ?? null });
-        } else {
-          this.questionState = "idle";
-          this.questionHeader = null;
-          this.questionAt = null;
-          this.emitEvent("question", { state: "finished" });
-          this.clearIfConfirmedKind("question");
-        }
-        return;
-      }
       case "todo": {
         const todo = message as TodoHookMessage;
         this.emitEvent("todo", {

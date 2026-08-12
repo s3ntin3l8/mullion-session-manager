@@ -42,6 +42,7 @@ import type {
   CompactHookMessage,
   SubagentHookMessage,
   ElicitationHookMessage,
+  QuestionHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -616,6 +617,29 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // authoritative as a REST decision" reasoning as review_gate's own
         // non-waiting branch above.
         ctx.clearIfConfirmedKind("elicitation");
+      }
+    },
+  ],
+  [
+    "question",
+    (ctx, message) => {
+      const q = message as QuestionHookMessage;
+      if (q.state === "started") {
+        ctx.questionState = "pending";
+        ctx.questionHeader = q.header ?? null;
+        ctx.questionAt = Date.now();
+        ctx.emitEvent("question", {
+          state: "started",
+          header: q.header ?? null,
+          summary: q.summary ?? null,
+        });
+        ctx.emitAttentionSignalWithExtras("question", { header: q.header ?? null });
+      } else {
+        ctx.questionState = "idle";
+        ctx.questionHeader = null;
+        ctx.questionAt = null;
+        ctx.emitEvent("question", { state: "finished" });
+        ctx.clearIfConfirmedKind("question");
       }
     },
   ],
