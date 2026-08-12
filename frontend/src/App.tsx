@@ -26,7 +26,6 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "./api/index.js";
 import { getSchemeBackground } from "./terminalTheme.js";
-import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import { resolveAgentLogo } from "./cliLogos.js";
@@ -43,7 +42,7 @@ import {
   shouldAutoOpenChildPanels,
   panelSessionId,
 } from "./panelUtils.js";
-import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
+import { unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
@@ -51,21 +50,9 @@ import { useMobileLayout } from "./hooks/useMobileLayout.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useAppStreams } from "./hooks/useAppStreams.js";
+import { useAttentionNotifications } from "./hooks/useAttentionNotifications.js";
 import { usePolling } from "./hooks/usePolling.js";
-import {
-  pickNewNotifiableEvents,
-  notificationChannelEnabled,
-  shouldRequestNotificationPermission,
-  requestNotificationPermission,
-  canShowBrowserNotification,
-  isCoalesced,
-} from "./desktopNotify.js";
 import { ensurePushSubscribed } from "./pushClient.js";
-import {
-  countAttentionRequired,
-  formatDocumentTitle,
-  updateFaviconBadge,
-} from "./documentBadge.js";
 
 // B2 — code-split Settings' ~2,700-line modal out of the initial bundle via
 // React.lazy (the two browser/preview panes and the Kanban board get the
@@ -235,36 +222,16 @@ export function App() {
   // further down, at the exact position the restore/autosave effects used
   // to occupy) — several effects further down in this file (auto-open-
   // child-panel, deep-link, push-message) still read them.
-  // Issue #170's per-session "already considered" bookkeeping for the
-  // desktop-notification effect below — the event-stream equivalent of the
-  // old seenAttentionRef/seenExitedRef poll-diff Sets (removed), just keyed
-  // by the /ws/events channel's own monotonic seq (desktopNotify.ts's
-  // pickNewNotifiableEvents) instead of Set membership.
-  const notifiedThroughSeqRef = useRef<Map<number, number>>(new Map());
-  // The moment the desktop-notification effect below first ran — passed as
-  // `notBefore` to pickNewNotifiableEvents so the /ws/events channel's
-  // on-connect replay of each session's buffered event *history* (store.ts's
-  // `events` slice — "live + replayed events") doesn't get misclassified as
-  // a burst of fresh notifications on every page load; only events at/after
-  // this instant (genuinely new, not backlog) can fire. See that function's
-  // own doc comment for why `alreadyProcessed` alone can't substitute for
-  // this. Lazily set inside the effect itself (not `useRef(Date.now())`) —
-  // reading the clock belongs in an effect, not render.
-  const notifyStreamStartRef = useRef<number | null>(null);
-  // Whether Notification permission has already been requested this page
-  // session — gates desktopNotify.ts's shouldRequestNotificationPermission
-  // to the FIRST attention event only (issue #170), independent of
-  // Settings.tsx's own request-on-toggle path.
-  const permissionRequestedRef = useRef(false);
-  // Rich statuses (issue: extend surfaced session statuses) — per-session
-  // notification coalescing (desktopNotify.ts's isCoalesced), so a burst of
-  // notifiable events for the same session in quick succession fires at
-  // most one sound/desktop-notification every NOTIFICATION_COALESCE_MS,
-  // not one per event.
-  const lastNotifiedAtRef = useRef<Map<number, number>>(new Map());
-  // The #98 auto-focus effect below is deliberately NOT part of this
+  // notifiedThroughSeqRef/notifyStreamStartRef/permissionRequestedRef/
+  // lastNotifiedAtRef used to be declared here — Issue #170's per-session
+  // "already considered" bookkeeping for the desktop-notification effect,
+  // keyed by the /ws/events channel's own monotonic seq
+  // (desktopNotify.ts's pickNewNotifiableEvents) — but now live inside
+  // useAttentionNotifications (hooks/useAttentionNotifications.ts), which
+  // owns that effect; see that hook's own header comment.
+  // The #98 auto-focus effect below is deliberately NOT part of that
   // migration — it stays on the poll-diff `sessions.attention` snapshot
-  // (own Set, independent of notifiedThroughSeqRef above) rather than the
+  // (own Set, independent of the moved refs above) rather than the
   // /ws/events stream; see that effect's own comment for why.
   const seenAttentionForFocusRef = useRef<Set<number>>(new Set());
   // Phase 5 (Track B, issue #194 5.4) — same "poll-diff, own Set" shape as
@@ -513,99 +480,18 @@ export function App() {
   useEffect(() => void useDashboardStore.getState().hydrateSettings(), []);
   useEffect(() => useDashboardStore.getState().startThemeWatch(), []);
 
-  // Issue #170: fires a browser Notification (and/or the notification
-  // sound) when the live /ws/events channel (issue #166, store.ts's
-  // `events` slice) delivers a genuinely notification-worthy event —
-  // desktopNotify.ts's pickNewNotifiableEvents, which reuses
-  // eventDescriptions.ts's notifyKind (the exact same "attention actually
-  // ringing, or a program exited" filter the tab badge (#168) and
-  // notification panel feed (#169) already use, so all three surfaces agree
-  // on what counts). Replaces the old poll-diff seenAttentionRef/
-  // seenExitedRef effects (removed above) that diffed polled SessionInfo
-  // snapshots each live-refresh tick — leaving both live would double-fire
-  // during the migration. The backend's attention state machine (#171)
-  // already debounces per-kind before an `attention` event is ever emitted,
-  // so this deliberately does not add a second debounce layer on top: one
-  // NotificationEvent is one candidate notification.
-  useEffect(() => {
-    if (notifyStreamStartRef.current === null) notifyStreamStartRef.current = Date.now();
-    const { notifiable, processedThrough } = pickNewNotifiableEvents(
-      events,
-      notifiedThroughSeqRef.current,
-      notifyStreamStartRef.current,
-    );
-    notifiedThroughSeqRef.current = processedThrough;
-
-    for (const { sessionId, event, kind } of notifiable) {
-      // Issue #404 — every OTHER notifyKind-classified event kind has a
-      // matching SessionStatus that's simultaneously true when it fires
-      // (e.g. a permission_request event and session.sessionStatus ===
-      // "awaiting_permission" land together), which is what makes gating
-      // this loop by session.sessionStatus below meaningful: the matrix
-      // entry checked is actually the entry FOR this event. dev_server_detected
-      // deliberately has no SessionStatus of its own (see sessionStatus.ts —
-      // this is a background housekeeping signal, not an agent-state
-      // transition), so that same lookup would instead check whatever ELSE
-      // the session happens to be doing right now (idle/working/etc) —
-      // orthogonal to this event, and in practice almost always notify:false
-      // by default, silently defeating the feature. Skipped here entirely:
-      // it still gets the in-app treatment (bell icon, panel row with
-      // accept/dismiss, tab badge via PaneTab.tsx's own notifyKind use) —
-      // just never an OS-level Notification/sound/auto-focus, which would be
-      // gated by the wrong axis anyway.
-      if (event.kind === "dev_server_detected") continue;
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) continue;
-      if (!notificationChannelEnabled(session.sessionStatus, settings.notifications)) continue;
-
-      const now = Date.now();
-      if (isCoalesced(sessionId, now, lastNotifiedAtRef.current)) continue;
-      lastNotifiedAtRef.current.set(sessionId, now);
-
-      const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
-      if (shouldRequestNotificationPermission(kind, permission, permissionRequestedRef.current)) {
-        permissionRequestedRef.current = true;
-        requestNotificationPermission();
-      }
-
-      // Per-status sound: the global channels.sound toggle AND the
-      // per-status matrix column must both be on for a sound to fire.
-      if (
-        settings.notifications.channels.sound &&
-        settings.notifications.notificationMatrix[session.sessionStatus]?.sound
-      ) {
-        playNotificationSound(settings.notifications.soundName);
-      }
-
-      // Issue #170's Page Visibility requirement: only actually raise the
-      // desktop notification while the tab is hidden/unfocused — a visible
-      // tab already surfaces the change some other way (status line, tab
-      // badge, the bell itself). Issue #322: also fires for backgrounded
-      // dockview panes in a visible tab — only the currently-active pane
-      // (the one the user is looking at) is suppressed.
-      const sessionIsActive = activePanelId === `session-${sessionId}`;
-      if (
-        !canShowBrowserNotification({
-          browserChannelEnabled: settings.notifications.channels.browser,
-          permission,
-          documentHidden: document.visibilityState !== "visible",
-          sessionIsActive,
-        })
-      ) {
-        continue;
-      }
-
-      const described = describeEvent(event);
-      const notification = new Notification(session.name || session.command || "Mullion", {
-        body: described?.text ?? "Needs your attention",
-      });
-      notification.onclick = () => {
-        window.focus();
-        useDashboardStore.getState().openNotificationsPanel();
-        notification.close();
-      };
-    }
-  }, [events, sessions, settings.notifications, activePanelId]);
+  // Fires a browser Notification (+ sound) on a notification-worthy
+  // /ws/events arrival (issue #170), and keeps the backgrounded-tab
+  // document.title/favicon badge current — extracted to
+  // useAttentionNotifications (hooks/useAttentionNotifications.ts). Called
+  // here, at the desktop-notification effect's original position in this
+  // component's body, purely to keep the diff minimal and the file's effect
+  // ordering easy to audit — like useDockviewDrop/useGlobalShortcuts/
+  // useAppStreams before it, this call-site position is NOT load-bearing.
+  // See that hook's own header comment for the full ordering/coupling
+  // analysis, including why the title/favicon effect's own position
+  // (originally further down this file) safely moved here too.
+  useAttentionNotifications({ events, sessions, settings, activePanelId });
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
   // via Settings -> Notifications & status (default off — see api.ts's
@@ -766,17 +652,11 @@ export function App() {
     restoredWorkspaceIdRef,
   ]);
 
-  // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
-  // tab previously gave no signal at all that something happened (static
-  // favicon, document.title never assigned — see documentBadge.ts's own
-  // header comment). Runs unconditionally (no Settings gate): unlike a sound
-  // or a desktop notification, a tab title/favicon change is not disruptive
-  // and costs nothing to always keep current.
-  useEffect(() => {
-    const count = countAttentionRequired(sessions);
-    document.title = formatDocumentTitle(count);
-    updateFaviconBadge(count);
-  }, [sessions]);
+  // The backgrounded-tab document.title/favicon-badge effect used to be
+  // declared here — moved into useAttentionNotifications above (called
+  // higher up in this file); see that hook's own header comment for why
+  // moving its execution position earlier is safe (it shares no ref/state
+  // with anything between its old and new position).
 
   // Issue #87 — apple-mobile-web-app-status-bar-style: iOS reads this once
   // at standalone launch and does NOT re-read it on later DOM mutations, so
@@ -1512,9 +1392,10 @@ export function App() {
   // terminal session is the active mobile pane (not the timeline/Agent
   // Browser/task-detail/git/github panels, which don't accept keystrokes).
   // `session-${id}` is the terminal panel's own id format everywhere else in
-  // this file (e.g. the sessionIsActive check in the auto-focus-on-attention
-  // effect above) — reused here rather than inspecting dockview's internal
-  // component-type metadata. Also requires `status === "active"` (Hermes
+  // this file (e.g. the `#98 item 4` auto-focus effect's own
+  // `` `session-${s.id}` === panelId `` lookup above) — reused here rather
+  // than inspecting dockview's internal component-type metadata. Also
+  // requires `status === "active"` (Hermes
   // review, PR #616 round 1): a killed/exited session's pane can still be
   // the active one (closing is a separate, explicit action from the program
   // exiting — see PaneTab.tsx's own close-vs-kill distinction), and there's
