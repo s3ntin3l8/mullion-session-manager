@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { eventKey, useDashboardStore } from "./store.js";
+import { eventKey, useDashboardStore } from "./store/index.js";
 import { describeEvent, notifyKind } from "./eventDescriptions.js";
-import { api } from "./api.js";
-import type { NotificationEvent, Project, Session } from "./api.js";
-import { BellIcon, CheckIcon, CloseIcon } from "./icons.js";
+import { api } from "./api/index.js";
+import type { NotificationEvent, Project, Session } from "./api/index.js";
+import { BellIcon, CheckIcon, CloseIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
-import { useFocusTrap } from "./useFocusTrap.js";
+import { useFocusTrap } from "./hooks/useFocusTrap.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
 // currently ringing" list into an actual event feed: one row per buffered

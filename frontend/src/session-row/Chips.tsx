@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { BackgroundTask, SubagentInfo } from "../api.js";
+import type { BackgroundTask, SubagentInfo } from "../api/index.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "../lib/persistedState.js";
 import { backgroundTaskLetter, isSubagentLive, subagentDotClass } from "../lib/sidebarStatus.js";

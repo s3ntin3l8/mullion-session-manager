@@ -1,4 +1,4 @@
-import { useDashboardStore } from "../../store.js";
+import { useDashboardStore } from "../../store/index.js";
 import { Eyebrow, ListRow, NumberField, Row, StyledList, Toggle } from "../../ui/primitives.js";
 
 export function TerminalSection() {

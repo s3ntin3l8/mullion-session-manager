@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store.js";
-import { api } from "./api.js";
-import type { ServerInfo } from "./api.js";
+import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store/index.js";
+import { api } from "./api/index.js";
+import type { ServerInfo } from "./api/index.js";
 
 const SERVER_INFO: ServerInfo = {
   version: "0.1.0",

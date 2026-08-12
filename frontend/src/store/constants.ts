@@ -1,4 +1,4 @@
-import type { ServerInfo } from "../api.js";
+import type { ServerInfo } from "../api/index.js";
 
 // How often the live-refresh loop re-fetches sessions so status badges
 // (activity/attention/exited) reflect the backend without waiting on a

@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
-import { api } from "../../api.js";
-import type { GitBranchesResult, GitHubPRsStatus } from "../../api.js";
+import { api } from "../../api/index.js";
+import type { GitBranchesResult, GitHubPRsStatus } from "../../api/index.js";
 import type { DashboardState, GitSlice } from "../types.js";
 
 // Dedups overlapping refreshGitStatuses() calls — mirrors git-status.ts's own

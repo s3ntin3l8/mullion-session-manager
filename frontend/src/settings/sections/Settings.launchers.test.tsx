@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { Settings } from "../../Settings.js";
-import type { Agent } from "../../api.js";
+import type { Agent } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
 // Guards against the misalignment fixed here: shell rows (no icon, no

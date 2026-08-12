@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "./Settings.js";
-import { useDashboardStore } from "./store.js";
-import { DEFAULT_SETTINGS } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
 
 // Mobile UI/UX overhaul, item D — Settings.tsx's drill-down is pure JS state
 // (`mobileNavOpen`) gated entirely by CSS at the <700px breakpoint (see

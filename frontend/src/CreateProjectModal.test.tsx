@@ -3,11 +3,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CreateProjectModal } from "./CreateProjectModal.js";
-import { api, ApiError } from "./api.js";
-import type { Launcher } from "./api.js";
-import type * as ApiModule from "./api.js";
+import { api, ApiError } from "./api/index.js";
+import type { Launcher } from "./api/index.js";
+import type * as ApiModule from "./api/index.js";
 
-vi.mock("./api.js", async (importOriginal) => {
+vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
   return {
     ...actual,

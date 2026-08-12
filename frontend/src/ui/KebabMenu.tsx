@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "../store/index.js";
 import { OverflowIcon } from "./icons.js";
 
 // Generic ⋯ trigger + portaled dropdown, extracted from PaneTab.tsx's own

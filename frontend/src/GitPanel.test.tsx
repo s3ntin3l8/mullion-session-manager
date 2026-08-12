@@ -4,8 +4,8 @@ import { act } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitPanel } from "./GitPanel.js";
-import type { GitBranchesResult, GitStatus } from "./api.js";
-import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
+import type { GitBranchesResult, GitStatus } from "./api/index.js";
+import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const CLEAN_STATUS: GitStatus = {

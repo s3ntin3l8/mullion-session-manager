@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { GitHubPanel } from "./GitHubPanel.js";
-import type { GitHubPRsStatus, GitHubStatus } from "./api.js";
+import type { GitHubPRsStatus, GitHubStatus } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const STATUS: GitHubStatus = {

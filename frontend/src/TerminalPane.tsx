@@ -16,11 +16,11 @@ import {
   RefreshIcon,
   SearchIcon,
   WifiOffIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { buildSearchDecorations, buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
-import { api, type AppSettings } from "./api.js";
+import { api, type AppSettings } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,

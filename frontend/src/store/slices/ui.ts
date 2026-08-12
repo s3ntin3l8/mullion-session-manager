@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
-import { api, DEFAULT_SETTINGS } from "../../api.js";
-import type { AppSettings, SettingsPatch } from "../../api.js";
+import { api, DEFAULT_SETTINGS } from "../../api/index.js";
+import type { AppSettings, SettingsPatch } from "../../api/index.js";
 import { deepMerge, mergePartialPatch } from "../../settingsMerge.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
 import {

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { ApiError } from "../api.js";
-import { PlusIcon } from "../icons.js";
+import { ApiError } from "../api/index.js";
+import { PlusIcon } from "../ui/icons.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the board's own "New task"

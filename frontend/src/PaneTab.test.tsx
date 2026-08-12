@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneTab } from "./PaneTab.js";
-import { api } from "./api.js";
-import type { GitStatus, NotificationEvent, Project, Session } from "./api.js";
+import { api } from "./api/index.js";
+import type { GitStatus, NotificationEvent, Project, Session } from "./api/index.js";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 
@@ -27,7 +27,7 @@ vi.mock("./panelUtils.js", () => ({
   },
 }));
 
-vi.mock("./api.js", () => ({
+vi.mock("./api/index.js", () => ({
   api: {
     getProjectGitBranches: vi.fn(),
   },
@@ -82,7 +82,7 @@ function eventKey(sessionId: number, seq: number): string {
   return `${sessionId}:${seq}`;
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
   useDashboardStore.getState = () => storeState();
   return { useDashboardStore, eventKey };

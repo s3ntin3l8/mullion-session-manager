@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useDashboardStore } from "../../store.js";
-import { api, ApiError } from "../../api.js";
-import type { BrowserCookieProfile } from "../../api.js";
+import { useDashboardStore } from "../../store/index.js";
+import { api, ApiError } from "../../api/index.js";
+import type { BrowserCookieProfile } from "../../api/index.js";
 import {
   Dropdown,
   GroupHeading,

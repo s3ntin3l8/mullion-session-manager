@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api.js";
+import { api } from "../api/index.js";
 import { parseUnifiedDiff, type DiffLine } from "../diffUtils.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
 import {

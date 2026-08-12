@@ -5,9 +5,9 @@ import type {
   Position,
   SerializedDockview,
 } from "dockview";
-import type { Task, Workspace } from "./api.js";
+import type { Task, Workspace } from "./api/index.js";
 import { positionToDirection } from "dockview";
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
 
 // Mirrors App.tsx's own MOBILE_BREAKPOINT_QUERY (kept private there) —

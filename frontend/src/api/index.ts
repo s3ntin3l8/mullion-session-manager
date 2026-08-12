@@ -5,11 +5,10 @@
 // exports — the flat `api.xxx()` object, `ApiError`, `normalizeAgentId`,
 // `DEFAULT_SETTINGS`, `TASK_STATUSES`/`TaskStatus`/`LOCAL_HOST_ID`, and
 // every type below — is exactly what frontend/src/api.ts used to export
-// under the same names, so every existing `import { api } from "./api.js"`
-// (or `"../api.js"`) elsewhere in the frontend keeps working completely
-// unchanged: this directory replaces api.ts on disk, but ./api.js /
-// ../api.js resolve to this barrel the same way they resolved to the flat
-// file before.
+// under the same names. The former `frontend/src/api.ts` resolution shim
+// (`export * from "./api/index.js"`) is gone as of Wave 5's folder-taxonomy
+// PR — every import site now points at `./api/index.js` / `../api/index.js`
+// directly.
 //
 // A handful of type shapes re-exported below used to be hand-mirrored 1:1
 // copies of a backend declaration (each annotated "Mirrors src/services/
@@ -67,7 +66,7 @@ export type {
 // see above), so these are plain imports, not `import type`, and
 // physically live in src/shared/constants.ts (repo root, NOT this frontend
 // workspace). Re-exported below so every existing import of them from
-// "./api.js" elsewhere in the frontend keeps working unchanged.
+// "./api/index.js" elsewhere in the frontend keeps working unchanged.
 import { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 
 export { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID };

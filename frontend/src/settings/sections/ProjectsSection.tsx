@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useDashboardStore } from "../../store.js";
-import { api } from "../../api.js";
-import type { ServerInfo } from "../../api.js";
-import { CloseIcon, FolderIcon, PlusIcon, RefreshIcon } from "../../icons.js";
+import { useDashboardStore } from "../../store/index.js";
+import { api } from "../../api/index.js";
+import type { ServerInfo } from "../../api/index.js";
+import { CloseIcon, FolderIcon, PlusIcon, RefreshIcon } from "../../ui/icons.js";
 import { GroupHeading, ListRow, Row, SecondaryButton, StyledList } from "../../ui/primitives.js";
 
 export function ProjectsSection() {

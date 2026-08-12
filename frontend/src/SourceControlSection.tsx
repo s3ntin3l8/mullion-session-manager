@@ -1,11 +1,11 @@
 import { useCallback, useState } from "react";
-import { api, LOCAL_HOST_ID } from "./api.js";
-import type { GitFileStatus, GitStatus } from "./api.js";
-import { useDashboardStore } from "./store.js";
+import { api, LOCAL_HOST_ID } from "./api/index.js";
+import type { GitFileStatus, GitStatus } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
-import { ChevronDownIcon, GitBranchIcon } from "./icons.js";
+import { ChevronDownIcon, GitBranchIcon } from "./ui/icons.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
 

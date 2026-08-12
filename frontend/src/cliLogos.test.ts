@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveAgentLogo, resolveLauncherLogo, commandToBinary } from "./cliLogos.js";
-import type { Launcher } from "./api.js";
+import type { Launcher } from "./api/index.js";
 
 const DARK = "dark" as const;
 

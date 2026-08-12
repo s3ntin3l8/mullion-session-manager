@@ -1,4 +1,4 @@
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import {
   GridIcon,
   MoonIcon,
@@ -7,10 +7,10 @@ import {
   SidebarToggleIcon,
   SunIcon,
   GearIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { NotificationBell } from "./NotificationBell.js";
 import { ViewModeToggle } from "./ViewModeToggle.js";
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 import type { SettingsSection } from "./Settings.js";
 
 interface ToolbarProps {

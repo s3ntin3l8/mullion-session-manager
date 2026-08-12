@@ -5,9 +5,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPanel } from "./BrowserPanel.js";
-import { useDashboardStore } from "./store.js";
-import { api } from "./api.js";
-import type { Project, ServerInfo } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import { api } from "./api/index.js";
+import type { Project, ServerInfo } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const PROJECT: Project = {

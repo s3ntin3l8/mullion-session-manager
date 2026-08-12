@@ -3,14 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PromoteDialog } from "./PromoteDialog.js";
-import type { Project, Session } from "./api.js";
+import type { Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 // Issue #271 — PromoteDialog reads two store actions directly; everything
 // else it needs (project/session/onClose) comes via props.
 const promoteSessionMock = vi.fn();
 const declinePromoteMock = vi.fn();
-vi.mock("./store.js", () => ({
+vi.mock("./store/index.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({ promoteSession: promoteSessionMock, declinePromote: declinePromoteMock }),
 }));

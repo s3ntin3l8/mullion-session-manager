@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Settings } from "../../Settings.js";
-import type { SkillInfo } from "../../api.js";
+import type { SkillInfo } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
 function mockFetch(list: () => Response | Promise<Response>) {

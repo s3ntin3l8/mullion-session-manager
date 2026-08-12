@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useDashboardStore, eventKey } from "./store.js";
-import { api } from "./api.js";
-import type { Session, NotificationEvent } from "./api.js";
+import { useDashboardStore, eventKey } from "./store/index.js";
+import { api } from "./api/index.js";
+import type { Session, NotificationEvent } from "./api/index.js";
 
 // P6 — `events`, `lastSeenSeq`, and `dismissedEventKeys` are keyed by
 // session id and, before this fix, nothing ever removed a key: a long-lived

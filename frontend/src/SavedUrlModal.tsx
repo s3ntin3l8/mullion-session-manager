@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api } from "./api.js";
-import { useDashboardStore } from "./store.js";
-import { CloseIcon } from "./icons.js";
+import { api } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
+import { CloseIcon } from "./ui/icons.js";
 
 interface SavedUrlModalProps {
   projectId: number;

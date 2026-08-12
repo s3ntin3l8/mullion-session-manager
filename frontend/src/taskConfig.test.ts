@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveTaskMaster } from "./taskConfig.js";
-import { DEFAULT_SETTINGS } from "./api.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
 
 // Mirrors test/services/task-config.test.ts on the backend — same
 // algorithm, same assertions, kept in sync deliberately (see taskConfig.ts's

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
   TASK_COLUMNS,
@@ -16,9 +16,9 @@ import {
 } from "./unifiedBoard.js";
 import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { TaskDetail } from "./TaskDetail.js";
-import type { Session, TaskStatus } from "./api.js";
-import { ApiError } from "./api.js";
-import { ChevronDownIcon, ChevronRightIcon, CloseIcon, LayersIcon } from "./icons.js";
+import type { Session, TaskStatus } from "./api/index.js";
+import { ApiError } from "./api/index.js";
+import { ChevronDownIcon, ChevronRightIcon, CloseIcon, LayersIcon } from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";

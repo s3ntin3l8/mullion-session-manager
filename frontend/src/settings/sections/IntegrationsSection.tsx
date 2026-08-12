@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, ApiError } from "../../api.js";
-import type { GitHubAppStatus, GitHubIntegration, SetGitHubAppResult } from "../../api.js";
+import { api, ApiError } from "../../api/index.js";
+import type { GitHubAppStatus, GitHubIntegration, SetGitHubAppResult } from "../../api/index.js";
 import { GitHubDeviceFlowModal } from "../../GitHubDeviceFlowModal.js";
 import { formatRelativeAge } from "../../relativeTime.js";
-import { GitHubIcon } from "../../icons.js";
+import { GitHubIcon } from "../../ui/icons.js";
 import {
   GroupHeading,
   ListRow,

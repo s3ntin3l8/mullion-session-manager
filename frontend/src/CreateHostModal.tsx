@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { HostsIcon, CloseIcon } from "./icons.js";
+import { HostsIcon, CloseIcon } from "./ui/icons.js";
 import { ErrorText } from "./ui/ErrorText.js";
 
 interface CreateHostModalProps {

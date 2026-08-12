@@ -1,4 +1,4 @@
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 
 // Pure hierarchy logic for Sidebar.tsx's ProjectSection (Phase 5, Track B,
 // issue #195 5.5b) — split into its own module purely so Sidebar.tsx can

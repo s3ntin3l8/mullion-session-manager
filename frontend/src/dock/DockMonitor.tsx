@@ -1,10 +1,10 @@
 import { Fragment } from "react";
-import type { DockControl, Session } from "../api.js";
-import { ContainerIcon, GlobeIcon, RefreshIcon } from "../icons.js";
+import type { DockControl, Session } from "../api/index.js";
+import { ContainerIcon, GlobeIcon, RefreshIcon } from "../ui/icons.js";
 import { TerminalPane } from "../TerminalPane.js";
-import { CustomSelect } from "../CustomSelect.js";
-import type { CustomSelectOption } from "../CustomSelect.js";
-import { KebabMenu } from "../KebabMenu.js";
+import { CustomSelect } from "../ui/CustomSelect.js";
+import type { CustomSelectOption } from "../ui/CustomSelect.js";
+import { KebabMenu } from "../ui/KebabMenu.js";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { imageTag } from "./dockHelpers.js";
 

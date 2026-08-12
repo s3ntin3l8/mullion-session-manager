@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import { GitBranchIcon } from "../icons.js";
+import { GitBranchIcon } from "../ui/icons.js";
 import { useGitBranches } from "../hooks/useGitBranches.js";
 import { Dropdown } from "../ui/primitives.js";
 

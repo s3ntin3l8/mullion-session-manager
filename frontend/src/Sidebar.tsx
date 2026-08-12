@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { CreateProjectModal } from "./CreateProjectModal.js";
-import { KebabMenu } from "./KebabMenu.js";
-import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
-import type { DiscoveredProject, Host, Project, Session } from "./api.js";
+import { KebabMenu } from "./ui/KebabMenu.js";
+import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
+import type { DiscoveredProject, Host, Project, Session } from "./api/index.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
 import {
   formatStatusLabel,
@@ -36,7 +36,7 @@ import {
   RenameIcon,
   SearchAlertIcon,
   SearchIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";

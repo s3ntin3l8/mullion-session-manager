@@ -1,4 +1,4 @@
-import type { Session } from "../api.js";
+import type { Session } from "../api/index.js";
 
 // Pure helpers for Dock.tsx's monitor rendering — split out (Wave 5 / PR 28
 // of .claude/plans/can-we-do-a-warm-cocke.md) for the same

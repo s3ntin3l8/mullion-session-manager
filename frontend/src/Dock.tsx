@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { api } from "./api.js";
-import type { DockControl, DockerUpdateCheckResult, GitBranchesResult } from "./api.js";
-import { useDashboardStore } from "./store.js";
+import { api } from "./api/index.js";
+import type { DockControl, DockerUpdateCheckResult, GitBranchesResult } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronDownIcon, DockIcon, GlobeIcon } from "./icons.js";
+import { ChevronDownIcon, DockIcon, GlobeIcon } from "./ui/icons.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStatus.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { usePolling } from "./hooks/usePolling.js";

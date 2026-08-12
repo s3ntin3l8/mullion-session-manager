@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store.js";
-import { ApiError, LOCAL_HOST_ID } from "../../api.js";
-import type { Host } from "../../api.js";
+import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
+import { ApiError, LOCAL_HOST_ID } from "../../api/index.js";
+import type { Host } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
 import { deriveHostStatus, type PingState } from "../../hostStatus.js";
-import { KebabMenu } from "../../KebabMenu.js";
+import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
-import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../icons.js";
+import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
 import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 

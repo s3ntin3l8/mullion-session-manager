@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useState } from "react";
-import { useDashboardStore } from "../../store.js";
-import { api } from "../../api.js";
-import type { Agent, SessionStatus, SoundName } from "../../api.js";
+import { useDashboardStore } from "../../store/index.js";
+import { api } from "../../api/index.js";
+import type { Agent, SessionStatus, SoundName } from "../../api/index.js";
 import { requestNotificationPermission } from "../../desktopNotify.js";
 import { disablePush, enablePush, isPushSupported } from "../../pushClient.js";
 import { STATUS_PRESENTATION, isStatusReachable } from "../../sessionStatus.js";
-import { BellIcon } from "../../icons.js";
+import { BellIcon } from "../../ui/icons.js";
 import { Dropdown, ListRow, Row, Slider, StyledList, Toggle } from "../../ui/primitives.js";
 
 const SOUND_OPTIONS: Array<{ value: SoundName; label: string }> = [

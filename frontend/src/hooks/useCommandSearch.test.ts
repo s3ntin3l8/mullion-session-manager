@@ -15,7 +15,7 @@ import { describe, it, expect } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useCommandSearch } from "./useCommandSearch.js";
 import { makeSession, makeProject, makeWorkspace } from "../test/fixtures.js";
-import type { Launcher } from "../api.js";
+import type { Launcher } from "../api/index.js";
 
 const PROJECT = makeProject({ id: 5, name: "mullion" });
 

@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { useDashboardStore } from "../../store.js";
+import { useDashboardStore } from "../../store/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
 import { NumberField, Row, Toggle } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit } from "../clamp.js";

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError } from "./api.js";
-import type { AgentRuleTarget } from "./api.js";
-import { FileTextIcon } from "./icons.js";
-import { ConfirmButton } from "./ConfirmButton.js";
+import { api, ApiError } from "./api/index.js";
+import type { AgentRuleTarget } from "./api/index.js";
+import { FileTextIcon } from "./ui/icons.js";
+import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 
 export interface AgentRulesPanelParams {

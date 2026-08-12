@@ -16,16 +16,16 @@ import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { GridIcon, RefreshIcon, ServerRackIcon, CloseIcon } from "./icons.js";
+import { GridIcon, RefreshIcon, ServerRackIcon, CloseIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
-} from "./store.js";
+} from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 import { getSchemeBackground } from "./terminalTheme.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
@@ -55,7 +55,7 @@ import {
   panelSessionId,
 } from "./panelUtils.js";
 import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
-import { useVisualViewportInset } from "./useVisualViewportInset.js";
+import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { usePolling } from "./hooks/usePolling.js";
 import {

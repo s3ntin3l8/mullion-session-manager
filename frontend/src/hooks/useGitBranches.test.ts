@@ -4,7 +4,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { useGitBranches } from "./useGitBranches.js";
 import { mockFetch } from "../test/mockFetch.js";
 import { jsonResponse } from "../test/jsonResponse.js";
-import type { GitBranchesResult } from "../api.js";
+import type { GitBranchesResult } from "../api/index.js";
 
 const BRANCHES_RESULT: GitBranchesResult = {
   branches: [

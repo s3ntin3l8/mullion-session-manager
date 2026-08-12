@@ -1,4 +1,4 @@
-import type { NotificationEvent, Theme as ThemePreference } from "../api.js";
+import type { NotificationEvent, Theme as ThemePreference } from "../api/index.js";
 import { STORAGE_KEYS, readBool, readNumber, readString } from "../lib/persistedState.js";
 import { EVENTS_PER_SESSION_CAP, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from "./constants.js";
 import type { Theme, ViewMode } from "./types.js";

@@ -1,4 +1,4 @@
-import type { GitDiffStats, GitHubPROrWithChecks, GitStatus } from "../api.js";
+import type { GitDiffStats, GitHubPROrWithChecks, GitStatus } from "../api/index.js";
 import { sessionGitDotClass, sessionPrDotClass } from "../lib/sidebarStatus.js";
 
 // SessionRow's row 3 (issue #202) — worktree/branch/PR/diff-stats single-line

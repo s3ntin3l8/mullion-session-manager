@@ -3,8 +3,8 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSection } from "./Sidebar.js";
-import { LOCAL_HOST_ID } from "./api.js";
-import type { GitStatus, Project } from "./api.js";
+import { LOCAL_HOST_ID } from "./api/index.js";
+import type { GitStatus, Project } from "./api/index.js";
 
 // ProjectSection reads the store two ways: a selector (`gitStatuses[project.id]`)
 // and — since the P1 perf fix moved its five actions off a whole-store
@@ -29,7 +29,7 @@ function storeState() {
     unsubscribeFromGitHubProject,
   };
 }
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
     const state = storeState();
     return selector ? selector(state) : state;

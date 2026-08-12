@@ -1,11 +1,11 @@
 import { useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { useDashboardStore } from "../store.js";
-import type { Theme } from "../store.js";
-import type { GitHubCiStatus, Session, Task } from "../api.js";
+import { useDashboardStore } from "../store/index.js";
+import type { Theme } from "../store/index.js";
+import type { GitHubCiStatus, Session, Task } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
-import { BotIcon, GitHubIcon, WarningTriangleIcon } from "../icons.js";
+import { BotIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";

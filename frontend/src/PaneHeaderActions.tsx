@@ -1,6 +1,6 @@
 import type { IDockviewHeaderActionsProps } from "dockview";
-import { useDashboardStore } from "./store.js";
-import { SplitDownIcon, SplitRightIcon } from "./icons.js";
+import { useDashboardStore } from "./store/index.js";
+import { SplitDownIcon, SplitRightIcon } from "./ui/icons.js";
 
 // Ported 1:1 from the design's pane-header anatomy (Cmux States.dc.html,
 // section 02): split-right/split-down sit at the far right of a pane's

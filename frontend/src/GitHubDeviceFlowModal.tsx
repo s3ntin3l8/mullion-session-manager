@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError } from "./api.js";
-import type { DeviceFlowStatus } from "./api.js";
-import { CloseIcon, GitHubIcon } from "./icons.js";
+import { api, ApiError } from "./api/index.js";
+import type { DeviceFlowStatus } from "./api/index.js";
+import { CloseIcon, GitHubIcon } from "./ui/icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { SecondaryButton } from "./ui/primitives.js";
 import { ErrorText } from "./ui/ErrorText.js";

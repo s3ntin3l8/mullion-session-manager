@@ -14,7 +14,7 @@
 // `npm run typecheck`, the same "add to the union, and something forgot to
 // update" pairing routes/sessions.ts's `LiveInfoKey` and session-status.ts's
 // `SEVERITY_BY_STATUS` already use.
-import type { SessionSeverity, SessionStatus } from "./api.js";
+import type { SessionSeverity, SessionStatus } from "./api/index.js";
 
 export interface StatusPresentation {
   /** Human-facing label — always shown alongside the dot/badge below, never

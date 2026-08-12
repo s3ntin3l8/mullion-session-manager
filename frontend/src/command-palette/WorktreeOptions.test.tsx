@@ -15,8 +15,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "../CommandPalette.js";
-import { useDashboardStore } from "../store.js";
-import type { Launcher, Project } from "../api.js";
+import { useDashboardStore } from "../store/index.js";
+import type { Launcher, Project } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 
 const PROJECT: Project = {

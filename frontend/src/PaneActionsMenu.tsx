@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { DockviewApi, DockviewPanelApi } from "dockview";
 import type { TerminalPaneParams } from "./TerminalPane.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import {
   GitBranchIcon,
   KillIcon,
@@ -12,11 +12,11 @@ import {
   OverflowIcon,
   RenameIcon,
   BotIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
-import { useFocusTrap } from "./useFocusTrap.js";
+import { useFocusTrap } from "./hooks/useFocusTrap.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
 // iterative-planet.md) — the kill/rename/timeline/browser/promote overflow

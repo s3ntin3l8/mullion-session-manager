@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFocusTrap } from "./useFocusTrap.js";
+import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
   AppearanceIcon,
@@ -17,7 +17,7 @@ import {
   ServerRackIcon,
   SkillIcon,
   TerminalPromptIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { AppearanceSection } from "./settings/sections/AppearanceSection.js";
 import { TerminalSection } from "./settings/sections/TerminalSection.js";
 import { ProjectsSection } from "./settings/sections/ProjectsSection.js";

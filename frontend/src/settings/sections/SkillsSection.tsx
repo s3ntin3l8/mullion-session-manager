@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "../../api.js";
-import type { SkillInfo } from "../../api.js";
+import { api } from "../../api/index.js";
+import type { SkillInfo } from "../../api/index.js";
 
 // Issue #432 — read-only "what skills does Mullion see" listing: every
 // global/builtin skill discovered on THIS host (see skills.ts's own

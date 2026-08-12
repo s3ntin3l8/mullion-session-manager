@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
-import { ApiError } from "./api.js";
-import type { GitHubCiStatus, Session, Task } from "./api.js";
+import { ApiError } from "./api/index.js";
+import type { GitHubCiStatus, Session, Task } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
-import { BotIcon, GitHubIcon, TerminalPromptIcon, WarningTriangleIcon } from "./icons.js";
+import { BotIcon, GitHubIcon, TerminalPromptIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 

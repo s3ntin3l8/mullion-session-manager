@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
-import type { EventHistoryPage, NotificationEvent, Session } from "./api.js";
+import type { EventHistoryPage, NotificationEvent, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 let sessions: Session[];
@@ -13,7 +13,7 @@ function storeState() {
   return { sessions, events };
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
   const eventKey = (sessionId: number, seq: number) => `${sessionId}:${seq}`;
   return { useDashboardStore, eventKey };

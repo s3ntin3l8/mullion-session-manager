@@ -5,7 +5,7 @@ import {
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
-import type { SessionSeverity, SessionStatus } from "./api.js";
+import type { SessionSeverity, SessionStatus } from "./api/index.js";
 
 const ALL_STATUSES = Object.keys(STATUS_PRESENTATION) as SessionStatus[];
 

@@ -1,4 +1,4 @@
-import { api } from "./api.js";
+import { api } from "./api/index.js";
 import { requestNotificationPermission } from "./desktopNotify.js";
 
 // Issue #95 — the browser half of web push. The backend (push-store.ts,
