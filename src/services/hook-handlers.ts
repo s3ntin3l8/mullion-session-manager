@@ -141,10 +141,10 @@ export type HookHandler = (ctx: SessionHookContext, message: HookMessage) => voi
  * (`HOOK_HANDLERS[message.kind]`) would walk the prototype chain for a kind
  * like `"constructor"`/`"toString"`/`"__proto__"` and could invoke an
  * unrelated `Object.prototype` member. `Map.get` has no such hazard. A kind
- * with no entry (an unmigrated case still on the switch below, `"browser_action"`,
- * or any future/unrecognized kind) yields `undefined` — dispatch falls
- * through to the switch, and eventually (once every case has migrated) is a
- * plain no-op, same as the original switch's `default: return`.
+ * with no entry (`"browser_action"`, which no case ever handled, or any
+ * future/unrecognized kind) yields `undefined` — Session.emitHookEvent
+ * (pty-manager.ts) treats that as a silent no-op, same as the original
+ * switch's `default: return`.
  */
 export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, HookHandler>([
   [

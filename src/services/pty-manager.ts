@@ -2285,26 +2285,21 @@ export class Session {
   emitHookEvent(message: HookMessage): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
     // "progress"/"done" — proves this session's hook pipeline genuinely
-    // fires, so this latches unconditionally before the switch, ahead of
-    // every case's own early `return`. See `hooksProven`'s field doc for why
-    // this can't be the ONLY place it latches (Claude Code's own first hook,
+    // fires, so this latches unconditionally before dispatch, ahead of every
+    // handler's own early return. See `hooksProven`'s field doc for why this
+    // can't be the ONLY place it latches (Claude Code's own first hook,
     // SessionStart, never reaches this method at all — see markHooksProven).
     this.hooksProven = true;
-    // PR 33a (Wave 6) — HOOK_HANDLERS (hook-handlers.ts) is populated one
-    // case at a time as the roadmap's "one case per commit" migration
-    // proceeds; a kind already migrated dispatches here and returns, a kind
-    // still on the switch below falls through unchanged. Once every case has
-    // migrated, this table lookup is this method's entire body and the
-    // switch is deleted (tracked as the final commit of this migration).
+    // PR 33a (Wave 6) — was a 24-case switch; now a thin dispatch through
+    // HOOK_HANDLERS (hook-handlers.ts), one entry per hook kind, each
+    // operating over the narrow SessionHookContext built by
+    // buildHookContext() above rather than a full Session. A kind with no
+    // entry (`"browser_action"`, or any future/unrecognized kind — see
+    // HOOK_HANDLERS' own doc comment for why a missing key is never an
+    // error) is a silent no-op, same as the original switch's
+    // `default: return`.
     const handler = HOOK_HANDLERS.get(message.kind);
-    if (handler) {
-      handler(this.buildHookContext(), message);
-      return;
-    }
-    switch (message.kind) {
-      default:
-        return;
-    }
+    if (handler) handler(this.buildHookContext(), message);
   }
 
   /**
