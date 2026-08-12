@@ -30,6 +30,7 @@ import type {
   NotificationHookMessage,
   ProgressHookMessage,
   FileChangeHookMessage,
+  ReviewGateHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -285,6 +286,38 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         .catch((err) => {
           console.error(`[pty-manager] session ${ctx.id} file_change filter failed:`, err);
         });
+    },
+  ],
+  [
+    "review_gate",
+    (ctx, message) => {
+      // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
+      // (not a literal) plus a `[key: string]: unknown` index signature,
+      // so TS can't discriminate `message` down to just
+      // ReviewGateHookMessage from `message.kind === "review_gate"`
+      // alone — reading `.state`/`.prompt` off the still-widened union
+      // resolves to `unknown`. Safe to assert narrow here: the protocol
+      // layer's validateReviewGate (hook-protocol.ts) only ever produces
+      // a real ReviewGateHookMessage for this kind, never
+      // UnknownHookMessage.
+      const gate = message as ReviewGateHookMessage;
+      ctx.gateState = gate.state;
+      ctx.gatePrompt = gate.state === "waiting" ? gate.prompt : null;
+      ctx.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
+      if (gate.state === "waiting") {
+        ctx.gateAt = Date.now();
+        ctx.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
+      } else {
+        // Follow-up to #275 (gap #3): a resolved state arriving over the
+        // hook channel itself is as authoritative as resolveGate() below —
+        // see this method's doc comment for why a superseding resolution is
+        // now required at all (an OUTPUT_IMMUNE_KINDS-confirmed reviewGate
+        // no longer clears on the tool call's own PTY output). Gated on
+        // confirmedKind so a newer, unrelated confirmed flag isn't
+        // dismissed by a stale gate resolution.
+        ctx.gateAt = null;
+        ctx.clearIfConfirmedKind("reviewGate");
+      }
     },
   ],
 ]);

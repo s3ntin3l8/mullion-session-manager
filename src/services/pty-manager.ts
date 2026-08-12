@@ -36,7 +36,6 @@ import { buildSessionEnv } from "./session-env.js";
 import type {
   HookMessageKind,
   HookMessage,
-  ReviewGateHookMessage,
   PromoteRequestHookMessage,
   PermissionRequestHookMessage,
   ToolDoneHookMessage,
@@ -2322,36 +2321,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "review_gate": {
-        // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
-        // (not a literal) plus a `[key: string]: unknown` index signature,
-        // so TS can't discriminate `message` down to just
-        // ReviewGateHookMessage from `message.kind === "review_gate"`
-        // alone — reading `.state`/`.prompt` off the still-widened union
-        // resolves to `unknown`. Safe to assert narrow here: the protocol
-        // layer's validateReviewGate (hook-protocol.ts) only ever produces
-        // a real ReviewGateHookMessage for this kind, never
-        // UnknownHookMessage.
-        const gate = message as ReviewGateHookMessage;
-        this.gateState = gate.state;
-        this.gatePrompt = gate.state === "waiting" ? gate.prompt : null;
-        this.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
-        if (gate.state === "waiting") {
-          this.gateAt = Date.now();
-          this.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
-        } else {
-          // Follow-up to #275 (gap #3): a resolved state arriving over the
-          // hook channel itself is as authoritative as resolveGate() below —
-          // see this method's doc comment for why a superseding resolution is
-          // now required at all (an OUTPUT_IMMUNE_KINDS-confirmed reviewGate
-          // no longer clears on the tool call's own PTY output). Gated on
-          // confirmedKind so a newer, unrelated confirmed flag isn't
-          // dismissed by a stale gate resolution.
-          this.gateAt = null;
-          this.clearIfConfirmedKind("reviewGate");
-        }
-        return;
-      }
       case "promote_request": {
         // Same TS-narrowing reasoning as the review_gate case above: safe to
         // assert narrow since hook-protocol.ts's validatePromoteRequest only
