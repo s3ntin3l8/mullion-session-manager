@@ -33,7 +33,6 @@ import {
   type AttentionTransition,
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
-import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { isPathGitIgnoredCached } from "./git-ignore.js";
 import type {
   HookMessageKind,
@@ -59,25 +58,23 @@ import type {
   BackgroundTask,
 } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
-import {
-  applyHookAdapters,
-  getAdapterEmits,
-  getAdapterInitialPromptArgs,
-  resolveForwarderPath,
-} from "./hook-adapters/index.js";
+import { getAdapterEmits } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
 import { RedrawNudge } from "./redraw-nudge.js";
-import { writeSessionAgentGuide } from "./agent-guide.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import {
-  scopeUnitName,
   stopScope,
   isMasterAlive as isMasterAliveProcess,
   isMasterAliveBatch as isMasterAliveBatchProcess,
   listSessionProcesses as listSessionProcessesProcess,
 } from "./session-process.js";
+import { buildLaunchPlan } from "./launch-plan.js";
+// Re-exported so existing importers (src/routes/agents.ts, this module's own
+// tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
+// their actual definitions into launch-plan.ts, alongside buildLaunchPlan().
+export { getSkipPermissionFlag, SKIP_PERMISSION_FLAGS } from "./launch-plan.js";
 // NotificationEvent now physically lives in src/shared/types.ts
 // (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
@@ -1621,122 +1618,35 @@ export class Session {
     this.attachClient();
   }
 
-  /** Create the dtach master and exit — no attach, nothing to track. */
+  /**
+   * Create the dtach master and exit — no attach, nothing to track.
+   *
+   * PR 32 (Wave 6) split this into two parts: buildLaunchPlan() (launch-
+   * plan.ts) computes everything about WHAT gets launched — the env scrub,
+   * shell-integration setup, the five MULLION_* injections, agent-guide
+   * injection, hook-adapter wiring, skip-permissions handling, and
+   * initial-prompt composition — and this method now does only the actual
+   * process launch: wrapping that plan's argv/env in the transient
+   * `systemd --user` scope below. See launch-plan.ts's own doc comments for
+   * the full step-by-step reasoning that used to live inline here.
+   */
   private bootstrapMaster(): Promise<void> {
-    const shell = process.env.SHELL || "/bin/bash";
-    const unitName = scopeUnitName(this.id);
-    // Strip this server's own Mullion config (PORT, DATABASE_URL,
-    // SESSIONS_DIR, secrets, ...) before it reaches the session's shell — a
-    // session must not inherit the identity of the process that spawned it,
-    // e.g. a `make dev` run from inside this session must not see this
-    // process's PORT/DATABASE_URL (issue #70). See session-env.ts.
-    const sessionEnv = buildSessionEnv();
-    // Issue: sidebar worktree display — injects the OSC 7 shell-integration
-    // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
-    // shell announces its cwd on every prompt draw, feeding Session.liveCwd
-    // above. A no-op for any other $SHELL — see shell-integration.ts.
-    applyShellIntegrationEnv(shell, sessionEnv, this.sessionsDir);
-    // Phase 2 (issue #172): injected AFTER the scrub above (not before), so
-    // this session's own hook socket/token survive it — SERVER_ENV_KEYS lists
-    // both purely so a *nested* Mullion re-scrubs them from ITS OWN sessions,
-    // not so buildSessionEnv() strips them from this one. An agent that
-    // ignores these two vars is completely unaffected: the socket exists but
-    // nothing ever connects.
-    sessionEnv.MULLION_HOOK_SOCKET = this.hookSocketPath;
-    sessionEnv.MULLION_HOOK_TOKEN = this.hookToken;
-    // Phase 4 (#134): lets the `mullion` CLI (src/cli/), run from inside
-    // this session, find the control socket and default its own session
-    // targeting to this session with no flags — same "injected after the
-    // scrub, SERVER_ENV_KEYS lists it only so a nested Mullion re-scrubs
-    // it" reasoning as the hook socket/token above. MULLION_SESSION_ID has
-    // no other existing purpose to collide with (session-env.ts).
-    sessionEnv.MULLION_SOCKET_PATH = this.controlSocketPath;
-    sessionEnv.MULLION_SESSION_ID = this.id;
-    // Phase 2 (issue #264): pass the review-gate toggle through the session
-    // env so the forwarder (spawned as an agent hook subprocess) can read it
-    // and conditionally skip the blocking review_gate for agents whose hook
-    // is always registered (agy) rather than gated at registration time.
-    sessionEnv.MULLION_REVIEW_GATE_ENABLED = String(this.reviewGateEnabled);
-
-    // Issue #405 — writes this session's own copy of the shipped agent
-    // guide doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,
-    // unconditionally (never gated on hook-adapter match below): every
-    // agent benefits from having this on disk, even one with no hook
-    // adapter at all. Not gated on `sessions.injectAgentGuide` either —
-    // that setting only controls the pointer/injection to this file (both
-    // hooks.ts's SessionStart reply and, per issue #437c below, opencode's
-    // `instructions` config entry), not the file's own (cheap, harmless)
-    // existence. See agent-guide.ts's own doc comment.
-    //
-    // Issue #437c — moved BEFORE applyHookAdapters (previously ran after):
-    // the opencode adapter's prepareLaunch now needs this file to already
-    // exist so it can point `instructions` only at a copy it has confirmed
-    // is actually there, not merely at the shipped SOURCE doc's existence
-    // (agentGuideSourceExists()) — those can diverge if this write itself
-    // fails (logged-and-swallowed, e.g. a full disk or EACCES on
-    // sessionsDir), which for opencode would otherwise leave a dangling
-    // `instructions` entry pointing at a file that was never created,
-    // unlike every other agent where a stale pointer is just harmless
-    // prose. No other adapter reads this file, so reordering these two
-    // writes changes nothing for Claude Code/Codex/agy.
-    writeSessionAgentGuide(path.dirname(this.hookSocketPath), this.id);
-
-    // Phase 2 (issue #174): if `this.command` matches a known agent with a
-    // hook adapter (currently just Claude Code), rewrite the command/env for
-    // this launch only — see hook-adapters/index.ts's applyHookAdapters for
-    // the defensive-fallback behavior (any adapter failure launches the
-    // original, unmodified command instead of failing the session outright).
-    // `sessionsDir` is derived from hookSocketPath (`<sessionsDir>/hooks.sock`,
-    // see PtyManager's constructor) rather than threaded through as its own
-    // field, since this is the only place that needs it.
-    const {
-      command: launchCommand,
-      envAdditions,
-      matched,
-      emits,
-    } = applyHookAdapters(this.command, {
-      sessionId: this.id,
-      sessionsDir: path.dirname(this.hookSocketPath),
-      hookSocketPath: this.hookSocketPath,
+    const plan = buildLaunchPlan({
+      id: this.id,
+      cwd: this.cwd,
+      command: this.command,
+      socketPath: this.socketPath,
       hookToken: this.hookToken,
+      hookSocketPath: this.hookSocketPath,
       controlSocketPath: this.controlSocketPath,
-      forwarderPath: resolveForwarderPath(),
+      sessionsDir: this.sessionsDir,
       reviewGateEnabled: this.reviewGateEnabled,
       injectAgentGuide: this.injectAgentGuide,
-      cwd: this.cwd,
       skipPermissions: this.skipPermissions,
+      initialPrompt: this.initialPrompt,
     });
-    Object.assign(sessionEnv, envAdditions);
-    this.hooksActive = matched;
-    this.hookEmits = emits;
-
-    // Issue: skip-permissions flag — if the caller requested it, append the
-    // agent-specific flag (e.g. `--dangerously-skip-permissions`, `--auto`)
-    // to the launch command. Done after the hook adapters so it never
-    // interferes with hook config injection; the shell metacharacter guard
-    // in getSkipPermissionFlag() ensures the flag lands only on a simple,
-    // unchained invocation regardless.
-    const withSkipPermissions = this.skipPermissions
-      ? `${launchCommand} ${getSkipPermissionFlag(launchCommand) ?? ""}`.trimEnd()
-      : launchCommand;
-
-    // Task Master's initial-turn prompt (see CreateSessionOptions.
-    // initialPrompt's own doc comment) — appended LAST, after both
-    // applyHookAdapters' own commandTransform and the skip-permissions flag
-    // above, so prompt text (arbitrary issue-body content, which routinely
-    // contains `;`/`&`/`|`/etc) is never fed back through either of those
-    // guards. Matched against `this.command` (the ORIGINAL, unmodified
-    // command), same as applyHookAdapters/getAdapterEmits above — not
-    // `launchCommand`, which may already have a commandTransform's flags
-    // appended and would defeat the adapter's own conservative matches()
-    // anchor. A no-op (returns null) for an agent with no initial-prompt
-    // argv form, or when no prompt was requested.
-    const initialPromptArgs = this.initialPrompt
-      ? getAdapterInitialPromptArgs(this.command, this.initialPrompt)
-      : null;
-    const finalCommand = initialPromptArgs
-      ? `${withSkipPermissions} ${initialPromptArgs}`.trimEnd()
-      : withSkipPermissions;
+    this.hooksActive = plan.hooksActive;
+    this.hookEmits = plan.hookEmits;
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -1751,28 +1661,15 @@ export class Session {
       // be available, i.e. a real host with a systemd user session — not a
       // plain container, which is one more reason this runs on the host
       // (see the plan's pivotal architecture decision).
-      const child = spawnChild(
-        "systemd-run",
-        [
-          "--user",
-          "--scope",
-          "--collect",
-          "-u",
-          unitName,
-          "--",
-          "dtach",
-          "-n",
-          this.socketPath,
-          shell,
-          "-lc",
-          finalCommand,
-        ],
-        { cwd: this.cwd, env: sessionEnv, stdio: "ignore" },
-      );
+      const child = spawnChild("systemd-run", plan.argv, {
+        cwd: this.cwd,
+        env: plan.env,
+        stdio: "ignore",
+      });
       child.on("error", reject);
       child.on("exit", (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`master bootstrap exited with code ${code} (unit ${unitName})`));
+        else reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));
       });
     });
   }
@@ -3588,32 +3485,10 @@ export class Session {
   }
 }
 
-// Per-agent skip-permissions flag lookup. Anchored at the start of the
-// trimmed command (optionally path-qualified), same conservative "no
-// partial/substring match" posture as agent-detect.ts's KNOWN_AGENTS probing
-// and the hook adapters' matches() regexen. Only matches unchained, simple
-// invocations (no shell metacharacters) so the flag is never appended to the
-// wrong part of a pipeline or chain.
-/** Exported for the agents route to expose to the frontend. */
-export const SKIP_PERMISSION_FLAGS: Record<string, string> = {
-  claude: "--dangerously-skip-permissions",
-  codex: "--dangerously-bypass-approvals-and-sandbox",
-  opencode: "--auto",
-  gemini: "--approval-mode yolo",
-  agy: "--dangerously-skip-permissions",
-  aider: "--yes",
-};
-
-/** Exported for tests. */
-export function getSkipPermissionFlag(command: string): string | null {
-  const trimmed = command.trim();
-  for (const [bin, flag] of Object.entries(SKIP_PERMISSION_FLAGS)) {
-    if (new RegExp(`^(?:\\S*/)?${bin}(?:\\s|$)`).test(trimmed) && !/[;&|<>]/.test(trimmed)) {
-      return flag;
-    }
-  }
-  return null;
-}
+// SKIP_PERMISSION_FLAGS/getSkipPermissionFlag moved to launch-plan.ts in
+// PR 32 (Wave 6) alongside buildLaunchPlan(), the only other place that
+// calls getSkipPermissionFlag(); re-exported near the top of this file for
+// existing importers (src/routes/agents.ts, this module's own tests).
 
 export class PtyManager {
   private sessions = new Map<string, Session>();
