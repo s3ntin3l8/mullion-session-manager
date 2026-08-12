@@ -31,18 +31,12 @@ import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import { resolveAgentLogo } from "./cliLogos.js";
-import {
-  components,
-  tabComponents,
-  KanbanBoardOverlay,
-  MOBILE_BREAKPOINT_QUERY,
-} from "./panels/registry.js";
+import { components, tabComponents, KanbanBoardOverlay } from "./panels/registry.js";
 import {
   hasTiledPanels,
   openSessionPanel,
   openTimelinePanel,
   dropSessionPanel,
-  applyMobilePresentation,
   attentionTransitionPanelIds,
   findSessionWorkspace,
   parseDeepLinkSessionId,
@@ -56,6 +50,7 @@ import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
+import { useMobileLayout } from "./hooks/useMobileLayout.js";
 import { usePolling } from "./hooks/usePolling.js";
 import {
   pickNewNotifiableEvents,
@@ -416,51 +411,19 @@ export function App() {
     return () => disposable.dispose();
   }, [dockviewApi]);
 
-  // Mobile breakpoint detection — mirrors the design's own matchMedia usage
-  // (699px) rather than duplicating the value as a magic number elsewhere.
-  // Issue #85: applyMobilePresentation (not a bare exitMaximizedGroup) so
-  // this is symmetric — entering mobile now maximizes too, not just leaving
-  // it. onChange() already runs immediately on mount, and this effect
-  // re-runs when dockviewApi transitions from null to non-null, so "first
-  // mount while already mobile" is covered without a separate call.
-  useEffect(() => {
-    const mq = window.matchMedia(MOBILE_BREAKPOINT_QUERY);
-    const onChange = () => {
-      setIsMobile(mq.matches);
-      if (dockviewApi) applyMobilePresentation(dockviewApi, mq.matches);
-    };
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [dockviewApi]);
-
-  // Mobile UI/UX overhaul, item A.2 — applyMobilePresentation (above) syncs
-  // every group's header.hidden on restore and on breakpoint change, but a
-  // group created and maximized *between* those two moments (e.g. opening a
-  // session's timeline or Agent Browser panel on mobile — panelUtils.ts's
-  // openTimelinePanel/openBrowserPanePanel/openTaskDetailPanel, or the ~14
-  // inline `if (isMobile) dockviewApi.maximizeGroup(...)` call sites further
-  // down this file) would otherwise show its header un-hidden until the next
-  // breakpoint change. Every one of those calls `maximizeGroup`, which fires
-  // this event — subscribing here once covers all of them (current and
-  // future) without editing each call site individually. Also covers
-  // `onDidAddGroup` (Hermes review, PR #613): a group created WITHOUT an
-  // intervening maximizeGroup — a drag-split, or a future programmatic
-  // `addGroup()` — would otherwise render dockview's own tab strip un-hidden
-  // until the next breakpoint change, reintroducing this PR's own "doubled
-  // switcher" bug for that one group.
-  useEffect(() => {
-    if (!dockviewApi) return;
-    const hideIfMobile = (group: DockviewGroupPanel) => {
-      group.header.hidden = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-    };
-    const maximizedSub = dockviewApi.onDidMaximizedGroupChange(({ group }) => hideIfMobile(group));
-    const addedSub = dockviewApi.onDidAddGroup((group) => hideIfMobile(group));
-    return () => {
-      maximizedSub.dispose();
-      addedSub.dispose();
-    };
-  }, [dockviewApi]);
+  // Keeps dockview's presentation in sync with the mobile breakpoint —
+  // extracted to useMobileLayout (hooks/useMobileLayout.ts). Called here, at
+  // the EXACT position its two effects previously occupied in this
+  // component's body, so their execution order relative to every other
+  // effect in this file — in particular, running AFTER the
+  // useWorkspacePersistence restore effect above on the commit where
+  // dockviewApi first becomes non-null — is unchanged. `isMobile` itself
+  // stays owned by this component's own useState (rather than being
+  // returned from the hook) specifically because it's read EARLIER in this
+  // render body, at the useWorkspacePersistence call above — see that hook's
+  // own `setIsMobile` param comment for why returning it here instead would
+  // be a real ordering regression, not just a style difference.
+  useMobileLayout({ dockviewApi, setIsMobile });
 
   // Focuses the mobile pane bar's inline rename input the moment it opens —
   // same "explicit transition, not a bare mount effect" shape as
