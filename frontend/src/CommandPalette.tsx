@@ -19,7 +19,7 @@ import {
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
-import { Dropdown } from "./settings/primitives.js";
+import { Dropdown } from "./ui/primitives.js";
 import { matchesQuery } from "./matchQuery.js";
 import { useFocusTrap } from "./useFocusTrap.js";
 

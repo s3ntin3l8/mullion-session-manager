@@ -3,7 +3,7 @@ import { api, LOCAL_HOST_ID } from "./api.js";
 import type { GitFileStatus, GitStatus } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
-import { Dropdown } from "./settings/primitives.js";
+import { Dropdown } from "./ui/primitives.js";
 import { ChevronDownIcon, GitBranchIcon } from "./icons.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";

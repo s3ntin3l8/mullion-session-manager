@@ -27,7 +27,7 @@ import {
 } from "./sessionStatus.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { MullionMark } from "./assets/MullionMark.js";
-import { Dropdown } from "./settings/primitives.js";
+import { Dropdown } from "./ui/primitives.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import {

@@ -3,6 +3,11 @@
 // shell" section for the full spec each of these was built against).
 // Every section in Settings.tsx composes these instead of raw
 // `<select>`/`<input>` elements.
+//
+// Moved out of settings/ — most importers are non-Settings components. The
+// `settings-*` class-name prefix below is kept as historical: renaming 130
+// `.settings-*` rules in styles.css for a file move is pure
+// visual-regression risk for zero functional gain.
 import type { ReactNode } from "react";
 
 export function Row({

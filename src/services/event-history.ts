@@ -229,7 +229,7 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
  * Hermes review, PR #563 (round 3) — `Math.trunc` below, not just
  * `<= 0`: `safeNumber` (settings.ts) validates range/finiteness but not
  * integer-ness, and the NumberField backing this setting sends a bare
- * `Number(input)` (settings/primitives.tsx) with nothing stopping a
+ * `Number(input)` (ui/primitives.tsx) with nothing stopping a
  * fractional value like `1.5` from persisting. A fractional `OFFSET` is a
  * SQLite "datatype mismatch" the sweep tick's own try/catch would
  * otherwise swallow silently, hourly, forever — verified empirically. This

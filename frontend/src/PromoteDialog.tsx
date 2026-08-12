@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api.js";
 import type { Session, Project } from "./api.js";
 import { useDashboardStore } from "./store.js";
-import { Dropdown } from "./settings/primitives.js";
+import { Dropdown } from "./ui/primitives.js";
 import { GitBranchIcon, CloseIcon } from "./icons.js";
 
 // Issue #271, option 2 — "promote an existing session" into a fresh git
