@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import { Settings } from "./Settings.js";
-import type { Agent } from "./api.js";
-import { jsonResponse } from "./test/jsonResponse.js";
+import { Settings } from "../../Settings.js";
+import type { Agent } from "../../api.js";
+import { jsonResponse } from "../../test/jsonResponse.js";
 
 // Guards against the misalignment fixed here: shell rows (no icon, no
 // toggles) and agent rows (icon, conditional skip-perms toggle) used to
