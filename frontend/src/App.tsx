@@ -1,34 +1,15 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
-import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
+import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import type { DockviewGroupDropLocation, DockviewGroupPanel, Position } from "dockview";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
-import { TerminalPane } from "./TerminalPane.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { repaintAllTerminals } from "./terminalRepaintRegistry.js";
-import { GitHubPanel } from "./GitHubPanel.js";
-import type { GitHubPanelParams } from "./GitHubPanel.js";
-import { GitPanel } from "./GitPanel.js";
-import type { GitPanelParams } from "./GitPanel.js";
-import { AgentRulesPanel } from "./AgentRulesPanel.js";
-import type { AgentRulesPanelParams } from "./AgentRulesPanel.js";
-import { DockConfigPanel } from "./DockConfigPanel.js";
-import type { DockConfigPanelParams } from "./DockConfigPanel.js";
-import { SkillsPanel } from "./SkillsPanel.js";
-import type { SkillsPanelParams } from "./SkillsPanel.js";
-import type { BrowserPanelParams } from "./BrowserPanel.js";
-import type { BrowserPaneParams } from "./BrowserPane.js";
-import { SessionTimeline } from "./SessionTimeline.js";
-import type { SessionTimelineParams } from "./SessionTimeline.js";
-import { TasksPanelRedirect } from "./TasksPanelRedirect.js";
-import { TaskDetail } from "./TaskDetail.js";
-import type { TaskDetailParams } from "./TaskDetail.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
-import { PaneTab } from "./PaneTab.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
@@ -47,8 +28,14 @@ import type { Session } from "./api.js";
 import { getSchemeBackground } from "./terminalTheme.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
-import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
+import { initialPaneTitle } from "./paneTitle.js";
 import { resolveAgentLogo } from "./cliLogos.js";
+import {
+  components,
+  tabComponents,
+  KanbanBoardOverlay,
+  MOBILE_BREAKPOINT_QUERY,
+} from "./panels/registry.js";
 import {
   hasTiledPanels,
   openSessionPanel,
@@ -83,44 +70,15 @@ import {
   updateFaviconBadge,
 } from "./documentBadge.js";
 
-// B2 — code-split the substantial, not-always-needed-on-first-paint pieces
-// of UI (Settings' ~2,700-line modal, the two browser/preview panes, and
-// the Kanban board) out of the initial bundle via React.lazy. dockview and
-// xterm+webgl stay eager — a terminal pane is what the app shows first, so
-// splitting those would only move the cost, not remove it. Each import()
-// resolves `{ default }` because these modules use named exports, not a
+// B2 — code-split Settings' ~2,700-line modal out of the initial bundle via
+// React.lazy (the two browser/preview panes and the Kanban board get the
+// same treatment, but live in panels/registry.tsx alongside the rest of the
+// dockview panel registrations — see that module's own header comment).
+// dockview and xterm+webgl stay eager — a terminal pane is what the app
+// shows first, so splitting those would only move the cost, not remove it.
+// Resolves `{ default }` because Settings.tsx uses a named export, not a
 // default export.
 const LazySettings = lazy(() => import("./Settings.js").then((m) => ({ default: m.Settings })));
-const LazyUnifiedBoard = lazy(() =>
-  import("./UnifiedBoard.js").then((m) => ({ default: m.UnifiedBoard })),
-);
-const LazyBrowserPanel = lazy(() =>
-  import("./BrowserPanel.js").then((m) => ({ default: m.BrowserPanel })),
-);
-const LazyBrowserPane = lazy(() =>
-  import("./BrowserPane.js").then((m) => ({ default: m.BrowserPane })),
-);
-
-// Shared Suspense fallback for the lazy dockview panels above (the Browser
-// panel/pane and the Kanban board overlay, all absolutely-positioned within
-// their container) — reuses the existing terminal-connecting spinner
-// vocabulary (SpinnerIcon + .terminal-status-spinner's cmuxSpin keyframe,
-// styles.css) instead of inventing a second loading affordance.
-function LazyPanelFallback() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <SpinnerIcon size={22} className="terminal-status-spinner connecting" />
-    </div>
-  );
-}
 
 // Settings-specific Suspense fallback — the modal shell (backdrop + a
 // centered spinner in place of the panel body) so clicking the gear icon
@@ -145,281 +103,8 @@ function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
   );
 }
 
-// Wrapped per-panel (not once around the whole dockview area) so a crash in
-// one session's terminal can't take out sibling panes too. Owns its own
-// `resetKey`, bumped by the boundary's "Reload pane" — a class component's
-// error state has no way to retry the exact subtree that threw, so the
-// fix is remounting a fresh <TerminalPane> under a new key instead.
-function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  const sessionId = props.params.sessionId;
-  const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
-  const panelId = `session-${sessionId}`;
-  // Real-time tab title tracking (issue #69): TerminalPane stays dockview-
-  // agnostic (see its own header comment) and just reports the raw OSC
-  // title string up; this wrapper is where props.api.setTitle actually lives.
-  // Reads sessions/projects fresh via getState() at call time (rather than
-  // useDashboardStore selectors + a dep-array effect) so the always-current
-  // nameLocked flag gates every OSC event without re-subscribing TerminalPane
-  // on every store change.
-  const onTitleChange = useCallback(
-    (oscTitle: string) => {
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session || session.nameLocked) return; // pinned by an explicit rename
-      const projectName = projects.find((p) => p.id === session.projectId)?.name;
-      props.api.setTitle(formatPaneTitle(oscTitle, projectName));
-    },
-    [props.api, sessionId],
-  );
-  // U7 — same api.onDidActiveChange subscription PaneTab.tsx already uses
-  // for its own badge logic (see that component's own comment on why the
-  // useState initializer, not the effect, is what makes an already-active
-  // tab at mount — e.g. the default tab on first load — read correctly).
-  // TerminalPane itself stays dockview-agnostic (see its own header
-  // comment), so this wrapper is where the dockview panel API lives and
-  // where the resulting plain boolean gets threaded down.
-  const [isActive, setIsActive] = useState(props.api.isActive);
-  useEffect(() => {
-    const disposable = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
-    return () => disposable.dispose();
-  }, [sessionId, props.api]);
-  return (
-    <div
-      className={highlightedPanelId === panelId ? "panel-body-highlight" : ""}
-      // position: relative anchors .panel-body-highlight::after's absolute
-      // overlay (see styles.css) — the highlight itself is drawn as a sibling
-      // overlay on top of this div's content, not an inset shadow on this div
-      // directly, since TerminalPane's own inner container (issue #132's
-      // opaque background) would otherwise paint straight over an inset
-      // shadow here.
-      style={{ width: "100%", height: "100%", position: "relative" }}
-    >
-      <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-        <TerminalPane
-          key={resetKey}
-          params={props.params}
-          onTitleChange={onTitleChange}
-          active={isActive}
-        />
-      </ErrorBoundary>
-    </div>
-  );
-}
-
-// A crash here is much lower-stakes than a terminal pane (a static status
-// fetch, not a live WS/xterm connection), but wrapped the same way for the
-// same reason: one project's GitHub panel misbehaving shouldn't blank the
-// whole dashboard.
-function GitHubPanelWrapper(props: IDockviewPanelProps<GitHubPanelParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <GitHubPanel key={resetKey} params={props.params} />
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — a crashing status fetch
-// shouldn't blank the whole dashboard either. U6 — resolves onOpenSession
-// via props.containerApi rather than needing App()'s own onOpenSession
-// closure threaded down, same shape as TaskDetailWrapper below.
-function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  const projects = useDashboardStore((s) => s.projects);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <GitPanel
-        key={resetKey}
-        params={props.params}
-        onOpenSession={(session) => {
-          const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-          openSessionPanel(props.containerApi, session, isMobile, projects);
-        }}
-      />
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — a crashing agent-rules fetch
-// shouldn't blank the whole dashboard either.
-function AgentRulesPanelWrapper(props: IDockviewPanelProps<AgentRulesPanelParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <AgentRulesPanel key={resetKey} params={props.params} />
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — a crashing dock-config fetch
-// shouldn't blank the whole dashboard either.
-function DockConfigPanelWrapper(props: IDockviewPanelProps<DockConfigPanelParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <DockConfigPanel key={resetKey} params={props.params} />
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — a crashing skills fetch
-// shouldn't blank the whole dashboard either.
-function SkillsPanelWrapper(props: IDockviewPanelProps<SkillsPanelParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <SkillsPanel key={resetKey} params={props.params} />
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — a crashing iframe/preview
-// fetch shouldn't blank the whole dashboard either.
-function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <Suspense fallback={<LazyPanelFallback />}>
-        <LazyBrowserPanel key={resetKey} params={props.params} api={props.api} />
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — a stream-parsing/canvas
-// crash shouldn't blank the whole dashboard either. Reports the Playwright
-// page's title up via props.api.setTitle, same shape as
-// TerminalPanelWrapper's onTitleChange but simpler (no nameLocked/rename
-// concept for this panel type yet).
-function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  const onTitleChange = useCallback(
-    (pageTitle: string) => {
-      props.api.setTitle(pageTitle ? `Agent Browser: ${pageTitle}` : "Agent Browser");
-    },
-    [props.api],
-  );
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <Suspense fallback={<LazyPanelFallback />}>
-        <LazyBrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
-// B2 — the Kanban board overlay (not a dockview panel, see its render site's
-// own "overlay, not a conditionally-mounted replacement" comment for why
-// dockview stays untouched underneath). Same ErrorBoundary+resetKey pattern
-// as the panel wrappers above, kept as its own component (rather than inline
-// JSX in App's render) purely so it can own that local resetKey — App's
-// render body has no natural per-mount slot for it.
-function KanbanBoardOverlay(props: {
-  onOpenSession: (session: Session) => void;
-  onSessionEnded: (session: Session) => void;
-}) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <div className="kanban-board-overlay" style={{ position: "absolute", inset: 0 }}>
-      <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-        <Suspense fallback={<LazyPanelFallback />}>
-          <LazyUnifiedBoard
-            key={resetKey}
-            onOpenSession={props.onOpenSession}
-            onSessionEnded={props.onSessionEnded}
-          />
-        </Suspense>
-      </ErrorBoundary>
-    </div>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above — SessionTimeline reads
-// straight off the store, no fetch of its own, but a bad event payload
-// shouldn't blank the whole dashboard either.
-function SessionTimelineWrapper(props: IDockviewPanelProps<SessionTimelineParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <SessionTimeline key={resetKey} params={props.params} />
-    </ErrorBoundary>
-  );
-}
-
-// The task board (formerly TasksPanel.tsx, this "tasks" panel's own
-// component) is now the unified Kanban view (UnifiedBoard.tsx) — this
-// wrapper renders TasksPanelRedirect.tsx's explanatory stub instead, kept
-// registered so an already-saved workspace layout referencing "tasks"
-// doesn't throw on restore (see TasksPanelRedirect.tsx's own header comment,
-// and the restore effect's closeLegacyPanels call below, which self-heals a
-// restored "tasks" panel away).
-function TasksPanelRedirectWrapper(props: IDockviewPanelProps<Record<string, never>>) {
-  const [resetKey, setResetKey] = useState(0);
-  const setViewMode = useDashboardStore((s) => s.setViewMode);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <TasksPanelRedirect
-        key={resetKey}
-        onOpenBoard={() => {
-          setViewMode("kanban");
-          props.api.close();
-        }}
-      />
-    </ErrorBoundary>
-  );
-}
-
-// Same reasoning as GitHubPanelWrapper above. Resolves onOpenSession via
-// props.containerApi rather than needing App()'s own onOpenSession closure
-// threaded down. Kept registered (see TasksPanelRedirectWrapper below) even
-// though task detail now normally opens as an inline drawer inside
-// UnifiedBoard.tsx — a saved workspace layout can still contain a
-// `task-detail-<id>` panel id.
-function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
-  const [resetKey, setResetKey] = useState(0);
-  const projects = useDashboardStore((s) => s.projects);
-  return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <TaskDetail
-        key={resetKey}
-        params={props.params}
-        onOpenSession={(session) => {
-          const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-          openSessionPanel(props.containerApi, session, isMobile, projects);
-        }}
-      />
-    </ErrorBoundary>
-  );
-}
-
-const components = {
-  terminal: TerminalPanelWrapper,
-  github: GitHubPanelWrapper,
-  git: GitPanelWrapper,
-  "agent-rules": AgentRulesPanelWrapper,
-  "dock-config": DockConfigPanelWrapper,
-  skills: SkillsPanelWrapper,
-  browser: BrowserPanelWrapper,
-  browserPane: BrowserPaneWrapper,
-  timeline: SessionTimelineWrapper,
-  tasks: TasksPanelRedirectWrapper,
-  "task-detail": TaskDetailWrapper,
-};
-
-// The custom tab component (PaneTab) carries the redesign's most important
-// distinction — close-pane (detach) vs. kill-session (guarded, ends the
-// program) — so it only applies to "terminal" panels; "github"/"browser"/
-// "browserPane" have no session to kill (browserPane's underlying Chromium
-// is owned by BrowserManager, not this panel — closing the pane doesn't
-// kill it, same "detach only" model as terminal), so they fall back to
-// dockview's own default tab (title + plain close), same as this repo's
-// other non-terminal panel types would.
-const tabComponents = { terminal: PaneTab };
-
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const DEFAULT_WORKSPACE_NAME = "Default";
-const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
 // Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
 // to decide whether to surface the hook-trust banner (issue #259) for a
 // currently-active session, never to make any backend decision. The
