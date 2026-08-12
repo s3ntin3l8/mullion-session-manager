@@ -28,6 +28,7 @@ import type {
   HookMessage,
   HookMessageKind,
   NotificationHookMessage,
+  ProgressHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -145,6 +146,96 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         title: notification.title,
         body: notification.body,
       });
+    },
+  ],
+  [
+    "progress",
+    (ctx, message) => {
+      // Same TS-narrowing gap the review_gate/promote_request cases below
+      // document: `UnknownHookMessage`'s `kind: string` (not a literal)
+      // means the switch can't exclude it here, so a plain `message.<field>`
+      // read stays widened rather than narrowing to ProgressHookMessage.
+      // Safe to assert narrow — hook-protocol.ts's validateProgress only
+      // ever produces a real ProgressHookMessage for this kind.
+      const progress = message as ProgressHookMessage;
+      const extras: Record<string, unknown> = { phase: progress.phase };
+      if (progress.lastAssistantMessage !== undefined) {
+        extras.lastAssistantMessage = progress.lastAssistantMessage;
+        // Rich statuses — kept across turns, not just this event's extras;
+        // see SessionInfo.lastAssistantMessage's doc comment.
+        ctx.lastAssistantMessage = progress.lastAssistantMessage;
+      }
+      // Issue #428 — present-only update: a message with no
+      // `backgroundTasks` field (e.g. Claude Code's `idle_prompt`
+      // notification path, mapped to `phase: "done"` with nothing else)
+      // must NOT wipe a previously-latched outstanding set. `absent ≠
+      // cleared` — only overwrite when the hook actually reported a list.
+      if (progress.backgroundTasks !== undefined) {
+        extras.backgroundTasks = progress.backgroundTasks;
+        ctx.setBackgroundTasks(progress.backgroundTasks);
+      }
+      if (progress.detail !== undefined) {
+        extras.detail = progress.detail;
+      }
+      ctx.emitEvent("status_change", extras);
+      // "done" is the agent's own authoritative "my turn is over" signal
+      // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
+      // Stop — see forwarder-core.mjs/opencode-plugin.js) — the latch
+      // below always fires on it. The ATTENTION signal is gated: firing
+      // `agentIdle` (and hence a desktop notification/"needs_input") the
+      // moment Stop arrives is wrong when `backgroundTasks` (issue #428)
+      // still reports outstanding work — a background `Agent`/`Task` call
+      // this same turn hasn't returned yet. See resolveDeferredTurnEnd()
+      // for where the deferred ping actually fires once that work drains.
+      if (progress.phase === "done") {
+        // The agent's turn ending is the authoritative signal that any
+        // pending permission request, plan review, or error condition has
+        // been resolved (by the agent itself or by a human's intervening
+        // action that ended the turn). Clear these sticky states so the
+        // sidebar doesn't permanently show "Needs permission" / "Plan
+        // ready" / "API error" after the agent has moved on. Unconditional
+        // — none of these are affected by outstanding background work.
+        ctx.permissionState = "idle";
+        ctx.permissionAt = null;
+        ctx.pendingPermissionTool = null;
+        ctx.planState = "idle";
+        ctx.planAt = null;
+        ctx.questionState = "idle";
+        ctx.questionHeader = null;
+        ctx.questionAt = null;
+        // Rich statuses — latches the `finished` status (see
+        // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
+        // latch rather than read off attentionState.confirmedKind). Stays
+        // an honest "the Stop hook fired" signal even while background
+        // work is outstanding — session-status.ts's deriveSessionStatus is
+        // where the two axes combine, not here.
+        ctx.lastTurnEndedAt = Date.now();
+        // A fresh latch is a NEW turn-end occurrence that deserves its
+        // own single ping, even if a PRIOR latch's ping already fired and
+        // the user hasn't typed anything since (Hermes review, PR #453 —
+        // see turnEndPingSent's own doc comment).
+        ctx.turnEndPingSent = false;
+        ctx.resolveDeferredTurnEnd();
+      } else if (progress.backgroundTasks !== undefined) {
+        // Issue #428 — a non-"done" progress message isn't expected to
+        // carry `backgroundTasks` per Claude Code's documented shape (only
+        // Stop/SubagentStop do), but if a future/other adapter ever
+        // reports a drain this way, resolve a still-latched prior Stop
+        // rather than requiring the next "done" to catch it. Deliberately
+        // NOT called on every plain thinking/generating message with no
+        // `backgroundTasks` field — lastTurnEndedAt only clears via
+        // turn_start/write()'s genuine-input check, and re-checking it on
+        // every unrelated progress tick would risk re-firing `agentIdle`
+        // for an agent whose forwarder never sends turn_start.
+        ctx.resolveDeferredTurnEnd();
+      }
+      // Any progress signal (thinking/generating/done) proves the agent
+      // loop is alive and advancing — a previous tool failure was either
+      // handled or superseded by the agent's own recovery, so the error
+      // state is no longer current.
+      ctx.errorState = "idle";
+      ctx.errorAt = null;
+      ctx.errorDetail = null;
     },
   ],
 ]);
