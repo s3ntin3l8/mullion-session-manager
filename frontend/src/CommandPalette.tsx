@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, normalizeAgentId } from "./api.js";
-import type { Launcher, Session, Workspace } from "./api.js";
+import type { Launcher, Session } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -18,10 +18,9 @@ import {
   TerminalPromptIcon,
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
-import { useGitBranches } from "./hooks/useGitBranches.js";
+import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
-import { Dropdown } from "./ui/primitives.js";
-import { matchesQuery } from "./matchQuery.js";
+import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap } from "./useFocusTrap.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
@@ -155,9 +154,7 @@ export function CommandPalette({
   });
   const [manualTargetProjectId, setManualTargetProjectId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [query, setQuery] = useState("");
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
 
@@ -200,20 +197,37 @@ export function CommandPalette({
 
   // Issue #271, option 1 — the launcher's opt-in "isolate this session"
   // toggle: launch directly into a fresh worktree instead of the target
-  // project's own cwd. Off by default; the base-ref picker only fetches
-  // once the toggle is switched on, not on every palette open (`enabled`
-  // below).
+  // project's own cwd. Off by default; <WorktreeOptions> only fetches
+  // branches once the toggle is switched on, not on every palette open.
+  // `worktreeEnabled`/`worktreeBaseRef` stay lifted here (not owned by
+  // <WorktreeOptions>) because `launch()` below also reads them at launch
+  // time.
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
-  const { branches: worktreeBranches, error: worktreeBranchesError } = useGitBranches(
+
+  // The three parallel filter pipelines (Sessions / Workspaces / launcher
+  // "Matching commands") plus the combined-index keyboard nav across them —
+  // see useCommandSearch.ts for the full doc comment on the index math.
+  const {
+    query,
+    setQuery,
+    setSelectedIndex,
+    filtered,
+    matchingSessions,
+    matchingWorkspaces,
+    entries,
+    activeIndex,
+    activeEntry,
+    groupOffset,
+  } = useCommandSearch({
+    scope,
     effectiveProjectId,
-    {
-      enabled: worktreeEnabled,
-      onLoaded: ({ branches, currentBranch }) => {
-        setWorktreeBaseRef((prev) => prev || currentBranch || branches[0] || "");
-      },
-    },
-  );
+    sessions,
+    projects,
+    workspaces,
+    launchers,
+    hiddenAgents: settings.launchers.hiddenAgents,
+  });
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
@@ -251,108 +265,6 @@ export function CommandPalette({
     void useDashboardStore.getState().refreshProjectUrls(effectiveProjectId);
   }, [effectiveProjectId]);
 
-  // Hidden-agent filtering: strip the "agent:" prefix from launcher IDs
-  // (detected agents have ids like "agent:claude") and compare against the
-  // bare names stored in settings.launchers.hiddenAgents.  A
-  // .crs/actions.json override with a non-standard id (no "agent:" prefix)
-  // falls through to a raw id lookup, which won't match the Settings toggle's
-  // always-bare stored names — an acknowledged edge case that only affects
-  // projects with custom actions.json overrides.
-  const filtered = useMemo(
-    () =>
-      launchers.filter(
-        (l) =>
-          (!(l.kind === "agent") ||
-            !settings.launchers.hiddenAgents?.includes(normalizeAgentId(l.id))) &&
-          (query.trim() === "" || matchesQuery([l.title, l.command], query)),
-      ),
-    [launchers, query, settings.launchers.hiddenAgents],
-  );
-
-  // U2 — search existing sessions from the palette instead of only being
-  // able to launch new ones. Matched against the exact field precedence the
-  // finding spells out: an explicit name first, then the last OSC-reported
-  // title, then the raw launch command — deliberately NOT SessionRow's
-  // nameLocked-gated `title` (Sidebar.tsx): an un-locked, auto-generated
-  // title is still a perfectly good thing to find a session by here. Project
-  // name and the best-known live branch (`liveBranch` — see its own doc
-  // comment on api.ts's Session for why that field, not a
-  // sessionGitStatuses lookup, is the "best known" one) extend the match
-  // beyond the title alone.
-  const matchingSessions = useMemo(() => {
-    if (query.trim() === "") return [];
-    return sessions
-      .filter(
-        (s) =>
-          // Killed sessions have no pane left to reopen (Sidebar.tsx excludes
-          // them from the tree for the same reason), and "dock" sessions live
-          // in the Dock region rather than the tab strip onOpenSession
-          // targets — both are filtered out here to match what actually
-          // opens through onOpenSession below. In "project" scope (a project
-          // row's own "+ session" trigger) the target strip above reads
-          // "Runs in <project>" and the launcher list itself is already
-          // fetched per-project — a session from a DIFFERENT project ranking
-          // above this project's own commands would contradict that framing,
-          // so this scopes to effectiveProjectId too (Hermes review, PR
-          // #581). "global" scope has no such single-project framing (the
-          // whole point of its picker is that it isn't bound to one
-          // project), so it stays unfiltered — the subtitle's project name
-          // is what disambiguates there.
-          s.kind === "terminal" &&
-          s.status !== "killed" &&
-          (scope !== "project" || s.projectId === effectiveProjectId),
-      )
-      .filter((s) => {
-        const project = projects.find((p) => p.id === s.projectId);
-        const title = s.name || s.lastTitle || s.command;
-        return matchesQuery([title, s.command, project?.name, s.liveBranch], query);
-      });
-    // Deliberately NOT filtered by the global "hide ended sessions" setting
-    // (Settings -> Sessions) the way Sidebar.tsx's tree is — typing a query
-    // here is explicit search intent, not passive browsing, so an exited
-    // session the user is actively looking for should still surface.
-  }, [sessions, projects, query, scope, effectiveProjectId]);
-
-  // Same "only once there's a real query" gate as matchingSessions above —
-  // dumping every workspace into an unscoped list on open would just
-  // duplicate WorkspaceSwitcher's own always-visible list for no benefit.
-  const matchingWorkspaces = useMemo(() => {
-    if (query.trim() === "") return [];
-    return workspaces.filter((w) => matchesQuery([w.name], query));
-  }, [workspaces, query]);
-
-  // Sessions, Workspaces, and Matching commands render as three separate
-  // groups but share ONE selection index across all of them for arrow-key
-  // nav — Sidebar.tsx's own grouped list (projects -> sessions) has no
-  // analogous single-index keyboard nav to follow (each project section is
-  // independently click/hover-driven, never arrow-keyed), so this flattens
-  // the three result arrays into one ordered list purely for index math:
-  // entries[i] is whichever group i falls into once each group's rows are
-  // rendered at their own absolute offset (see groupOffset below).
-  type PaletteEntry =
-    | { type: "session"; session: Session }
-    | { type: "workspace"; workspace: Workspace }
-    | { type: "launcher"; launcher: Launcher };
-  const entries = useMemo<PaletteEntry[]>(
-    () => [
-      ...matchingSessions.map((session): PaletteEntry => ({ type: "session", session })),
-      ...matchingWorkspaces.map((workspace): PaletteEntry => ({ type: "workspace", workspace })),
-      ...filtered.map((launcher): PaletteEntry => ({ type: "launcher", launcher })),
-    ],
-    [matchingSessions, matchingWorkspaces, filtered],
-  );
-  // `sessions` (and therefore matchingSessions/entries) refreshes every 4s
-  // off the store's live-refresh poll while the palette can stay open
-  // (store.ts's LIVE_REFRESH_INTERVAL_MS) — unlike `filtered`, which only
-  // ever shrinks/grows on a keystroke or a project switch. A session
-  // dropping out of the match set mid-poll can leave `selectedIndex` past
-  // the new end; clamping once here (rather than at every read site) is
-  // what keeps Enter/highlight/the options-strip below from silently
-  // targeting a stale, now out-of-range index.
-  const activeIndex = entries.length === 0 ? -1 : Math.min(selectedIndex, entries.length - 1);
-  const activeEntry = entries[activeIndex];
-  const groupOffset = matchingSessions.length + matchingWorkspaces.length;
-
   const skipPermissionsAgentIds = useMemo(() => {
     const ids = new Set<string>();
     for (const id of settings.launchers.skipPermissionsAgents ?? []) {
@@ -386,8 +298,9 @@ export function CommandPalette({
   // but a search box, with the only evidence anything went wrong being an
   // unhandled rejection in the console. `launching`/`launchError` are new
   // local state (same "an inline error near the control that triggered the
-  // request" shape as worktreeBranchesError above and UnifiedBoard.tsx's
-  // TasksToolbar) — critically, the failure path must NOT call onClose():
+  // request" shape as <WorktreeOptions>'s own branches-fetch error and
+  // UnifiedBoard.tsx's TasksToolbar) — critically, the failure path must NOT
+  // call onClose():
   // closing on failure would unmount the very component about to render the
   // error, hiding it from the user just as reliably as never catching the
   // rejection did.
@@ -451,10 +364,7 @@ export function CommandPalette({
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSelectedIndex(0);
-            }}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Launch a session or run a command…"
             onKeyDown={(e) => {
               if (e.key === "Escape") {
@@ -529,32 +439,13 @@ export function CommandPalette({
               Not shown until a project target is resolved (mirrors every
               other target-dependent affordance in this strip). */}
           {effectiveProjectId !== null && (
-            <div className="cmd-palette-target-row cmd-palette-worktree-row">
-              <label className="cmd-palette-worktree-toggle">
-                <input
-                  type="checkbox"
-                  checked={worktreeEnabled}
-                  onChange={(e) => setWorktreeEnabled(e.target.checked)}
-                />
-                <GitBranchIcon size={13} style={{ color: "var(--muted)" }} />
-                <span>Isolate in a new worktree</span>
-              </label>
-              {worktreeEnabled && (
-                <div className="cmd-palette-worktree-picker">
-                  <Dropdown
-                    small
-                    value={worktreeBaseRef}
-                    onChange={setWorktreeBaseRef}
-                    options={worktreeBranches.map((name) => ({ value: name, label: name }))}
-                  />
-                  {worktreeBranchesError && (
-                    <span className="cmd-palette-inline-error" title={worktreeBranchesError}>
-                      {worktreeBranchesError}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
+            <WorktreeOptions
+              projectId={effectiveProjectId}
+              enabled={worktreeEnabled}
+              onEnabledChange={setWorktreeEnabled}
+              baseRef={worktreeBaseRef}
+              onBaseRefChange={setWorktreeBaseRef}
+            />
           )}
         </div>
 
