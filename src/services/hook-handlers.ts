@@ -43,6 +43,7 @@ import type {
   SubagentHookMessage,
   ElicitationHookMessage,
   QuestionHookMessage,
+  TodoHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -641,6 +642,17 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         ctx.emitEvent("question", { state: "finished" });
         ctx.clearIfConfirmedKind("question");
       }
+    },
+  ],
+  [
+    "todo",
+    (ctx, message) => {
+      const todo = message as TodoHookMessage;
+      ctx.emitEvent("todo", {
+        content: todo.content,
+        status: todo.status,
+        priority: todo.priority,
+      });
     },
   ],
 ]);

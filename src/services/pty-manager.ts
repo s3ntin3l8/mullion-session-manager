@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  TodoHookMessage,
   SessionDiffHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
@@ -2309,15 +2308,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "todo": {
-        const todo = message as TodoHookMessage;
-        this.emitEvent("todo", {
-          content: todo.content,
-          status: todo.status,
-          priority: todo.priority,
-        });
-        return;
-      }
       case "session_diff": {
         const sd = message as SessionDiffHookMessage;
         this.emitEvent("session_diff", { files: sd.files });
