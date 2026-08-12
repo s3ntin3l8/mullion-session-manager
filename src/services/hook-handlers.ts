@@ -21,8 +21,20 @@
 // persistence, etc. are all absent here).
 //
 // The attention STATE MACHINE itself (advanceAttention/applyAttentionTransition
-// and friends) is a separate, coupled follow-up per the roadmap item's own
-// note — not touched by this PR.
+// and friends) was the separate, coupled follow-up per the roadmap item's own
+// note — not touched by this PR, but landed as PR 33b: it now lives on a
+// composed `AttentionTracker` instance (attention-tracker.ts), reached from
+// here exactly the same way as before — `SessionHookContext`'s
+// emitAttentionSignalWithExtras/clearIfConfirmedKind/resolveDeferredTurnEnd/
+// setBackgroundTasks members, and the lastTurnEndedAt/turnEndPingSent/
+// backgroundTasks/backgroundTasksAt get/set pairs, are still proxied by
+// pty-manager.ts's `buildHookContext()` — only now onto `self.attention.*`
+// instead of `self.*` directly. This file's handlers are unchanged either
+// way: they only ever went through the ctx facade, never Session's fields
+// directly. bumpSubagentActivity/recordSubagentStart/recordSubagentStop
+// stayed on Session — they never touch attention state, despite being
+// reached through this same ctx (see attention-tracker.ts's own header
+// comment for that boundary call).
 
 import type {
   HookMessage,
