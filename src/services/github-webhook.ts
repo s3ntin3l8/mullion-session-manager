@@ -5,10 +5,7 @@ import { integrations, projects, webhookRegistrations } from "../db/schema.js";
 import { getToken, GITHUB_PROVIDER } from "./github-integration.js";
 import { validateGitHubRepoRef } from "./github.js";
 import { resolveRepoRef } from "./host-git.js";
-
-const GITHUB_API_BASE = "https://api.github.com";
-const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "mullion-session-manager";
+import { githubApiFetch } from "./github-fetch.js";
 
 function generateSecret(): string {
   return crypto.randomBytes(32).toString("hex");
@@ -26,16 +23,9 @@ async function getExistingHooks(
   repo: string,
 ): Promise<GitHubHookApiItem[]> {
   validateGitHubRepoRef(owner, repo);
-  const res = await fetch(
-    `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    },
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
+    { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!res.ok) return [];
   return (await res.json()) as GitHubHookApiItem[];
@@ -67,21 +57,18 @@ async function registerHook(
   const mullionHook = existing.find((h) => h.active && h.config.url === webhookUrl);
 
   if (mullionHook) {
-    const res = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${mullionHook.id}`,
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${mullionHook.id}`,
       {
         method: "PATCH",
         headers: {
           Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": USER_AGENT,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           active: true,
           config: { url: webhookUrl, content_type: "json", secret, insecure_ssl: "0" },
         }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
     );
     if (!res.ok) {
@@ -93,14 +80,12 @@ async function registerHook(
     return mullionHook.id;
   }
 
-  const res = await fetch(
-    `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -114,7 +99,6 @@ async function registerHook(
           insecure_ssl: "0",
         },
       }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     },
   );
   if (!res.ok) {
@@ -140,16 +124,11 @@ export async function unregisterHook(
   const existing = await getExistingHooks(token, owner, repo);
   for (const hook of existing) {
     if (hook.active && hook.config.url === webhookUrl) {
-      await fetch(
-        `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${hook.id}`,
+      await githubApiFetch(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${hook.id}`,
         {
           method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/vnd.github+json",
-            "User-Agent": USER_AGENT,
-          },
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          headers: { Authorization: `Bearer ${token}` },
         },
       ).catch(() => {});
     }

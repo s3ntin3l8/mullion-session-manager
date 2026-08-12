@@ -6,7 +6,8 @@
 // this module never imports that service itself, keeping the two
 // independently testable).
 
-const GITHUB_API_BASE = "https://api.github.com";
+import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
+export { GitHubApiError };
 
 // GitHub repo/owner naming constraints: alphanumeric + hyphens for owners
 // (max 39 chars), plus underscores/periods for repos (max 100 chars).
@@ -15,23 +16,11 @@ const GITHUB_API_BASE = "https://api.github.com";
 // encodeURIComponent and the fixed api.github.com base prevent injection.
 const OWNER_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?$/;
 const REPO_RE = /^[a-zA-Z0-9_.-]{1,100}$/;
-const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "mullion-session-manager";
 
 // Fetch-on-open + short TTL, not background polling — see the plan's
 // "protect the 5000/hr budget" note. A project's Dock widget/panel re-fetches
 // at most this often even if the user reopens it repeatedly.
 const CACHE_TTL_MS = 60_000;
-
-export class GitHubApiError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: number,
-  ) {
-    super(message);
-    this.name = "GitHubApiError";
-  }
-}
 
 export interface GitHubIssueOrPr {
   number: number;
@@ -188,14 +177,12 @@ async function fetchActionsRuns(
 ): Promise<GitHubActionsRun[]> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
 
   try {
-    const repoRes = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    const repoRes = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      { headers },
     );
     if (!repoRes.ok) return [];
     const repoData = (await repoRes.json()) as GitHubRepoApiResponse;
@@ -207,9 +194,9 @@ async function fetchActionsRuns(
     // that's an extreme case; 20 (the prior value) risked missing workflows
     // in an ordinary monorepo with more than a handful of them (Hermes
     // review, PR #42).
-    const runsRes = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?branch=${encodeURIComponent(defaultBranch)}&per_page=100`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    const runsRes = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?branch=${encodeURIComponent(defaultBranch)}&per_page=100`,
+      { headers },
     );
     if (!runsRes.ok) return [];
     const runsData = (await runsRes.json()) as { workflow_runs?: GitHubWorkflowRunApiItem[] };
@@ -270,26 +257,13 @@ export async function getRepoStatus(
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
   if (cached?.etag) headers["If-None-Match"] = cached.etag;
 
-  let res: Response;
-  try {
-    res = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&per_page=100`,
-      {
-        headers,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      },
-    );
-  } catch (err) {
-    throw new GitHubApiError(
-      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
-      0,
-    );
-  }
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&per_page=100`,
+    { headers },
+  );
 
   if (res.status === 304 && cached) {
     cached.ts = Date.now();
@@ -364,22 +338,12 @@ export async function listLabeledIssues(
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
 
-  let res: Response;
-  try {
-    res = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-    );
-  } catch (err) {
-    throw new GitHubApiError(
-      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
-      0,
-    );
-  }
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
+    { headers },
+  );
 
   if (!res.ok) {
     throw new GitHubApiError(
@@ -444,22 +408,12 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
 
-  let res: Response;
-  try {
-    res = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&per_page=100`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-    );
-  } catch (err) {
-    throw new GitHubApiError(
-      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
-      0,
-    );
-  }
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&per_page=100`,
+    { headers },
+  );
 
   if (!res.ok) {
     throw new GitHubApiError(`GitHub API error for PRs (HTTP ${res.status})`, res.status);
@@ -488,14 +442,12 @@ async function fetchRunsForHead(
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
 
   try {
-    const runsRes = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    const runsRes = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`,
+      { headers },
     );
     if (!runsRes.ok) return [];
     const runsData = (await runsRes.json()) as { workflow_runs?: GitHubWorkflowRunItem[] };
@@ -639,14 +591,12 @@ export async function getWorkflowRunJobs(
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
 
   try {
-    const res = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=100`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=100`,
+      { headers },
     );
     if (!res.ok) return [];
     const data = (await res.json()) as GitHubJobsApiResponse;
@@ -685,14 +635,12 @@ export async function getJobLogs(
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
   };
 
   try {
-    const res = await fetch(
-      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
-      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
+      { headers },
     );
     if (!res.ok) return null;
     const text = await res.text();

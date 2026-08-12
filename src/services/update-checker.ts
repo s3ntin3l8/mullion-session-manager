@@ -5,9 +5,7 @@
 // for a newer release (unlike github.ts's per-project integration, which
 // authenticates as the connected user to read private repos too).
 
-const GITHUB_API_BASE = "https://api.github.com";
-const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "mullion-session-manager";
+import { githubApiFetch } from "./github-fetch.js";
 
 // A release check is a background/settings-page concern, not something a
 // user is staring at waiting for — cache generously (unlike github.ts's
@@ -203,21 +201,12 @@ export async function checkForUpdate(
 
   let res: Response;
   try {
-    res = await fetch(
-      `${GITHUB_API_BASE}/repos/${repoSlug}/releases?per_page=${RELEASES_PAGE_SIZE}`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": USER_AGENT,
-        },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      },
-    );
+    res = await githubApiFetch(`/repos/${repoSlug}/releases?per_page=${RELEASES_PAGE_SIZE}`);
   } catch (err) {
-    throw new UpdateCheckError(
-      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
-      0,
-    );
+    // githubApiFetch's own GitHubApiError message is already "Could not
+    // reach GitHub: ...", so its message is reused as-is here rather than
+    // wrapped again.
+    throw new UpdateCheckError(err instanceof Error ? err.message : String(err), 0);
   }
 
   if (!res.ok) {
