@@ -473,7 +473,14 @@ describe("hosts route (issue #26)", () => {
         vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
           const url =
             typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-          if (url.startsWith("https://api.github.com")) {
+          // Parsed and checked against the exact hostname (CodeQL
+          // js/incomplete-url-substring-sanitization) rather than a
+          // startsWith/substring check — "https://api.github.com" is a
+          // string PREFIX of "https://api.github.com.evil.example/", which
+          // a naive check would wrongly route to the GitHub fixture queue.
+          // No untrusted input reaches this test-only router, but the
+          // pattern is worth getting right regardless.
+          if (new URL(url).hostname === "api.github.com") {
             githubCallCount++;
             const next = githubResponses.shift();
             if (!next) throw new Error("unexpected GitHub API call in test");
