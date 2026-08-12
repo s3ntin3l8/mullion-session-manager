@@ -2320,13 +2320,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "notification_resolved":
-        // Follow-up to #275 (gap #2) — opencode's permission.replied,
-        // resolving a hookNotification-confirmed flag with no keystroke of
-        // its own (an auto-approved permission) — see
-        // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
-        this.clearIfConfirmedKind("hookNotification");
-        return;
       case "permission_request": {
         const pr = message as PermissionRequestHookMessage;
         this.permissionState = "pending";

@@ -348,6 +348,16 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // `hooksProven`, despite bypassing this method entirely.
     },
   ],
+  [
+    "notification_resolved",
+    (ctx) => {
+      // Follow-up to #275 (gap #2) — opencode's permission.replied,
+      // resolving a hookNotification-confirmed flag with no keystroke of
+      // its own (an auto-approved permission) — see
+      // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
+      ctx.clearIfConfirmedKind("hookNotification");
+    },
+  ],
 ]);
 
 export type { HookMessageKind };
