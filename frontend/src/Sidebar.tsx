@@ -10,10 +10,7 @@ import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
 import type {
   BackgroundTask,
   DiscoveredProject,
-  GitHubCiStatus,
-  GitStatus,
   Host,
-  NotificationEvent,
   Project,
   Session,
   SubagentInfo,
@@ -55,34 +52,20 @@ import { HierarchyToggle } from "./HierarchyToggle.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
-import { matchesQuery } from "./matchQuery.js";
 import { columnForSession } from "./kanban.js";
 import type { KanbanColumnId } from "./kanban.js";
-
-// U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
-// the sidebar's own display-name precedence, factored out so the new search
-// filter below can match against exactly the same text SessionRow itself
-// renders as the row's title, instead of drifting from it. Previously
-// inlined once, in SessionRow's own `title` computation.
-function sessionDisplayTitle(session: Session): string {
-  return session.nameLocked && session.name
-    ? session.name
-    : session.lastTitle
-      ? session.lastTitle
-      : session.command;
-}
-
-// U3 — the sidebar's own search box, reusing CommandPalette.tsx's (U2,
-// #581) plain case-insensitive substring matcher rather than growing a
-// second one (matchQuery.ts's own header comment covers why it's a plain
-// substring test, not fuzzy). Matches on the session's displayed title,
-// its raw command, and its *project's* name — typing a project name is
-// meant to keep every one of that project's sessions visible, which falls
-// out for free from including project.name as one of the per-session
-// fields checked here.
-function sessionMatchesSearch(session: Session, project: Project, query: string): boolean {
-  return matchesQuery([sessionDisplayTitle(session), session.command, project.name], query);
-}
+import { sessionDisplayTitle, sessionMatchesSearch } from "./lib/sessionDisplay.js";
+import {
+  backgroundTaskLetter,
+  fileChangeDotClass,
+  fileChangeLetter,
+  isSubagentLive,
+  sessionGitDotClass,
+  sessionPrDotClass,
+  subagentDotClass,
+  summarizeFileChanges,
+} from "./lib/sidebarStatus.js";
+import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 
 // U3's three status filter chips. Deliberately only 3 of kanban.ts's 5
 // severity-derived columns (not "Finished"/"Idle") — matches the finding's
@@ -1069,7 +1052,7 @@ function VirtualizedProjectTree({
     // scroll container", using this list's own `offsetTop` as the measured
     // margin (see the transform below for the matching subtraction).
     scrollMargin: listRef.current?.offsetTop ?? 0,
-    estimateSize: (index) => estimateSidebarRowHeight(rows[index]),
+    estimateSize: (index) => estimateSidebarRowHeight(rows[index], expandedSessionRows),
     overscan: 8,
   });
 
@@ -1157,34 +1140,11 @@ function VirtualizedProjectTree({
   );
 }
 
-const PROJECT_HEADER_ROW_ESTIMATE = 32;
-const EMPTY_NOTE_ROW_ESTIMATE = 28;
-const SESSION_ROW_ESTIMATE_COLLAPSED = 54;
-const SESSION_ROW_ESTIMATE_EXPANDED = 92;
-
-// A session row's real height varies with which of its (up to) six sub-rows
-// are showing (see SessionRow's own doc comments — row 3's git-details
-// toggle, row 4's file-change chips, row 5's subagent chips, row 6's
-// background-task chips can each add a line). A fully accurate a-priori
-// estimate would mean duplicating SessionRow's own derivation of
-// fileChanges/showSubagentsRow/showBackgroundTasksRow here — those aren't
-// fields on Session itself, they're derived from the session's *event*
-// history inside that component — purely to guess a number that
-// `measureElement` (in VirtualizedProjectTree above) immediately corrects
-// after first paint anyway. So this uses the one cheap, already-available
-// signal instead: whether the git-details line is expanded, read off the
-// same `expandedSessionRows` module set SessionRow itself reads for that
-// toggle's persisted state. Same two-tier estimate/measureElement split
-// NotificationBell.tsx already uses (see its own HEADER_ROW_HEIGHT/
-// EVENT_ROW_ESTIMATE_HEIGHT).
-function estimateSidebarRowHeight(row: SidebarFlatRow | undefined): number {
-  if (!row) return SESSION_ROW_ESTIMATE_COLLAPSED;
-  if (row.type === "header") return PROJECT_HEADER_ROW_ESTIMATE;
-  if (row.type === "empty") return EMPTY_NOTE_ROW_ESTIMATE;
-  return expandedSessionRows.has(row.session.id)
-    ? SESSION_ROW_ESTIMATE_EXPANDED
-    : SESSION_ROW_ESTIMATE_COLLAPSED;
-}
+// estimateSidebarRowHeight (VirtualizedProjectTree's useVirtualizer
+// estimateSize above) moved to lib/sidebarRowSizing.ts (PR 27 phase 1) —
+// see that module's own doc comment for why `SidebarFlatRow` itself stayed
+// here rather than moving with it, and why `expandedSessionRows` (below) is
+// now passed in explicitly at the call site instead of closed over.
 
 // The 4 status treatments the redesign's States doc specifies (confirmed
 // against the design source — its tab-chrome badge grid has exactly these
@@ -1251,16 +1211,8 @@ function setSubagentRowExpanded(sessionId: number, agentId: string, expanded: bo
   writeJSON(STORAGE_KEYS.expandedSubagentRows, [...expandedSubagentRows]);
 }
 
-// Live (still running) vs finished — the only two states a SubagentInfo can
-// be in (see pty-manager.ts's recordSubagentStart/Stop); reused for both the
-// chip's dot color and its age label ("running Xm ago" vs "finished Xm ago").
-function isSubagentLive(subagent: SubagentInfo): boolean {
-  return subagent.endedAt === null;
-}
-
-function subagentDotClass(subagent: SubagentInfo): "good" | "pending" {
-  return isSubagentLive(subagent) ? "pending" : "good";
-}
+// isSubagentLive/subagentDotClass (both pure) moved to lib/sidebarStatus.ts
+// (PR 27 phase 1) — imported above.
 
 interface SubagentChipProps {
   sessionId: number;
@@ -1322,14 +1274,9 @@ function SubagentChip({ sessionId, subagent }: SubagentChipProps) {
   );
 }
 
-// Issue #428 — the first letter of a background task's `type` (e.g.
-// "shell"/"subagent"/"mcp"), same one-glyph-badge convention as row 4's
-// fileChangeLetter above. Falls back to "?" for an empty/malformed type —
-// hook-protocol.ts's validateBackgroundTasksField only requires each element
-// to be a non-null object, not that `type` itself is a non-empty string.
-function backgroundTaskLetter(type: string): string {
-  return typeof type === "string" && type.length > 0 ? type[0].toUpperCase() : "?";
-}
+// backgroundTaskLetter (pure) moved to lib/sidebarStatus.ts (PR 27 phase
+// 1) — imported above; same one-glyph-badge convention as fileChangeLetter,
+// also in that module now.
 
 interface BackgroundTaskChipProps {
   task: BackgroundTask;
@@ -1351,76 +1298,14 @@ function BackgroundTaskChip({ task }: BackgroundTaskChipProps) {
   );
 }
 
-// Same clean/dirty/conflict/none taxonomy as ProjectSection's own gitStatus
-// handling above, reused here for row 3's dirty dot (`.project-git-dot`) —
-// kept as a small local helper rather than a shared export since
-// ProjectSection's version is inlined into its own render and this is the
-// only other call site (matches git-refs.ts's own "small guards get
-// duplicated, not shared" precedent elsewhere in this codebase).
-function sessionGitDotClass(status: GitStatus): "clean" | "dirty" | "conflict" {
-  if (status.hasConflicts) return "conflict";
-  return status.isClean ? "clean" : "dirty";
-}
-
-// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
-// as GitHubPanel.tsx's own ciDotClass — duplicated rather than imported for
-// the same "small guard, not worth a cross-module dependency" reasoning.
-function sessionPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  if (status === "in_progress") return "pending";
-  return "none";
-}
-
-interface FileChangeSummary {
-  path: string;
-  action: "modify" | "create" | "delete";
-  count: number;
-  lastSeq: number;
-}
+// sessionGitDotClass/sessionPrDotClass/summarizeFileChanges/
+// fileChangeDotClass/fileChangeLetter (all pure, plus the FileChangeSummary
+// type they share) moved to lib/sidebarStatus.ts (PR 27 phase 1) — imported
+// above. ProjectHeader's own gitStatus handling above stays inlined rather
+// than routed through sessionGitDotClass (matches git-refs.ts's own "small
+// guards get duplicated, not shared" precedent elsewhere in this codebase).
 
 const FILE_CHANGE_MAX_SHOWN = 5;
-
-// Row 4 (issue #177) — collapses this session's raw `file_change` hook
-// events (see eventDescriptions.ts's own file_change case for the payload
-// shape) into one summary per path: the most recent action wins, `count`
-// is how many times that path was touched recently. `events` is
-// oldest-first (store.ts's addEvent), so a single forward scan naturally
-// leaves the latest action/seq in place with no extra sort-then-scan step.
-function summarizeFileChanges(events: NotificationEvent[] | undefined): FileChangeSummary[] {
-  if (!events) return [];
-  const byPath = new Map<string, FileChangeSummary>();
-  for (const event of events) {
-    if (event.kind !== "file_change") continue;
-    const path = typeof event.payload.path === "string" ? event.payload.path : null;
-    const action = event.payload.action;
-    if (!path || (action !== "modify" && action !== "create" && action !== "delete")) continue;
-    const existing = byPath.get(path);
-    if (existing) {
-      existing.action = action;
-      existing.count += 1;
-      existing.lastSeq = event.seq;
-    } else {
-      byPath.set(path, { path, action, count: 1, lastSeq: event.seq });
-    }
-  }
-  return Array.from(byPath.values()).sort((a, b) => b.lastSeq - a.lastSeq);
-}
-
-// Reuses the same letter+dot language as GitPanel.tsx's own per-file status
-// badges (create/A -> good, delete/D -> bad, modify/M -> pending) rather
-// than inventing a fourth dot vocabulary for this one strip.
-function fileChangeDotClass(action: FileChangeSummary["action"]): "good" | "bad" | "pending" {
-  if (action === "create") return "good";
-  if (action === "delete") return "bad";
-  return "pending";
-}
-
-function fileChangeLetter(action: FileChangeSummary["action"]): "A" | "D" | "M" {
-  if (action === "create") return "A";
-  if (action === "delete") return "D";
-  return "M";
-}
 
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 

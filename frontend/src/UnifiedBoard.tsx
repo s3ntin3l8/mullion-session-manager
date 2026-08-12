@@ -59,9 +59,9 @@ function clampDrawerWidth(n: number, maxW: number): number {
 }
 
 // Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
-// as Sidebar.tsx's sessionPrDotClass/GitHubPanel.tsx's ciDotClass —
+// as lib/sidebarStatus.ts's sessionPrDotClass/GitHubPanel.tsx's ciDotClass —
 // duplicated rather than imported, this codebase's own established
-// precedent for this exact small guard (see Sidebar.tsx's own comment).
+// precedent for this exact small guard (see that module's own comment).
 function taskCardPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
   if (status === "success") return "good";
   if (status === "failure") return "bad";
