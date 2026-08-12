@@ -47,7 +47,13 @@ export interface HeaderProps {
   onRename: (value: string) => void;
   childCount: number;
   confirmBeforeKill: boolean;
-  onEnd: () => void;
+  // Named onConfirmEnd (not onEnd) deliberately: SessionRow's own `onEnd`
+  // prop is the caller's raw ender (`() => void | Promise<void>`, per that
+  // prop's own doc comment) — this is SessionRow's already-wrapped
+  // `handleEnd`, a same-file, different-contract value one hop away. Same
+  // name for both would be exactly the kind of one-character-diff trap this
+  // split is supposed to make easier to review, not harder.
+  onConfirmEnd: () => void;
 }
 
 export function Header({
@@ -68,7 +74,7 @@ export function Header({
   onRename,
   childCount,
   confirmBeforeKill,
-  onEnd,
+  onConfirmEnd,
 }: HeaderProps) {
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -198,7 +204,7 @@ export function Header({
                 ? `End this session — ${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
                 : "End this session (the program will be terminated)"
             }
-            onConfirm={onEnd}
+            onConfirm={onConfirmEnd}
             // Phase 5 (Track B, issue #196 5.6) — always require the
             // arm-then-confirm step when this session has live children,
             // regardless of the global "confirm before kill" setting.

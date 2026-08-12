@@ -1234,10 +1234,12 @@ export function SessionRow({
   // renders (project → session → child session, so only 0 or 1 is possible
   // today: nesting is capped at one level server-side, see
   // createSessionRecord's "parent-is-child" rejection). An explicit prop
-  // rather than recursion: SessionRow is ~450 lines and shared verbatim by
-  // UnifiedBoard.tsx's ad-hoc lane (which never passes this, so its cards
-  // stay flat for free) — recursing here would force that lane to opt out of
-  // a second thing instead of just not knowing this prop exists at all.
+  // rather than recursion: SessionRow (now this orchestrator plus its
+  // Header/GitLine/FileChanges/Chips sub-components under ./session-row/,
+  // split in PR 27 phase 2) is shared verbatim by UnifiedBoard.tsx's ad-hoc
+  // lane (which never passes this, so its cards stay flat for free) —
+  // recursing here would force that lane to opt out of a second thing
+  // instead of just not knowing this prop exists at all.
   depth?: number;
 }) {
   const isTerminal = session.status === "killed";
@@ -1519,7 +1521,7 @@ export function SessionRow({
           }}
           childCount={childCount}
           confirmBeforeKill={confirmBeforeKill}
-          onEnd={handleEnd}
+          onConfirmEnd={handleEnd}
         />
         {eventLine && (
           <span

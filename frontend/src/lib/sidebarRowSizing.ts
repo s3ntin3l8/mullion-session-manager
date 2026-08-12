@@ -2,11 +2,18 @@
 // PR 27 phase 1 (Wave 5, .claude/plans/can-we-do-a-warm-cocke.md). The
 // `SidebarFlatRow` union itself (header/session/empty, carrying full
 // `Project`/`Session` render state) stays in Sidebar.tsx — it's render
-// shape, not a pure-helper concern, and moving it into `lib/` would only
-// churn again once the SessionRow-split PR reshapes those rows. Instead,
-// `SidebarRowSizeInput` below is the minimal structural slice this
-// estimator actually reads; `SidebarFlatRow` is assignable to it at the one
-// call site (Sidebar.tsx's VirtualizedProjectTree) with no cast needed.
+// shape, not a pure-helper concern. PR 27 phase 2 (the SessionRow split into
+// Header/GitLine/FileChanges/Chips under ./session-row/) deliberately did
+// NOT reshape `SidebarFlatRow` or this estimator's own two-tier
+// estimate/measureElement contract: every sub-component returns the exact
+// same DOM (no new wrapper elements at the component boundaries), so the
+// real rendered height each row measures to is unchanged, and this
+// estimator's cheap a-priori guess (based only on whether the git-details
+// line is expanded, corrected by `measureElement` after first paint) needed
+// no changes either. `SidebarRowSizeInput` below is the minimal structural
+// slice this estimator actually reads; `SidebarFlatRow` is assignable to it
+// at the one call site (Sidebar.tsx's VirtualizedProjectTree) with no cast
+// needed.
 export type SidebarRowSizeInput =
   { type: "header" } | { type: "empty" } | { type: "session"; session: { id: number } };
 
