@@ -7,9 +7,10 @@ import {
   foreignKey,
 } from "drizzle-orm/sqlite-core";
 // TASK_STATUSES/TaskStatus now physically live in src/shared/constants.ts
-// (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
-// re-export). Re-exported below so every existing backend importer of this
-// module (task-state.ts, routes/tasks.ts, ...) keeps working unchanged.
+// (re-exported by the frontend too, from the same file — see
+// frontend/src/api.ts's own re-export). Re-exported below so every existing
+// backend importer of this module (task-state.ts, routes/tasks.ts, ...)
+// keeps working unchanged.
 // TASK_STATUSES is a runtime VALUE, not type-only, so this is a plain
 // import, not `import type`.
 import { TASK_STATUSES, type TaskStatus } from "../shared/constants.js";

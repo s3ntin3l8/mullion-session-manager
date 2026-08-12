@@ -4,10 +4,10 @@ import { eq, and, isNotNull, ne } from "drizzle-orm";
 import { hosts, projects } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 // LOCAL_HOST_ID now physically lives in src/shared/constants.ts
-// (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
-// re-export). Re-exported below so every existing backend importer of this
-// module keeps working unchanged. Runtime VALUE, not type-only, so this is
-// a plain import.
+// (re-exported by the frontend too, from the same file — see
+// frontend/src/api.ts's own re-export). Re-exported below so every existing
+// backend importer of this module keeps working unchanged. Runtime VALUE,
+// not type-only, so this is a plain import.
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 
 export { LOCAL_HOST_ID };
