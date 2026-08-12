@@ -37,7 +37,6 @@ import type {
   HookMessageKind,
   HookMessage,
   ToolDoneHookMessage,
-  PlanReadyHookMessage,
   GitBranchHookMessage,
   CwdChangedHookMessage,
   CompactHookMessage,
@@ -2316,20 +2315,6 @@ export class Session {
       return;
     }
     switch (message.kind) {
-      case "plan_ready": {
-        const plan = message as PlanReadyHookMessage;
-        this.planState = "pending";
-        this.planAt = Date.now();
-        this.emitEvent("plan_ready", {
-          plan: plan.plan,
-          filePath: plan.filePath ?? null,
-          summary: plan.summary ?? null,
-        });
-        this.emitAttentionSignalWithExtras("planReady", {
-          summary: plan.summary ?? plan.plan.slice(0, 100),
-        });
-        return;
-      }
       case "git_branch": {
         // Issue: sidebar worktree detection — an agent reports its current
         // branch (opencode's vcs.branch.updated, or a Bash tool intercept

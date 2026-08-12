@@ -36,6 +36,7 @@ import type {
   StopFailureHookMessage,
   ToolFailureHookMessage,
   SessionEndHookMessage,
+  PlanReadyHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
@@ -424,6 +425,22 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.endedReason = se.reason;
       ctx.exitCode = se.exitCode ?? null;
       ctx.emitEvent("session_end", { reason: se.reason, exitCode: se.exitCode ?? null });
+    },
+  ],
+  [
+    "plan_ready",
+    (ctx, message) => {
+      const plan = message as PlanReadyHookMessage;
+      ctx.planState = "pending";
+      ctx.planAt = Date.now();
+      ctx.emitEvent("plan_ready", {
+        plan: plan.plan,
+        filePath: plan.filePath ?? null,
+        summary: plan.summary ?? null,
+      });
+      ctx.emitAttentionSignalWithExtras("planReady", {
+        summary: plan.summary ?? plan.plan.slice(0, 100),
+      });
     },
   ],
 ]);
