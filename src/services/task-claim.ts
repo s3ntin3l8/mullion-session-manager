@@ -1,14 +1,13 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
-// Reaches into routes/ from a service — an intentional, narrow exception.
-// createSessionRecord/withLiveStatus already exist specifically for
-// cross-file reuse (routes/tasks.ts's thin-slice claim endpoint was their
-// first external consumer); this is the second, not a new precedent. Both
-// are pure business logic that happen to be filed under routes/ for
-// historical colocation with POST /api/sessions, not anything
-// request/reply-shaped.
-import { createSessionRecord, withLiveStatus } from "../routes/sessions.js";
+// createSessionRecord/withLiveStatus are pure business logic, filed under
+// services/ (session-lifecycle.ts/session-live-info.ts) precisely so a
+// service can reuse them directly rather than reaching into routes/ — see
+// those files' own doc comments for the createSessionRecord/killSession and
+// buildLiveInfo/withLiveInfo/withLiveStatus split.
+import { createSessionRecord } from "./session-lifecycle.js";
+import { withLiveStatus } from "./session-live-info.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { resolveHostBaseRef } from "./host-git.js";

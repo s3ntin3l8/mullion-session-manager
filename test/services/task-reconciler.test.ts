@@ -696,7 +696,7 @@ describe("reconcileTasks", () => {
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
-      const sessionsModule = await import("../../src/routes/sessions.js");
+      const sessionsModule = await import("../../src/services/session-lifecycle.js");
       vi.spyOn(sessionsModule, "createSessionRecord").mockResolvedValueOnce({
         ok: false,
         reason: "spawn-failed",
@@ -723,7 +723,7 @@ describe("reconcileTasks", () => {
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
         } as never);
-        const sessionsModule = await import("../../src/routes/sessions.js");
+        const sessionsModule = await import("../../src/services/session-lifecycle.js");
         const createSessionSpy = vi.spyOn(sessionsModule, "createSessionRecord");
 
         await reconcileTasks(app);

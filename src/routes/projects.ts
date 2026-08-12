@@ -70,7 +70,7 @@ import {
   inspectImageId,
   type ComposeService,
 } from "../services/docker-service-detect.js";
-import { createSessionRecord } from "./sessions.js";
+import { createSessionRecord } from "../services/session-lifecycle.js";
 
 interface CreateProjectBody {
   name: string;
