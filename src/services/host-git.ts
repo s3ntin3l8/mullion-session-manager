@@ -7,7 +7,8 @@
 // credential-free, and threading a GitHub token through it would be the
 // wrong shape for the one caller (pushHostBranch) that needs one.
 //
-// Modeled on resolveRepoRef (github-webhook.ts) — same
+// Modeled on resolveRepoRef (originally github-webhook.ts, moved into this
+// module below as part of routes/projects.ts's GitHub-route dedup) — same
 // `(app, {cwd, hostId})`-shaped local/remote dispatch, same reason it lives
 // here rather than in git-status.ts/git-refs.ts/git-push.ts themselves:
 // those modules deliberately have no FastifyInstance import.
@@ -15,6 +16,7 @@ import type { FastifyInstance } from "fastify";
 import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
 import { resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
 import { pushBranch, type PushResult } from "./git-push.js";
+import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import {
   getRemoteHostClient,
@@ -158,4 +160,47 @@ export async function pushHostBranch(
     return { ok: true, value };
   }
   return viaRemote(app, hostId, (client) => client.resolvePushBranch(cwd, branch, token));
+}
+
+/**
+ * The GitHub `owner/repo` a project's `cwd` resolves to, on whichever host
+ * owns it — `parseGitRemote(cwd)` locally (uncaught: a throwing
+ * `parseGitRemote` is a real bug, not a "host unreachable" condition, so it
+ * propagates same as every other local branch in this module), the agent's
+ * `resolveGitHubRepo(cwd)` remotely via the shared `viaRemote` dispatch.
+ * `value: null` means "no github.com remote configured", not an error —
+ * `ok: false` is reserved for "couldn't determine this at all" (host
+ * unreachable / doesn't support the route yet).
+ *
+ * Moved here from github-webhook.ts (originally #484, relocated as part of
+ * routes/projects.ts's GitHub-route dedup) — most of its callers
+ * (task-promote.ts, task-github-sync.ts, task-watcher.ts,
+ * webhook-reconciler.ts via registerProjectWebhook, routes/webhooks.ts)
+ * aren't webhook-specific; this module is where the rest of the
+ * host-aware git dispatch already lives.
+ */
+export async function resolveRepoRefResult(
+  app: FastifyInstance,
+  project: { cwd: string; hostId: string },
+): Promise<HostGitResult<GitHubRepoRef | null>> {
+  if (project.hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: parseGitRemote(project.cwd) };
+  }
+  return viaRemote(app, project.hostId, (client) => client.resolveGitHubRepo(project.cwd));
+}
+
+/**
+ * `resolveRepoRefResult`, collapsed to `GitHubRepoRef | null` — the shape
+ * every existing caller (webhook registration/sync, Task Master's
+ * promote/sync/watcher paths) wants: none of them need to distinguish
+ * "host unreachable" from "no GitHub remote configured", they just want to
+ * skip/no-op either way. Only routes/projects.ts's GitHub routes need that
+ * distinction (503 vs. 204) — they call `resolveRepoRefResult` directly.
+ */
+export async function resolveRepoRef(
+  app: FastifyInstance,
+  project: { cwd: string; hostId: string },
+): Promise<GitHubRepoRef | null> {
+  const result = await resolveRepoRefResult(app, project);
+  return result.ok ? result.value : null;
 }

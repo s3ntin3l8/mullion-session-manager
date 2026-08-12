@@ -37,7 +37,7 @@ vi.mock("../../src/services/github-integration.js", () => ({
 // that host-aware resolution is what makes the sweep reach a remote-hosted
 // project's repo at all. Mocked at the same seam task-github-sync.test.ts
 // already mocks it at.
-vi.mock("../../src/services/github-webhook.js", () => ({
+vi.mock("../../src/services/host-git.js", () => ({
   resolveRepoRef: mockResolveRepoRef,
 }));
 

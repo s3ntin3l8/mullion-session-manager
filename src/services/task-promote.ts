@@ -42,7 +42,6 @@
 import type { FastifyInstance } from "fastify";
 import type { tasks, projects } from "../db/schema.js";
 import { resolveGitHubToken } from "./github-integration.js";
-import { resolveRepoRef } from "./github-webhook.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import {
   createPullRequest,
@@ -53,7 +52,12 @@ import {
   GitHubWriteScopeError,
 } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
-import { resolveHostGitStatus, resolveHostBaseRef, pushHostBranch } from "./host-git.js";
+import {
+  resolveHostGitStatus,
+  resolveHostBaseRef,
+  pushHostBranch,
+  resolveRepoRef,
+} from "./host-git.js";
 import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
 
 type TaskRow = typeof tasks.$inferSelect;
