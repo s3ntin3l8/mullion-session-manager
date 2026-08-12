@@ -2,11 +2,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Settings } from "./Settings.js";
-import type { Host } from "./api.js";
-import { jsonResponse } from "./test/jsonResponse.js";
-import { mockFetch } from "./test/mockFetch.js";
-import { resetStore } from "./test/resetStore.js";
+import { Settings } from "../../Settings.js";
+import type { Host } from "../../api.js";
+import { jsonResponse } from "../../test/jsonResponse.js";
+import { mockFetch } from "../../test/mockFetch.js";
+import { resetStore } from "../../test/resetStore.js";
 
 // Closes the gap Hermes flagged on PR #35 (issue #26, phase 4): "the
 // non-trivial 409 -> cascade retry path is entirely unverified." Exercises

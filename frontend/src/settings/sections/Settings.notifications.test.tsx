@@ -2,10 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Settings } from "./Settings.js";
-import { useDashboardStore } from "./store.js";
-import { DEFAULT_SETTINGS } from "./api.js";
-import { jsonResponse } from "./test/jsonResponse.js";
+import { Settings } from "../../Settings.js";
+import { useDashboardStore } from "../../store.js";
+import { DEFAULT_SETTINGS } from "../../api.js";
+import { jsonResponse } from "../../test/jsonResponse.js";
 
 // #95 — the push channel row delegates the actual subscribe/unsubscribe
 // side effects to pushClient.ts (its own dedicated test file exercises
@@ -16,7 +16,7 @@ const pushClientMock = vi.hoisted(() => ({
   enablePush: vi.fn(() => Promise.resolve()),
   disablePush: vi.fn(() => Promise.resolve()),
 }));
-vi.mock("./pushClient.js", () => pushClientMock);
+vi.mock("../../pushClient.js", () => pushClientMock);
 
 // Issue #318 review follow-up — the flat attentionAlerts/exitedAlerts/
 // finishedAlerts toggles were replaced by the per-status notification

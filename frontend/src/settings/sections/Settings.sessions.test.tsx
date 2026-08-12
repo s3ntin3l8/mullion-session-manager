@@ -2,10 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Settings } from "./Settings.js";
-import { useDashboardStore } from "./store.js";
-import { DEFAULT_SETTINGS } from "./api.js";
-import { jsonResponse } from "./test/jsonResponse.js";
+import { Settings } from "../../Settings.js";
+import { useDashboardStore } from "../../store.js";
+import { DEFAULT_SETTINGS } from "../../api.js";
+import { jsonResponse } from "../../test/jsonResponse.js";
 
 // fix: status-clearing-semantics — "Stale error timeout" is the new Settings
 // row surfacing sessions.staleErrorSeconds (previously a reconciler-internal
