@@ -41,7 +41,6 @@ import {
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
-  handleGlobalEscape,
   panelSessionId,
 } from "./panelUtils.js";
 import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
@@ -50,6 +49,7 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useMobileLayout } from "./hooks/useMobileLayout.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { usePolling } from "./hooks/usePolling.js";
 import {
   pickNewNotifiableEvents,
@@ -468,36 +468,14 @@ export function App() {
 
   // Global keyboard shortcuts: ⌘K/Ctrl+K opens the launcher, ⌘,/Ctrl+, opens
   // settings, Esc closes whichever overlay is open. Registered once,
-  // independent of what currently has DOM focus.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPalette((p) => ({ ...p, open: true, scope: "global" }));
-      } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        openSettings();
-      } else if (e.key === "Escape") {
-        // U9 — see handleGlobalEscape's own doc comment for why
-        // clearSplitRequest belongs here: the palette also renders for a
-        // pending split-right/split-down splitRequest (paletteOpen's own
-        // `palette.open || (splitRequest !== null && ...)` computation
-        // below), and the palette's OWN Escape handler only fires while
-        // focus is actually inside its search input — moving focus to the
-        // project picker, a launcher row, the worktree checkbox, or the
-        // base-ref dropdown (all still inside the palette) leaves this
-        // global, window-level handler as the only one that still sees the
-        // keypress.
-        handleGlobalEscape({
-          clearPalette: () => setPalette((p) => ({ ...p, open: false })),
-          closeSettings: () => setSettingsOpen(false),
-          clearSplitRequest: () => useDashboardStore.getState().clearSplitRequest(),
-        });
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [openSettings]);
+  // independent of what currently has DOM focus — extracted to
+  // useGlobalShortcuts (hooks/useGlobalShortcuts.ts). Called here, at the
+  // EXACT position this effect previously occupied in this component's body
+  // — not because it's load-bearing (see that hook's own header comment for
+  // the ordering/coupling analysis proving this effect is independent of
+  // every other effect in this file), but to keep the diff minimal and the
+  // file's effect ordering easy to audit.
+  useGlobalShortcuts({ setPalette, setSettingsOpen, openSettings });
 
   // Check for updates on mount and re-check every 30 minutes.
   // The backend caches results for 1h, so most re-checks are no-ops.
