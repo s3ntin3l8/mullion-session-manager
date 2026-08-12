@@ -4,12 +4,17 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import type { SocketLike } from "../services/socket-channel.js";
+// ResizeMessage/ExitedMessage physically live in src/shared/ws-protocol.ts
+// (hand-mirrored 1:1 on the frontend — see TerminalPane.tsx's own import)
+// as TerminalWSMessage's two arms. ResizeMessage used to be a module-private
+// (non-exported) `interface` declared here; ExitedMessage never had a named
+// type at all — this was a bare `{ type: "exited" }` object literal. Both
+// are now exported from here for the first time (no prior importer to
+// preserve), purely so a reader of this file can jump straight to the
+// canonical definition instead of one more hop through ws-protocol.ts.
+import type { ResizeMessage, ExitedMessage } from "../shared/ws-protocol.js";
 
-interface ResizeMessage {
-  type: "resize";
-  cols: number;
-  rows: number;
-}
+export type { ResizeMessage, ExitedMessage };
 
 function isResizeMessage(value: unknown): value is ResizeMessage {
   return (
@@ -89,7 +94,8 @@ export function attachSocketToSession(
 
   const unsubscribeExit = session.onExit(() => {
     if (socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify({ type: "exited" }));
+      const exitedMessage: ExitedMessage = { type: "exited" };
+      socket.send(JSON.stringify(exitedMessage));
     }
   });
 

@@ -6,6 +6,15 @@ import {
   index,
   foreignKey,
 } from "drizzle-orm/sqlite-core";
+// TASK_STATUSES/TaskStatus now physically live in src/shared/constants.ts
+// (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
+// re-export). Re-exported below so every existing backend importer of this
+// module (task-state.ts, routes/tasks.ts, ...) keeps working unchanged.
+// TASK_STATUSES is a runtime VALUE, not type-only, so this is a plain
+// import, not `import type`.
+import { TASK_STATUSES, type TaskStatus } from "../shared/constants.js";
+
+export { TASK_STATUSES, type TaskStatus };
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -280,26 +289,9 @@ export const browserCookies = sqliteTable(
   ],
 );
 
-// Phase 6 Task Master (6.9/#233) — the full lifecycle status vocabulary.
-// `backlog`/`ready` replace the thin slice's single "pending": `ready` is
-// what drag-to-ready (interactive) and the watcher's auto-claim ingest
-// (autonomous) both write, so it's the concurrency-cap-gated pickup point;
-// `backlog` is the un-picked-up staging column (see task-state.ts for the
-// legal transition table and the roadmap's Task Model & Task Board section
-// for the backlog->ready->...->done column framing). Free text at the SQL
-// level (see tasks.status's own comment below) — this union is the
-// TypeScript-side source of truth every route/service imports rather than
-// re-declaring.
-export const TASK_STATUSES = [
-  "backlog",
-  "ready",
-  "claimed",
-  "in_progress",
-  "reviewing",
-  "done",
-  "failed",
-] as const;
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+// TASK_STATUSES/TaskStatus imported and re-exported near the top of this
+// file (see that import's own comment) — see src/shared/constants.ts for
+// the full lifecycle-vocabulary doc comment (Phase 6 Task Master, 6.9/#233).
 
 // Phase 6 Task Master (6.9/#233, hardening the Phase 2.5 Thin Slice's
 // #214/#227) — one row per task, the Mullion-local hub the roadmap's Task

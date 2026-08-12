@@ -28,6 +28,12 @@ import { connectEventsStream, type EventsClientHandle } from "./eventsClient.js"
 import { connectTasksStream } from "./tasksClient.js";
 import type { KanbanColumnId } from "./kanban.js";
 import { resolveTaskMaster } from "./taskConfig.js";
+// GitHubWSEvent physically lives in src/shared/ws-protocol.ts (repo root,
+// NOT this frontend workspace — see src/services/github-ws-broadcast.ts's
+// own re-export), the backend's /ws/github push-event shape. Used below to
+// narrow connectGitHubWS's incoming message instead of hand-inspecting an
+// `unknown`-typed parse.
+import type { GitHubWSEvent } from "../../src/shared/ws-protocol.js";
 
 // Which workspace was last active survives a reload via localStorage (not
 // the DB — it's a per-browser UI preference, not shared server state).
@@ -1569,7 +1575,16 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data as string);
+          // An unchecked type assertion, not a runtime-validated narrowing
+          // — JSON.parse still returns `unknown` underneath; this just
+          // documents the shape this handler expects from the backend
+          // (every arm of GitHubWSEvent carries `projectId: string`). The
+          // `!= null` guard below is kept precisely because the assertion
+          // proves nothing at runtime: a malformed/unexpected frame from a
+          // version-skewed backend still parses fine, just without a real
+          // `projectId`, and that guard is what actually protects against
+          // it.
+          const data = JSON.parse(event.data as string) as GitHubWSEvent;
           if (data.projectId != null) {
             set((state) => ({ prsRefreshTrigger: state.prsRefreshTrigger + 1 }));
             // prsRefreshTrigger alone only reaches GitHubPanel (its own

@@ -1,5 +1,13 @@
 import type { WebSocket } from "@fastify/websocket";
-import type { TaskStatus } from "./task-state.js";
+// TaskEvent now physically lives in src/shared/ws-protocol.ts. The frontend
+// previously had no typed mirror of this at all — tasksClient.ts's
+// isTaskWireMessage was a hand-written guard hardcoding a literal list of
+// `kind` values; it now derives that list from this same union (see
+// tasksClient.ts's own comment). Re-exported below so every existing
+// backend importer of this module keeps working unchanged.
+import type { TaskEvent } from "../shared/ws-protocol.js";
+
+export type { TaskEvent };
 
 // #488 — a dedicated, session-less broadcast channel for task-transition
 // events, deliberately NOT built on pty-manager.ts's NotificationEvent
@@ -24,25 +32,6 @@ import type { TaskStatus } from "./task-state.js";
 // history, so a reconnecting client just needs one refresh on connect.
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
-
-// #490a — "ingested" is a second event kind alongside the original
-// "transition": a freshly-labeled/opened issue becoming a task has no
-// from/to (it wasn't anything before), so this is a discriminated union
-// rather than making from/to optional on one shape — a transition frame
-// keeps both fields required. Only fired for a genuinely NEW task (see
-// upsertIssueTask's own doc comment) — a re-sighting of an already-tracked
-// issue is not an "arrival" the Tasks panel needs telling about beyond its
-// existing 60s poll.
-export type TaskEvent =
-  | {
-      taskId: number;
-      projectId: number;
-      kind: "transition";
-      from: TaskStatus;
-      to: TaskStatus;
-      ts: number;
-    }
-  | { taskId: number; projectId: number; kind: "ingested"; ts: number };
 
 const subscribers = new Set<WebSocket>();
 

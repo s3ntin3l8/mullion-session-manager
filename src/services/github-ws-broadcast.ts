@@ -1,30 +1,15 @@
 import type { WebSocket } from "@fastify/websocket";
+// GitHubWSEvent now physically lives in src/shared/ws-protocol.ts. The
+// frontend previously had no typed version of this at all — store.ts's
+// connectGitHubWS parsed incoming /ws/github messages to `unknown` and
+// hand-inspected fields; it now imports this same type to narrow that
+// parse (see store.ts's own comment). Re-exported below so every existing
+// backend importer of this module keeps working unchanged.
+import type { GitHubWSEvent } from "../shared/ws-protocol.js";
+
+export type { GitHubWSEvent };
 
 const subscribers = new Map<string, Set<WebSocket>>();
-
-export type GitHubWSEvent =
-  | {
-      type: "pr";
-      action: "opened" | "closed" | "sync";
-      projectId: string;
-      pr: Record<string, unknown>;
-      ci?: Record<string, unknown>[];
-    }
-  | {
-      type: "issue";
-      action: "opened" | "closed";
-      projectId: string;
-      counts: { open: number; closed: number };
-    }
-  | {
-      type: "ci";
-      action: "completed" | "started";
-      projectId: string;
-      run: Record<string, unknown>;
-      jobs?: Record<string, unknown>[];
-    }
-  | { type: "release"; action: "published"; projectId: string; release: Record<string, unknown> }
-  | { type: "push"; projectId: string; branch: string; sha: string };
 
 export function subscribeToProject(projectId: string, socket: WebSocket): void {
   if (!subscribers.has(projectId)) {

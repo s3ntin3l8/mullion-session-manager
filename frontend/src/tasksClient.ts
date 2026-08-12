@@ -12,6 +12,12 @@
 // which just triggers a debounced refetch) — a missed event while
 // reconnecting is caught by the next poll tick or the next transition's own
 // event, so there's nothing to replay.
+//
+// TaskEvent physically lives in src/shared/ws-protocol.ts (repo root, NOT
+// this frontend workspace — see src/services/task-events.ts's own
+// re-export), the backend's /ws/tasks push-event shape.
+import type { TaskEvent } from "../../src/shared/ws-protocol.js";
+
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8000;
 
@@ -20,17 +26,24 @@ export interface TasksClientHandle {
   close: () => void;
 }
 
+// #490a — this used to hardcode `kind === "transition" || kind ===
+// "ingested"` as its own literal list, with a comment warning it "must never
+// lag the backend that produces the wider set" — an easy invariant to
+// violate silently, since nothing forced this list to stay in sync with the
+// backend's own TaskEvent union. TASK_EVENT_KINDS below is instead typed as
+// `Record<TaskEvent["kind"], true>`: if the backend's union ever grows a
+// third `kind` arm without a matching entry added here, that's a missing-
+// property `tsc` error in this file, not a silent runtime gap.
+const TASK_EVENT_KINDS: Record<TaskEvent["kind"], true> = {
+  transition: true,
+  ingested: true,
+};
+
 function isTaskWireMessage(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   if (typeof (value as { taskId?: unknown }).taskId !== "number") return false;
   const kind = (value as { kind?: unknown }).kind;
-  // #490a — "ingested" (a freshly-labeled/opened issue becoming a task) is
-  // a second frame kind alongside "transition", added in the same commit
-  // as the backend change that emits it: this validator is the frontend's
-  // hard gate on unknown frame shapes (see #488's own note on why a
-  // stricter/looser mismatch here silently drops frames), so widening it
-  // must never lag the backend that produces the wider set.
-  return kind === "transition" || kind === "ingested";
+  return typeof kind === "string" && Object.hasOwn(TASK_EVENT_KINDS, kind);
 }
 
 /** Opens (and keeps reopening, on any drop) a connection to /ws/tasks,
