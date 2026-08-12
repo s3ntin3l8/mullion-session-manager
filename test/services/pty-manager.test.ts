@@ -852,7 +852,7 @@ describe("PtyManager", () => {
     );
   });
 
-  it("suppresses scrollback capture during a nudgeRedraw repaint but still delivers it live", async () => {
+  it("suppresses scrollback capture during a redraw-nudge repaint but still delivers it live", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const session = manager.getOrCreate({
@@ -865,8 +865,8 @@ describe("PtyManager", () => {
       await waitForSpawn(session);
       const pty = fakePtyChildren[0];
 
-      // Flush the spawn-time nudge (attachClient() -> nudgeRedraw()) so it
-      // doesn't interfere with the assertions below.
+      // Flush the spawn-time nudge (attachClient() -> RedrawNudge.trigger())
+      // so it doesn't interfere with the assertions below.
       await vi.advanceTimersByTimeAsync(700 + 500);
       const before = session.getScrollback().toString();
 
@@ -919,7 +919,7 @@ describe("PtyManager", () => {
       // Reported bug this hardening pass fixes: a cosmetic repaint (here,
       // simulating the SIGWINCH repaint a mere terminal select/resize
       // provokes) arriving well AFTER the suppression window has closed —
-      // i.e. exactly the case the old suppressSynthesizedOutput-only fix
+      // i.e. exactly the case the old redraw-nudge-suppression-only fix
       // did NOT cover — must still not clear a hookNotification-confirmed
       // flag. Only a genuine decision may (see below).
       await vi.advanceTimersByTimeAsync(300 + 400 + 500);
@@ -1214,8 +1214,8 @@ describe("PtyManager", () => {
   });
 
   it("requestRedraw dips then restores rows to force a repaint", async () => {
-    // Fake only setTimeout/clearTimeout — nudgeRedraw()'s the sole user of
-    // real timers on this path, and leaving setImmediate real keeps
+    // Fake only setTimeout/clearTimeout — RedrawNudge.trigger()'s the sole
+    // user of real timers on this path, and leaving setImmediate real keeps
     // waitForSpawn's polling loop and the mocked child_process bootstrap
     // (both setImmediate-based) working exactly as in every other test here.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1230,8 +1230,8 @@ describe("PtyManager", () => {
       await waitForSpawn(session);
       const pty = fakePtyChildren[0];
 
-      // Flush the spawn-time nudge (attachClient() -> nudgeRedraw()) so it
-      // doesn't interfere with the assertions below.
+      // Flush the spawn-time nudge (attachClient() -> RedrawNudge.trigger())
+      // so it doesn't interfere with the assertions below.
       await vi.advanceTimersByTimeAsync(700);
       pty.resizeSpy.mockClear();
 
@@ -1250,11 +1250,12 @@ describe("PtyManager", () => {
 
   it("requestRedraw called again before the first dip fires coalesces into one cycle", async () => {
     // Regression test for the overlapping-nudge-cycles bug (issue #107): two
-    // unserialized nudgeRedraw() calls used to schedule fully independent
-    // dip/restore/grace-reset timers, so a second reattach landing while a
-    // first cycle was still in flight produced FOUR resize calls (two dips,
-    // two restores) instead of one clean pair, and could let the first
-    // cycle's grace-reset clear suppression mid-repaint (see the next test).
+    // unserialized RedrawNudge.trigger() calls used to schedule fully
+    // independent dip/restore/grace-reset timers, so a second reattach
+    // landing while a first cycle was still in flight produced FOUR resize
+    // calls (two dips, two restores) instead of one clean pair, and could
+    // let the first cycle's grace-reset clear suppression mid-repaint (see
+    // the next test).
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const session = manager.getOrCreate({
@@ -1271,10 +1272,10 @@ describe("PtyManager", () => {
       pty.resizeSpy.mockClear();
 
       session.requestRedraw();
-      // Re-nudge BEFORE the first cycle's dip (300ms) fires — cancelPendingNudge()
-      // clears its still-pending dip timer, so the first cycle never produces
-      // any resize call at all; only the second (superseding) cycle's own
-      // dip/restore should ever fire.
+      // Re-nudge BEFORE the first cycle's dip (300ms) fires — RedrawNudge.
+      // cancel() clears its still-pending dip timer, so the first cycle
+      // never produces any resize call at all; only the second
+      // (superseding) cycle's own dip/restore should ever fire.
       await vi.advanceTimersByTimeAsync(100);
       session.requestRedraw();
 
@@ -1344,10 +1345,10 @@ describe("PtyManager", () => {
   it("an earlier nudge cycle's cancelled grace-reset can't clear suppression for a still-in-flight later cycle", async () => {
     // Regression test for the core cross-cycle race (issue #107): the OLD
     // code's three bare setTimeouts per cycle meant a first cycle's
-    // grace-reset (suppressSynthesizedOutput = false) could fire while a SECOND,
-    // later cycle's own dip/restore repaint was still genuinely in flight —
+    // grace-reset (suppressed = false) could fire while a SECOND, later
+    // cycle's own dip/restore repaint was still genuinely in flight —
     // letting that second cycle's own reduced-height dip frame leak into
-    // scrollback and get replayed to a future attach. cancelPendingNudge()
+    // scrollback and get replayed to a future attach. RedrawNudge.cancel()
     // fixes this by cancelling whichever single stage is pending (including
     // an already-scheduled grace-reset) the instant a new cycle starts.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1371,7 +1372,7 @@ describe("PtyManager", () => {
       // single pending timer, scheduled to fire at t=1200.
       await vi.advanceTimersByTimeAsync(800);
 
-      // Cycle 2 starts at t=800 — cancelPendingNudge() cancels cycle 1's
+      // Cycle 2 starts at t=800 — RedrawNudge.cancel() cancels cycle 1's
       // still-pending grace-reset (would have fired at t=1200) before it can
       // run, then schedules its own: dip@1100, restore@1500, grace@2000.
       session.requestRedraw();

@@ -68,6 +68,7 @@ import {
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
+import { RedrawNudge } from "./redraw-nudge.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
@@ -468,14 +469,6 @@ const MOUSE_ENCODING_ENABLE: Record<Exclude<MouseTrackingState["encoding"], "DEF
   SGR: "\x1b[?1006h",
   SGR_PIXELS: "\x1b[?1016h",
 };
-
-// How long after nudgeRedraw()'s final resize to keep suppressing the
-// synthesized repaint (see Session.suppressSynthesizedOutput). The repaint a
-// resize provokes arrives asynchronously — SIGWINCH, then whatever the TUI
-// takes to re-render — not synchronously with the resize() call, so the
-// window has to extend past it rather than closing the instant the last
-// resize() returns.
-const NUDGE_REPAINT_GRACE_MS = 500;
 
 // A session showing no output for this long is considered "idle" rather
 // than "working" — a coarse, admittedly heuristic threshold (see the plan's
@@ -931,12 +924,18 @@ export class Session {
   // directories/files over its lifetime, nowhere near a memory concern, and
   // it's fully discarded at kill() either way.
   private gitIgnoreDirCache = new Map<string, boolean>();
-  // True while a nudgeRedraw() repaint is in flight — see nudgeRedraw()'s
-  // suppression window. Deliberately dual-purpose (two call sites in onData
-  // below both check it) rather than two separate flags with the same
-  // lifecycle, since both readings are really the same fact — "this chunk is
-  // OUR synthesized repaint, not real program content" — just applied to two
-  // different consumers:
+  // The redraw-nudge state machine itself (Milestone 1's Risk 1, hardened by
+  // #107 — see redraw-nudge.ts's own header comment for why Claude's
+  // Ink-based TUI needs a real dip/restore resize on attach, not just
+  // dtach's `-r winch`).
+  // `resize` and `getSize` are read/written live against this Session's own
+  // ptyProcess/cols/rows (rather than captured once) — see RedrawNudgeHost's
+  // docstring for why a real client resize landing mid-cycle must still be
+  // respected. `suppressingOutput` is deliberately dual-purpose from onData's
+  // side (two call sites below both check it) rather than two separate
+  // flags with the same lifecycle, since both readings are really the same
+  // fact — "this chunk is OUR synthesized repaint, not real program
+  // content" — just applied to two different consumers:
   //  1. Scrollback capture: while set, onData still fans chunks out to live
   //     subscribers (a reconnecting client must see the repaint) but does not
   //     buffer them into scrollback, so repeated reconnect-triggered repaints
@@ -947,17 +946,15 @@ export class Session {
   //     clear a confirmed attention flag (see the onData call site's own
   //     comment for why this matters — issue: opening a workspace tab must
   //     not silently dismiss a pending "needs permission" flag).
-  // A future change to this field's lifecycle (e.g. narrowing the window for
+  // A future change to this flag's lifecycle (e.g. narrowing the window for
   // scrollback reasons alone) affects BOTH consumers — keep this comment and
   // both call sites in sync if that ever happens.
-  private suppressSynthesizedOutput = false;
-  // Handle for whichever stage (dip / restore / grace-reset) of the current
-  // nudgeRedraw() cycle is still pending — see cancelPendingNudge()'s doc
-  // comment for why this must be tracked at all. A single nullable handle
-  // rather than a list: the three stages are strictly sequential (each
-  // schedules the next from inside its own callback), so at most one is ever
-  // outstanding at a time.
-  private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly redrawNudge = new RedrawNudge({
+    resize: (cols, rows) => {
+      this.ptyProcess?.resize(cols, rows);
+    },
+    getSize: () => ({ cols: this.cols, rows: this.rows }),
+  });
   private dataListeners = new Set<DataListener>();
   private exitListeners = new Set<ExitListener>();
   private eventListeners = new Set<EventListener>();
@@ -1835,9 +1832,9 @@ export class Session {
 
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
-      // Skipped during a nudgeRedraw() repaint window — see
-      // suppressSynthesizedOutput's docstring. Listeners below still get it live.
-      if (!this.suppressSynthesizedOutput) this.scrollbackBuffer.push(chunk);
+      // Skipped during a redraw-nudge repaint window — see
+      // redrawNudge's docstring above. Listeners below still get it live.
+      if (!this.redrawNudge.suppressingOutput) this.scrollbackBuffer.push(chunk);
 
       // Prepend any carry from the previous chunk so a `?1049h`/mouse-mode
       // DECSET split across two PTY reads is still recognized — detection
@@ -1936,21 +1933,21 @@ export class Session {
       // that repaint is output WE caused by resizing the pty, not the
       // program resuming work, and feeding it as `{type:"output"}` would
       // clear a "needs permission" flag the instant the user merely opens
-      // the workspace tab. Reuses the same suppressSynthesizedOutput flag
-      // that gates scrollback capture one guard above — see its docstring
-      // for why one flag deliberately serves both. Real output confirming an
-      // actual resolution still arrives once the grace window ends and
-      // clears normally for output-clearable kinds — but follow-up to #275
-      // (gap #3): for an OUTPUT_IMMUNE_KINDS-confirmed flag (a hook's own
-      // "needs permission"/"blocked on a decision" signal), output NEVER
-      // clears it, suppressed window or not — only a real "userInput" or a
-      // superseding resolution does (see advanceAttention's "attention" +
-      // "output" case).
+      // the workspace tab. Reuses the same redrawNudge.suppressingOutput
+      // flag that gates scrollback capture one guard above — see redraw-
+      // nudge.ts's own docstring for why one flag deliberately serves both.
+      // Real output confirming an actual resolution still arrives once the
+      // grace window ends and clears normally for output-clearable kinds —
+      // but follow-up to #275 (gap #3): for an OUTPUT_IMMUNE_KINDS-confirmed
+      // flag (a hook's own "needs permission"/"blocked on a decision"
+      // signal), output NEVER clears it, suppressed window or not — only a
+      // real "userInput" or a superseding resolution does (see
+      // advanceAttention's "attention" + "output" case).
       if (candidateKind !== null) {
         this.applyAttentionTransition(
           advanceAttention(this.attentionState, { type: "signal", kind: candidateKind, now }),
         );
-      } else if (!this.suppressSynthesizedOutput) {
+      } else if (!this.redrawNudge.suppressingOutput) {
         this.applyAttentionTransition(
           advanceAttention(this.attentionState, { type: "output", now }),
         );
@@ -1962,12 +1959,12 @@ export class Session {
     ptyProcess.onExit(() => {
       this.ptyProcess = null;
       // Cancels any nudge timer still pending against this now-dead client —
-      // not just for the suppressSynthesizedOutput tidiness noted below, but because
-      // a stale dip/restore timer left running would fire against whichever
-      // NEW attach-client a later respawn creates (the closure captures
-      // `this`, not the pty instance), mis-resizing an unrelated process
-      // incarnation. See cancelPendingNudge()'s own doc comment.
-      this.cancelPendingNudge();
+      // not just for suppressingOutput tidiness, but because a stale
+      // dip/restore timer left running would fire against whichever NEW
+      // attach-client a later respawn creates (the closure captures `this`,
+      // not the pty instance), mis-resizing an unrelated process
+      // incarnation. See redraw-nudge.ts's RedrawNudge.cancel() doc comment.
+      this.redrawNudge.cancel();
       // A1 (Hermes review, PR #593): kill()'s own flushTitleChangeEvent()
       // call only covers the EXPLICIT-detach path. A pty process can also
       // die on its own — a crash, or (very commonly) an agent program
@@ -2000,97 +1997,15 @@ export class Session {
     });
 
     this.ptyProcess = ptyProcess;
-    this.nudgeRedraw();
-  }
-
-  /**
-   * Force a real repaint on every fresh attach by resizing away from and
-   * back to the current size. Milestone 1 found empirically that dtach's own
-   * `-r winch` redraw request is not enough on its own: Claude's Ink-based
-   * TUI only re-renders when it detects an actual dimension change (Node's
-   * tty resize-event machinery itself skips firing if the reported size is
-   * unchanged), so reattaching at the *same* size — the common case, since a
-   * reconnecting browser tab typically fits to the same window — produced a
-   * blank screen even with winch. A same-size nudge (±1 row) wasn't a big
-   * enough delta to reliably trigger it either; a proportionally larger dip
-   * (half the rows, floor of 4) was. This runs on every attach regardless of
-   * whether the size actually changed, so a real resize from the client
-   * still lands correctly on top of it.
-   *
-   * @param suppressCapture Skip buffering the repaint this nudge provokes
-   * into scrollback, and don't let it clear attention either (see
-   * suppressSynthesizedOutput's docstring). Only set by
-   * requestRedraw()'s reattach path, where the SAME repaint recurs on every
-   * reconnect and would otherwise progressively evict real output from the
-   * ring buffer. The initial spawn-time nudge from attachClient() below
-   * deliberately does NOT set this — that repaint is the session's actual
-   * starting screen state and is exactly what a later attach should see.
-   */
-  private nudgeRedraw(suppressCapture = false): void {
-    // Supersede (never stack with) any cycle already in flight — see
-    // cancelPendingNudge()'s doc comment for why. Must run BEFORE the
-    // suppressCapture assignment below: cancelling clears
-    // suppressSynthesizedOutput when it was left set by a cycle it's
-    // aborting, so doing this after would immediately wipe out the
-    // suppression this very call is about to set.
-    this.cancelPendingNudge();
-    // Suppress scrollback capture (and attention-clearing) for the whole
-    // dip-then-restore cycle plus a grace period past the final resize — see
-    // suppressSynthesizedOutput's docstring for why the window has to extend
-    // past resize() returning.
-    if (suppressCapture) this.suppressSynthesizedOutput = true;
-    const dipRows = Math.max(4, Math.floor(this.rows / 2));
-    this.nudgeTimer = setTimeout(() => this.nudgeDip(dipRows, suppressCapture), 300);
-  }
-
-  // The dip/restore/grace-reset stages below are split into named steps
-  // (rather than nesting them as inline closures inside nudgeRedraw) purely
-  // for readability — each one's single job reads on its own instead of
-  // three levels deep. They still form one strictly-sequential chain, each
-  // scheduling the next via `this.nudgeTimer`, which is exactly what makes a
-  // single handle (rather than a list of timers) enough to track and cancel
-  // the whole in-flight cycle from cancelPendingNudge().
-
-  private nudgeDip(dipRows: number, suppressCapture: boolean): void {
-    this.ptyProcess?.resize(this.cols, dipRows);
-    this.nudgeTimer = setTimeout(() => this.nudgeRestore(suppressCapture), 400);
-  }
-
-  private nudgeRestore(suppressCapture: boolean): void {
-    this.ptyProcess?.resize(this.cols, this.rows);
-    if (suppressCapture) {
-      this.nudgeTimer = setTimeout(() => this.nudgeGraceReset(), NUDGE_REPAINT_GRACE_MS);
-    } else {
-      this.nudgeTimer = null;
-    }
-  }
-
-  private nudgeGraceReset(): void {
-    this.suppressSynthesizedOutput = false;
-    this.nudgeTimer = null;
-  }
-
-  /**
-   * Cancel whichever stage of a nudgeRedraw() cycle is currently pending, so
-   * a new nudge always supersedes rather than interleaves with a prior one.
-   * Without this, two overlapping cycles on the same shared Session (e.g. a
-   * second reattach — two browser tabs, or reconnect retries — landing
-   * while a first cycle's dip/restore/grace-reset timers are still ticking)
-   * can let an EARLIER cycle's grace-reset clear suppressSynthesizedOutput
-   * while a LATER cycle's own dip/restore repaint is still in flight, letting
-   * that repaint's reduced-height frame leak into scrollback (or clear
-   * attention) and get replayed to a future attach. Cancelling also takes
-   * over the responsibility of clearing suppressSynthesizedOutput: the timer
-   * that would have done so (this cycle's own grace-reset) is exactly what's
-   * being cancelled, so leaving suppression untouched here would strand it on
-   * indefinitely.
-   */
-  private cancelPendingNudge(): void {
-    if (this.nudgeTimer !== null) {
-      clearTimeout(this.nudgeTimer);
-      this.nudgeTimer = null;
-    }
-    if (this.suppressSynthesizedOutput) this.suppressSynthesizedOutput = false;
+    // Force a real repaint on every fresh attach — see redraw-nudge.ts's
+    // own header comment for why dtach's `-r winch` redraw request above
+    // isn't enough on its own for an Ink-based TUI. Runs unconditionally,
+    // regardless of whether the size actually changed, so a real resize
+    // from the client still lands correctly on top of it. Deliberately NOT
+    // suppressCapture: true here (unlike requestRedraw() below) — this is
+    // the session's actual starting screen state and is exactly what a
+    // later attach should see.
+    this.redrawNudge.trigger();
   }
 
   /**
@@ -3475,20 +3390,20 @@ export class Session {
     // it, which dtach forwards into the session — the same mechanism a real
     // resized SSH terminal would trigger. No special-casing needed here.
     //
-    // Deliberately does NOT cancel a pending nudgeRedraw() cycle (unlike
+    // Deliberately does NOT cancel a pending redraw-nudge cycle (unlike
     // kill()/onExit below). It's tempting to think a real resize already
     // forces its own repaint, making a pending synthetic dip/restore
     // redundant — but the frontend's on-open resize (TerminalPane.tsx,
     // sendResizeIfOpen) has no delta guard and fires on every attach even
     // when the size is unchanged, which lands here as a same-size resize().
     // A same-size resize is a kernel-level TIOCSWINSZ no-op (no SIGWINCH) —
-    // see nudgeRedraw()'s own docstring. If this cancelled the pending nudge,
-    // the nudge (the only thing that would force a repaint) would never run,
-    // reintroducing the exact blank-screen-on-reconnect bug nudgeRedraw()
-    // exists to fix. So any pending nudge must run to completion regardless
-    // of what resize() does in the meantime — its restore stage reads
-    // this.cols/this.rows live, so it still lands at the right size either
-    // way.
+    // see redraw-nudge.ts's own header comment. If this cancelled the
+    // pending nudge, the nudge (the only thing that would force a repaint)
+    // would never run, reintroducing the exact blank-screen-on-reconnect
+    // bug it exists to fix. So any pending nudge must run to completion
+    // regardless of what resize() does in the meantime — its restore stage
+    // reads this.cols/this.rows live (via RedrawNudgeHost.getSize()), so it
+    // still lands at the right size either way.
     this.ptyProcess?.resize(cols, rows);
   }
 
@@ -3497,14 +3412,15 @@ export class Session {
    * otherwise not get: attachClient() nudges on every spawn/respawn, but a
    * reattach to a still-alive client never respawns, so it must ask
    * explicitly (see attachSocketToSession's `wasAlive` check in
-   * routes/terminal.ts). Safe to call any time — nudgeRedraw()'s optional
-   * chaining no-ops if the client has since died. Passes suppressCapture:
-   * true — see nudgeRedraw()'s docstring for why this path (unlike the
-   * initial spawn-time nudge) shouldn't buffer its own repaint.
+   * routes/terminal.ts). Safe to call any time — RedrawNudgeHost.resize()'s
+   * optional chaining no-ops if the client has since died. Passes
+   * suppressCapture: true — see RedrawNudge.trigger()'s docstring for why
+   * this path (unlike the initial spawn-time nudge) shouldn't buffer its
+   * own repaint.
    */
   requestRedraw(): void {
     const suppressCapture = true;
-    this.nudgeRedraw(suppressCapture);
+    this.redrawNudge.trigger(suppressCapture);
   }
 
   onData(listener: DataListener): () => void {
@@ -3572,13 +3488,14 @@ export class Session {
     // flushed title_change lands strictly before the exited status_change
     // in event order, matching what actually happened chronologically.
     this.flushTitleChangeEvent();
-    // See cancelPendingNudge()'s doc comment: without this, a pending nudge
-    // timer would survive this kill and fire against whatever NEW
-    // attach-client a later respawn of this same Session creates. Covers
-    // every higher-level teardown path transitively — PtyManager.killAll()
-    // and session-reconciler.ts both route through PtyManager.kill() ->
-    // Session.kill(), as does terminate() before its own stopScope() call.
-    this.cancelPendingNudge();
+    // See redraw-nudge.ts's RedrawNudge.cancel() doc comment: without this,
+    // a pending nudge timer would survive this kill and fire against
+    // whatever NEW attach-client a later respawn of this same Session
+    // creates. Covers every higher-level teardown path transitively —
+    // PtyManager.killAll() and session-reconciler.ts both route through
+    // PtyManager.kill() -> Session.kill(), as does terminate() before its
+    // own stopScope() call.
+    this.redrawNudge.cancel();
     this.ptyProcess?.kill();
     this.ptyProcess = null;
     // Unlike inAltScreen/mouseTracking (which deliberately persist across a

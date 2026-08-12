@@ -83,11 +83,12 @@ async function waitUntil(check: () => boolean | Promise<boolean>) {
   throw new Error("condition never became true");
 }
 
-// Session.nudgeRedraw() (pty-manager.ts) schedules its dip/restore with real
-// setTimeout(300ms then +400ms) — a setImmediate-polling waitUntil() never
-// gets far enough in wall-clock time to observe it, so the one test that
-// exercises the redraw nudge polls with real delays instead, up to a timeout
-// comfortably past the 700ms the two timers need to both fire.
+// RedrawNudge.trigger() (redraw-nudge.ts, driven by Session) schedules its
+// dip/restore with real setTimeout(300ms then +400ms) — a
+// setImmediate-polling waitUntil() never gets far enough in wall-clock time
+// to observe it, so the one test that exercises the redraw nudge polls with
+// real delays instead, up to a timeout comfortably past the 700ms the two
+// timers need to both fire.
 async function waitUntilReal(check: () => boolean, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -356,9 +357,9 @@ describe("terminal route (/ws/terminal)", () => {
     const { sessionId, pty } = await createProjectAndSession(app);
 
     // POST /api/sessions above already spawned the pty, which nudges its own
-    // redraw (dip + restore) via attachClient() -> nudgeRedraw() in
-    // pty-manager.ts. Let that settle first so it isn't mistaken for the
-    // reattach nudge this test is actually checking.
+    // redraw (dip + restore) via attachClient() -> RedrawNudge.trigger() (see
+    // pty-manager.ts / redraw-nudge.ts). Let that settle first so it isn't
+    // mistaken for the reattach nudge this test is actually checking.
     await waitUntilReal(() => pty.resizeSpy.mock.calls.length >= 2);
     pty.resizeSpy.mockClear();
 
