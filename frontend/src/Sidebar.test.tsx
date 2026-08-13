@@ -22,6 +22,7 @@ let projects: Project[];
 let sessions: Session[];
 let hosts: Host[];
 let hideEndedSessions: boolean;
+let viewMode: string;
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
 const refreshHosts = vi.fn().mockResolvedValue(undefined);
@@ -46,6 +47,7 @@ function storeState() {
     settingsLoaded: true,
     hierarchicalView: false,
     setHierarchicalView,
+    viewMode,
     theme: "dark",
     events: {},
     gitStatuses: {},
@@ -172,6 +174,7 @@ beforeEach(() => {
   sessions = [];
   hosts = [];
   hideEndedSessions = false;
+  viewMode = "list";
   localStorage.clear();
 });
 
@@ -230,6 +233,23 @@ describe("VirtualizedProjectTree size math (independent review, PR #583)", () =>
     virtualizer.getTotalSize();
     expect(virtualizer.measurementsCache[0]).toMatchObject({ start: 100, end: 110 });
     expect(virtualizer.measurementsCache[2]).toMatchObject({ start: 120, end: 130 });
+  });
+});
+
+describe("Sidebar Tasks entry — Tasks-as-a-destination", () => {
+  it("is not marked active when viewMode is not kanban", () => {
+    renderSidebar();
+    const entry = screen.getByRole("button", { name: /Tasks/ });
+    expect(entry).not.toHaveClass("active");
+    expect(entry).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("is marked active while the Tasks board is the active view", () => {
+    viewMode = "kanban";
+    renderSidebar();
+    const entry = screen.getByRole("button", { name: /Tasks/ });
+    expect(entry).toHaveClass("active");
+    expect(entry).toHaveAttribute("aria-pressed", "true");
   });
 });
 

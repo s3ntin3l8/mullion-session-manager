@@ -98,7 +98,7 @@ export function WorkspaceSwitcher() {
   // re-rendered this component, which re-walks every workspace's layout
   // (see P2/deriveWorkspaceLiveStatus above) and every group. Split into one
   // selector per field actually read for rendering, so this only re-renders
-  // when one of THESE FOUR specifically changes identity. Actions are
+  // when one of THESE FIVE specifically changes identity. Actions are
   // deliberately NOT selected here — see the getState() calls at each call
   // site below, matching App.tsx's own established pattern for pure
   // action-callers (a store action's function identity never changes, so
@@ -108,6 +108,15 @@ export function WorkspaceSwitcher() {
   const groups = useDashboardStore((s) => s.groups);
   const sessions = useDashboardStore((s) => s.sessions);
   const activeWorkspaceId = useDashboardStore((s) => s.activeWorkspaceId);
+  // Tasks-as-a-destination — Tasks isn't a workspace, so while it's the
+  // active view (viewMode === "kanban") no workspace item should paint as
+  // "active" here; that highlight would otherwise keep pointing at whatever
+  // workspace was active before Tasks was opened, implying a scope Tasks
+  // doesn't have. Only affects the WorkspaceItem `active` comparison below
+  // (its one real read site) — the underlying activeWorkspaceId itself is
+  // untouched, so switching back to list view restores the real highlight.
+  const viewMode = useDashboardStore((s) => s.viewMode);
+  const displayActiveWorkspaceId = viewMode === "kanban" ? null : activeWorkspaceId;
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
@@ -213,7 +222,7 @@ export function WorkspaceSwitcher() {
             .sort((a, b) => a.position - b.position)}
           sessions={sessions}
           sessionIdsByWorkspace={sessionIdsByWorkspace}
-          activeWorkspaceId={activeWorkspaceId}
+          activeWorkspaceId={displayActiveWorkspaceId}
           onSelect={(id) => useDashboardStore.getState().setActiveWorkspaceId(id)}
           onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
           onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
@@ -248,7 +257,7 @@ export function WorkspaceSwitcher() {
         bucketGroupId={null}
         items={ungrouped}
         dragCtx={dragCtx}
-        activeWorkspaceId={activeWorkspaceId}
+        activeWorkspaceId={displayActiveWorkspaceId}
         sessions={sessions}
         sessionIdsByWorkspace={sessionIdsByWorkspace}
         onSelect={(id) => useDashboardStore.getState().setActiveWorkspaceId(id)}

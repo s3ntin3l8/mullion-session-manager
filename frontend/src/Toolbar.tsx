@@ -1,6 +1,8 @@
 import { useDashboardStore } from "./store/index.js";
 import {
+  ChevronLeftIcon,
   GridIcon,
+  LayersIcon,
   MoonIcon,
   PlusIcon,
   SearchIcon,
@@ -9,7 +11,6 @@ import {
   GearIcon,
 } from "./ui/icons.js";
 import { NotificationBell } from "./NotificationBell.js";
-import { ViewModeToggle } from "./ViewModeToggle.js";
 import type { Session } from "./api/index.js";
 import type { SettingsSection } from "./Settings.js";
 
@@ -54,6 +55,14 @@ export function Toolbar({
   // (only used inside the theme button's onClick below) — see the
   // getState() call at that call site instead of subscribing to it here.
   const theme = useDashboardStore((s) => s.theme);
+  // Tasks is an install-wide board, not a workspace view — reading viewMode
+  // here (rather than threading it through a list/Kanban toggle, issue #211's
+  // now-removed ViewModeToggle.tsx) lets the toolbar say so honestly: the
+  // workspace name/pane-count this row otherwise shows would be describing a
+  // scope Tasks doesn't have. Entering Tasks now only happens from the
+  // sidebar's own entry (Sidebar.tsx) or the command palette; this is only
+  // the way back out, mirroring Dock.tsx's own contextual-chrome posture.
+  const viewMode = useDashboardStore((s) => s.viewMode);
 
   return (
     <div className="toolbar">
@@ -76,14 +85,21 @@ export function Toolbar({
         </button>
       </div>
       <div className="toolbar-center">
-        {activeWorkspaceName !== null && (
+        {viewMode === "kanban" ? (
           <>
-            <GridIcon size={15} />
-            <span className="toolbar-center-name">{activeWorkspaceName}</span>
-            <span className="toolbar-center-count">
-              {paneCount} pane{paneCount === 1 ? "" : "s"}
-            </span>
+            <LayersIcon size={14} />
+            <span className="toolbar-center-name">Tasks</span>
           </>
+        ) : (
+          activeWorkspaceName !== null && (
+            <>
+              <GridIcon size={15} />
+              <span className="toolbar-center-name">{activeWorkspaceName}</span>
+              <span className="toolbar-center-count">
+                {paneCount} pane{paneCount === 1 ? "" : "s"}
+              </span>
+            </>
+          )
         )}
       </div>
       <div className="toolbar-actions">
@@ -92,7 +108,16 @@ export function Toolbar({
           <span style={{ fontSize: 12 }}>Run command…</span>
           <span className="kbd">⌘K</span>
         </button>
-        <ViewModeToggle />
+        {viewMode === "kanban" && (
+          <button
+            className="toolbar-icon-btn toolbar-back-to-workspace"
+            onClick={() => useDashboardStore.getState().setViewMode("list")}
+            title="Back to workspace"
+          >
+            <ChevronLeftIcon size={17} />
+            <span>Back</span>
+          </button>
+        )}
         <button
           className="toolbar-icon-btn"
           onClick={() => useDashboardStore.getState().toggleTheme()}

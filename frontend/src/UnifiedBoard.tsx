@@ -7,6 +7,7 @@ import {
   canDragToColumn,
   orderTasksForColumn,
   computeTaskReorder,
+  absoluteDropIndex,
 } from "./tasksBoard.js";
 import {
   taskLinkedSessionIds,
@@ -20,7 +21,13 @@ import type { Session, TaskStatus } from "./api/index.js";
 import { ApiError } from "./api/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, LayersIcon } from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
-import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
+import {
+  STORAGE_KEYS,
+  readNumber,
+  writeNumber,
+  readJSON,
+  writeJSON,
+} from "./lib/persistedState.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { TasksToolbar } from "./unified-board/TasksToolbar.js";
 import { TaskColumn } from "./unified-board/TaskColumn.js";
@@ -96,6 +103,47 @@ export function UnifiedBoard({
   const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
   const sessionsById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
 
+  // Board-wide project filter (empty = every project, the default) — a
+  // client-only render-time filter, not a fetch param: `tasks` in the store
+  // always holds every task install-wide (see store.ts's refreshTasks), and
+  // must keep doing so here too, because computeTaskReorder below reindexes
+  // a target column's FULL contents on every drop, including whatever a
+  // filter is currently hiding. #610 considered and cut a project filter
+  // for exactly this hazard ("the drag/reorder math indexes against the
+  // rendered list, not the full store list, and filtering would silently
+  // corrupt boardOrder on drop") — applyDrop's use of absoluteDropIndex
+  // below is what closes that gap: it translates a filtered TaskColumn's
+  // own rendered index back into the equivalent index against the full,
+  // unfiltered column before computeTaskReorder ever sees it.
+  const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>(() => {
+    const raw = readJSON<unknown>(STORAGE_KEYS.taskProjectFilter, []);
+    return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
+  });
+  // Drops ids for projects deleted since they were selected — same posture
+  // as Dock.tsx's own manualIds/columnIds filtering.
+  const activeProjectIds = useMemo(
+    () => selectedProjectIds.filter((id) => projectsById.has(id)),
+    [selectedProjectIds, projectsById],
+  );
+  const toggleProjectFilter = (id: number) => {
+    const next = activeProjectIds.includes(id)
+      ? activeProjectIds.filter((p) => p !== id)
+      : [...activeProjectIds, id];
+    setSelectedProjectIds(next);
+    writeJSON(STORAGE_KEYS.taskProjectFilter, next);
+  };
+  const clearProjectFilter = () => {
+    setSelectedProjectIds([]);
+    writeJSON(STORAGE_KEYS.taskProjectFilter, []);
+  };
+  const visibleTasks = useMemo(
+    () =>
+      activeProjectIds.length === 0
+        ? tasks
+        : tasks.filter((t) => activeProjectIds.includes(t.projectId)),
+    [tasks, activeProjectIds],
+  );
+
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
     () => adhocSessionsByColumn(sessions, linkedSessionIds, hideEndedSessions),
@@ -139,7 +187,13 @@ export function UnifiedBoard({
   const draggingTask =
     draggingId !== null ? (tasks.find((t) => t.id === draggingId) ?? null) : null;
 
-  const applyDrop = (draggedId: number, targetStatus: TaskStatus, targetIndex: number) => {
+  // `visibleIndex` is whatever TaskColumn rendered a drop against — an
+  // index into `orderTasksForColumn(visibleTasks, targetStatus)`, since
+  // that's the (possibly filtered) list it was handed. computeTaskReorder
+  // itself must still run against the FULL `tasks`, so absoluteDropIndex
+  // translates the index first; see its own doc comment in tasksBoard.ts
+  // for why, and why that's provably a no-op when no filter is active.
+  const applyDrop = (draggedId: number, targetStatus: TaskStatus, visibleIndex: number) => {
     const dragged = tasks.find((t) => t.id === draggedId);
     if (!dragged) return;
     if (
@@ -149,6 +203,7 @@ export function UnifiedBoard({
       return;
     }
     setDragError(null);
+    const targetIndex = absoluteDropIndex(tasks, visibleTasks, targetStatus, visibleIndex);
     const updates = computeTaskReorder(tasks, draggedId, targetStatus, targetIndex);
     for (const update of updates) {
       const patch: { status?: "backlog" | "ready"; boardOrder: number } = {
@@ -337,6 +392,37 @@ export function UnifiedBoard({
             }
             onCreated={() => setCreating(false)}
           />
+          {/* Client-only render filter (see selectedProjectIds's own
+              comment above) — only worth showing once there's more than
+              one project to narrow down. */}
+          {projects.length > 1 && (
+            <div className="tasks-panel-filter-bar">
+              <div className="sidebar-filter-chips" role="group" aria-label="Filter by project">
+                {projects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`sidebar-filter-chip${activeProjectIds.includes(p.id) ? " active" : ""}`}
+                    aria-pressed={activeProjectIds.includes(p.id)}
+                    onClick={() => toggleProjectFilter(p.id)}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+              {activeProjectIds.length > 0 && (
+                <button
+                  type="button"
+                  className="tasks-panel-filter-clear"
+                  title="Show every project"
+                  aria-label="Show every project"
+                  onClick={clearProjectFilter}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
           {dragError && (
             <div className="task-detail-error tasks-panel-drag-error" role="status">
               {dragError}
@@ -359,9 +445,27 @@ export function UnifiedBoard({
               </div>
             </EmptyStateNote>
           )}
+          {/* Distinct from the "No tasks yet." case above — there ARE
+              tasks, the active project filter just hides all of them. Same
+              "above the columns, not instead of them" posture: the seven
+              empty columns still show, so the board's shape stays legible
+              and Clear is one click away without leaving the board. */}
+          {tasksLoaded && tasks.length > 0 && visibleTasks.length === 0 && (
+            <EmptyStateNote>
+              <LayersIcon size={20} />
+              <div>No tasks in the selected projects.</div>
+              <button
+                type="button"
+                className="tasks-panel-empty-hint-clear"
+                onClick={clearProjectFilter}
+              >
+                Clear the project filter
+              </button>
+            </EmptyStateNote>
+          )}
           <div className="kanban-board tasks-board kanban-unified-columns">
             {TASK_COLUMNS.map((column) => {
-              const columnTasks = orderTasksForColumn(tasks, column.id);
+              const columnTasks = orderTasksForColumn(visibleTasks, column.id);
               const acceptsDrop =
                 draggingTask !== null &&
                 (draggingTask.status === column.id ||
@@ -424,7 +528,7 @@ export function UnifiedBoard({
                   aria-label="Close task detail"
                   onClick={() => setDetailTaskId(null)}
                 >
-                  <CloseIcon size={14} />
+                  <CloseIcon size={18} />
                 </button>
               </div>
               <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={openSession} />
