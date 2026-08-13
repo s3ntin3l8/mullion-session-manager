@@ -322,6 +322,20 @@ export function WarningTriangleIcon(props: IconProps) {
   );
 }
 
+// #667 — a "no entry" circle-with-slash, for a task blocked on an open
+// GitHub issue dependency (UnifiedBoard.tsx's TaskCard, TaskDetail.tsx).
+// Deliberately not a padlock: a lock reads as "permissions", not
+// "ordering" — this needs to read as "can't proceed yet" at a glance, at
+// the same 11px size WarningTriangleIcon is used at nearby.
+export function BlockedIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <line x1="5.6" y1="5.6" x2="18.4" y2="18.4" />
+    </Svg>
+  );
+}
+
 // The extraction's description ("two stacked rects + status dots") — same
 // caveat as WarningTriangleIcon, a close standard reconstruction.
 export function ServerRackIcon(props: IconProps) {

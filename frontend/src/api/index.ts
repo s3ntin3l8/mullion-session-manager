@@ -127,6 +127,7 @@ export type {
   ProjectUrl,
   ServerInfo,
   Task,
+  TaskBlocker,
   UpdateCheckResult,
   UpdatePhase,
   UpdateStatus,

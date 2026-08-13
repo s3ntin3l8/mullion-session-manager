@@ -3,9 +3,15 @@ import { useDashboardStore } from "./store/index.js";
 import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import { ApiError } from "./api/index.js";
-import type { GitHubCiStatus, Session, Task } from "./api/index.js";
+import type { GitHubCiStatus, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
-import { BotIcon, GitHubIcon, TerminalPromptIcon, WarningTriangleIcon } from "./ui/icons.js";
+import {
+  BlockedIcon,
+  BotIcon,
+  GitHubIcon,
+  TerminalPromptIcon,
+  WarningTriangleIcon,
+} from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 
@@ -21,6 +27,14 @@ function taskDetailPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending
   if (status === "failure") return "bad";
   if (status === "in_progress") return "pending";
   return "none";
+}
+
+// #667 — same "N blocker(s) not visible to this token" special-case as
+// UnifiedBoard.tsx's own blockerLabel (duplicated per this codebase's own
+// precedent for this exact small guard, e.g. the two dot-class functions
+// above and below).
+function taskDetailBlockerLabel(b: TaskBlocker): string {
+  return b.htmlUrl === null ? b.title : `#${b.number}`;
 }
 
 // Phase 6 (6.5/#218) — the task board's detail panel: metadata, issue/PR
@@ -165,6 +179,39 @@ export function TaskDetail({
         <div className="task-detail-sync-error">
           <GitHubIcon size={12} />
           GitHub sync: {task.githubSyncError}
+        </div>
+      )}
+
+      {/* #667 — this is where "why isn't this moving?" actually gets
+          answered; the board card (UnifiedBoard.tsx's TaskCard) only ever
+          shows the count. */}
+      {task.blockedState !== "clear" && (
+        <div className="task-detail-blocked">
+          <BlockedIcon size={12} />
+          {task.blockedState === "unresolved" ? (
+            "Checking dependencies…"
+          ) : (
+            <span>
+              Blocked by{" "}
+              {task.blockers.map((b, i) => (
+                <span key={`${b.owner}/${b.repo}#${b.number}`}>
+                  {i > 0 && ", "}
+                  {b.htmlUrl ? (
+                    <a
+                      href={b.htmlUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="task-detail-link"
+                    >
+                      {taskDetailBlockerLabel(b)}
+                    </a>
+                  ) : (
+                    taskDetailBlockerLabel(b)
+                  )}
+                </span>
+              ))}
+            </span>
+          )}
         </div>
       )}
 

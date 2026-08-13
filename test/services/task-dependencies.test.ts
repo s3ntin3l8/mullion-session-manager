@@ -184,6 +184,40 @@ describe("refreshTaskBlockers", () => {
     expect(row.blockedByCheckedAt).not.toBeNull();
   });
 
+  it("refreshes dependencyCount to the observed blocker count, not the caller's stale one (webhook-push consistency)", async () => {
+    // The task's stored dependencyCount is 0 — the shape a task in with a
+    // brand-new "blocked_by_added" webhook delivery has, since nothing has
+    // re-fetched issue_dependencies_summary yet.
+    const { task } = await createProjectAndTask({ dependencyCount: 0, blockedBy: null });
+    mockListBlockedByIssues.mockResolvedValue([
+      {
+        owner: "o",
+        repo: "r",
+        number: 1,
+        title: "new blocker",
+        htmlUrl: "https://x/1",
+        state: "open",
+      },
+    ]);
+
+    await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 0, // stale — the caller's own on-hand value
+      token: "tok",
+    });
+
+    const row = getTask(task.id);
+    // Without the fix, dependencyCount would stay 0 here, and
+    // dependencyGate's `dependencyCount === 0` short-circuit would read
+    // "clear" despite a real open blocker sitting in blockedBy.
+    expect(row.dependencyCount).toBe(1);
+    expect(dependencyGate(row)).toBe("blocked");
+  });
+
   it("stores an empty array when every blocker is closed", async () => {
     const { task } = await createProjectAndTask({ dependencyCount: 1 });
     mockListBlockedByIssues.mockResolvedValue([

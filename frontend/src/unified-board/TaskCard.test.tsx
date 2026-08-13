@@ -379,6 +379,57 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByLabelText("GitHub sync error: 401 Unauthorized")).toBeInTheDocument();
   });
 
+  it("#667 — shows a blocked glyph with an accessible name for a blocked task", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        blockedState: "blocked",
+        blockers: [
+          {
+            owner: "acme",
+            repo: "widgets",
+            number: 12,
+            title: "The blocker",
+            htmlUrl: "https://x/12",
+          },
+        ],
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByTitle("Blocked by #12")).toBeInTheDocument();
+    expect(screen.getByLabelText("Blocked by #12")).toBeInTheDocument();
+    expect(screen.getByText("#12")).toBeInTheDocument();
+  });
+
+  it("#667 — shows a +N suffix for multiple blockers", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        blockedState: "blocked",
+        blockers: [
+          { owner: "acme", repo: "widgets", number: 12, title: "one", htmlUrl: "https://x/12" },
+          { owner: "acme", repo: "widgets", number: 13, title: "two", htmlUrl: "https://x/13" },
+        ],
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByRole("img", { name: /^Blocked by #12, #13/ })).toHaveTextContent("#12 +1");
+  });
+
+  it("#667 — shows a muted 'checking' state for an unresolved dependency check", () => {
+    tasks = [makeTask({ id: 1, blockedState: "unresolved", blockers: [] })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByTitle("Checking dependencies…")).toBeInTheDocument();
+    expect(screen.getByLabelText("Dependency state not yet checked")).toBeInTheDocument();
+  });
+
+  it("#667 — shows nothing for a clear (the common, zero-dependency) task", () => {
+    tasks = [makeTask({ id: 1, blockedState: "clear", blockers: [] })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByTitle("Checking dependencies…")).toBeNull();
+    expect(screen.queryByText(/^Blocked by/)).toBeNull();
+  });
+
   it("shows the failure reason on a failed card", () => {
     tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

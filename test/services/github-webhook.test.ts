@@ -137,6 +137,78 @@ describe("github-webhook service", () => {
       await app.close();
     });
 
+    // #667 — a newly-created hook subscribes to issue_dependencies
+    // alongside the pre-#667 event list, and the persisted row is stamped
+    // with the current WEBHOOK_EVENTS_VERSION — the value
+    // webhook-reconciler.ts's own staleness gate compares against.
+    it("#667 — subscribes a fresh hook to issue_dependencies and stamps eventsVersion", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_token");
+      seedProject(app);
+
+      fetchMock.mockReset();
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 7 }));
+
+      await enableWebhooks(app);
+
+      const createCall = fetchMock.mock.calls.find(
+        (call) => (call[1] as RequestInit | undefined)?.method === "POST",
+      );
+      expect(createCall).toBeDefined();
+      const body = JSON.parse((createCall![1] as RequestInit).body as string) as {
+        events: string[];
+      };
+      expect(body.events).toEqual(
+        expect.arrayContaining(["issues", "pull_request", "issue_dependencies"]),
+      );
+
+      const [row] = app.db.select().from(webhookRegistrations).all();
+      expect(row.eventsVersion).toBeGreaterThan(0);
+      await app.close();
+    });
+
+    // #667 — an already-registered hook is PATCHed with the current events
+    // list on every (re-)registration, not just its first creation — the
+    // fix for the event-list-frozen-at-creation gap: without sending
+    // `events` on the PATCH, an event added after a hook already existed
+    // would never reach it, since PATCHing without `events` leaves GitHub's
+    // own stored subscription untouched.
+    it("#667 — PATCHes an existing hook's events too, not just active/config", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_token");
+      seedProject(app);
+
+      fetchMock.mockReset();
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") return Promise.resolve(jsonResponse(200, { id: 5 }));
+        return Promise.resolve(
+          jsonResponse(200, [
+            {
+              id: 5,
+              active: true,
+              config: { url: "https://hooks.example.com/api/webhooks/github" },
+            },
+          ]),
+        );
+      });
+
+      await enableWebhooks(app);
+
+      const patchCall = fetchMock.mock.calls.find(
+        (call) => (call[1] as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as RequestInit).body as string) as {
+        events?: string[];
+      };
+      expect(body.events).toEqual(expect.arrayContaining(["issue_dependencies"]));
+      await app.close();
+    });
+
     // #490b — PATCHes (not skips) an already-existing Mullion hook, so a
     // second enable rotates the hook's own secret to match whatever this
     // call just persisted — the fix for the secret-divergence bug where a
