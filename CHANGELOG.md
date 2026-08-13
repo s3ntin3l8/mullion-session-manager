@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.27](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.26...v0.2.27) (2026-08-13)
+
+
+### Features
+
+* 7.8: agent auto-update ([#652](https://github.com/s3ntin3l8/mullion-session-manager/issues/652)) ([4d507f8](https://github.com/s3ntin3l8/mullion-session-manager/commit/4d507f8f1169a697b5fa7aaa807b0aeb9f23b53a))
+* add a mobile terminal key bar for Esc/Tab/Shift+Tab/Ctrl+C ([#616](https://github.com/s3ntin3l8/mullion-session-manager/issues/616)) ([9c0e3cc](https://github.com/s3ntin3l8/mullion-session-manager/commit/9c0e3ccbf9701b81f408c077ba844369ff99ad1c))
+* add PWA install screenshots and README imagery ([#654](https://github.com/s3ntin3l8/mullion-session-manager/issues/654)) ([40e4717](https://github.com/s3ntin3l8/mullion-session-manager/commit/40e4717dbd7a10925596ae782174925e604864cc))
+* add ui/Modal with focus trap, Escape, and ARIA; migrate PromoteDialog ([#642](https://github.com/s3ntin3l8/mullion-session-manager/issues/642)) ([a18d10b](https://github.com/s3ntin3l8/mullion-session-manager/commit/a18d10b0caf22dc6a964d35f66ad804e69310763))
+* make Settings usable on mobile ([#621](https://github.com/s3ntin3l8/mullion-session-manager/issues/621)) ([0e6c735](https://github.com/s3ntin3l8/mullion-session-manager/commit/0e6c7351185bf3e4bab5e7c54fdf63f87603b331))
+* reflow the mobile layout around the on-screen keyboard ([#615](https://github.com/s3ntin3l8/mullion-session-manager/issues/615)) ([9772598](https://github.com/s3ntin3l8/mullion-session-manager/commit/97725988620f0ebb35e6b15409177b1784d835af))
+* require confirmation before creating a missing project directory ([#620](https://github.com/s3ntin3l8/mullion-session-manager/issues/620)) ([712e013](https://github.com/s3ntin3l8/mullion-session-manager/commit/712e013256b25820e902789cc97aa30dba20e256))
+
+
+### Bug Fixes
+
+* bind loopback by default, require explicit MULLION_TRUST_GATEWAY opt-out ([#611](https://github.com/s3ntin3l8/mullion-session-manager/issues/611)) ([341cd3f](https://github.com/s3ntin3l8/mullion-session-manager/commit/341cd3fdb5a353611ea0c619b62d0ffe2fcb753f))
+* deduplicate mobile pane chrome and sidebar toggle ([#613](https://github.com/s3ntin3l8/mullion-session-manager/issues/613)) ([df785ad](https://github.com/s3ntin3l8/mullion-session-manager/commit/df785ade2351d3186157dfaef8a5cc3f9ba39ada))
+* **deps:** override sharp to ^0.35.0 in the frontend workspace ([#601](https://github.com/s3ntin3l8/mullion-session-manager/issues/601)) ([fded9c4](https://github.com/s3ntin3l8/mullion-session-manager/commit/fded9c477a71fb0a508e9503e2a3f8988b23fef5))
+* give every dockview panel heading a left inset, fix panel-body drift ([#650](https://github.com/s3ntin3l8/mullion-session-manager/issues/650)) ([49a4d5c](https://github.com/s3ntin3l8/mullion-session-manager/commit/49a4d5c48907b58c075cdfda263956dab112acfb))
+* harden resolveWithinRoots and dock-config against pre-planted symlinks ([#612](https://github.com/s3ntin3l8/mullion-session-manager/issues/612)) ([c98d609](https://github.com/s3ntin3l8/mullion-session-manager/commit/c98d6091dd9ff7c543243c6269d153a211ca7f44))
+* overhaul the kanban board's layout, mobile support, and drawer ([#610](https://github.com/s3ntin3l8/mullion-session-manager/issues/610)) ([f11c75d](https://github.com/s3ntin3l8/mullion-session-manager/commit/f11c75dda8cadd0a9645ef558d706c7184bec629))
+* run make test/lint/typecheck across both workspaces, fix e2e worktree exclude gap ([#614](https://github.com/s3ntin3l8/mullion-session-manager/issues/614)) ([9dd49b5](https://github.com/s3ntin3l8/mullion-session-manager/commit/9dd49b56b4268fd7a8ced0a49e54a41fe5ef966d))
+
 ## [0.2.26](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.25...v0.2.26) (2026-08-10)
 
 
