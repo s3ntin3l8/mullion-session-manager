@@ -465,6 +465,28 @@ export const tasks = sqliteTable(
     // a server log line, invisible even during promotion despite docs
     // claiming otherwise).
     githubSyncError: text("github_sync_error"),
+    // #667 — dependency-aware auto-claim. Snapshot of GitHub's
+    // `issue_dependencies_summary.total_blocked_by`, written on every
+    // ingest (rides the `listLabeledIssues` list response for free — see
+    // github.ts's TaskIssue). Deliberately NULLABLE, not
+    // `NOT NULL DEFAULT 0`: null means "not yet observed" — a GitHub-linked
+    // task whose dependency state has never been read (fresh webhook
+    // ingest, a pre-#667 row, a sweep that hasn't reached it yet) must read
+    // as unresolved/fail-closed, not as verified-zero. A local task
+    // (issueNumber null) never gets this written and so always reads
+    // "clear" — see task-dependencies.ts's dependencyGate table.
+    dependencyCount: integer("dependency_count"),
+    // JSON array of this task's currently-OPEN blockers (owner/repo/number/
+    // title/htmlUrl), resolved via GET .../dependencies/blocked_by. Null =
+    // never resolved, or the last resolution attempt failed (fail-closed,
+    // same as a null dependencyCount). "[]" = resolved, zero open blockers.
+    // See task-dependencies.ts.
+    blockedBy: text("blocked_by"),
+    // When blockedBy was last successfully resolved — drives the re-check
+    // TTL in task-watcher.ts's autoClaimReadyTasks (avoids re-fetching
+    // blockers on every sweep once webhooks or a recent check already
+    // settled them).
+    blockedByCheckedAt: integer("blocked_by_checked_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -571,6 +593,16 @@ export const webhookRegistrations = sqliteTable(
     hookId: integer("hook_id"),
     registeredAt: integer("registered_at", { mode: "timestamp" }),
     lastError: text("last_error"),
+    // #667 — which version of github-webhook.ts's registered `events` array
+    // this hook was last (re-)registered against. NOT NULL DEFAULT 0 so
+    // every pre-existing row starts below WEBHOOK_EVENTS_VERSION, which is
+    // exactly what makes webhook-reconciler.ts re-run registration for an
+    // already-healthy hook once, the only way an event-list change (e.g.
+    // adding "issue_dependencies") ever reaches an install that registered
+    // before it shipped — the reconciler otherwise only touches projects
+    // with no hook at all. Stamped by upsertWebhookRegistration on every
+    // successful registration.
+    eventsVersion: integer("events_version").notNull().default(0),
   },
   (table) => [uniqueIndex("webhook_registrations_project_id_unique").on(table.projectId)],
 );

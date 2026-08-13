@@ -210,6 +210,82 @@ export async function getIssueState(
   return { state: result.state, labels };
 }
 
+// #667 — native GitHub issue dependencies
+// (docs.github.com/en/rest/issues/issue-dependencies). Both endpoints return
+// full issue objects (state included, cross-repo blockers included via each
+// item's own `repository`), so one call each fully resolves either
+// direction — no follow-up lookups needed.
+
+export interface DependencyIssue {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  htmlUrl: string;
+  state: "open" | "closed";
+}
+
+interface GitHubDependencyApiItem {
+  number: number;
+  title: string;
+  html_url: string;
+  state: "open" | "closed";
+  repository?: { name?: string; owner?: { login?: string } };
+}
+
+/** Shared by listBlockedByIssues/listBlockingIssues below — same request
+ * shape, opposite direction. Single page (100 items), matching
+ * listLabeledIssues' own documented one-page cap (see github.ts). Falls back
+ * to the requesting `owner`/`repo` when a returned item's own `repository`
+ * is absent (same-repo blocker — the common case). */
+async function listDependencyIssues(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  direction: "blocked_by" | "blocking",
+): Promise<DependencyIssue[]> {
+  const results = await githubRequest<GitHubDependencyApiItem[]>(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/issues/${issueNumber}/dependencies/${direction}?per_page=100`,
+  );
+  return results.map((item) => ({
+    owner: item.repository?.owner?.login ?? owner,
+    repo: item.repository?.name ?? repo,
+    number: item.number,
+    title: item.title,
+    htmlUrl: item.html_url,
+    state: item.state,
+  }));
+}
+
+/** The issues blocking `issueNumber` from being worked — task-dependencies.ts's
+ * refreshTaskBlockers filters this to `state === "open"` and stores the
+ * result on the task row. */
+export async function listBlockedByIssues(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<DependencyIssue[]> {
+  return listDependencyIssues(token, owner, repo, issueNumber, "blocked_by");
+}
+
+/** The issues `issueNumber` itself blocks — used only by the "a blocker just
+ * closed" webhook push (routes/webhooks.ts) to find which tracked tasks to
+ * re-check immediately rather than waiting for the next poll. */
+export async function listBlockingIssues(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<DependencyIssue[]> {
+  return listDependencyIssues(token, owner, repo, issueNumber, "blocking");
+}
+
 export interface CreatePullRequestParams {
   title: string;
   head: string;

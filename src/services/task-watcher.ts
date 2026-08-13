@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./host-git.js";
@@ -10,8 +10,13 @@ import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { claimTask } from "./task-claim.js";
 import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "./task-github-sync.js";
-import { canTransition, type TaskStatus } from "./task-state.js";
+import { canTransition, CONCURRENCY_CAPPED_STATUSES, type TaskStatus } from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
+import {
+  dependencyGate,
+  refreshTaskBlockers,
+  type DependencyGateRow,
+} from "./task-dependencies.js";
 
 // Read-back (6.4/#217) — how many previously-tracked-but-now-missing
 // issues get an individual GET check per project per sweep. Bounded so a
@@ -24,6 +29,22 @@ import { broadcastTaskEvent } from "./task-events.js";
 // sharing one budget would let either kind of churn starve the other out
 // of a sweep entirely.
 const MAX_READBACK_CHECKS_PER_SWEEP = 20;
+
+// #667 — bounds on the lazy dependency check in autoClaimReadyTasks below.
+// The naive "check every ready task with dependencyCount > 0 during ingest"
+// design doesn't survive this feature's own motivating scenario: a ~32-issue
+// roadmap labeled ready up front has ~31 candidates with dependencies, so
+// "only check tasks with dependencies" filters nothing — a per-sweep cap
+// alone would still mean 20 calls/project/60s = 1200/hr against a 5000/hr
+// core limit, with no 429/Retry-After handling anywhere in this repo to
+// catch the overrun. So the check moved into autoClaimReadyTasks itself,
+// where it only ever resolves blockers for a candidate the loop is actually
+// about to try, bounded three ways (cheapest first): a capacity pre-count
+// (§ autoClaimReadyTasks, zero calls once at cap), this TTL (skip a
+// recently-checked task with no call), and this per-sweep cap as a backstop
+// for the pathological "first N candidates are all blocked" ordering.
+const BLOCKER_RECHECK_TTL_MS = 5 * 60 * 1000;
+const MAX_DEPENDENCY_CHECKS_PER_SWEEP = 20;
 
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
 // auto-claim eligibility with a `Manual: true` line, mirroring the
@@ -58,6 +79,16 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       .get() !== undefined;
 
   const initialStatus = isManualOnly(issue.body) ? "backlog" : "ready";
+
+  // #667 — dependencyCount is only present on a listLabeledIssues-sourced
+  // TaskIssue (the poll sweep); a webhook-built one (routes/webhooks.ts) has
+  // no summary to read and omits it entirely. The `set`/`where` additions
+  // below are built in lockstep, and ONLY when it's present — a webhook-
+  // driven re-sighting must not reset an already-known count back to
+  // unknown, and the `where` no-op guard shouldn't fire on a column that
+  // isn't actually part of this write.
+  const hasDependencyCount = issue.dependencyCount !== undefined;
+
   const row = app.db
     .insert(tasks)
     .values({
@@ -67,6 +98,7 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       body: issue.body,
       htmlUrl: issue.htmlUrl,
       status: initialStatus,
+      dependencyCount: issue.dependencyCount ?? null,
     })
     .onConflictDoUpdate({
       target: [tasks.projectId, tasks.issueNumber],
@@ -75,8 +107,11 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
         body: issue.body,
         htmlUrl: issue.htmlUrl,
         updatedAt: new Date(),
+        ...(hasDependencyCount ? { dependencyCount: issue.dependencyCount } : {}),
       },
-      where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
+      where: hasDependencyCount
+        ? sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl} OR ${tasks.dependencyCount} IS NOT ${issue.dependencyCount}`
+        : sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
     })
     .returning({ id: tasks.id })
     .get();
@@ -147,6 +182,15 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     cwd: string,
     hostId: string,
     label: string,
+    // #667 — populated here with this sweep's own freshly-resolved
+    // repoRef/token so autoClaimReadyTasks's lazy dependency checks (called
+    // once, after every project's syncProjectTasks has run for this same
+    // tick — see pollOnce below) can reuse them instead of re-resolving. A
+    // fresh Map per pollOnce tick, not a module/closure-level one: reusing
+    // a prior tick's token across ticks would risk a silently-stale
+    // credential for a project whose resolution happens to fail on a later
+    // tick, for zero benefit (resolveGitHubToken already caches).
+    githubContext: Map<number, { owner: string; repo: string; token: string }>,
   ): Promise<void> {
     const repoRef = await resolveRepoRef(app, { cwd, hostId });
     if (!repoRef) {
@@ -182,6 +226,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       );
       return;
     }
+    githubContext.set(projectId, { owner: repoRef.owner, repo: repoRef.repo, token });
 
     try {
       const issues = await listLabeledIssues(token, repoRef.owner, repoRef.repo, label);
@@ -310,14 +355,31 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // Phase 6 (6.2/#215) — auto-claim: every task discovered as "ready" (the
   // watcher's own ingest already excludes `Manual: true` issues from this
   // set by inserting them as "backlog" instead — see syncProjectTasks
-  // above) gets claimed autonomously, one at a time via task-claim.ts's
-  // shared orchestration (`auto: true`, so an agent with no seed-delivery
-  // channel is refused rather than silently spawned with no instructions).
-  // No local pre-count against the concurrency cap: claimTask's own
-  // reservation is already atomic with the cap check, so iterating and
-  // letting each call self-limit is simpler and no less correct than
-  // duplicating that count here — once the cap is hit, every further call
-  // this sweep just gets `{ok:false, reason:"cap"}` and is skipped.
+  // above) gets claimed autonomously, in `boardOrder`/`id` order via
+  // task-claim.ts's shared orchestration (`auto: true`, so an agent with no
+  // seed-delivery channel is refused rather than silently spawned with no
+  // instructions).
+  //
+  // #667 — a candidate whose dependencyGate() isn't "clear" is skipped
+  // rather than claimed; see task-dependencies.ts for the full gate table
+  // and this file's own MAX_DEPENDENCY_CHECKS_PER_SWEEP/
+  // BLOCKER_RECHECK_TTL_MS for why the check is lazy (resolved only for a
+  // candidate this loop is actually about to try) rather than eager (during
+  // ingest, for every ready task with dependencies — which doesn't survive
+  // this feature's own motivating scenario, see those constants' comment).
+  //
+  // Capacity pre-count (#667) — this DELIBERATELY contradicts the "no local
+  // pre-count" reasoning this comment used to carry: that was true when
+  // every loop iteration was free (claimTask's own atomic reservation is
+  // simpler and no less correct than duplicating the count). It stops being
+  // true once an iteration can cost a real GitHub round-trip (the lazy
+  // dependency check above) — at that point, counting once up front to
+  // avoid burning calls on candidates that can't possibly be claimed this
+  // sweep is strictly better than discovering "cap" after the fact.
+  // claimTask's transaction remains the only correctness authority for the
+  // cap itself; this count is purely a call-avoidance guard and can be
+  // stale by the time claimTask actually runs (a manual claim racing this
+  // sweep), which is fine — claimTask's own reservation still catches it.
   //
   // Gated on the runtime pause (settings.taskMaster.autoClaimPaused), the
   // roadmap's stated kill-switch requirement — distinct from the "enabled"
@@ -326,32 +388,129 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // human can still manually claim/approve/reject while paused. Both are
   // now settings-backed and take effect on the next sweep with no restart
   // (see task-config.ts). Read fresh every sweep, not cached.
-  async function autoClaimReadyTasks(): Promise<void> {
+  async function autoClaimReadyTasks(
+    githubContext: Map<number, { owner: string; repo: string; token: string }>,
+  ): Promise<void> {
     if (getStoredSettings(app.db).taskMaster.autoClaimPaused) {
       app.log.debug("[task-watcher] auto-claim is paused, skipping");
       return;
     }
-    const ready = app.db
+
+    const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
+    const inFlight = app.db
       .select({ id: tasks.id })
       .from(tasks)
+      .where(inArray(tasks.status, CONCURRENCY_CAPPED_STATUSES))
+      .all().length;
+    let remaining = maxConcurrent - inFlight;
+    if (remaining <= 0) {
+      app.log.debug(
+        { inFlight, maxConcurrent },
+        "[task-watcher] at capacity, skipping auto-claim sweep entirely",
+      );
+      return;
+    }
+
+    const ready = app.db
+      .select({
+        id: tasks.id,
+        projectId: tasks.projectId,
+        issueNumber: tasks.issueNumber,
+        dependencyCount: tasks.dependencyCount,
+        blockedBy: tasks.blockedBy,
+        blockedByCheckedAt: tasks.blockedByCheckedAt,
+      })
+      .from(tasks)
       .where(eq(tasks.status, "ready"))
+      // The missing ORDER BY the issue was filed about — boardOrder is the
+      // board's own local render/ordering tier (routes/tasks.ts's own
+      // GET /api/tasks uses the same order), id as a stable tiebreak.
+      .orderBy(tasks.boardOrder, tasks.id)
       .all();
+
+    let dependencyChecksThisSweep = 0;
+    let cappedOut = false;
+
     for (const row of ready) {
+      if (remaining <= 0) break;
+
+      let gateRow: DependencyGateRow = row;
+      let gate = dependencyGate(gateRow);
+
+      if (gate !== "clear") {
+        const isStale =
+          row.blockedByCheckedAt === null ||
+          Date.now() - row.blockedByCheckedAt.getTime() >= BLOCKER_RECHECK_TTL_MS;
+        const ctx = githubContext.get(row.projectId);
+
+        if (isStale && ctx && row.issueNumber !== null) {
+          if (dependencyChecksThisSweep >= MAX_DEPENDENCY_CHECKS_PER_SWEEP) {
+            cappedOut = true;
+          } else {
+            dependencyChecksThisSweep++;
+            await refreshTaskBlockers(app, {
+              taskId: row.id,
+              projectId: row.projectId,
+              owner: ctx.owner,
+              repo: ctx.repo,
+              issueNumber: row.issueNumber,
+              dependencyCount: row.dependencyCount,
+              token: ctx.token,
+            });
+            const [fresh] = app.db
+              .select({
+                issueNumber: tasks.issueNumber,
+                dependencyCount: tasks.dependencyCount,
+                blockedBy: tasks.blockedBy,
+              })
+              .from(tasks)
+              .where(eq(tasks.id, row.id))
+              .all();
+            if (fresh) {
+              gateRow = fresh;
+              gate = dependencyGate(gateRow);
+            }
+          }
+        }
+      }
+
+      if (gate !== "clear") {
+        app.log.debug(
+          { taskId: row.id, gate, blockedBy: gateRow.blockedBy },
+          "[task-watcher] auto-claim skipped — dependency gate not clear",
+        );
+        continue;
+      }
+
       try {
         const outcome = await claimTask(app, row.id, { auto: true });
-        if (!outcome.ok) {
+        if (outcome.ok) {
+          remaining--;
+        } else {
           // "cap" is expected and frequent once the install is at its
           // concurrency limit — debug, not warn, so a healthy install
           // running at capacity doesn't spam warn-level logs every sweep.
+          // Still possible despite the pre-count above (a manual claim or a
+          // concurrent sweep racing this one) — stop trying further
+          // candidates this sweep rather than burning more dependency
+          // checks on tasks that can't be claimed anyway.
           const level = outcome.reason === "cap" ? "debug" : "warn";
           app.log[level](
             { taskId: row.id, reason: outcome.reason },
             "[task-watcher] auto-claim did not succeed",
           );
+          if (outcome.reason === "cap") remaining = 0;
         }
       } catch (err) {
         app.log.error({ err, taskId: row.id }, "[task-watcher] auto-claim threw unexpectedly");
       }
+    }
+
+    if (cappedOut) {
+      app.log.warn(
+        { checked: MAX_DEPENDENCY_CHECKS_PER_SWEEP },
+        "[task-watcher] more ready tasks needed a dependency check than this sweep's cap allows — remainder deferred to a later sweep",
+      );
     }
   }
 
@@ -373,8 +532,13 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       }
       const label = app.config.MULLION_TASK_LABEL;
       const rows = pollableProjectRows();
+      // #667 — one Map per tick, populated by each project's own
+      // syncProjectTasks call below and consumed by autoClaimReadyTasks
+      // right after — see syncProjectTasks's own param doc for why this
+      // isn't hoisted to a longer-lived scope.
+      const githubContext = new Map<number, { owner: string; repo: string; token: string }>();
       for (const row of rows) {
-        await syncProjectTasks(row.id, row.cwd, row.hostId, label);
+        await syncProjectTasks(row.id, row.cwd, row.hostId, label, githubContext);
       }
       // Independent of whether a GitHub token is configured (Hermes/
       // independent review posture carried into 6.2): a locally-created
@@ -382,7 +546,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // roadmap's local-board-works-regardless-of-GitHub decision means
       // auto-claim shouldn't silently stop working just because ingest
       // has nothing to do this sweep.
-      await autoClaimReadyTasks();
+      await autoClaimReadyTasks(githubContext);
     } catch (err) {
       app.log.error({ err }, "[task-watcher] poll cycle failed");
     } finally {
@@ -425,7 +589,16 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         // startup even with Task Master disabled, now that the plugin
         // always registers.
         if (!resolveTaskMasterConfig(app).enabled) return;
-        await syncProjectTasks(row.id, row.cwd, row.hostId, app.config.MULLION_TASK_LABEL);
+        // Throwaway per-call Map — autoClaimReadyTasks doesn't run on this
+        // staggered initial-fetch path, so there's nothing to hand context
+        // to; the real pollOnce tick that follows builds its own.
+        await syncProjectTasks(
+          row.id,
+          row.cwd,
+          row.hostId,
+          app.config.MULLION_TASK_LABEL,
+          new Map(),
+        );
       } catch (err) {
         app.log.warn({ err, projectId: row.id }, "[task-watcher] initial fetch failed");
       }
