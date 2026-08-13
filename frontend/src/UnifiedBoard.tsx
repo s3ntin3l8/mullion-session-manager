@@ -415,6 +415,7 @@ export function UnifiedBoard({
                   type="button"
                   className="tasks-panel-filter-clear"
                   title="Show every project"
+                  aria-label="Show every project"
                   onClick={clearProjectFilter}
                 >
                   Clear

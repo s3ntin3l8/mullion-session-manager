@@ -369,7 +369,7 @@ describe("UnifiedBoard project filter", () => {
     expect(screen.queryByText("other task")).toBeNull();
     expect(screen.getByRole("button", { name: "demo" })).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await user.click(screen.getByRole("button", { name: "Show every project" }));
     expect(screen.getByText("other task")).toBeInTheDocument();
   });
 
