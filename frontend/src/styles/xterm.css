@@ -37,17 +37,20 @@
    `terminal` panels get a custom tab, PaneTab.tsx, via `tabComponents`
    below) sat flush at 0px against the group's left edge whenever its group
    held a single tab, and jumped sideways the moment a second tab joined.
-   Fix: zero .dv-tab's own horizontal padding in every mode, and move the
-   inset onto the tab's actual content instead — the terminal case already
-   has one (.pane-tab's own `padding: 0 8px 0 11px`, terminal.css), so with
-   .dv-tab itself zeroed that 11px alone now determines its inset regardless
-   of tab count; .dv-default-tab-content below gives every other panel type
-   the same 11px, also regardless of tab count. */
+   Fix: zero .dv-tab's own LEFT padding in every mode, and move the inset
+   onto the tab's actual content instead — the terminal case already has
+   one (.pane-tab's own `padding: 0 8px 0 11px`, terminal.css), so with
+   .dv-tab's left padding zeroed that 11px alone now determines its inset
+   regardless of tab count; .dv-default-tab-content below gives every other
+   panel type the same 11px, also regardless of tab count. Deliberately
+   left-only: .dv-tab's own padding-right is untouched, so the close
+   button's inset on the right (already asymmetric between single/multi-tab
+   modes, same root cause) is unaffected by this fix — that asymmetry
+   wasn't reported and is out of scope here. */
 .cmux-root .dv-tab {
   flex-shrink: 1 !important;
   min-width: 110px;
   padding-left: 0 !important;
-  padding-right: 0 !important;
 }
 .cmux-root .dv-default-tab-content {
   padding-left: 11px;
