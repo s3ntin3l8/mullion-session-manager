@@ -77,15 +77,28 @@ export function TaskDetail({
         </span>
       </div>
 
-      {/* Independent review, PR #477 — mirrors routes/tasks.ts's own DELETE
-          restriction exactly (no linked GitHub issue, status still
-          backlog/ready): a locally-created task that turns out to be a
-          mistake previously had no way to be removed anywhere in the UI at
-          all. Local-board CRUD, so unlike Claim/Approve/Reject this isn't
-          gated on taskMasterEnabled. */}
-      {task.issueNumber === null && (task.status === "backlog" || task.status === "ready") && (
-        <DeleteTaskAction taskId={task.id} />
-      )}
+      {/* One row for every action this task can take right now, directly
+          under the title — not after the description, where a long body
+          used to push Move/Claim/Approve/etc. below the fold. No chrome of
+          its own (no padding/border/min-height): TaskActions returns null
+          for claimed/in_progress/done and DeleteTaskAction renders nothing
+          outside its own gated condition, so when both are absent this row
+          has zero children and collapses to nothing rather than painting an
+          empty bar. Delete is visually separated (margin-left: auto on its
+          own .task-detail-actions) so it isn't a mis-click neighbour of
+          Move to Ready/Claim. */}
+      <div className="task-detail-actions-row">
+        <TaskActions task={task} />
+        {/* Independent review, PR #477 — mirrors routes/tasks.ts's own
+            DELETE restriction exactly (no linked GitHub issue, status still
+            backlog/ready): a locally-created task that turns out to be a
+            mistake previously had no way to be removed anywhere in the UI
+            at all. Local-board CRUD, so unlike Claim/Approve/Reject this
+            isn't gated on taskMasterEnabled. */}
+        {task.issueNumber === null && (task.status === "backlog" || task.status === "ready") && (
+          <DeleteTaskAction taskId={task.id} />
+        )}
+      </div>
 
       <div className="task-detail-meta">
         <span className="task-detail-meta-row">{task.projectName}</span>
@@ -155,8 +168,6 @@ export function TaskDetail({
         </div>
       )}
 
-      <TaskActions task={task} />
-
       <div className="task-detail-section">
         <div className="task-detail-section-title">Timeline</div>
         {task.seedDelivered === false && (
@@ -221,7 +232,7 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 
   if (!confirming) {
     return (
-      <div className="task-detail-actions">
+      <div className="task-detail-actions task-detail-actions-delete">
         <button className="notif-gate-btn notif-gate-deny" onClick={() => setConfirming(true)}>
           Delete task
         </button>
@@ -230,7 +241,7 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
   }
 
   return (
-    <div className="task-detail-actions">
+    <div className="task-detail-actions task-detail-actions-delete">
       <span className="task-detail-hint">Delete this task? This can't be undone.</span>
       <button
         className="notif-gate-btn notif-gate-deny-confirm"

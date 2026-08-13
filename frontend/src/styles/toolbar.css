@@ -55,24 +55,19 @@
   color: var(--fg);
 }
 
-/* Issue #211's list/Kanban switcher (ViewModeToggle.tsx) — a segmented pair
-   of .toolbar-icon-btn, same base look as every other toolbar icon button,
-   plus an .active state (not used by the plain toolbar-icon-btn instances
-   elsewhere, which have no persistent on/off state) to show which view is
-   selected. */
-.view-mode-toggle {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  background: var(--track);
-  border-radius: 8px;
-  padding: 2px;
-  margin-right: 2px;
-}
-.view-mode-toggle .toolbar-icon-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+/* Tasks-as-a-destination — Toolbar.tsx's own way back out of the board
+   (entering it now only happens from Sidebar.tsx's entry or the command
+   palette; this replaces issue #211's list/Kanban ViewModeToggle.tsx, which
+   used to render a segmented pair here unconditionally). Overrides
+   .toolbar-icon-btn's fixed 30x30 square — a "Back" label needs room the
+   plain icon buttons around it don't. */
+.toolbar-back-to-workspace {
+  width: auto;
+  gap: 6px;
+  padding: 0 10px 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
 }
 
 /* Phase 5 (Track B, issue #195 5.5b) — hierarchical/flat sidebar toggle

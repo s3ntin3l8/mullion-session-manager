@@ -1388,15 +1388,20 @@ export function App() {
                   panel, now merged — see UnifiedBoard.tsx) — same "overlay,
                   not a conditionally-mounted replacement" reasoning as the
                   empty grid dropzone above: dockview's own API instance (and
-                  every open panel) stays alive underneath while toggled to
-                  Kanban, so switching back to list view via
-                  ViewModeToggle.tsx restores exactly what was there before.
-                  Unlike that dropzone (still desktop-only), this renders on
-                  mobile too — UnifiedBoard.tsx/styles.css carry their own
-                  mobile layout (stacked columns, a full-bleed detail sheet),
-                  since removing the "tasks" dockview panel means mobile has
-                  no other way to reach the task board (ViewModeToggle
-                  itself already renders on mobile, at the Toolbar). */}
+                  every open panel) stays alive underneath while viewMode is
+                  "kanban", so leaving Tasks via Toolbar.tsx's own "Back to
+                  workspace" button restores exactly what was there before.
+                  Tasks is a top-level destination, not a workspace view mode
+                  — entering it now only happens from Sidebar.tsx's own
+                  entry or the command palette, not a toggle that implied it
+                  was a peer of the tiled workspace grid. Unlike the empty
+                  grid dropzone (still desktop-only), this renders on mobile
+                  too — UnifiedBoard.tsx/styles.css carry their own mobile
+                  layout (stacked columns, a full-bleed detail sheet), since
+                  removing the "tasks" dockview panel means mobile has no
+                  other way to reach the task board (the Toolbar's own "Back"
+                  button renders on mobile too — see mobile.css's
+                  .toolbar-back-to-workspace override). */}
               {viewMode === "kanban" && (
                 <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}

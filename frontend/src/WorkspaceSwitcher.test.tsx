@@ -316,4 +316,36 @@ describe("WorkspaceSwitcher", () => {
       expect(updateGroup).not.toHaveBeenCalled();
     });
   });
+
+  // Tasks-as-a-destination — Tasks isn't a workspace, so the switcher must
+  // not keep pointing at whatever workspace was active before it opened.
+  describe("Tasks-as-a-destination", () => {
+    it("highlights the active workspace normally when viewMode is not kanban", () => {
+      resetStore({
+        workspaces: [makeWorkspace()],
+        groups: [],
+        sessions: [makeSession()],
+        activeWorkspaceId: 1,
+        tasks: [],
+      });
+      const { container } = render(<WorkspaceSwitcher />);
+      expect(container.querySelector(".workspace-item")).toHaveClass("active");
+    });
+
+    it("drops the active-workspace highlight while viewMode is kanban, without touching activeWorkspaceId itself", () => {
+      resetStore({
+        workspaces: [makeWorkspace()],
+        groups: [],
+        sessions: [makeSession()],
+        activeWorkspaceId: 1,
+        viewMode: "kanban",
+        tasks: [],
+      });
+      const { container } = render(<WorkspaceSwitcher />);
+      expect(container.querySelector(".workspace-item")).not.toHaveClass("active");
+      // The underlying selection is untouched — only the paint is
+      // suppressed, so leaving Tasks restores the real highlight.
+      expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
+    });
+  });
 });

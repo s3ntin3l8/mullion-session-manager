@@ -121,6 +121,7 @@ export function Sidebar({
     settings,
     settingsLoaded,
     hierarchicalView,
+    viewMode,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -131,6 +132,7 @@ export function Sidebar({
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
       hierarchicalView: s.hierarchicalView,
+      viewMode: s.viewMode,
     })),
   );
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -339,7 +341,11 @@ export function Sidebar({
 
   return (
     <div className="sidebar">
-      <button className="sidebar-tasks-entry" onClick={onOpenTasks}>
+      <button
+        className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
+        aria-pressed={viewMode === "kanban"}
+        onClick={onOpenTasks}
+      >
         <LayersIcon size={14} />
         <span className="sidebar-tasks-entry-label">Tasks</span>
         {actionableTaskCount > 0 && (

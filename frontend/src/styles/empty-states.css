@@ -130,6 +130,15 @@
 .sidebar-tasks-entry:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
+/* Tasks-as-a-destination — this is now the sidebar's own indicator that
+   Tasks (not a workspace) is the active view, mirroring
+   .workspace-item.active's on/off shape in WorkspaceSwitcher.tsx, which
+   drops ITS active highlight while this one is on (Sidebar.tsx passes
+   `viewMode === "kanban"` to both). */
+.sidebar-tasks-entry.active {
+  background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
+  color: var(--accent-solid);
+}
 .sidebar-tasks-entry-label {
   flex: 1;
 }
@@ -162,6 +171,32 @@
 .tasks-panel-drag-error {
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-soft);
+}
+/* Reuses Sidebar.tsx's own .sidebar-filter-chip look (same on/off pill
+   shape) for the board's project filter, so the two "narrow this list
+   down" affordances read as one visual language rather than two competing
+   ones. */
+.tasks-panel-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
+}
+.tasks-panel-filter-clear {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-solid);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+.tasks-panel-filter-clear:hover {
+  text-decoration: underline;
 }
 .tasks-panel-new-btn {
   display: flex;
@@ -223,6 +258,19 @@
   color: var(--dim);
   text-align: center;
   max-width: 320px;
+}
+.tasks-panel-empty-hint-clear {
+  border: none;
+  background: transparent;
+  color: var(--accent-solid);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+.tasks-panel-empty-hint-clear:hover {
+  text-decoration: underline;
 }
 .kanban-unified-tasks .tasks-board {
   flex: 1;
@@ -457,12 +505,6 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  /* The kanban drawer's own close button (.kanban-detail-drawer-close) is
-     absolutely positioned at top:8/right:8 over this panel, so without this
-     the status badge below — pinned right by its own flex-shrink:0 — sits
-     directly under it and gets its right edge painted over by the button's
-     opaque background. This reserves that corner so the two never overlap. */
-  padding-right: 30px;
 }
 .task-detail-title {
   font-size: 14px;
@@ -542,11 +584,28 @@
   font-size: 11.5px;
   color: var(--y);
 }
+/* Wraps TaskActions + DeleteTaskAction directly under the title/status
+   header (TaskDetail.tsx) — deliberately no padding/border/min-height of
+   its own, so when both render null (e.g. a claimed/in_progress task with
+   a linked GitHub issue) this row has zero children and collapses to
+   nothing instead of painting an empty gap. */
+.task-detail-actions-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .task-detail-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+/* Separates the destructive Delete action from the transition buttons
+   (Move to Ready, Claim, Approve, ...) sharing the same row, so it isn't a
+   mis-click neighbour of the routine ones. */
+.task-detail-actions-delete {
+  margin-left: auto;
 }
 .task-detail-hint,
 .task-detail-error {
@@ -658,8 +717,15 @@
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  padding: 16px;
-  min-height: 100%;
+  /* --kanban-board-pad drives both this padding and the sticky header
+     offset below, so the two can't drift out of sync the way they did
+     before (a hardcoded 16px here vs. a hardcoded -16px/16px pair on the
+     header) — that mismatch is what made the sticky header leave a gap
+     cards showed through. top padding is 0 here and moved onto the
+     header itself; see that rule's own comment. */
+  --kanban-board-pad: 16px;
+  padding: var(--kanban-board-pad);
+  padding-top: 0;
   box-sizing: border-box;
   overflow-x: auto;
 }
@@ -771,19 +837,23 @@
    .kanban-column-header currently has exactly one consumer (this board) but
    keeping the modifier scoped costs nothing. `background` is required, not
    cosmetic: the base rule only carries a border-bottom, so cards would
-   otherwise show straight through the stuck header. `.kanban-board`'s own
-   padding (16px) sits *below* the scrollport's padding edge that `top: 0`
-   pins to, so a bare `top: 0` would both leave a 16px gap above the header
-   AND make it jump upward by that much the instant it starts sticking —
-   the negative margin/padding pair below absorbs exactly that padding
-   instead of moving it off the shared .kanban-board rule. */
+   otherwise show straight through the stuck header.
+   `.kanban-board`'s own top padding lives on this header's own
+   `padding-top` (via --kanban-board-pad) instead of on `.kanban-board`
+   itself — `top: 0` pins the header's border-box flush to the scrollport's
+   padding edge, and the header's own padding-top reproduces the visual gap
+   above the title that used to come from the board's padding. A negative
+   margin used to sit here instead, to compensate for `.kanban-board` still
+   carrying its own top padding — that made the stuck header's border box
+   land 16px *below* the scrollport top (measured), leaving a transparent
+   band cards could scroll through above it. Zeroing the board's own
+   padding-top removes the need for that compensation entirely. */
 .kanban-unified-columns .kanban-column-header {
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--bg);
-  margin-top: -16px;
-  padding-top: 16px;
+  padding-top: var(--kanban-board-pad);
 }
 .kanban-detail-drawer {
   position: relative;

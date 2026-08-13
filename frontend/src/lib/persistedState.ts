@@ -42,6 +42,7 @@ export const STORAGE_KEYS = {
   expandedSubagentRows: "crs.expandedSubagentRows",
   sourceControlCollapsed: "crs.sourceControlCollapsed",
   taskDrawerWidth: "crs.taskDrawerWidth",
+  taskProjectFilter: "crs.taskProjectFilter",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

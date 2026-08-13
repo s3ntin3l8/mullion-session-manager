@@ -119,3 +119,37 @@ export function computeTaskReorder(
     boardOrder: u.position,
   }));
 }
+
+// A project filter renders a column from a subset of `tasks` (see
+// UnifiedBoard.tsx's `visibleTasks`), but computeTaskReorder above must
+// still run against the FULL, unfiltered column — it reindexes every task
+// in the target bucket, including ones a filter is currently hiding, and
+// running it against only the visible subset would silently drop those
+// hidden tasks' boardOrder right off the end of the column. TaskColumn's
+// own onDrop only ever hands back an index into whatever list it rendered
+// (`unified-board/TaskColumn.tsx`), so a filtered drop needs that visible
+// index translated into what it would have been against the full column
+// before it reaches computeTaskReorder.
+//
+// This does NOT correct computeReorder's own index semantics (`reorder.ts`'s
+// bucketOf excludes the dragged item before splicing at `targetIndex`) — it
+// reproduces them. `full` here, like `visibleTasks` passed in, still
+// includes the dragged task; an anchor-id lookup against it therefore lands
+// on the exact same index computeTaskReorder already expects when no filter
+// is active, by construction (visibleTasks === full then, so
+// `full.findIndex(anchor) === visibleIndex` trivially). Do not try to also
+// account for the dragged item's own position — that's computeReorder's
+// job, not this one's.
+export function absoluteDropIndex(
+  allTasks: Task[],
+  visibleTasks: Task[],
+  targetStatus: TaskStatus,
+  visibleIndex: number,
+): number {
+  const full = orderTasksForColumn(allTasks, targetStatus);
+  const visibleColumn = orderTasksForColumn(visibleTasks, targetStatus);
+  if (visibleIndex >= visibleColumn.length) return full.length;
+  const anchor = visibleColumn[visibleIndex];
+  const found = full.findIndex((t) => t.id === anchor.id);
+  return found === -1 ? full.length : found;
+}

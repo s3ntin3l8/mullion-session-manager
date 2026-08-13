@@ -136,7 +136,12 @@
   }
   .kanban-unified-columns {
     flex-direction: column;
-    padding: 10px;
+    /* Updates the same --kanban-board-pad the sticky column header's own
+       padding-top reads (empty-states.css) — a plain `padding: 10px` here
+       left that custom property at its 16px desktop default, so the
+       header's internal inset didn't match the board's own padding. */
+    --kanban-board-pad: 10px;
+    padding: var(--kanban-board-pad);
   }
   .kanban-unified-tasks .tasks-board {
     overflow: visible;
@@ -178,6 +183,13 @@
   .kanban-detail-drawer-close {
     width: 44px;
     height: 44px;
+  }
+  /* CloseIcon's size prop is a fixed SVG width/height attribute, not
+     something the 44px mobile target can grow on its own — scale the
+     glyph itself up to match, rather than leaving it small in a big box. */
+  .kanban-detail-drawer-close svg {
+    width: 22px;
+    height: 22px;
   }
   /* The mobile drawer is a full-bleed fixed sheet (above) with no columns
      visible behind it to resize against, and mouse drag events don't fire
@@ -331,9 +343,19 @@
      hidden on mobile) and HierarchyToggle.tsx renders in the sidebar drawer
      (Sidebar.tsx), which is reachable on mobile too — both need their own,
      equally-specific override. */
-  .view-mode-toggle .toolbar-icon-btn,
   .hierarchy-toggle .toolbar-icon-btn {
     width: 44px;
+    height: 44px;
+  }
+  /* Same specificity/source-order hazard the comment above documents —
+     .toolbar-back-to-workspace's own `width: auto` (toolbar.css) loses to
+     the plain .toolbar-icon-btn 44px bump 5 lines up (equal one-class
+     specificity, later source) without this. ViewModeToggle.tsx used to be
+     the only way back to the workspace on mobile (Toolbar.tsx's own
+     comment); this button is what replaced it, so it has to stay reachable
+     here too, not squeezed into a 44px square its "Back" label can't fit. */
+  .toolbar-back-to-workspace {
+    width: auto;
     height: 44px;
   }
   /* The card itself is a drag-and-drop reorder handle (out of scope on

@@ -337,6 +337,117 @@ describe("UnifiedBoard task drag-and-drop", () => {
   });
 });
 
+// #610 cut a project filter for this exact reason: "the drag/reorder math
+// indexes against the rendered list, not the full store list, and
+// filtering would silently corrupt boardOrder on drop." tasksBoard.test.ts
+// covers absoluteDropIndex's own math in isolation; these tests cover the
+// board actually wiring it up — persistence, rendering, and that a drag
+// inside a filtered column produces the same updateTask calls dragging the
+// same two cards with no filter active would.
+describe("UnifiedBoard project filter", () => {
+  it("shows no filter bar with a single project", () => {
+    projects = [makeProject({ id: 1, name: "demo" })];
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Filter by project" })).toBeNull();
+  });
+
+  it("hides tasks from unselected projects and shows a Clear affordance", async () => {
+    tasks = [
+      makeTask({ id: 1, projectId: 1, projectName: "demo", status: "ready", title: "demo task" }),
+      makeTask({ id: 2, projectId: 2, projectName: "other", status: "ready", title: "other task" }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.getByText("other task")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "demo" }));
+
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.queryByText("other task")).toBeNull();
+    expect(screen.getByRole("button", { name: "demo" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText("other task")).toBeInTheDocument();
+  });
+
+  it("persists the selected projects to localStorage and restores them on remount", async () => {
+    projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", title: "demo task" }),
+      makeTask({ id: 2, projectId: 2, status: "ready", title: "other task" }),
+    ];
+    const user = userEvent.setup();
+    const first = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "demo" }));
+    expect(JSON.parse(localStorage.getItem("crs.taskProjectFilter")!)).toEqual([1]);
+    first.unmount();
+
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.queryByText("other task")).toBeNull();
+  });
+
+  it("drops an id belonging to a since-deleted project rather than blanking the board", () => {
+    localStorage.setItem("crs.taskProjectFilter", JSON.stringify([1, 999]));
+    projects = [makeProject({ id: 1, name: "demo" })];
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready", title: "demo task" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+  });
+
+  it("shows a distinct empty state when the filter hides every task, with a one-click Clear", async () => {
+    tasks = [makeTask({ id: 1, projectId: 2, status: "ready", title: "other task" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "demo" }));
+    expect(screen.getByText("No tasks in the selected projects.")).toBeInTheDocument();
+    expect(screen.queryByText("No tasks yet.")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Clear the project filter" }));
+    expect(screen.getByText("other task")).toBeInTheDocument();
+  });
+
+  it("reorders identically whether dragged inside a filtered column or with no filter active", async () => {
+    // Same "demo" pair as the unfiltered reorder test above, plus a hidden
+    // "other"-project task interleaved between them in boardOrder — the
+    // filtered case must still emit the exact same two updateTask calls.
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", boardOrder: 0, title: "first" }),
+      makeTask({ id: 3, projectId: 2, status: "ready", boardOrder: 1, title: "hidden" }),
+      makeTask({ id: 2, projectId: 1, status: "ready", boardOrder: 2, title: "second" }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "demo" }));
+
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    const cards = readyColumn.querySelectorAll(".task-card");
+    expect(cards).toHaveLength(2); // "hidden" is filtered out of the render
+
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
+
+    // Dragging task 1 onto task 2 pushes everything between their OLD
+    // positions up by one to make room — including hidden task 3, which
+    // sits between them in boardOrder even though its own card never
+    // rendered. That's correct, not a leak: an unfiltered drag of the same
+    // two cards onto each other (task 3 rendered in between, in full view)
+    // produces this exact same three-way reshuffle, since task 3's card
+    // would sit at the identical index in the full column either way.
+    expect(updateTask).toHaveBeenCalledWith(3, { boardOrder: 0 });
+    expect(updateTask).toHaveBeenCalledWith(2, { boardOrder: 1 });
+    expect(updateTask).toHaveBeenCalledWith(1, { boardOrder: 2 });
+    expect(updateTask).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("UnifiedBoard detail drawer", () => {
   it("opens the drawer with the right taskId when a card body is clicked, and closes it", async () => {
     tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
