@@ -204,7 +204,14 @@ token" and recorded as blocked with a distinct reason, rather than assumed
 to mean fewer real blockers than reported — GitHub does not document
 whether the summary and the list endpoint count private/cross-org blockers
 the same way, so this fails toward blocked rather than risk an
-under-scoped-token false negative.
+under-scoped-token false negative. Verified live (Hermes review) that
+`total_blocked_by` itself can lag GitHub's own dependency graph for a few
+seconds after an edge is added/removed — a re-fetch immediately after a
+`blocked_by_removed` API call can still return the pre-removal count — so a
+shortfall isn't always a genuine scope gap; it can be this transient lag.
+Because of that, a shortfall result does **not** stamp the task's re-check
+TTL — it self-corrects on the very next sweep instead of holding a possibly
+wrong "blocked" verdict for the full TTL window.
 
 `GET .../dependencies/blocking` (the reverse direction) drives a second,
 push-based path: when a labeled issue with dependents closes (webhook

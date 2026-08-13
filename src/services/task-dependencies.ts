@@ -21,6 +21,24 @@ export interface StoredBlocker {
 
 export type DependencyGate = "clear" | "blocked" | "unresolved";
 
+/** Hermes review, PR #669 — a per-item shape check, not just "is this JSON an
+ * array." `refreshTaskBlockers` below is the only writer today, so this is
+ * low-risk in practice, but the column round-trips into the API response
+ * (routes/tasks.ts) and the board/drawer render whatever's in it directly —
+ * a malformed row (a hand edit, a future writer with a bug) should fail
+ * closed here rather than hand a shape-mismatched value to the frontend. */
+function isStoredBlocker(v: unknown): v is StoredBlocker {
+  if (typeof v !== "object" || v === null) return false;
+  const b = v as Record<string, unknown>;
+  return (
+    typeof b.owner === "string" &&
+    typeof b.repo === "string" &&
+    typeof b.number === "number" &&
+    typeof b.title === "string" &&
+    (b.htmlUrl === null || typeof b.htmlUrl === "string")
+  );
+}
+
 /** Tolerant of a malformed/foreign blob — returns null (⇒ unresolved ⇒ fail
  * closed in dependencyGate) rather than throwing, since a task row's
  * blockedBy column is written only by refreshTaskBlockers below but read by
@@ -29,7 +47,8 @@ export function parseBlockedBy(json: string | null): StoredBlocker[] | null {
   if (json === null) return null;
   try {
     const parsed: unknown = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as StoredBlocker[]) : null;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.every(isStoredBlocker) ? parsed : null;
   } catch {
     return null;
   }
@@ -96,14 +115,24 @@ export async function refreshTaskBlockers(
       params.issueNumber,
     );
 
-    // Defensive count check (see github-write.ts's listBlockedByIssues doc
-    // comment) — `blocked_by` vs `total_blocked_by`'s exact difference is
-    // undocumented by GitHub; the safest reading treats a shorter-than-
-    // expected result as "some blockers aren't visible to this token"
-    // rather than "GitHub simply reports fewer than the summary said," and
-    // fails toward blocked rather than risk claiming a genuinely blocked
-    // task. Costs nothing when the counts agree, which was the only case
-    // observed in the wild during planning.
+    // Defensive count check — verified live against the API during Hermes
+    // review (PR #669): `total_blocked_by` counts ALL blockers regardless of
+    // open/closed state (matches `results.length`'s own scope — the list
+    // endpoint returns closed blockers too, just with `state: "closed"`),
+    // and does NOT change when a blocker merely closes. It DOES change when
+    // a dependency edge is added/removed — and GitHub's own summary field
+    // lags there: a fresh re-fetch of the issue immediately after a
+    // `blocked_by_removed` DELETE still returned the PRE-removal count in
+    // one verified test, while the list endpoint itself was already
+    // consistent. So `params.dependencyCount` (a caller-supplied snapshot,
+    // potentially from before an edge changed, and potentially still stale
+    // even freshly re-fetched) can legitimately read higher than reality —
+    // this is expected, not just a caller bug. Treated as "some blockers
+    // aren't visible to this token" rather than "GitHub simply reports
+    // fewer than the summary said," and fails toward blocked rather than
+    // risk claiming a genuinely blocked task — but see the
+    // `blockedByCheckedAt` handling below for how a false positive here
+    // self-corrects quickly rather than sticking for a full TTL window.
     const expected = params.dependencyCount ?? 0;
     const openBlockers: StoredBlocker[] = results
       .filter((r) => r.state === "open")
@@ -116,7 +145,8 @@ export async function refreshTaskBlockers(
       }));
 
     let blockers = openBlockers;
-    if (results.length < expected) {
+    const shortfall = results.length < expected;
+    if (shortfall) {
       const hidden = expected - results.length;
       app.log.warn(
         { taskId: params.taskId, expected, visible: results.length },
@@ -134,9 +164,22 @@ export async function refreshTaskBlockers(
       ];
     }
 
+    // Hermes review, PR #669 — `blockedByCheckedAt` is deliberately NOT
+    // stamped on a shortfall. It's the TTL task-watcher.ts's autoClaimReadyTasks
+    // uses to skip a re-check for up to 5 minutes; stamping it on a result
+    // that might just be the caller-supplied `expected` being transiently
+    // stale (per the comment above — a real, observed GitHub-side
+    // eventual-consistency lag, not only a hypothetical) would lock in a
+    // possibly-wrong "blocked" verdict for that whole window instead of
+    // letting the very next sweep retry with (hopefully) a fresher count.
+    // A clean result (no shortfall) has no such doubt and gets the normal
+    // TTL.
     app.db
       .update(tasks)
-      .set({ blockedBy: JSON.stringify(blockers), blockedByCheckedAt: new Date() })
+      .set({
+        blockedBy: JSON.stringify(blockers),
+        ...(shortfall ? {} : { blockedByCheckedAt: new Date() }),
+      })
       .where(eq(tasks.id, params.taskId))
       .run();
 

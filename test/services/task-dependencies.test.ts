@@ -256,4 +256,81 @@ describe("refreshTaskBlockers", () => {
     expect(blockers.some((b: { htmlUrl: string | null }) => b.htmlUrl === null)).toBe(true);
     expect(dependencyGate(getTask(task.id))).toBe("blocked");
   });
+
+  // Hermes review, PR #669 — verified live that GitHub's own summary count
+  // can lag after a dependency edge change even on an immediate re-fetch,
+  // so a shortfall here can be a transient false positive rather than a
+  // genuine token-scope gap. Not stamping blockedByCheckedAt on a shortfall
+  // is what lets the very next sweep retry immediately instead of trusting
+  // a possibly-wrong "blocked" verdict for the full 5-minute TTL.
+  it("does not stamp blockedByCheckedAt when a shortfall is detected, so the next sweep retries immediately", async () => {
+    const { task } = await createProjectAndTask({
+      dependencyCount: 2,
+      blockedBy: null,
+      blockedByCheckedAt: null,
+    });
+    mockListBlockedByIssues.mockResolvedValue([
+      { owner: "o", repo: "r", number: 1, title: "visible", htmlUrl: "https://x/1", state: "open" },
+    ]);
+
+    await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 2,
+      token: "tok",
+    });
+
+    expect(getTask(task.id).blockedByCheckedAt).toBeNull();
+  });
+
+  it("does stamp blockedByCheckedAt on a clean (non-shortfall) result", async () => {
+    const { task } = await createProjectAndTask({
+      dependencyCount: 1,
+      blockedBy: null,
+      blockedByCheckedAt: null,
+    });
+    mockListBlockedByIssues.mockResolvedValue([
+      { owner: "o", repo: "r", number: 1, title: "visible", htmlUrl: "https://x/1", state: "open" },
+    ]);
+
+    await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 1,
+      token: "tok",
+    });
+
+    expect(getTask(task.id).blockedByCheckedAt).not.toBeNull();
+  });
+});
+
+describe("parseBlockedBy shape validation (Hermes review, PR #669)", () => {
+  it("rejects an array whose items don't match StoredBlocker's shape", () => {
+    expect(parseBlockedBy(JSON.stringify([{ owner: "o", repo: "r" }]))).toBeNull();
+    expect(
+      parseBlockedBy(
+        JSON.stringify([{ owner: "o", repo: "r", number: "5", title: "t", htmlUrl: null }]),
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts a well-formed array, including a synthetic entry with htmlUrl: null", () => {
+    const blockers = [
+      { owner: "o", repo: "r", number: 5, title: "t", htmlUrl: "https://x/5" },
+      {
+        owner: "o",
+        repo: "r",
+        number: 0,
+        title: "1 blocker(s) not visible to this token",
+        htmlUrl: null,
+      },
+    ];
+    expect(parseBlockedBy(JSON.stringify(blockers))).toEqual(blockers);
+  });
 });
