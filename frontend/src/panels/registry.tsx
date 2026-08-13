@@ -134,7 +134,17 @@ export function makePanelWrapper<
     return (
       <ErrorBoundary onReset={resetPanel}>
         {options.suspense ? (
-          <Suspense fallback={<LazyPanelFallback />}>{content}</Suspense>
+          // LazyPanelFallback is `position: absolute; inset: 0` (see its own
+          // comment) — that only resolves correctly against a positioned
+          // ancestor. Neither dockview's own panel host (.dv-react-part) nor
+          // ErrorBoundary (which renders children directly, no wrapping div)
+          // establishes one, so without this host the fallback fell back to
+          // dockview's .dv-view instead: ~35px too tall, covering that
+          // group's tab strip (and swallowing clicks on it) for as long as
+          // the lazy chunk takes to load.
+          <div style={{ position: "relative", width: "100%", height: "100%" }}>
+            <Suspense fallback={<LazyPanelFallback />}>{content}</Suspense>
+          </div>
         ) : (
           content
         )}
@@ -262,9 +272,13 @@ function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
   );
   return (
     <ErrorBoundary onReset={resetPanel}>
-      <Suspense fallback={<LazyPanelFallback />}>
-        <LazyBrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
-      </Suspense>
+      {/* Same host-div fix as makePanelWrapper's own suspense branch above —
+          see its comment. */}
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <Suspense fallback={<LazyPanelFallback />}>
+          <LazyBrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
+        </Suspense>
+      </div>
     </ErrorBoundary>
   );
 }

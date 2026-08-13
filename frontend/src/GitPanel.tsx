@@ -444,7 +444,7 @@ export function GitPanel({
     <div className="github-panel cmux-scroll">
       <div className="github-panel-repo">
         <GitBranchIcon size={14} />
-        {status.branch}
+        <span className="github-panel-repo-name">{status.branch}</span>
         {status.hash && <span className="github-panel-row-number">{status.hash}</span>}
       </div>
 
@@ -588,10 +588,7 @@ export function GitPanel({
 
       {branchesResult && branchesResult.worktrees.length > 0 && (
         <div className="github-panel-section">
-          <div
-            className="github-panel-section-title"
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
-          >
+          <div className="github-panel-section-title with-action">
             <span>Worktrees ({branchesResult.worktrees.length})</span>
             <button
               className="git-panel-fetch-btn"

@@ -25,8 +25,33 @@
    Anchored under .cmux-root (the app root, see App.tsx) rather than a bare
    `.dv-tab`, so this override wins on specificity alone — the `!important`
    is belt-and-suspenders in case dockview ever applies a competing inline
-   style or the CSS import order changes. */
+   style or the CSS import order changes.
+
+   Panel heading left-inset fix — dockview's own .dv-tab padding differs
+   between an ordinary multi-tab group (`padding: 0.25rem 0.5rem`, i.e. 8px
+   horizontal) and a `singleTabMode="fullwidth"` group holding exactly one
+   tab (`padding: 0px`, dockview.css's
+   `.dv-full-width-single-tab .dv-tabs-container .dv-tab` rule, which at 5
+   classes of specificity needs `!important` here to lose). That meant every
+   non-terminal panel's title (dockview's own .dv-default-tab — only
+   `terminal` panels get a custom tab, PaneTab.tsx, via `tabComponents`
+   below) sat flush at 0px against the group's left edge whenever its group
+   held a single tab, and jumped sideways the moment a second tab joined.
+   Fix: zero .dv-tab's own LEFT padding in every mode, and move the inset
+   onto the tab's actual content instead — the terminal case already has
+   one (.pane-tab's own `padding: 0 8px 0 11px`, terminal.css), so with
+   .dv-tab's left padding zeroed that 11px alone now determines its inset
+   regardless of tab count; .dv-default-tab-content below gives every other
+   panel type the same 11px, also regardless of tab count. Deliberately
+   left-only: .dv-tab's own padding-right is untouched, so the close
+   button's inset on the right (already asymmetric between single/multi-tab
+   modes, same root cause) is unaffected by this fix — that asymmetry
+   wasn't reported and is out of scope here. */
 .cmux-root .dv-tab {
   flex-shrink: 1 !important;
   min-width: 110px;
+  padding-left: 0 !important;
+}
+.cmux-root .dv-default-tab-content {
+  padding-left: 11px;
 }

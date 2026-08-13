@@ -87,11 +87,7 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
           style={{ transform: log != null ? "rotate(180deg)" : undefined, flexShrink: 0 }}
         />
       </button>
-      {loading && (
-        <div className="github-panel-empty-row" style={{ paddingLeft: 32 }}>
-          Loading logs…
-        </div>
-      )}
+      {loading && <div className="github-panel-empty-row indent-job">Loading logs…</div>}
       {log && log.log && (
         <pre className="github-panel-log" onClick={(e) => e.stopPropagation()}>
           {log.log}
@@ -100,11 +96,7 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
           )}
         </pre>
       )}
-      {log && !log.log && (
-        <div className="github-panel-empty-row" style={{ paddingLeft: 32 }}>
-          No log output
-        </div>
-      )}
+      {log && !log.log && <div className="github-panel-empty-row indent-job">No log output</div>}
     </div>
   );
 }
@@ -162,21 +154,17 @@ function WorkflowRunRow({ projectId, run }: { projectId: number; run: GitHubActi
         />
       </button>
       {expanded && jobs !== undefined && jobs !== null && (
-        <div className="github-panel-jobs" style={{ paddingLeft: 16 }}>
+        <div className="github-panel-jobs">
           {jobs.map((job) => (
             <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
           ))}
         </div>
       )}
       {expanded && jobs === null && (
-        <div className="github-panel-empty-row" style={{ paddingLeft: 16 }}>
-          Failed to load jobs
-        </div>
+        <div className="github-panel-empty-row indent-job">Failed to load jobs</div>
       )}
       {expanded && jobs === undefined && (
-        <div className="github-panel-empty-row" style={{ paddingLeft: 16 }}>
-          Loading jobs…
-        </div>
+        <div className="github-panel-empty-row indent-job">Loading jobs…</div>
       )}
     </div>
   );
@@ -210,7 +198,7 @@ function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number
       </div>
       <CollapsibleSection expanded={expanded}>
         {pr.actionsRuns.length === 0 && (
-          <div className="github-panel-empty-row">No workflow runs for this PR</div>
+          <div className="github-panel-empty-row indent-run">No workflow runs for this PR</div>
         )}
         {pr.actionsRuns.map((run) => (
           <WorkflowRunRow key={run.htmlUrl} projectId={projectId} run={run} />

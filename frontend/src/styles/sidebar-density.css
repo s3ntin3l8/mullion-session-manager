@@ -41,7 +41,10 @@
 .agent-rules-panel-list {
   width: 240px;
   flex-shrink: 0;
-  padding: 12px 10px;
+  /* 14px horizontal, matching every other panel body's gutter
+     (.github-panel/.task-detail in empty-states.css, .agent-rules-panel-editor
+     below) — was 10px, the one place in this shell that didn't. */
+  padding: 12px 14px;
   overflow-y: auto;
   border-right: 1px solid var(--border);
 }
@@ -82,6 +85,14 @@
   flex-direction: column;
   min-width: 0;
   padding: 12px 14px;
+  /* SkillsPanel.tsx's detail pane has no scrollable child of its own (unlike
+     AgentRulesPanel/DockConfigPanel, whose tall child — the textarea or
+     .dock-config-panel-form — already carries overflow-y:auto), so a long
+     skill description or several agent toggle rows overflowed with no way
+     to reach the rest. Safe for those two as well: their children keep
+     their own overflow, so this outer scroller stays inert for them. */
+  overflow-y: auto;
+  min-height: 0;
 }
 .agent-rules-panel-editor-header {
   display: flex;

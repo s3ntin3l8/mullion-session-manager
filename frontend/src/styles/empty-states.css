@@ -147,12 +147,16 @@
   height: 100%;
   overflow: hidden;
 }
+/* Padding/border aligned to the dockview panel toolbars below (10px 14px,
+   var(--border)) for the same reason — see .browser-panel-toolbar's own
+   comment. This one isn't a dockview panel (it's the Kanban board's own
+   toolbar), but it sits in the same visual family and was the odd one out. */
 .tasks-panel-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 .tasks-panel-drag-error {
@@ -1099,12 +1103,29 @@
    kept as its own selector (`-note`, not `-compact`) rather than composed
    with `.ui-empty-state` above — it's a plain padded text block (no flex,
    no centering), a different rule set from the icon/title/body/actions
-   card. Declaration below is unchanged, selector string only. */
+   card.
+
+   Padding/height aligned to the loaded panel body (.github-panel's own
+   `12px 14px`, height: 100%) — was `20px 16px` with no height, so text
+   visibly shifted the moment a panel's loading/error/empty state gave way
+   to its real content. `.dv-react-part` (dockview-react's own panel host)
+   sets an explicit inline `height: 100%`, and its ancestor chain up to
+   `.dv-content-container` is all real (flex-resolved) heights, so `height:
+   100%` here resolves the same way it does on `.github-panel`. */
 .ui-empty-state-note {
-  padding: 20px 16px;
+  height: 100%;
+  padding: 12px 14px;
   color: var(--dim);
   font-size: 12px;
   line-height: 1.5;
+}
+/* Four call sites (SkillsPanel, DockConfigPanel, AgentRulesPanel x2) nest
+   this one message inside `.agent-rules-panel-editor`, which already
+   carries its own `12px 14px` — undo both there rather than stretching an
+   inline message to the full editor height or double-padding it. */
+.agent-rules-panel-editor > .ui-empty-state-note {
+  height: auto;
+  padding: 0;
 }
 .github-panel-repo {
   display: inline-flex;
@@ -1115,9 +1136,22 @@
   color: var(--fg);
   text-decoration: none;
   margin-bottom: 14px;
+  /* A branch name with no break opportunity (no `/` or `-`) can't wrap, and
+     `.github-panel`'s own `overflow-y: auto` computes overflow-x to `auto`
+     too (CSS Overflow: a `visible` axis paired with a non-`visible` one
+     resolves to `auto`) — so it scrolled the whole panel sideways instead
+     of truncating. min-width: 0 lets the inline-flex item shrink below its
+     content size so .github-panel-repo-name's own ellipsis (below) applies. */
+  min-width: 0;
 }
 .github-panel-repo:hover {
   color: var(--accent-solid);
+}
+.github-panel-repo-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .github-panel-section {
   margin-bottom: 16px;
@@ -1130,16 +1164,42 @@
   font-weight: 700;
   margin-bottom: 6px;
 }
+/* GitPanel.tsx's Worktrees section header seats a "Prune stale" button
+   beside the title — was an inline style on that one instance; every other
+   section title is a bare label. */
+.github-panel-section-title.with-action {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 .github-panel-empty-row {
   font-size: 12px;
   color: var(--dim);
   padding: 4px 2px;
 }
+/* GitHubPanel.tsx's CI accordion (PR → workflow run → job → log) placeholder
+   rows — "No workflow runs for this PR", "Loading jobs…"/"Failed to load
+   jobs", "Loading logs…"/"No log output" — used inline paddingLeft that
+   didn't match the depth of the row each one replaces (see
+   .github-panel-run-group/.github-panel-job-row's own left-inset below).
+   `.indent-run` matches a workflow-run row's own 16px; `.indent-job`
+   matches a job row's 24px (and .github-panel-log's own 24px left padding,
+   for the log-output placeholders). */
+.github-panel-empty-row.indent-run {
+  padding-left: 16px;
+}
+.github-panel-empty-row.indent-job {
+  padding-left: 24px;
+}
 .github-panel-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 5px 2px;
+  /* Text inset aligned to .agent-rules-panel-row's own 6px (was 2px, the
+     narrowest in this file — the row's flex hover background already spans
+     the panel's 14px gutter either way; this only moves where the text
+     itself starts within it). */
+  padding: 5px 6px;
   color: var(--fg);
   text-decoration: none;
   font-size: 12.5px;
@@ -1443,8 +1503,13 @@
   display: flex;
   flex-direction: column;
 }
+/* Padding aligned to .ui-empty-state-note above (12px 14px, was 20px 16px)
+   for the same reason — but no height:100% here, unlike that shared class:
+   both usages sit inside an already-flowing container (the scrollable
+   .session-timeline-list, or SessionTimeline's whole body), not as a
+   panel's sole root content. */
 .session-timeline-empty {
-  padding: 20px 16px;
+  padding: 12px 14px;
   color: var(--dim);
   font-size: 12px;
   line-height: 1.5;
@@ -1643,17 +1708,25 @@
   display: flex;
   flex-direction: column;
 }
+/* Padding aligned to .ui-empty-state-note above (12px 14px, was 20px 16px) —
+   same reasoning as .session-timeline-empty's own comment; no height:100%
+   here either, both usages sit inside .browser-panel's flex body rather
+   than being its sole content. */
 .browser-panel-empty {
-  padding: 20px 16px;
+  padding: 12px 14px;
   color: var(--dim);
   font-size: 12px;
   line-height: 1.5;
 }
+/* Padding/border aligned to .session-timeline-controls above and
+   .dock-config-panel-toolbar (sidebar-density.css) — 10px 14px,
+   var(--border) — the four panel toolbars had each picked a slightly
+   different height and border token, visible side by side in a split. */
 .browser-panel-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -1810,7 +1883,11 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #1a1a1a;
+  /* Was a literal #1a1a1a — the only hardcoded color in a panel body outside
+     the two token blocks above, so it stayed dark in light theme wherever
+     the remote page letterboxes. var(--term) already provides a
+     theme-aware near-black/white pair. */
+  background: var(--term);
   display: flex;
   align-items: center;
   justify-content: center;

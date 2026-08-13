@@ -343,4 +343,21 @@
   .kanban-card {
     min-height: 44px;
   }
+
+  /* Agent Rules / Skills / Dock config share the same two-pane shell
+     (.agent-rules-panel: a 240px fixed list beside a flex-1 editor, see
+     that class's own header comment) with no narrow-width handling at
+     all — on a phone-width group the editor was squeezed to ~135px.
+     Dockview group headers are already hidden entirely on mobile (item A),
+     so nothing about the list/editor split reads as tabs to fall back on;
+     stack them instead. */
+  .agent-rules-panel {
+    flex-direction: column;
+  }
+  .agent-rules-panel-list {
+    width: 100%;
+    max-height: 40%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
 }

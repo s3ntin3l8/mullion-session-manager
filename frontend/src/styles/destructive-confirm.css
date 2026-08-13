@@ -66,7 +66,12 @@
   gap: 9px;
   padding: 14px;
   text-align: center;
-  background: var(--term);
+  /* var(--term) is the terminal-specific background token — this renders
+     for the crash state of every panel type, not just terminal, so it
+     should match the actual dockview panel background (the same var(--bg)
+     dockview's own theme remap uses, see .dockview-container in
+     sidebar.css) rather than borrowing the terminal's. */
+  background: var(--bg);
 }
 .crashed-pane-title {
   font-size: 12px;

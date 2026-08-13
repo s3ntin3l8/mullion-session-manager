@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { GitHubPanel } from "./GitHubPanel.js";
-import type { GitHubPRsStatus, GitHubStatus } from "./api/index.js";
+import type { GitHubJob, GitHubLogResponse, GitHubPRsStatus, GitHubStatus } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const STATUS: GitHubStatus = {
@@ -51,6 +52,17 @@ const PRS_LOADED: GitHubPRsStatus = {
   prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
 };
 
+// Promise.withResolvers isn't in this project's configured TS lib target —
+// a plain manual deferred instead, just for the tests below that need to
+// assert a transient loading state before resolving it.
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function mockFetch(
   status: { status: GitHubStatus } | { status: GitHubStatus; prs: GitHubPRsStatus },
 ) {
@@ -60,6 +72,65 @@ function mockFetch(
       return Promise.resolve(jsonResponse(200, p));
     }
     return Promise.resolve(jsonResponse(200, status.status));
+  });
+}
+
+// A PR whose one workflow run has a numeric /actions/runs/<id> URL — the
+// shape WorkflowRunRow needs (runIdFromUrl) to render as expandable rather
+// than a bare link, so its jobs/logs accordion (JobRow) is reachable.
+const PRS_WITH_RUN: GitHubPRsStatus = {
+  prs: [
+    {
+      number: 42,
+      title: "Fix attention race",
+      htmlUrl: "https://github.com/acme/widgets/pull/42",
+      author: "a",
+      headSha: "abc123",
+      headBranch: "fix-attention",
+      baseBranch: "main",
+      ciStatus: "success",
+      actionsRuns: [
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://github.com/acme/widgets/actions/runs/99",
+          headSha: "abc123",
+        },
+      ],
+    },
+  ],
+  prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+};
+
+const JOB: GitHubJob = {
+  id: 7,
+  name: "build",
+  status: "completed",
+  conclusion: "success",
+  startedAt: null,
+  completedAt: null,
+  htmlUrl: "https://github.com/acme/widgets/actions/runs/99/job/7",
+  steps: [],
+};
+
+function mockFetchWithAccordion(opts: {
+  jobs?: GitHubJob[] | "error";
+  log?: GitHubLogResponse | "error";
+}) {
+  return vi.fn((url: string) => {
+    if (url.endsWith("/github/prs")) {
+      return Promise.resolve(jsonResponse(200, PRS_WITH_RUN));
+    }
+    if (url.includes("/jobs/") && url.endsWith("/logs")) {
+      if (opts.log === "error") return Promise.reject(new Error("log fetch failed"));
+      return Promise.resolve(jsonResponse(200, opts.log));
+    }
+    if (url.endsWith("/jobs")) {
+      if (opts.jobs === "error") return Promise.reject(new Error("jobs fetch failed"));
+      return Promise.resolve(jsonResponse(200, opts.jobs));
+    }
+    return Promise.resolve(jsonResponse(200, STATUS));
   });
 }
 
@@ -164,5 +235,83 @@ describe("GitHubPanel", () => {
     const deployLink = screen.getByRole("link", { name: /Deploy/ });
     expect(deployLink).toHaveAttribute("href", "https://github.com/acme/widgets/actions/runs/2");
     expect(screen.getByText("in_progress")).toBeInTheDocument();
+  });
+
+  // Below: the PR card's own accordion (workflow runs -> jobs -> logs),
+  // reachable only by expanding each level in turn — none of the tests
+  // above click into it.
+
+  it("shows 'No workflow runs for this PR' once a PR with none is expanded", async () => {
+    vi.stubGlobal("fetch", mockFetch({ status: STATUS, prs: PRS_LOADED }));
+    render(<GitHubPanel params={{ projectId: 7 }} />);
+
+    const header = await screen.findByText("Fix attention race");
+    await userEvent.click(header.closest("button")!);
+
+    expect(await screen.findByText("No workflow runs for this PR")).toBeInTheDocument();
+  });
+
+  it("walks a PR's run through 'Loading jobs…' to the job list, then a job's log through 'Loading logs…' to its content", async () => {
+    const jobsGate = deferred<GitHubJob[]>();
+    const logGate = deferred<GitHubLogResponse>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, PRS_WITH_RUN));
+        if (url.includes("/jobs/") && url.endsWith("/logs")) {
+          return logGate.promise.then((body) => jsonResponse(200, body));
+        }
+        if (url.endsWith("/jobs")) return jobsGate.promise.then((body) => jsonResponse(200, body));
+        return Promise.resolve(jsonResponse(200, STATUS));
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 8 }} />);
+
+    const prHeader = await screen.findByText("Fix attention race");
+    await userEvent.click(prHeader.closest("button")!);
+    const runHeader = await screen.findByText("CI");
+    await userEvent.click(runHeader.closest("button")!);
+
+    expect(await screen.findByText("Loading jobs…")).toBeInTheDocument();
+    jobsGate.resolve([JOB]);
+    expect(await screen.findByText("build")).toBeInTheDocument();
+
+    const jobHeader = screen.getByText("build");
+    await userEvent.click(jobHeader.closest("button")!);
+    expect(await screen.findByText("Loading logs…")).toBeInTheDocument();
+    logGate.resolve({ log: "npm run build\n> done", job: JOB, truncated: false, lineCount: 2 });
+    expect(await screen.findByText(/npm run build/)).toBeInTheDocument();
+  });
+
+  it("shows 'Failed to load jobs' when the jobs fetch rejects", async () => {
+    vi.stubGlobal("fetch", mockFetchWithAccordion({ jobs: "error" }));
+    render(<GitHubPanel params={{ projectId: 9 }} />);
+
+    const prHeader = await screen.findByText("Fix attention race");
+    await userEvent.click(prHeader.closest("button")!);
+    const runHeader = await screen.findByText("CI");
+    await userEvent.click(runHeader.closest("button")!);
+
+    expect(await screen.findByText("Failed to load jobs")).toBeInTheDocument();
+  });
+
+  it("shows 'No log output' when a job's log is empty", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetchWithAccordion({
+        jobs: [JOB],
+        log: { log: null, job: JOB, truncated: false, lineCount: 0 },
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 10 }} />);
+
+    const prHeader = await screen.findByText("Fix attention race");
+    await userEvent.click(prHeader.closest("button")!);
+    const runHeader = await screen.findByText("CI");
+    await userEvent.click(runHeader.closest("button")!);
+    const jobHeader = await screen.findByText("build");
+    await userEvent.click(jobHeader.closest("button")!);
+
+    expect(await screen.findByText("No log output")).toBeInTheDocument();
   });
 });
