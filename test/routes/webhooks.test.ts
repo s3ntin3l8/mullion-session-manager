@@ -1062,6 +1062,86 @@ describe("webhook routes", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
+    // Hermes review, PR #670 — this is exactly the direction where the
+    // stored dependencyCount is stale in a way that used to trip the
+    // defensive shortfall check: GitHub's own total_blocked_by summary can
+    // still report the pre-removal count even on an immediate re-fetch
+    // (verified live), so passing the raw stored count straight through
+    // would manufacture a "1 blocker(s) not visible to this token" false
+    // positive on the single-blocker case this test exercises. The route
+    // decrements the known count by the one blocker this delivery itself
+    // proves was just removed, instead.
+    it("an issue_dependencies/blocked_by_removed delivery does not manufacture a false shortfall on the known removal", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-depedge-removed");
+      const app = await buildApp();
+      await connectPat(app, "ghp_test_token");
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      // The task's only blocker was just removed — GitHub's list endpoint
+      // already reflects that (empty), even though its own summary field
+      // may not have caught up yet.
+      const listBlockedByIssuesSpy = vi
+        .spyOn(githubWrite, "listBlockedByIssues")
+        .mockResolvedValue([]);
+
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-depedge-removed-p", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 70,
+          title: "Was blocked, edge just removed",
+          status: "ready",
+          dependencyCount: 1,
+          blockedBy: JSON.stringify([
+            {
+              owner: "acme",
+              repo: "widgets-depedge-removed",
+              number: 71,
+              title: "old blocker",
+              htmlUrl: "https://x/71",
+            },
+          ]),
+        })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "blocked_by_removed",
+        repository: { full_name: "acme/widgets-depedge-removed", open_issues_count: 1 },
+        blocked_issue: { number: 70 },
+        blocking_issue: { number: 71 },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issue_dependencies",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const getRow = () => app.db.select().from(tasks).where(eq(tasks.id, task.id)).all()[0];
+      await waitUntil(() => getRow().blockedBy === "[]");
+      const row = getRow();
+      // No synthetic "not visible to this token" entry, and the re-check
+      // TTL was stamped (a clean, non-shortfall result).
+      expect(JSON.parse(row.blockedBy!)).toEqual([]);
+      expect(row.dependencyCount).toBe(0);
+      expect(row.blockedByCheckedAt).not.toBeNull();
+
+      listBlockedByIssuesSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
     it("an issues/closed delivery for an issue with dependents refreshes them via listBlockingIssues", async () => {
       const cwd = createMatchingGitRepo("acme", "widgets-blockerclose");
       const app = await buildApp();

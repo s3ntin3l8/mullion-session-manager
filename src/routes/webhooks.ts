@@ -193,6 +193,19 @@ export async function webhookRoutes(app: FastifyInstance) {
       const taskMasterEnabled = resolveTaskMasterConfig(app).enabled;
       const taskLabel = app.config.MULLION_TASK_LABEL;
 
+      // Hermes review, PR #670 — `owner`/`repo` are the same for every
+      // matched project (all matched via the same `repoKey`), so a token
+      // resolved for the `issue_dependencies` case below is the same
+      // regardless of which project the loop is currently on. Lazily
+      // resolved (only when the delivery actually needs it) and memoized
+      // per-delivery, so N matched projects on the same repo cost one
+      // resolveGitHubToken call instead of N.
+      let dependencyTokenPromise: Promise<string | null> | null = null;
+      function resolveDependencyToken(): Promise<string | null> {
+        dependencyTokenPromise ??= resolveGitHubToken(app, { owner, repo });
+        return dependencyTokenPromise;
+      }
+
       // Broadcast event to each matching project
       const action = payload.action;
       for (const projectId of projectIds) {
@@ -346,7 +359,23 @@ export async function webhookRoutes(app: FastifyInstance) {
               .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, blockedIssueNumber)))
               .all();
             if (!task) break;
-            resolveGitHubToken(app, { owner, repo })
+            // Hermes review, PR #670 — `blocked_by_removed` is exactly the
+            // action where the stored `dependencyCount` is known-stale in a
+            // direction that trips refreshTaskBlockers' defensive shortfall
+            // check: this delivery IS the evidence that one blocker just
+            // stopped counting, but GitHub's own `total_blocked_by` summary
+            // can still lag the removal for a few seconds even on an
+            // immediate re-fetch (verified live during review — see
+            // task-dependencies.ts's own comment). Decrementing the known
+            // count by the one blocker we know was just removed avoids
+            // manufacturing a "1 blocker(s) not visible" false positive on
+            // the single-blocker case, without needing an extra API round
+            // trip to re-fetch a summary that might still be stale anyway.
+            const expectedDependencyCount =
+              action === "blocked_by_removed"
+                ? Math.max(0, (task.dependencyCount ?? 0) - 1)
+                : task.dependencyCount;
+            resolveDependencyToken()
               .then((token) => {
                 if (!token) return;
                 return refreshTaskBlockers(app, {
@@ -355,7 +384,7 @@ export async function webhookRoutes(app: FastifyInstance) {
                   owner,
                   repo,
                   issueNumber: blockedIssueNumber,
-                  dependencyCount: task.dependencyCount,
+                  dependencyCount: expectedDependencyCount,
                   token,
                 });
               })
@@ -415,7 +444,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       ) {
         const closedIssueNumber = payload.issue.number;
         (async () => {
-          const token = await resolveGitHubToken(app, { owner, repo });
+          const token = await resolveDependencyToken();
           if (!token) return;
           const dependents = await listBlockingIssues(token, owner, repo, closedIssueNumber);
           for (const dep of dependents) {
