@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { api } from "../../api.js";
+import { api } from "../../api/index.js";
 import { BACKEND_UNREACHABLE_THRESHOLD, LIVE_REFRESH_INTERVAL_MS } from "../constants.js";
 import { pruneDismissedEventKeys, pruneSessionKeyedRecord } from "../helpers.js";
 import type { DashboardState, SessionsSlice } from "../types.js";

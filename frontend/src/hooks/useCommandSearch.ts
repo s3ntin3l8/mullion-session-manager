@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { normalizeAgentId } from "../api.js";
-import type { Launcher, Project, Session, Workspace } from "../api.js";
+import { normalizeAgentId } from "../api/index.js";
+import type { Launcher, Project, Session, Workspace } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
 
 // CommandPalette.tsx's three parallel filter pipelines (U2, issue #581) —

@@ -1,4 +1,4 @@
-import type { NotificationEvent, StoredEventRow } from "./api.js";
+import type { NotificationEvent, StoredEventRow } from "./api/index.js";
 
 // Issue #213 (roadmap 4.7) — the frontend half of "unified session history".
 // The backend query surface (GET /api/events, api.listEventHistory) already

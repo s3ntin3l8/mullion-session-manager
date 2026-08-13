@@ -1,0 +1,32 @@
+/* Barrel for the split-up styles.css (PR 31 of the refactoring roadmap,
+   .claude/plans/can-we-do-a-warm-cocke.md). Each imported file is a
+   contiguous, unmodified slice of the original monolithic styles.css, cut
+   along that file's own pre-existing banner comments.
+
+   CASCADE ORDER IS LOAD-BEARING: 615 unscoped class families in this
+   codebase mean later rules can win over earlier ones for the same
+   selector. These @import statements MUST stay in this exact order —
+   it is the same top-to-bottom order the sections appeared in the
+   original styles.css. Do not alphabetize, do not reorder to "group"
+   related files. If you need to add a new section, append/insert it at
+   the position matching where its rules would have lived in the original
+   cascade, not wherever seems tidy.
+
+   Vite inlines these `@import`s into a single CSS asset at build time
+   (verified via `npx vite build`), so this has no runtime cost — this
+   split is a source-organization change only. */
+
+@import "./tokens.css";
+@import "./app-shell.css";
+@import "./toolbar.css";
+@import "./sidebar.css";
+@import "./xterm.css";
+@import "./terminal.css";
+@import "./dock.css";
+@import "./empty-states.css";
+@import "./command-palette.css";
+@import "./settings.css";
+@import "./modals.css";
+@import "./destructive-confirm.css";
+@import "./mobile.css";
+@import "./sidebar-density.css";

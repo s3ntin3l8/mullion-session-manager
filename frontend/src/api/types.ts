@@ -117,6 +117,25 @@ export interface HostConfig {
   browserEnabled: boolean;
 }
 
+// Mirrors GET /api/hosts/:id/update's response (src/routes/hosts.ts) —
+// issue #647 / roadmap 7.8. `status` reuses UpdateStatus below (defined
+// further down this file, the same shape self-update.sh's own
+// .update-status.json already produces on the primary), proxied from the
+// agent's own /internal/updates/status.
+export interface HostUpdateStatus {
+  hostVersion: string;
+  primaryVersion: string;
+  upToDate: boolean;
+  // False whenever upToDate, OR the primary's own release has no
+  // downloadable asset yet (see unavailableReason) — never true just
+  // because a version differs.
+  updatable: boolean;
+  unavailableReason: string | null;
+  assetUrl: string | null;
+  checksumUrl: string | null;
+  status: UpdateStatus;
+}
+
 // Mirrors src/services/github-integration.ts's GitHubAppStatus 1:1 — never
 // carries the private key, only the public appId, a live installation
 // count (null when not configured, or when the live GitHub call failed),

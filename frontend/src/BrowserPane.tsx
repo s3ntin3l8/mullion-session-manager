@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshIcon, WifiOffIcon } from "./icons.js";
+import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 
 export interface BrowserPaneParams {

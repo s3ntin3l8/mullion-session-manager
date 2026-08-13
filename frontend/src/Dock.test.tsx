@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Dock } from "./Dock.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeProject } from "./test/fixtures.js";
 import { mockFetch } from "./test/mockFetch.js";

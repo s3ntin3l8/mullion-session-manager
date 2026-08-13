@@ -9,7 +9,7 @@ const setHierarchicalView = vi.fn((next: boolean) => {
   hierarchicalView = next;
 });
 
-vi.mock("./store.js", () => ({
+vi.mock("./store/index.js", () => ({
   useDashboardStore: (selector?: (s: unknown) => unknown) => {
     const state = { hierarchicalView, setHierarchicalView };
     return selector ? selector(state) : state;

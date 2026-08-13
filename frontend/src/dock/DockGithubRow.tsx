@@ -1,5 +1,5 @@
-import type { GitHubPRsStatus, GitHubStatus } from "../api.js";
-import { GitHubIcon } from "../icons.js";
+import type { GitHubPRsStatus, GitHubStatus } from "../api/index.js";
+import { GitHubIcon } from "../ui/icons.js";
 import { ciDotClass } from "./dockHelpers.js";
 
 // The dock column's GitHub status glance row — extracted from DockColumn

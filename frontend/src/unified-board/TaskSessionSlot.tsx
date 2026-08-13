@@ -1,12 +1,12 @@
-import type { Session } from "../api.js";
-import type { Theme } from "../store.js";
+import type { Session } from "../api/index.js";
+import type { Theme } from "../store/index.js";
 import {
   STATUS_PRESENTATION,
   formatStatusLabel,
   rowClassNameForSeverity,
 } from "../sessionStatus.js";
 import { resolveAgentLogo } from "../cliLogos.js";
-import { BotIcon, TerminalPromptIcon } from "../icons.js";
+import { BotIcon, TerminalPromptIcon } from "../ui/icons.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — a compact, non-SessionRow strip

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
-import type { EventHistoryPage, NotificationEvent, Session, StoredEventRow } from "./api.js";
+import type { EventHistoryPage, NotificationEvent, Session, StoredEventRow } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 // Issue #213 (roadmap 4.7) — covers the persisted-history data source added
@@ -20,7 +20,7 @@ function storeState() {
   return { sessions, events };
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
   const eventKey = (sessionId: number, seq: number) => `${sessionId}:${seq}`;
   return { useDashboardStore, eventKey };

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError } from "./api.js";
-import type { DockControlInput } from "./api.js";
-import { PlusIcon, CloseIcon, DockIcon } from "./icons.js";
-import { ConfirmButton } from "./ConfirmButton.js";
+import { api, ApiError } from "./api/index.js";
+import type { DockControlInput } from "./api/index.js";
+import { PlusIcon, CloseIcon, DockIcon } from "./ui/icons.js";
+import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { Row } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 
 export interface DockConfigPanelParams {
   projectId: number;

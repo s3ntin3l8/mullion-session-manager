@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api.js";
-import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api.js";
-import { GitBranchIcon } from "./icons.js";
+import { api } from "./api/index.js";
+import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api/index.js";
+import { GitBranchIcon } from "./ui/icons.js";
 import { usePolling } from "./hooks/usePolling.js";
-import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
+import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store/index.js";
 import { Toggle } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
-import { ConfirmButton } from "./ConfirmButton.js";
+import { ConfirmButton } from "./ui/ConfirmButton.js";
 
 export interface GitPanelParams {
   projectId: number;

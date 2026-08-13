@@ -1,4 +1,4 @@
-import type { NotificationEvent } from "./api.js";
+import type { NotificationEvent } from "./api/index.js";
 
 // Phase 1's notification event channel (issue #166): a single WS connection
 // to the backend's /ws/events (src/routes/events.ts), pushing a replay batch

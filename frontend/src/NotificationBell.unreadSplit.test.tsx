@@ -14,8 +14,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, fireEvent } from "@testing-library/react";
 import * as eventDescriptions from "./eventDescriptions.js";
 import { NotificationBell } from "./NotificationBell.js";
-import { useDashboardStore } from "./store.js";
-import type { Session, NotificationEvent, Project } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import type { Session, NotificationEvent, Project } from "./api/index.js";
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {

@@ -3,8 +3,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DockConfigPanel } from "./DockConfigPanel.js";
-import type { DockConfigResult, DockControlInput } from "./api.js";
-import { useDashboardStore } from "./store.js";
+import type { DockConfigResult, DockControlInput } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 function makeResult(

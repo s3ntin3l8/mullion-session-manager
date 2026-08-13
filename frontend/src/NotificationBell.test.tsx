@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NotificationBell } from "./NotificationBell.js";
-import type { NotificationEvent, Project, Session } from "./api.js";
+import type { NotificationEvent, Project, Session } from "./api/index.js";
 
 // Mirrors PaneTab.test.tsx's minimal selector-based store mock (only the
 // fields NotificationBell.tsx actually reads), plus store.ts's real
@@ -45,7 +45,7 @@ function storeState() {
   };
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
   return { useDashboardStore, eventKey };
 });
@@ -69,7 +69,7 @@ const dismissDevServerPort = vi.fn((_id: number, _port: string) => Promise.resol
 // — referencing it directly here would hit the same TDZ vi.mock footgun
 // store.js's mock below avoids via storeState() being a lazily-invoked
 // function declaration instead.
-vi.mock("./api.js", () => ({
+vi.mock("./api/index.js", () => ({
   api: {
     resolveReviewGate: (...args: [number, "approved" | "denied", string?]) =>
       resolveReviewGate(...args),

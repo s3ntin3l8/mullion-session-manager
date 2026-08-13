@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { eventKey, useDashboardStore } from "./store.js";
-import type { NotificationEvent } from "./api.js";
+import { eventKey, useDashboardStore } from "./store/index.js";
+import type { NotificationEvent } from "./api/index.js";
 
 // Phase 1's notification event model (issue #166) — store.ts's `events`
 // slice + startEventsStream()/markEventSeen(), driven against a mocked

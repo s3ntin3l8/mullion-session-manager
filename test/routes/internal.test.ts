@@ -95,7 +95,17 @@ vi.mock("node:child_process", async (importOriginal) => {
         return actual.spawn(file, args, options as ChildProcess.SpawnOptions);
       }
 
-      const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+      const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter; unref?: () => void };
+      // A real ChildProcess has .unref() (spawnSelfUpdate, issue #647, calls
+      // it right after .on("error", ...) — same pty-manager.ts
+      // bootstrapMaster convention every systemd-run spawn in this repo
+      // follows); a bare EventEmitter doesn't. Without this, that call
+      // throws synchronously INSIDE the route handler, which — critically —
+      // happens before the throwing test's own `await app.close()` ever
+      // runs, leaking that test's hooks socket and cascading into
+      // SocketAlreadyListeningError failures for every test after it in
+      // this file.
+      ee.unref = () => {};
 
       // PtyManager.isMasterAlive: `systemctl --user is-active <unit>.scope`.
       // Always replies "active" — this suite asserts response shape, not
@@ -319,6 +329,128 @@ describe("internal routes (agent role, issue #26)", () => {
     expect(typeof body.version).toBe("string");
     expect(body).not.toHaveProperty("idleTimeout");
     await app.close();
+  });
+
+  // Issue #647 / roadmap 7.8 — the agent-side counterpart to
+  // test/routes/updates.test.ts's own suite. Deliberately mirrors that
+  // file's fixtures (VALID_ASSET_URL/VALID_CHECKSUM_URL, a per-test
+  // mkdtemp MULLION_HOME) rather than sharing them, since these routes are
+  // reached over a different mount point (/internal/updates/* — see this
+  // file's own onRequest gate above) with a different auth requirement.
+  describe("self-update (issue #647 / roadmap 7.8)", () => {
+    const VALID_ASSET_URL =
+      "https://github.com/s3ntin3l8/mullion-session-manager/releases/download/v0.1.5/mullion-0.1.5.tgz";
+    const VALID_CHECKSUM_URL =
+      "https://github.com/s3ntin3l8/mullion-session-manager/releases/download/v0.1.5/mullion-0.1.5.tgz.sha256";
+    let mullionHome: string;
+
+    beforeEach(() => {
+      mullionHome = fs.mkdtempSync(path.join(os.tmpdir(), "internal-updates-test-home-"));
+    });
+
+    afterEach(() => {
+      delete process.env.MULLION_HOME;
+      fs.rmSync(mullionHome, { recursive: true, force: true });
+    });
+
+    it("rejects GET /internal/updates/status with no Authorization header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/internal/updates/status" });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("rejects POST /internal/updates/apply with no Authorization header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/updates/apply",
+        payload: { version: "0.1.5", assetUrl: VALID_ASSET_URL, checksumUrl: VALID_CHECKSUM_URL },
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("reports 'unavailable' from GET /internal/updates/status when MULLION_HOME is unset", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/updates/status",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ phase: "unavailable" });
+      await app.close();
+    });
+
+    it("reflects the current contents of .update-status.json", async () => {
+      process.env.MULLION_HOME = mullionHome;
+      fs.writeFileSync(
+        path.join(mullionHome, ".update-status.json"),
+        JSON.stringify({ phase: "restarting", version: "0.1.5", updatedAt: 12345 }),
+      );
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/updates/status",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.json()).toMatchObject({ phase: "restarting", version: "0.1.5" });
+      await app.close();
+    });
+
+    it("rejects a malformed body (bad version pattern) on POST /internal/updates/apply", async () => {
+      process.env.MULLION_HOME = mullionHome;
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/updates/apply",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          version: "not-a-version",
+          assetUrl: VALID_ASSET_URL,
+          checksumUrl: VALID_CHECKSUM_URL,
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("refuses when MULLION_HOME is unset", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/updates/apply",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { version: "0.1.5", assetUrl: VALID_ASSET_URL, checksumUrl: VALID_CHECKSUM_URL },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("launches self-update.sh detached via systemd-run and returns 202", async () => {
+      process.env.MULLION_HOME = mullionHome;
+      const scriptDir = path.join(mullionHome, "current", "scripts");
+      fs.mkdirSync(scriptDir, { recursive: true });
+      fs.writeFileSync(path.join(scriptDir, "self-update.sh"), "#!/usr/bin/env bash\n");
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/updates/apply",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { version: "0.1.5", assetUrl: VALID_ASSET_URL, checksumUrl: VALID_CHECKSUM_URL },
+      });
+
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toMatchObject({ phase: "downloading", version: "0.1.5" });
+      // The shared node:child_process mock at the top of this file tracks
+      // every "systemd-run -u <unit> ..." call's unit name in
+      // activeScopeUnits — reused here rather than adding a second spy on
+      // the same mocked spawn().
+      expect(activeScopeUnits.has("mullion-update-0.1.5.scope")).toBe(true);
+      await app.close();
+    });
   });
 
   it("requires a cwd query param for actions and dock", async () => {

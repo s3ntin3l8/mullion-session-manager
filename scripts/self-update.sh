@@ -52,22 +52,30 @@ UNIT_NAME="${6:-mullion.service}"
 
 # A lock older than this is treated as abandoned rather than "an update is
 # genuinely running" — see acquire_lock below. Generous relative to a real
-# update's actual runtime (download + npm ci + restart is normally well
-# under 5 minutes), but bounded so a SIGKILL/OOM/host reboot mid-update
-# doesn't permanently brick every future "Update now" (Hermes review, PR #54).
+# update's actual runtime (well under 10 minutes end to end), but bounded so
+# a SIGKILL/OOM/host reboot mid-update doesn't permanently brick every future
+# "Update now" (Hermes review, PR #54).
 #
 # INVARIANT: this must stay larger than every timeout that can keep a live
-# updater running (currently: curl's --max-time 300 for the download below,
-# plus NPM_CI_TIMEOUT_SECONDS for npm ci) — that ordering is *why* clearing
-# a stale lock can't race a genuinely-alive updater: anything still holding
-# the lock past STALE_LOCK_SECONDS must already have been SIGKILLed by one
-# of those timeouts. If a future change raises NPM_CI_TIMEOUT_SECONDS (or
-# adds a new slow step) without raising this too, that guarantee breaks and
-# two updaters could run concurrently.
-STALE_LOCK_SECONDS=1800
+# updater running, or clearing a "stale" lock could race a genuinely-alive
+# one. Current worst case (issue #647 correction — the enumeration below
+# used to omit two of these and left only a ~900s margin): curl's
+# --max-time 300 for the tarball download, plus --max-time 60 for the
+# checksum download, plus NPM_CI_TIMEOUT_SECONDS for `npm ci`, plus
+# NPM_CI_TIMEOUT_SECONDS again for the Playwright Chromium install below —
+# 300 + 60 + 600 + 600 = 1560s — plus whatever untimed time `tar`,
+# `sha256sum`, the two `node -e` smoke checks, `systemctl --user restart`,
+# and the release prune actually take. If a future change raises
+# NPM_CI_TIMEOUT_SECONDS (or adds a new slow step) without re-deriving this
+# sum and raising STALE_LOCK_SECONDS to stay comfortably above it, this
+# guarantee breaks and two updaters could run concurrently.
+STALE_LOCK_SECONDS=2400
 NPM_CI_TIMEOUT_SECONDS=600
 
-export PATH="$(dirname "$NODE_EXEC_PATH"):$PATH"
+# Declared and assigned separately (shellcheck SC2155) so a failure inside
+# the command substitution can't be masked by `export`'s own exit status.
+NODE_EXEC_DIR="$(dirname "$NODE_EXEC_PATH")"
+export PATH="$NODE_EXEC_DIR:$PATH"
 
 RELEASES_DIR="$MULLION_HOME/releases"
 RELEASE_DIR="$RELEASES_DIR/$VERSION"

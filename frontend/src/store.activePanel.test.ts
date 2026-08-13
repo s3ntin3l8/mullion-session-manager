@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 
 describe("activePanelId (issue #322)", () => {
   beforeEach(() => {

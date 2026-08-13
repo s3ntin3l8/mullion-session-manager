@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { DragEvent } from "react";
-import type { Project, Session, Task } from "../api.js";
-import type { Theme } from "../store.js";
+import type { Project, Session, Task } from "../api/index.js";
+import type { Theme } from "../store/index.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskCard } from "./TaskCard.js";
 

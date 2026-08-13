@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store.js";
-import type { Task } from "./api.js";
-import { DEFAULT_SETTINGS } from "./api.js";
+import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store/index.js";
+import type { Task } from "./api/index.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeTask } from "./test/fixtures.js";
 

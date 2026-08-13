@@ -1,4 +1,4 @@
-import { useDashboardStore } from "../../store.js";
+import { useDashboardStore } from "../../store/index.js";
 import { Row, Segmented, Toggle } from "../../ui/primitives.js";
 
 export function DockSection() {

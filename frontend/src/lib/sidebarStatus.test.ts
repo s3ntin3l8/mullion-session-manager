@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GitStatus, NotificationEvent, SubagentInfo } from "../api.js";
+import type { GitStatus, NotificationEvent, SubagentInfo } from "../api/index.js";
 import {
   backgroundTaskLetter,
   fileChangeDotClass,

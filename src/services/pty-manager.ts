@@ -28,56 +28,30 @@ import {
   INITIAL_MOUSE_TRACKING_STATE,
   INITIAL_ATTENTION_STATE,
   type MouseTrackingState,
-  type AttentionMachineState,
   type AttentionSignalKind,
-  type AttentionTransition,
 } from "./attention-detect.js";
+import { AttentionTracker } from "./attention-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
-import { applyShellIntegrationEnv } from "./shell-integration.js";
-import { isPathGitIgnoredCached } from "./git-ignore.js";
-import type {
-  HookMessageKind,
-  HookMessage,
-  ProgressHookMessage,
-  ReviewGateHookMessage,
-  PromoteRequestHookMessage,
-  FileChangeHookMessage,
-  PermissionRequestHookMessage,
-  ToolDoneHookMessage,
-  StopFailureHookMessage,
-  ToolFailureHookMessage,
-  SessionEndHookMessage,
-  PlanReadyHookMessage,
-  GitBranchHookMessage,
-  CwdChangedHookMessage,
-  CompactHookMessage,
-  SubagentHookMessage,
-  ElicitationHookMessage,
-  QuestionHookMessage,
-  TodoHookMessage,
-  SessionDiffHookMessage,
-  BackgroundTask,
-} from "./hook-protocol.js";
+import type { HookMessageKind, HookMessage, BackgroundTask } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
-import {
-  applyHookAdapters,
-  getAdapterEmits,
-  getAdapterInitialPromptArgs,
-  resolveForwarderPath,
-} from "./hook-adapters/index.js";
+import { getAdapterEmits } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
 import { RedrawNudge } from "./redraw-nudge.js";
-import { writeSessionAgentGuide } from "./agent-guide.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import {
-  scopeUnitName,
   stopScope,
   isMasterAlive as isMasterAliveProcess,
   isMasterAliveBatch as isMasterAliveBatchProcess,
   listSessionProcesses as listSessionProcessesProcess,
 } from "./session-process.js";
+import { buildLaunchPlan } from "./launch-plan.js";
+import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
+// Re-exported so existing importers (src/routes/agents.ts, this module's own
+// tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
+// their actual definitions into launch-plan.ts, alongside buildLaunchPlan().
+export { getSkipPermissionFlag, SKIP_PERMISSION_FLAGS } from "./launch-plan.js";
 // NotificationEvent now physically lives in src/shared/types.ts
 // (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
@@ -958,12 +932,21 @@ export class Session {
   private lastSeenSeq = 0;
   private lastActivityAt: number | null = null;
   private activityStreakStart: number | null = null;
-  // The attention state machine's own state (issue #171/#98) — see
-  // advanceAttention() in attention-detect.ts. Replaces the old bare
-  // `attentionAt: number | null` field entirely: `attentionState.confirmedAt`
-  // IS this session's public attentionAt (see toInfo()), folded into the
-  // machine's state so there's only ever one timestamp to keep in sync.
-  private attentionState: AttentionMachineState = INITIAL_ATTENTION_STATE;
+  // PR 33b (Wave 6) — the attention state machine's own live state
+  // (`attention.state`, issue #171/#98) plus issue #428's outstanding-
+  // background-task tracking (`backgroundTasks`/`backgroundTasksAt`/
+  // `lastTurnEndedAt`/`turnEndPingSent`) and the methods that mutate them
+  // (applyAttentionTransition/clearIfConfirmedKind/
+  // emitAttentionSignalWithExtras/setBackgroundTasks/resolveDeferredTurnEnd)
+  // now live on this composed AttentionTracker instance — see
+  // attention-tracker.ts's own header comment for the full rationale
+  // (mirrors RedrawNudge's "hand it callbacks, don't reach into Session's
+  // private fields" shape) and for why bumpSubagentActivity/
+  // recordSubagentStart/recordSubagentStop stay on Session instead, despite
+  // being reached through the same SessionHookContext. Constructed in the
+  // constructor body below (not as a field initializer) so `this.id` is
+  // already assigned by the time it's built.
+  private readonly attention: AttentionTracker;
   // Minimal review gate (Phase 2, issue #178) — see SessionInfo.gateState's
   // doc comment for the state meanings. Set from emitHookEvent's
   // "review_gate" case and from resolveGate() below; read by toInfo().
@@ -1020,21 +1003,13 @@ export class Session {
   private questionState: "idle" | "pending" = "idle";
   private questionHeader: string | null = null;
   private questionAt: number | null = null;
-  private lastTurnEndedAt: number | null = null;
-  // Issue #428 — see SessionInfo.backgroundTasks/.backgroundTasksAt's own
-  // doc comments.
-  private backgroundTasks: BackgroundTask[] = [];
-  private backgroundTasksAt: number | null = null;
-  // Issue #428 — one-shot guard for resolveDeferredTurnEnd()'s `agentIdle`
-  // ping (Hermes review, PR #453): without this, a repeated hook message
-  // reporting the SAME already-drained (or already-empty) backgroundTasks
-  // state — a late/reordered SubagentStop, or a second progress:done with
-  // no new information — would call resolveDeferredTurnEnd() again while
-  // lastTurnEndedAt is still latched, re-firing a duplicate "Finished" ping
-  // for a turn that already got its one. Scoped to the CURRENT latch: reset
-  // to false everywhere lastTurnEndedAt is freshly set OR cleared, so the
-  // next genuine turn end gets its own single ping.
-  private turnEndPingSent = false;
+  // lastTurnEndedAt/backgroundTasks/backgroundTasksAt/turnEndPingSent moved
+  // to the composed AttentionTracker (this.attention) above — issue #428's
+  // outstanding-background-task tracking is part of the attention machine's
+  // own coupled state (resolveDeferredTurnEnd's whole job is deciding when
+  // a deferred `agentIdle` ping fires off of exactly these four fields), not
+  // a Session-level concern. See attention-tracker.ts for their doc comments
+  // moved verbatim.
   // Issue #404 — the port most recently detected pending accept/dismiss; see
   // SessionInfo.pendingDevServerPort's own doc comment. In-memory only, same
   // resets-on-restart posture as gateState/promoteState above.
@@ -1161,6 +1136,17 @@ export class Session {
     this.skipPermissions = opts.skipPermissions ?? false;
     this.initialPrompt = opts.initialPrompt;
     this.projectId = opts.projectId ?? null;
+    // Built here (constructor body), not as a field initializer, so
+    // `this.id` above is already assigned — the host object's `sessionId`
+    // is captured once (readonly `id` is never reassigned, same posture as
+    // every other readonly-id capture in this constructor); `emitEvent` is
+    // a deferred closure, same as RedrawNudge's own `resize`/`getSize`
+    // callbacks below, so it's safe regardless of ordering. Must exist
+    // before readStateFile() below, which drives it directly.
+    this.attention = new AttentionTracker({
+      sessionId: this.id,
+      emitEvent: (kind, payload) => this.emitEvent(kind, payload),
+    });
     // Issue #351 — compute hookEmits on every construction (including reattach
     // after server restart) so toInfo() always reflects the adapter that
     // matches this.session.command, not just the one bootstrapMaster() saw at
@@ -1250,13 +1236,13 @@ export class Session {
     if (s.promoteSuggestedBaseRef !== undefined)
       this.promoteSuggestedBaseRef = s.promoteSuggestedBaseRef;
     if (s.attentionKind !== undefined) {
-      const ak = this.attentionState;
+      const ak = this.attention.state;
       if (s.attentionKind === null) {
         // Explicitly cleared — keep the machine state as-is (already idle).
       } else {
         // We can't fully reconstruct the attention machine, but setting
         // confirmedKind signals to the UI what was pending.
-        this.applyAttentionTransition(
+        this.attention.applyAttentionTransition(
           advanceAttention(ak, { type: "signal", kind: s.attentionKind, now: Date.now() }),
         );
       }
@@ -1276,7 +1262,7 @@ export class Session {
     if (s.questionState !== undefined) this.questionState = s.questionState;
     if (s.questionHeader !== undefined) this.questionHeader = s.questionHeader;
     if (s.questionAt !== undefined) this.questionAt = s.questionAt;
-    if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
+    if (s.lastTurnEndedAt !== undefined) this.attention.lastTurnEndedAt = s.lastTurnEndedAt;
     if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
     // Issue #428 — the persisted `backgroundTasksAt` timestamp itself is
     // NOT restored (same posture as subagentCountAt above — a restored
@@ -1287,7 +1273,7 @@ export class Session {
     // always false and a restored outstanding set could never be swept at
     // all until some unrelated turn_start/keystroke/hook event happened to
     // touch it (Hermes review, PR #453).
-    if (Array.isArray(s.backgroundTasks)) this.setBackgroundTasks(s.backgroundTasks);
+    if (Array.isArray(s.backgroundTasks)) this.attention.setBackgroundTasks(s.backgroundTasks);
     // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
     // not in StoredStateFields, same as backgroundTasksAt), so it would
     // otherwise always restore to its class-field default of `false`. That's
@@ -1301,8 +1287,9 @@ export class Session {
     // as already-pinged on restore exactly when it's both latched AND has
     // nothing outstanding — the same condition resolveDeferredTurnEnd()
     // itself checks before firing.
-    if (this.lastTurnEndedAt !== null) {
-      this.turnEndPingSent = filterOutstandingBackgroundTasks(this.backgroundTasks).length === 0;
+    if (this.attention.lastTurnEndedAt !== null) {
+      this.attention.turnEndPingSent =
+        filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length === 0;
     }
 
     this.stateRestored = true;
@@ -1328,7 +1315,7 @@ export class Session {
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
-      attentionKind: this.attentionState.confirmedKind,
+      attentionKind: this.attention.state.confirmedKind,
       compactState: this.compactState,
       subagentCount: this.subagentCount,
       subagents: Array.from(this.subagents.values()),
@@ -1337,9 +1324,9 @@ export class Session {
       questionState: this.questionState,
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
-      lastTurnEndedAt: this.lastTurnEndedAt,
+      lastTurnEndedAt: this.attention.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
-      backgroundTasks: this.backgroundTasks,
+      backgroundTasks: this.attention.backgroundTasks,
     };
   }
 
@@ -1498,11 +1485,11 @@ export class Session {
     this.questionState = "idle";
     this.questionHeader = null;
     this.questionAt = null;
-    this.lastTurnEndedAt = null;
-    this.turnEndPingSent = false;
-    this.backgroundTasks = [];
-    this.backgroundTasksAt = null;
-    this.attentionState = INITIAL_ATTENTION_STATE;
+    this.attention.lastTurnEndedAt = null;
+    this.attention.turnEndPingSent = false;
+    this.attention.backgroundTasks = [];
+    this.attention.backgroundTasksAt = null;
+    this.attention.state = INITIAL_ATTENTION_STATE;
     // Re-apply restored state if we had it, so the UI sees the known
     // pre-restart state until hooks catch up with fresh data.
     if (savedState) {
@@ -1530,20 +1517,21 @@ export class Session {
       this.questionState = savedState.questionState;
       this.questionHeader = savedState.questionHeader;
       this.questionAt = savedState.questionAt;
-      this.lastTurnEndedAt = savedState.lastTurnEndedAt;
+      this.attention.lastTurnEndedAt = savedState.lastTurnEndedAt;
       this.lastAssistantMessage = savedState.lastAssistantMessage;
       // The persisted backgroundTasksAt itself is NOT restored — going
       // through setBackgroundTasks() re-stamps it to NOW instead, same
       // reasoning as the state-file restore path's own comment above.
       if (Array.isArray(savedState.backgroundTasks)) {
-        this.setBackgroundTasks(savedState.backgroundTasks);
+        this.attention.setBackgroundTasks(savedState.backgroundTasks);
       }
       // Fresh-review finding — same turnEndPingSent derivation as the
       // state-file restore path's own comment above: a respawn (re-applying
       // savedState after the fresh reset a few lines up) needs the same
       // "already-pinged" inference, not the reset's unconditional `false`.
-      if (this.lastTurnEndedAt !== null) {
-        this.turnEndPingSent = filterOutstandingBackgroundTasks(this.backgroundTasks).length === 0;
+      if (this.attention.lastTurnEndedAt !== null) {
+        this.attention.turnEndPingSent =
+          filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length === 0;
       }
       // attentionKind is restored from state file via readStateFile but
       // NOT re-applied here — the attention machine has its own timing
@@ -1621,122 +1609,35 @@ export class Session {
     this.attachClient();
   }
 
-  /** Create the dtach master and exit — no attach, nothing to track. */
+  /**
+   * Create the dtach master and exit — no attach, nothing to track.
+   *
+   * PR 32 (Wave 6) split this into two parts: buildLaunchPlan() (launch-
+   * plan.ts) computes everything about WHAT gets launched — the env scrub,
+   * shell-integration setup, the five MULLION_* injections, agent-guide
+   * injection, hook-adapter wiring, skip-permissions handling, and
+   * initial-prompt composition — and this method now does only the actual
+   * process launch: wrapping that plan's argv/env in the transient
+   * `systemd --user` scope below. See launch-plan.ts's own doc comments for
+   * the full step-by-step reasoning that used to live inline here.
+   */
   private bootstrapMaster(): Promise<void> {
-    const shell = process.env.SHELL || "/bin/bash";
-    const unitName = scopeUnitName(this.id);
-    // Strip this server's own Mullion config (PORT, DATABASE_URL,
-    // SESSIONS_DIR, secrets, ...) before it reaches the session's shell — a
-    // session must not inherit the identity of the process that spawned it,
-    // e.g. a `make dev` run from inside this session must not see this
-    // process's PORT/DATABASE_URL (issue #70). See session-env.ts.
-    const sessionEnv = buildSessionEnv();
-    // Issue: sidebar worktree display — injects the OSC 7 shell-integration
-    // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
-    // shell announces its cwd on every prompt draw, feeding Session.liveCwd
-    // above. A no-op for any other $SHELL — see shell-integration.ts.
-    applyShellIntegrationEnv(shell, sessionEnv, this.sessionsDir);
-    // Phase 2 (issue #172): injected AFTER the scrub above (not before), so
-    // this session's own hook socket/token survive it — SERVER_ENV_KEYS lists
-    // both purely so a *nested* Mullion re-scrubs them from ITS OWN sessions,
-    // not so buildSessionEnv() strips them from this one. An agent that
-    // ignores these two vars is completely unaffected: the socket exists but
-    // nothing ever connects.
-    sessionEnv.MULLION_HOOK_SOCKET = this.hookSocketPath;
-    sessionEnv.MULLION_HOOK_TOKEN = this.hookToken;
-    // Phase 4 (#134): lets the `mullion` CLI (src/cli/), run from inside
-    // this session, find the control socket and default its own session
-    // targeting to this session with no flags — same "injected after the
-    // scrub, SERVER_ENV_KEYS lists it only so a nested Mullion re-scrubs
-    // it" reasoning as the hook socket/token above. MULLION_SESSION_ID has
-    // no other existing purpose to collide with (session-env.ts).
-    sessionEnv.MULLION_SOCKET_PATH = this.controlSocketPath;
-    sessionEnv.MULLION_SESSION_ID = this.id;
-    // Phase 2 (issue #264): pass the review-gate toggle through the session
-    // env so the forwarder (spawned as an agent hook subprocess) can read it
-    // and conditionally skip the blocking review_gate for agents whose hook
-    // is always registered (agy) rather than gated at registration time.
-    sessionEnv.MULLION_REVIEW_GATE_ENABLED = String(this.reviewGateEnabled);
-
-    // Issue #405 — writes this session's own copy of the shipped agent
-    // guide doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,
-    // unconditionally (never gated on hook-adapter match below): every
-    // agent benefits from having this on disk, even one with no hook
-    // adapter at all. Not gated on `sessions.injectAgentGuide` either —
-    // that setting only controls the pointer/injection to this file (both
-    // hooks.ts's SessionStart reply and, per issue #437c below, opencode's
-    // `instructions` config entry), not the file's own (cheap, harmless)
-    // existence. See agent-guide.ts's own doc comment.
-    //
-    // Issue #437c — moved BEFORE applyHookAdapters (previously ran after):
-    // the opencode adapter's prepareLaunch now needs this file to already
-    // exist so it can point `instructions` only at a copy it has confirmed
-    // is actually there, not merely at the shipped SOURCE doc's existence
-    // (agentGuideSourceExists()) — those can diverge if this write itself
-    // fails (logged-and-swallowed, e.g. a full disk or EACCES on
-    // sessionsDir), which for opencode would otherwise leave a dangling
-    // `instructions` entry pointing at a file that was never created,
-    // unlike every other agent where a stale pointer is just harmless
-    // prose. No other adapter reads this file, so reordering these two
-    // writes changes nothing for Claude Code/Codex/agy.
-    writeSessionAgentGuide(path.dirname(this.hookSocketPath), this.id);
-
-    // Phase 2 (issue #174): if `this.command` matches a known agent with a
-    // hook adapter (currently just Claude Code), rewrite the command/env for
-    // this launch only — see hook-adapters/index.ts's applyHookAdapters for
-    // the defensive-fallback behavior (any adapter failure launches the
-    // original, unmodified command instead of failing the session outright).
-    // `sessionsDir` is derived from hookSocketPath (`<sessionsDir>/hooks.sock`,
-    // see PtyManager's constructor) rather than threaded through as its own
-    // field, since this is the only place that needs it.
-    const {
-      command: launchCommand,
-      envAdditions,
-      matched,
-      emits,
-    } = applyHookAdapters(this.command, {
-      sessionId: this.id,
-      sessionsDir: path.dirname(this.hookSocketPath),
-      hookSocketPath: this.hookSocketPath,
+    const plan = buildLaunchPlan({
+      id: this.id,
+      cwd: this.cwd,
+      command: this.command,
+      socketPath: this.socketPath,
       hookToken: this.hookToken,
+      hookSocketPath: this.hookSocketPath,
       controlSocketPath: this.controlSocketPath,
-      forwarderPath: resolveForwarderPath(),
+      sessionsDir: this.sessionsDir,
       reviewGateEnabled: this.reviewGateEnabled,
       injectAgentGuide: this.injectAgentGuide,
-      cwd: this.cwd,
       skipPermissions: this.skipPermissions,
+      initialPrompt: this.initialPrompt,
     });
-    Object.assign(sessionEnv, envAdditions);
-    this.hooksActive = matched;
-    this.hookEmits = emits;
-
-    // Issue: skip-permissions flag — if the caller requested it, append the
-    // agent-specific flag (e.g. `--dangerously-skip-permissions`, `--auto`)
-    // to the launch command. Done after the hook adapters so it never
-    // interferes with hook config injection; the shell metacharacter guard
-    // in getSkipPermissionFlag() ensures the flag lands only on a simple,
-    // unchained invocation regardless.
-    const withSkipPermissions = this.skipPermissions
-      ? `${launchCommand} ${getSkipPermissionFlag(launchCommand) ?? ""}`.trimEnd()
-      : launchCommand;
-
-    // Task Master's initial-turn prompt (see CreateSessionOptions.
-    // initialPrompt's own doc comment) — appended LAST, after both
-    // applyHookAdapters' own commandTransform and the skip-permissions flag
-    // above, so prompt text (arbitrary issue-body content, which routinely
-    // contains `;`/`&`/`|`/etc) is never fed back through either of those
-    // guards. Matched against `this.command` (the ORIGINAL, unmodified
-    // command), same as applyHookAdapters/getAdapterEmits above — not
-    // `launchCommand`, which may already have a commandTransform's flags
-    // appended and would defeat the adapter's own conservative matches()
-    // anchor. A no-op (returns null) for an agent with no initial-prompt
-    // argv form, or when no prompt was requested.
-    const initialPromptArgs = this.initialPrompt
-      ? getAdapterInitialPromptArgs(this.command, this.initialPrompt)
-      : null;
-    const finalCommand = initialPromptArgs
-      ? `${withSkipPermissions} ${initialPromptArgs}`.trimEnd()
-      : withSkipPermissions;
+    this.hooksActive = plan.hooksActive;
+    this.hookEmits = plan.hookEmits;
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -1751,28 +1652,15 @@ export class Session {
       // be available, i.e. a real host with a systemd user session — not a
       // plain container, which is one more reason this runs on the host
       // (see the plan's pivotal architecture decision).
-      const child = spawnChild(
-        "systemd-run",
-        [
-          "--user",
-          "--scope",
-          "--collect",
-          "-u",
-          unitName,
-          "--",
-          "dtach",
-          "-n",
-          this.socketPath,
-          shell,
-          "-lc",
-          finalCommand,
-        ],
-        { cwd: this.cwd, env: sessionEnv, stdio: "ignore" },
-      );
+      const child = spawnChild("systemd-run", plan.argv, {
+        cwd: this.cwd,
+        env: plan.env,
+        stdio: "ignore",
+      });
       child.on("error", reject);
       child.on("exit", (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`master bootstrap exited with code ${code} (unit ${unitName})`));
+        else reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));
       });
     });
   }
@@ -1927,12 +1815,12 @@ export class Session {
       // real "userInput" or a superseding resolution does (see
       // advanceAttention's "attention" + "output" case).
       if (candidateKind !== null) {
-        this.applyAttentionTransition(
-          advanceAttention(this.attentionState, { type: "signal", kind: candidateKind, now }),
+        this.attention.applyAttentionTransition(
+          advanceAttention(this.attention.state, { type: "signal", kind: candidateKind, now }),
         );
       } else if (!this.redrawNudge.suppressingOutput) {
-        this.applyAttentionTransition(
-          advanceAttention(this.attentionState, { type: "output", now }),
+        this.attention.applyAttentionTransition(
+          advanceAttention(this.attention.state, { type: "output", now }),
         );
       }
 
@@ -2023,62 +1911,11 @@ export class Session {
     this.stateFile.schedule();
   }
 
-  /**
-   * Apply one advanceAttention() result: adopt the new machine state, turn
-   * any `log` entries into debug lines (the issue's "add debug logging on
-   * attention state transitions" ask — matches this file's existing
-   * console.error(...) logging shape; Session has no Fastify logger to hang
-   * this off, see spawn()'s own console.error call), and turn any `emit`
-   * entries into real emitEvent("attention", ...) calls. The one place
-   * onData/tick() ever touch `this.attentionState` — keeps every call site
-   * from having to duplicate this bookkeeping.
-   */
-  private applyAttentionTransition(transition: AttentionTransition): void {
-    for (const entry of transition.log) {
-      // Skip PENDING_ATTENTION churn (entering it from idle, or being
-      // cancelled back to idle from it without ever confirming) — during
-      // exactly the bursty-signal scenario issue #171 exists to fix, this
-      // is by far the highest-frequency transition, and logging every one
-      // would spam stdout at the same frequency this PR is suppressing
-      // false positives for (console.debug bypasses pino's level filter
-      // entirely — see spawn()'s console.error for why Session logs this
-      // way at all). Only the meaningful edges — a signal actually
-      // CONFIRMING attention, or a confirmed session actually CLEARING
-      // back to idle — are worth a line.
-      const isPendingChurn =
-        entry.to === "pending_attention" ||
-        (entry.from === "pending_attention" && entry.to === "idle");
-      if (isPendingChurn) continue;
-      console.debug(
-        `[pty-manager] session ${this.id} attention: ${entry.from} -> ${entry.to}` +
-          (entry.kind ? ` (${entry.kind})` : ""),
-      );
-    }
-    this.attentionState = transition.next;
-    // Spread into a plain object: AttentionEmit's fixed shape (no index
-    // signature) doesn't structurally satisfy emitEvent's deliberately
-    // loose Record<string, unknown> payload type otherwise.
-    for (const emit of transition.emit) this.emitEvent("attention", { ...emit });
-  }
-
-  /**
-   * Follow-up to #275 (gap #3): a delivered decision — resolveGate(),
-   * resolvePromote(), or a resolved `review_gate` hook message — is a
-   * superseding authoritative resolution, exactly as `userInput` is (see
-   * write()), for the ONE kind of OUTPUT_IMMUNE_KINDS confirmation it
-   * actually resolves. Gated on `kind` matching the CURRENT confirmedKind so
-   * a decision arriving after a newer, unrelated confirmed flag has already
-   * superseded it (e.g. a fresh hookNotification while a reviewGate
-   * resolution is still in flight) doesn't wrongly dismiss that newer flag.
-   * A no-op outside "attention" or for any other confirmedKind.
-   */
-  private clearIfConfirmedKind(kind: AttentionSignalKind): void {
-    if (this.attentionState.state === "attention" && this.attentionState.confirmedKind === kind) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
-      );
-    }
-  }
+  // applyAttentionTransition()/clearIfConfirmedKind() moved to the composed
+  // AttentionTracker (PR 33b, Wave 6) — see this.attention and
+  // attention-tracker.ts's own doc comments (moved verbatim). Call sites
+  // below now read `this.attention.applyAttentionTransition(...)`/
+  // `this.attention.clearIfConfirmedKind(...)`.
 
   /** Phase 5 (Track A) — creates a registry entry on SubagentStart. Evicts
    * the oldest FINISHED entry (by endedAt) if the cap is exceeded; a
@@ -2153,551 +1990,278 @@ export class Session {
    * layer already accepts verbatim (extensibility) is likewise a no-op here
    * until a later phase teaches this method about it.
    */
+  /**
+   * PR 33a (Wave 6) — builds the narrow `SessionHookContext` facade the
+   * HOOK_HANDLERS table (hook-handlers.ts) operates over, one per
+   * emitHookEvent() call. A plain `this` can't be passed directly: Session's
+   * state fields/methods below are `private`, and TypeScript refuses to
+   * assign a class instance to a structurally-matching external interface
+   * when the class has private members the interface doesn't know about
+   * (confirmed empirically — `Session` is "not assignable" to
+   * `SessionHookContext` with `this` passed raw). Each accessor here is a
+   * thin proxy onto the real private field/method — this is the ONE place
+   * that boundary is crossed, so every handler in hook-handlers.ts stays
+   * provably scoped to just what's declared on SessionHookContext, not
+   * Session's full surface.
+   */
+  private buildHookContext(): SessionHookContext {
+    // The object literal's own get/set accessors below each have their OWN
+    // dynamic `this` (bound to the ctx object itself, not this Session) —
+    // an arrow function is the only way to close over the real Session
+    // instance from inside them, hence capturing it under a plain name here.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      get id() {
+        return self.id;
+      },
+      get cwd() {
+        return self.cwd;
+      },
+      get liveCwd() {
+        return self._liveCwd;
+      },
+      set liveCwd(v: string | null) {
+        self._liveCwd = v;
+      },
+      get liveBranch() {
+        return self._liveBranch;
+      },
+      set liveBranch(v: string | null) {
+        self._liveBranch = v;
+      },
+      get fileChangeQueue() {
+        return self.fileChangeQueue;
+      },
+      set fileChangeQueue(v: Promise<void>) {
+        self.fileChangeQueue = v;
+      },
+      get gitIgnoreDirCache() {
+        return self.gitIgnoreDirCache;
+      },
+      get gateState() {
+        return self.gateState;
+      },
+      set gateState(v) {
+        self.gateState = v;
+      },
+      get gatePrompt() {
+        return self.gatePrompt;
+      },
+      set gatePrompt(v) {
+        self.gatePrompt = v;
+      },
+      get gateAt() {
+        return self.gateAt;
+      },
+      set gateAt(v) {
+        self.gateAt = v;
+      },
+      get promoteState() {
+        return self.promoteState;
+      },
+      set promoteState(v) {
+        self.promoteState = v;
+      },
+      get promoteSummary() {
+        return self.promoteSummary;
+      },
+      set promoteSummary(v) {
+        self.promoteSummary = v;
+      },
+      get promoteSuggestedBaseRef() {
+        return self.promoteSuggestedBaseRef;
+      },
+      set promoteSuggestedBaseRef(v) {
+        self.promoteSuggestedBaseRef = v;
+      },
+      get promoteAt() {
+        return self.promoteAt;
+      },
+      set promoteAt(v) {
+        self.promoteAt = v;
+      },
+      get permissionState() {
+        return self.permissionState;
+      },
+      set permissionState(v) {
+        self.permissionState = v;
+      },
+      get permissionAt() {
+        return self.permissionAt;
+      },
+      set permissionAt(v) {
+        self.permissionAt = v;
+      },
+      get pendingPermissionTool() {
+        return self.pendingPermissionTool;
+      },
+      set pendingPermissionTool(v) {
+        self.pendingPermissionTool = v;
+      },
+      get planState() {
+        return self.planState;
+      },
+      set planState(v) {
+        self.planState = v;
+      },
+      get planAt() {
+        return self.planAt;
+      },
+      set planAt(v) {
+        self.planAt = v;
+      },
+      get questionState() {
+        return self.questionState;
+      },
+      set questionState(v) {
+        self.questionState = v;
+      },
+      get questionHeader() {
+        return self.questionHeader;
+      },
+      set questionHeader(v) {
+        self.questionHeader = v;
+      },
+      get questionAt() {
+        return self.questionAt;
+      },
+      set questionAt(v) {
+        self.questionAt = v;
+      },
+      get elicitationState() {
+        return self.elicitationState;
+      },
+      set elicitationState(v) {
+        self.elicitationState = v;
+      },
+      get elicitationServer() {
+        return self.elicitationServer;
+      },
+      set elicitationServer(v) {
+        self.elicitationServer = v;
+      },
+      get elicitationAt() {
+        return self.elicitationAt;
+      },
+      set elicitationAt(v) {
+        self.elicitationAt = v;
+      },
+      get errorState() {
+        return self.errorState;
+      },
+      set errorState(v) {
+        self.errorState = v;
+      },
+      get errorAt() {
+        return self.errorAt;
+      },
+      set errorAt(v) {
+        self.errorAt = v;
+      },
+      get errorDetail() {
+        return self.errorDetail;
+      },
+      set errorDetail(v) {
+        self.errorDetail = v;
+      },
+      get lastAssistantMessage() {
+        return self.lastAssistantMessage;
+      },
+      set lastAssistantMessage(v) {
+        self.lastAssistantMessage = v;
+      },
+      get lastTurnEndedAt() {
+        return self.attention.lastTurnEndedAt;
+      },
+      set lastTurnEndedAt(v) {
+        self.attention.lastTurnEndedAt = v;
+      },
+      get turnEndPingSent() {
+        return self.attention.turnEndPingSent;
+      },
+      set turnEndPingSent(v) {
+        self.attention.turnEndPingSent = v;
+      },
+      get backgroundTasks() {
+        return self.attention.backgroundTasks;
+      },
+      set backgroundTasks(v) {
+        self.attention.backgroundTasks = v;
+      },
+      get backgroundTasksAt() {
+        return self.attention.backgroundTasksAt;
+      },
+      set backgroundTasksAt(v) {
+        self.attention.backgroundTasksAt = v;
+      },
+      get compactState() {
+        return self.compactState;
+      },
+      set compactState(v) {
+        self.compactState = v;
+      },
+      get compactAt() {
+        return self.compactAt;
+      },
+      set compactAt(v) {
+        self.compactAt = v;
+      },
+      get subagentCount() {
+        return self.subagentCount;
+      },
+      set subagentCount(v) {
+        self.subagentCount = v;
+      },
+      get subagentCountAt() {
+        return self.subagentCountAt;
+      },
+      set subagentCountAt(v) {
+        self.subagentCountAt = v;
+      },
+      get endedReason() {
+        return self.endedReason;
+      },
+      set endedReason(v) {
+        self.endedReason = v;
+      },
+      get exitCode() {
+        return self.exitCode;
+      },
+      set exitCode(v) {
+        self.exitCode = v;
+      },
+      emitEvent: (kind, payload) => self.emitEvent(kind, payload),
+      emitAttentionSignalWithExtras: (kind, extras) =>
+        self.attention.emitAttentionSignalWithExtras(kind, extras),
+      clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
+      resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
+      setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks),
+      bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
+      recordSubagentStart: (agentId, agentType, now) =>
+        self.recordSubagentStart(agentId, agentType, now),
+      recordSubagentStop: (agentId, summary, now) => self.recordSubagentStop(agentId, summary, now),
+    };
+  }
+
   emitHookEvent(message: HookMessage): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
     // "progress"/"done" — proves this session's hook pipeline genuinely
-    // fires, so this latches unconditionally before the switch, ahead of
-    // every case's own early `return`. See `hooksProven`'s field doc for why
-    // this can't be the ONLY place it latches (Claude Code's own first hook,
+    // fires, so this latches unconditionally before dispatch, ahead of every
+    // handler's own early return. See `hooksProven`'s field doc for why this
+    // can't be the ONLY place it latches (Claude Code's own first hook,
     // SessionStart, never reaches this method at all — see markHooksProven).
     this.hooksProven = true;
-    switch (message.kind) {
-      case "notification":
-        this.emitAttentionSignalWithExtras("hookNotification", {
-          title: message.title,
-          body: message.body,
-        });
-        return;
-      case "progress": {
-        // Same TS-narrowing gap the review_gate/promote_request cases below
-        // document: `UnknownHookMessage`'s `kind: string` (not a literal)
-        // means the switch can't exclude it here, so a plain `message.<field>`
-        // read stays widened rather than narrowing to ProgressHookMessage.
-        // Safe to assert narrow — hook-protocol.ts's validateProgress only
-        // ever produces a real ProgressHookMessage for this kind.
-        const progress = message as ProgressHookMessage;
-        const extras: Record<string, unknown> = { phase: progress.phase };
-        if (progress.lastAssistantMessage !== undefined) {
-          extras.lastAssistantMessage = progress.lastAssistantMessage;
-          // Rich statuses — kept across turns, not just this event's extras;
-          // see SessionInfo.lastAssistantMessage's doc comment.
-          this.lastAssistantMessage = progress.lastAssistantMessage;
-        }
-        // Issue #428 — present-only update: a message with no
-        // `backgroundTasks` field (e.g. Claude Code's `idle_prompt`
-        // notification path, mapped to `phase: "done"` with nothing else)
-        // must NOT wipe a previously-latched outstanding set. `absent ≠
-        // cleared` — only overwrite when the hook actually reported a list.
-        if (progress.backgroundTasks !== undefined) {
-          extras.backgroundTasks = progress.backgroundTasks;
-          this.setBackgroundTasks(progress.backgroundTasks);
-        }
-        if (progress.detail !== undefined) {
-          extras.detail = progress.detail;
-        }
-        this.emitEvent("status_change", extras);
-        // "done" is the agent's own authoritative "my turn is over" signal
-        // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
-        // Stop — see forwarder-core.mjs/opencode-plugin.js) — the latch
-        // below always fires on it. The ATTENTION signal is gated: firing
-        // `agentIdle` (and hence a desktop notification/"needs_input") the
-        // moment Stop arrives is wrong when `backgroundTasks` (issue #428)
-        // still reports outstanding work — a background `Agent`/`Task` call
-        // this same turn hasn't returned yet. See resolveDeferredTurnEnd()
-        // for where the deferred ping actually fires once that work drains.
-        if (progress.phase === "done") {
-          // The agent's turn ending is the authoritative signal that any
-          // pending permission request, plan review, or error condition has
-          // been resolved (by the agent itself or by a human's intervening
-          // action that ended the turn). Clear these sticky states so the
-          // sidebar doesn't permanently show "Needs permission" / "Plan
-          // ready" / "API error" after the agent has moved on. Unconditional
-          // — none of these are affected by outstanding background work.
-          this.permissionState = "idle";
-          this.permissionAt = null;
-          this.pendingPermissionTool = null;
-          this.planState = "idle";
-          this.planAt = null;
-          this.questionState = "idle";
-          this.questionHeader = null;
-          this.questionAt = null;
-          // Rich statuses — latches the `finished` status (see
-          // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
-          // latch rather than read off attentionState.confirmedKind). Stays
-          // an honest "the Stop hook fired" signal even while background
-          // work is outstanding — session-status.ts's deriveSessionStatus is
-          // where the two axes combine, not here.
-          this.lastTurnEndedAt = Date.now();
-          // A fresh latch is a NEW turn-end occurrence that deserves its
-          // own single ping, even if a PRIOR latch's ping already fired and
-          // the user hasn't typed anything since (Hermes review, PR #453 —
-          // see turnEndPingSent's own doc comment).
-          this.turnEndPingSent = false;
-          this.resolveDeferredTurnEnd();
-        } else if (progress.backgroundTasks !== undefined) {
-          // Issue #428 — a non-"done" progress message isn't expected to
-          // carry `backgroundTasks` per Claude Code's documented shape (only
-          // Stop/SubagentStop do), but if a future/other adapter ever
-          // reports a drain this way, resolve a still-latched prior Stop
-          // rather than requiring the next "done" to catch it. Deliberately
-          // NOT called on every plain thinking/generating message with no
-          // `backgroundTasks` field — lastTurnEndedAt only clears via
-          // turn_start/write()'s genuine-input check, and re-checking it on
-          // every unrelated progress tick would risk re-firing `agentIdle`
-          // for an agent whose forwarder never sends turn_start.
-          this.resolveDeferredTurnEnd();
-        }
-        // Any progress signal (thinking/generating/done) proves the agent
-        // loop is alive and advancing — a previous tool failure was either
-        // handled or superseded by the agent's own recovery, so the error
-        // state is no longer current.
-        this.errorState = "idle";
-        this.errorAt = null;
-        this.errorDetail = null;
-        return;
-      }
-      case "file_change": {
-        // Issue: sidebar worktree display's Part B — a git-ignored path (most
-        // commonly something under this repo's own `.claude/`, per that
-        // issue's motivating case) shouldn't surface as a Row 4 chip.
-        // `message.path` isn't normalized by the forwarder (Claude Code sends
-        // an absolute path, Codex's apply_patch-derived one is relative —
-        // see forwarder-core.mjs) — isPathGitIgnoredCached resolves it
-        // against `root` itself. `root` prefers the live cwd (a worktree the
-        // shell has since `cd`'d into) over the static spawn cwd, same
-        // precedence as everywhere else liveCwd overrides cwd.
-        // `UnknownHookMessage`'s fallback shape (`kind: string`) means TS
-        // can't discriminate this down to `FileChangeHookMessage` from
-        // `message.kind` alone — same explicit-cast gap the `review_gate`
-        // case below documents; safe for the same reason (hook-protocol.ts's
-        // validateFileChange only ever produces a real FileChangeHookMessage
-        // for this kind).
-        const fileChange = message as FileChangeHookMessage;
-        const root = this._liveCwd ?? this.cwd;
-        const { path: filePath, action, agentId } = fileChange;
-        this.fileChangeQueue = this.fileChangeQueue
-          .then(async () => {
-            // B8(3) — memoized (gitIgnoreDirCache, this session's whole
-            // lifetime) instead of a fresh `git check-ignore` subprocess
-            // spawn every single call — see isPathGitIgnoredCached's own
-            // doc comment for exactly what is and isn't safe to cache.
-            const ignored = await isPathGitIgnoredCached(root, filePath, this.gitIgnoreDirCache);
-            if (ignored) return;
-            // Phase 5 (Track A) — attribute to the subagent that made this
-            // change, if the hook carried one. Skipped for an ignored path
-            // so the registry's fileChanges count matches what actually
-            // surfaces in the sidebar/timeline.
-            if (agentId !== undefined) this.bumpSubagentActivity(agentId, "file_change");
-            this.emitEvent("file_change", { path: filePath, action, agentId: agentId ?? null });
-          })
-          // isPathGitIgnoredCached itself never rejects, but a listener this
-          // event fans out to (emitEvent's eventListeners) might throw
-          // synchronously — without this, that would leave
-          // `fileChangeQueue` permanently rejected, silently dropping every
-          // later file_change for this session (each new `.then()` on an
-          // already-rejected promise stays rejected too).
-          .catch((err) => {
-            console.error(`[pty-manager] session ${this.id} file_change filter failed:`, err);
-          });
-        return;
-      }
-      case "review_gate": {
-        // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
-        // (not a literal) plus a `[key: string]: unknown` index signature,
-        // so TS can't discriminate `message` down to just
-        // ReviewGateHookMessage from `message.kind === "review_gate"`
-        // alone — reading `.state`/`.prompt` off the still-widened union
-        // resolves to `unknown`. Safe to assert narrow here: the protocol
-        // layer's validateReviewGate (hook-protocol.ts) only ever produces
-        // a real ReviewGateHookMessage for this kind, never
-        // UnknownHookMessage.
-        const gate = message as ReviewGateHookMessage;
-        this.gateState = gate.state;
-        this.gatePrompt = gate.state === "waiting" ? gate.prompt : null;
-        this.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
-        if (gate.state === "waiting") {
-          this.gateAt = Date.now();
-          this.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
-        } else {
-          // Follow-up to #275 (gap #3): a resolved state arriving over the
-          // hook channel itself is as authoritative as resolveGate() below —
-          // see this method's doc comment for why a superseding resolution is
-          // now required at all (an OUTPUT_IMMUNE_KINDS-confirmed reviewGate
-          // no longer clears on the tool call's own PTY output). Gated on
-          // confirmedKind so a newer, unrelated confirmed flag isn't
-          // dismissed by a stale gate resolution.
-          this.gateAt = null;
-          this.clearIfConfirmedKind("reviewGate");
-        }
-        return;
-      }
-      case "promote_request": {
-        // Same TS-narrowing reasoning as the review_gate case above: safe to
-        // assert narrow since hook-protocol.ts's validatePromoteRequest only
-        // ever produces a real PromoteRequestHookMessage for this kind.
-        const promote = message as PromoteRequestHookMessage;
-        this.promoteState = "pending";
-        this.promoteAt = Date.now();
-        this.promoteSummary = promote.summary;
-        this.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
-        this.emitEvent("promote_request", {
-          summary: promote.summary,
-          suggestedBaseRef: promote.suggestedBaseRef ?? null,
-        });
-        this.emitAttentionSignalWithExtras("promoteRequest", { summary: promote.summary });
-        return;
-      }
-      case "session_start":
-        // Answered directly by hooks.ts (it needs app.pty.consumeSeed, which
-        // this Session-scoped method has no access to) — never reaches here.
-        // See markHooksProven() below for how THIS kind still latches
-        // `hooksProven`, despite bypassing this method entirely.
-        return;
-      case "notification_resolved":
-        // Follow-up to #275 (gap #2) — opencode's permission.replied,
-        // resolving a hookNotification-confirmed flag with no keystroke of
-        // its own (an auto-approved permission) — see
-        // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
-        this.clearIfConfirmedKind("hookNotification");
-        return;
-      case "permission_request": {
-        const pr = message as PermissionRequestHookMessage;
-        this.permissionState = "pending";
-        this.permissionAt = Date.now();
-        this.pendingPermissionTool = pr.tool;
-        this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
-        this.emitAttentionSignalWithExtras("permissionRequest", {
-          tool: pr.tool,
-          summary: pr.summary,
-        });
-        return;
-      }
-      case "stop_failure": {
-        const sf = message as StopFailureHookMessage;
-        this.errorState = "api_error";
-        this.errorAt = Date.now();
-        // Rich statuses — the short, stable label (see errorType's doc
-        // comment in hook-protocol.ts), falling back to the free-text detail
-        // when the adapter couldn't classify the failure.
-        this.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
-        this.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
-        this.emitAttentionSignalWithExtras("hookNotification", {
-          title: "API Error",
-          body: sf.error,
-        });
-        return;
-      }
-      case "tool_failure": {
-        const tf = message as ToolFailureHookMessage;
-        this.errorState = "tool_failure";
-        this.errorAt = Date.now();
-        // Rich statuses — prefer the adapter's own summary; fall back to
-        // just naming the failing tool.
-        this.errorDetail = tf.summary ?? tf.tool;
-        // Phase 5 (Track A) — attribute to the subagent that hit this
-        // failure, if the hook carried one.
-        if (tf.agentId !== undefined) this.bumpSubagentActivity(tf.agentId, "tool_failure");
-        this.emitEvent("tool_failure", {
-          tool: tf.tool,
-          error: tf.error,
-          summary: tf.summary ?? null,
-          agentId: tf.agentId ?? null,
-        });
-        this.emitAttentionSignalWithExtras("hookNotification", {
-          title: `Tool failed: ${tf.tool}`,
-          body: tf.error,
-        });
-        return;
-      }
-      case "session_end": {
-        const se = message as SessionEndHookMessage;
-        this.endedReason = se.reason;
-        this.exitCode = se.exitCode ?? null;
-        this.emitEvent("session_end", { reason: se.reason, exitCode: se.exitCode ?? null });
-        return;
-      }
-      case "plan_ready": {
-        const plan = message as PlanReadyHookMessage;
-        this.planState = "pending";
-        this.planAt = Date.now();
-        this.emitEvent("plan_ready", {
-          plan: plan.plan,
-          filePath: plan.filePath ?? null,
-          summary: plan.summary ?? null,
-        });
-        this.emitAttentionSignalWithExtras("planReady", {
-          summary: plan.summary ?? plan.plan.slice(0, 100),
-        });
-        return;
-      }
-      case "git_branch": {
-        // Issue: sidebar worktree detection — an agent reports its current
-        // branch (opencode's vcs.branch.updated, or a Bash tool intercept
-        // detecting git worktree add from any agent). Same TS-narrowing
-        // reasoning as the review_gate case above.
-        const gitBranch = message as GitBranchHookMessage;
-        this._liveBranch = gitBranch.branch;
-        // When the hook also carries a worktree path, update _liveCwd so
-        // the cwd-resolution pipeline (resolveSessionCwdTargets,
-        // getGitStatus) can resolve the branch from the worktree's actual
-        // git state on the next poll cycle.
-        if (gitBranch.worktree && gitBranch.worktree !== this._liveCwd) {
-          this._liveCwd = gitBranch.worktree;
-        }
-        this.emitEvent("status_change", { phase: "done" });
-        return;
-      }
-      case "cwd_changed": {
-        // Issue: sidebar worktree detection — an agent reports a working
-        // directory change via structured hooks instead of OSC 7 (Claude
-        // Code's CwdChanged, agy's PreToolUse Cwd, Codex's common cwd).
-        // Update _liveCwd so the cwd-resolution pipeline (resolveSessionCwdTargets,
-        // readGitBranch, getGitStatus) picks up the new location. Emit a
-        // status_change event so consumers don't need to wait for the next
-        // polling cycle to see the updated directory.
-        const cwdMsg = message as CwdChangedHookMessage;
-        if (cwdMsg.cwd !== this._liveCwd) {
-          this._liveCwd = cwdMsg.cwd;
-          this.emitEvent("status_change", { phase: "done" });
-        }
-        return;
-      }
-      case "turn_start": {
-        // Issue: extend surfaced session statuses — a deterministic "a new
-        // turn genuinely started" signal (Claude Code's UserPromptSubmit,
-        // remapped — see forwarder-core.mjs). Releases every observational
-        // "awaiting_*" latch and the `finished` latch, same set
-        // progress:done already releases (permissionState/planState) plus
-        // the ones only this event can authoritatively clear
-        // (elicitationState, lastTurnEndedAt). Mirrors progress:done's own
-        // choice NOT to force-clear the attention machine's confirmedKind
-        // directly — see that case's own comment for why (moreAuthoritativeKind
-        // already keeps an immune kind from being silently downgraded;
-        // session-status.ts's precedence order is what actually protects
-        // against a stale confirmedKind here, not an explicit clear).
-        this.permissionState = "idle";
-        this.permissionAt = null;
-        this.pendingPermissionTool = null;
-        this.planState = "idle";
-        this.planAt = null;
-        this.elicitationState = "idle";
-        this.elicitationServer = null;
-        this.elicitationAt = null;
-        this.questionState = "idle";
-        this.questionHeader = null;
-        this.questionAt = null;
-        this.errorState = "idle";
-        this.errorAt = null;
-        this.errorDetail = null;
-        this.lastTurnEndedAt = null;
-        this.turnEndPingSent = false;
-        // Issue #428 — a new turn invalidates the previous Stop's
-        // backgroundTasks snapshot; Claude Code re-sends the full list on
-        // the next Stop regardless, so there's nothing to preserve here.
-        this.backgroundTasks = [];
-        this.backgroundTasksAt = null;
-        this.emitEvent("status_change", { phase: "generating" });
-        return;
-      }
-      case "compact": {
-        const compact = message as CompactHookMessage;
-        this.compactState = compact.state === "started" ? "compacting" : "idle";
-        if (compact.state === "started") {
-          this.compactAt = Date.now();
-        } else {
-          this.compactAt = null;
-        }
-        this.emitEvent("status_change", {
-          compacting: this.compactState === "compacting",
-          trigger: compact.trigger ?? null,
-        });
-        return;
-      }
-      case "subagent": {
-        const subagent = message as SubagentHookMessage;
-        // Clamped at 0 defensively — a SubagentStop this session never saw a
-        // matching SubagentStart for (e.g. one that started just before this
-        // process restarted) must not drive the count negative.
-        this.subagentCount = Math.max(
-          0,
-          this.subagentCount + (subagent.state === "started" ? 1 : -1),
-        );
-        if (subagent.state === "started" && this.subagentCount > 0) {
-          this.subagentCountAt = Date.now();
-        } else if (subagent.state !== "started" && this.subagentCount === 0) {
-          this.subagentCountAt = null;
-        }
-        // Phase 5 (Track A) — the registry is purely additive: it's only
-        // populated when the hook carried an agentId (OpenCode's own
-        // "subagent" events never do), so subagentCount above stays the
-        // authoritative running count regardless of registry coverage.
-        if (subagent.agentId !== undefined) {
-          if (subagent.state === "started") {
-            this.recordSubagentStart(subagent.agentId, subagent.agentType ?? null, Date.now());
-          } else {
-            this.recordSubagentStop(subagent.agentId, subagent.summary ?? null, Date.now());
-          }
-        }
-        const subagentExtras: Record<string, unknown> = {
-          subagentCount: this.subagentCount,
-          agentType: subagent.agentType ?? null,
-          agentId: subagent.agentId ?? null,
-          // Named distinctly from the stale-blocked-clear branch's own
-          // `state: "subagentCount"` (which names the FIELD that was
-          // cleared, not a transition) — this one is the subagent's own
-          // started/finished transition, so eventDescriptions.ts can
-          // render it without the two meanings colliding on one key.
-          subagentState: subagent.state,
-        };
-        // Issue #428 — SubagentStop is the ONLY drain signal for a
-        // background subagent's own outstanding work: the parent's turn has
-        // already ended by the time this fires (that's the whole point of a
-        // background Agent/Task call), so no further "progress" message
-        // will ever report the list shrinking. Same present-only-update
-        // guard as the "progress" case — and the same reason
-        // resolveDeferredTurnEnd() is called ONLY inside this guard, not
-        // unconditionally for every subagent message: a plain
-        // "started"/"finished" event with no backgroundTasks field (the
-        // ordinary case) changes nothing about outstanding work, so calling
-        // it unconditionally would re-fire `agentIdle` for an
-        // already-resolved turn end the moment any unrelated subagent
-        // activity arrives afterward (Hermes review, PR #453).
-        let carriesBackgroundTasks = false;
-        if (subagent.backgroundTasks !== undefined) {
-          carriesBackgroundTasks = true;
-          subagentExtras.backgroundTasks = subagent.backgroundTasks;
-          this.setBackgroundTasks(subagent.backgroundTasks);
-        }
-        this.emitEvent("status_change", subagentExtras);
-        if (carriesBackgroundTasks) this.resolveDeferredTurnEnd();
-        return;
-      }
-      case "elicitation": {
-        const elicitation = message as ElicitationHookMessage;
-        if (elicitation.state === "started") {
-          this.elicitationState = "pending";
-          this.elicitationAt = Date.now();
-          this.elicitationServer = elicitation.server ?? null;
-          this.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
-          this.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
-        } else {
-          this.elicitationState = "idle";
-          this.elicitationServer = null;
-          this.elicitationAt = null;
-          this.emitEvent("elicitation", { state: "finished" });
-          // Same "resolution over the hook channel itself is as
-          // authoritative as a REST decision" reasoning as review_gate's own
-          // non-waiting branch above.
-          this.clearIfConfirmedKind("elicitation");
-        }
-        return;
-      }
-      case "question": {
-        const q = message as QuestionHookMessage;
-        if (q.state === "started") {
-          this.questionState = "pending";
-          this.questionHeader = q.header ?? null;
-          this.questionAt = Date.now();
-          this.emitEvent("question", {
-            state: "started",
-            header: q.header ?? null,
-            summary: q.summary ?? null,
-          });
-          this.emitAttentionSignalWithExtras("question", { header: q.header ?? null });
-        } else {
-          this.questionState = "idle";
-          this.questionHeader = null;
-          this.questionAt = null;
-          this.emitEvent("question", { state: "finished" });
-          this.clearIfConfirmedKind("question");
-        }
-        return;
-      }
-      case "todo": {
-        const todo = message as TodoHookMessage;
-        this.emitEvent("todo", {
-          content: todo.content,
-          status: todo.status,
-          priority: todo.priority,
-        });
-        return;
-      }
-      case "session_diff": {
-        const sd = message as SessionDiffHookMessage;
-        this.emitEvent("session_diff", { files: sd.files });
-        return;
-      }
-      case "permission_resolved":
-        // See PermissionResolvedHookMessage's doc comment (hook-protocol.ts)
-        // — a possible EXTRA release path for a pending permission_request,
-        // never asserted as the only one (Claude Code's PermissionDenied can
-        // fire with no preceding PermissionRequest at all, per its own
-        // docs). Safe to clear unconditionally either way: if nothing was
-        // pending, this is a no-op.
-        this.permissionState = "idle";
-        this.permissionAt = null;
-        this.pendingPermissionTool = null;
-        this.clearIfConfirmedKind("permissionRequest");
-        return;
-      case "plan_resolved":
-        this.planState = "idle";
-        this.planAt = null;
-        this.clearIfConfirmedKind("planReady");
-        return;
-      case "tool_done": {
-        // Fix: status-clearing-semantics — a completed tool call is forward-
-        // progress evidence: it means the agent is running again, which
-        // clears a stale errorState (same "the agent recovered" reasoning
-        // the "progress" case above already applies), and — matched by tool
-        // NAME, since Claude Code has no dedicated "permission granted" hook
-        // — can release a pending permission/plan that was waiting on THIS
-        // tool specifically.
-        //
-        // Deliberately NOT a release for gateState/promoteState (Mullion's
-        // own dialogs, resolved over REST — see resolveGate/resolvePromote)
-        // or elicitationState (already correctly resolved by
-        // ElicitationResult — see that case above); touching either here
-        // would be premature, since the agent can genuinely still be
-        // parked inside one of those while an unrelated tool_done arrives.
-        const td = message as ToolDoneHookMessage;
-        let changed = false;
-        if (this.errorState !== "idle") {
-          this.errorState = "idle";
-          this.errorAt = null;
-          this.errorDetail = null;
-          changed = true;
-        }
-        // Tool-name matching, not a request id (the hook payloads don't
-        // carry one). Accepted residual edge: two same-named tools in one
-        // parallel batch (e.g. two concurrent Bash calls, one awaiting
-        // permission, one completing) can release early. Narrowing further
-        // would need a permission-request id Claude Code doesn't send.
-        if (
-          this.permissionState === "pending" &&
-          (this.pendingPermissionTool === null || this.pendingPermissionTool === td.tool)
-        ) {
-          this.permissionState = "idle";
-          this.permissionAt = null;
-          this.pendingPermissionTool = null;
-          this.clearIfConfirmedKind("permissionRequest");
-          changed = true;
-        }
-        // ExitPlanMode resolving its own plan is the release path — see the
-        // PostToolUse matcher's own comment in hook-adapters/claude-code.ts
-        // for why this is unverified as an actual Claude Code behavior; the
-        // progress:done release above still backstops planState regardless.
-        if (td.tool === "ExitPlanMode" && this.planState === "pending") {
-          this.planState = "idle";
-          this.planAt = null;
-          this.clearIfConfirmedKind("planReady");
-          changed = true;
-        }
-        if (changed) this.emitEvent("status_change", { reason: "tool_done", tool: td.tool });
-        return;
-      }
-      default:
-        return;
-    }
+    // PR 33a (Wave 6) — was a 24-case switch; now a thin dispatch through
+    // HOOK_HANDLERS (hook-handlers.ts), one entry per hook kind, each
+    // operating over the narrow SessionHookContext built by
+    // buildHookContext() above rather than a full Session. A kind with no
+    // entry (`"browser_action"`, or any future/unrecognized kind — see
+    // HOOK_HANDLERS' own doc comment for why a missing key is never an
+    // error) is a silent no-op, same as the original switch's
+    // `default: return`.
+    const handler = HOOK_HANDLERS.get(message.kind);
+    if (handler) handler(this.buildHookContext(), message);
   }
 
   /**
@@ -2737,7 +2301,7 @@ export class Session {
     this.gatePrompt = null;
     this.gateAt = null;
     this.emitEvent("review_gate", { state: decision, ...(reason !== undefined ? { reason } : {}) });
-    this.clearIfConfirmedKind("reviewGate");
+    this.attention.clearIfConfirmedKind("reviewGate");
   }
 
   /**
@@ -2758,7 +2322,7 @@ export class Session {
     this.promoteSuggestedBaseRef = null;
     this.promoteAt = null;
     this.emitEvent("promote_request", { state: decision });
-    this.clearIfConfirmedKind("promoteRequest");
+    this.attention.clearIfConfirmedKind("promoteRequest");
   }
 
   /**
@@ -2825,92 +2389,13 @@ export class Session {
     return true;
   }
 
-  /**
-   * Drives the attention state machine with a zero-threshold hook signal
-   * (hookNotification/reviewGate — see ATTENTION_CONFIRM_MS) to keep
-   * `attentionState`/`SessionInfo.attention` correct, and unconditionally
-   * emits an "attention" event with `extras` merged into its payload —
-   * deliberately NOT gated on whether the transition itself produced a new
-   * `emit` entry. confirmAttention()'s `alreadyConfirmed` guard suppresses
-   * emitting again when attention was already confirmed, which is correct
-   * for the generic, content-free PTY-parsed signals applyAttentionTransition()
-   * handles (a second bell while already confirmed is genuinely nothing
-   * new) — but a hook notification's title/body (or a review_gate's prompt)
-   * is never "nothing new": each one is distinct content the event feed
-   * must surface even if the boolean itself was already true. Deliberately
-   * does NOT go through applyAttentionTransition() above for this reason,
-   * and also because AttentionEmit's fixed `{attention, signal}` shape has
-   * no room for title/body/prompt anyway — threading hook-specific display
-   * text through the otherwise-pure, byte-driven attention state machine
-   * isn't worth it for two call sites. Skips the console.debug transition
-   * logging applyAttentionTransition() does (kept only on the byte-driven
-   * path). `agentIdle` reuses this same call site (rather than getting its
-   * own): it carries no title/body/prompt of its own, but "the agent just
-   * finished" is exactly as one-shot/deliberate as a hook notification or
-   * review gate, so the same always-emit semantics apply — though unlike
-   * `hookNotification`/`reviewGate`/`promoteRequest`, `agentIdle` is NOT one
-   * of attention-detect.ts's OUTPUT_IMMUNE_KINDS (follow-up to #275, gap #3):
-   * it stays output-clearable, since it's purely informational ("turn over")
-   * rather than "blocked pending a human decision", and it's the only
-   * attention trigger opencode/codex/agy have at all.
-   */
-  private emitAttentionSignalWithExtras(
-    kind: Extract<
-      AttentionSignalKind,
-      | "hookNotification"
-      | "reviewGate"
-      | "agentIdle"
-      | "promoteRequest"
-      | "permissionRequest"
-      | "planReady"
-      | "elicitation"
-      | "question"
-    >,
-    extras: Record<string, unknown>,
-  ): void {
-    const transition = advanceAttention(this.attentionState, {
-      type: "signal",
-      kind,
-      now: Date.now(),
-    });
-    this.attentionState = transition.next;
-    this.emitEvent("attention", { attention: true, signal: kind, ...extras });
-  }
-
-  /** Issue #428 — the ONLY place `backgroundTasks`/`backgroundTasksAt` are
-   * written. Called from both the "progress" and "subagent" hook cases,
-   * each with their own present-only-update guard around the call (a
-   * message with no `backgroundTasks` field must leave a previously-latched
-   * outstanding set untouched). Re-stamps `backgroundTasksAt` on every call
-   * that still has outstanding work, matching subagentCountAt's own
-   * re-stamp-on-every-start (not just the initial idle -> busy transition)
-   * precedent — the staleness sweep's silence window should reset on each
-   * fresh report, not just the first. */
-  private setBackgroundTasks(tasks: BackgroundTask[]): void {
-    this.backgroundTasks = tasks;
-    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? Date.now() : null;
-  }
-
-  /** Issue #428 — fires the deferred "turn really is over" attention ping.
-   * `progress:done` always latches `lastTurnEndedAt` (see its own doc
-   * comment: that stays an honest "the Stop hook fired" signal regardless
-   * of outstanding background work), but firing `agentIdle` right then would
-   * be the premature ping issue #428 is about, when a background
-   * `Agent`/`Task` call from this same turn hasn't returned yet. No-op
-   * unless the turn has already ended, nothing outstanding remains, AND the
-   * ping for THIS latch hasn't already fired (`turnEndPingSent` — see its
-   * own doc comment; Hermes review, PR #453) — safe to call unconditionally
-   * after any `backgroundTasks` update (a plain Stop with no background work
-   * resolves it immediately; a SubagentStop or the staleness sweep resolves
-   * it late instead of never; a repeated report of the same already-drained
-   * state is a no-op instead of a duplicate ping). */
-  private resolveDeferredTurnEnd(): void {
-    if (this.lastTurnEndedAt === null) return;
-    if (this.turnEndPingSent) return;
-    if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
-    this.turnEndPingSent = true;
-    this.emitAttentionSignalWithExtras("agentIdle", {});
-  }
+  // emitAttentionSignalWithExtras()/setBackgroundTasks()/
+  // resolveDeferredTurnEnd() moved to the composed AttentionTracker (PR 33b,
+  // Wave 6) — see this.attention and attention-tracker.ts's own doc
+  // comments (moved verbatim, including the `emitAttentionSignalWithExtras`
+  // "deliberately does NOT go through applyAttentionTransition()" rationale
+  // and the `resolveDeferredTurnEnd` three-guard ordering). Call sites below
+  // now read `this.attention.emitAttentionSignalWithExtras(...)` etc.
 
   /**
    * The attention state machine's time-based half (issue #171/#98) — called
@@ -2961,7 +2446,9 @@ export class Session {
    * test/services/pty-manager.test.ts.
    */
   tick(now: number = Date.now()): void {
-    this.applyAttentionTransition(advanceAttention(this.attentionState, { type: "tick", now }));
+    this.attention.applyAttentionTransition(
+      advanceAttention(this.attention.state, { type: "tick", now }),
+    );
 
     const hadSustainedStreak =
       this.activityStreakStart !== null &&
@@ -2971,9 +2458,9 @@ export class Session {
     const silentLongEnough =
       this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
 
-    if (this.attentionState.state === "idle" && hadSustainedStreak && silentLongEnough) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "signal", kind: "silence", now }),
+    if (this.attention.state.state === "idle" && hadSustainedStreak && silentLongEnough) {
+      this.attention.applyAttentionTransition(
+        advanceAttention(this.attention.state, { type: "signal", kind: "silence", now }),
       );
     }
   }
@@ -3146,22 +2633,22 @@ export class Session {
     // confirmedKind and for idle/pending states (advanceAttention's
     // "userInput" cases).
     if (isGenuineUserInput(data)) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
+      this.attention.applyAttentionTransition(
+        advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
       );
       // Rich statuses — a genuine keystroke means the user has responded to
       // (or moved past) the last finished turn; clear the `finished` latch
       // so the next poll doesn't keep reporting a turn that's no longer the
       // current one. See SessionInfo.lastTurnEndedAt's doc comment.
-      let changed = this.lastTurnEndedAt !== null;
-      this.lastTurnEndedAt = null;
-      this.turnEndPingSent = false;
+      let changed = this.attention.lastTurnEndedAt !== null;
+      this.attention.lastTurnEndedAt = null;
+      this.attention.turnEndPingSent = false;
       // Issue #428 — same reasoning as turn_start's own clear: a genuine
       // keystroke means the user has moved past the finished turn, so its
       // backgroundTasks snapshot is stale too.
-      if (this.backgroundTasks.length > 0) changed = true;
-      this.backgroundTasks = [];
-      this.backgroundTasksAt = null;
+      if (this.attention.backgroundTasks.length > 0) changed = true;
+      this.attention.backgroundTasks = [];
+      this.attention.backgroundTasksAt = null;
       // Follow-up to fix: status-clearing-semantics — a genuine keystroke
       // into a session showing a stale error IS the retry; typing is as
       // authoritative an "unblocking action" as the agent's own recovery
@@ -3325,11 +2812,11 @@ export class Session {
     // still degrades correctly on the next poll (deriveSessionStatus reads
     // the now-empty outstandingBackgroundTasks), just without a false ping.
     if (
-      filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0 &&
-      isStale(this.backgroundTasksAt, busyMaxAgeMs)
+      filterOutstandingBackgroundTasks(this.attention.backgroundTasks).length > 0 &&
+      isStale(this.attention.backgroundTasksAt, busyMaxAgeMs)
     ) {
-      this.backgroundTasks = [];
-      this.backgroundTasksAt = null;
+      this.attention.backgroundTasks = [];
+      this.attention.backgroundTasksAt = null;
       this.emitEvent("status_change", {
         reason: "stale_blocked_cleared",
         state: "backgroundTasks",
@@ -3538,8 +3025,8 @@ export class Session {
       subscriberCount: this.subscriberCount,
       lastActivityAt: this.lastActivityAt,
       activity,
-      attention: this.attentionState.confirmedAt !== null,
-      attentionAt: this.attentionState.confirmedAt,
+      attention: this.attention.state.confirmedAt !== null,
+      attentionAt: this.attention.state.confirmedAt,
       lastTitle: this.lastTitle,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
@@ -3560,7 +3047,7 @@ export class Session {
       // Rich statuses — attentionKind mirrors attentionState.confirmedKind
       // directly (see its own SessionInfo doc comment for why), same
       // posture as attention/attentionAt just above.
-      attentionKind: this.attentionState.confirmedKind,
+      attentionKind: this.attention.state.confirmedKind,
       errorDetail: this.errorDetail,
       lastAssistantMessage: this.lastAssistantMessage,
       compactState: this.compactState,
@@ -3574,10 +3061,10 @@ export class Session {
       questionState: this.questionState,
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
-      lastTurnEndedAt: this.lastTurnEndedAt,
-      backgroundTasks: this.backgroundTasks,
-      backgroundTasksAt: this.backgroundTasksAt,
-      outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.backgroundTasks),
+      lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      backgroundTasks: this.attention.backgroundTasks,
+      backgroundTasksAt: this.attention.backgroundTasksAt,
+      outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.attention.backgroundTasks),
       // Issue #323: state file persistence metadata.
       stateRestored: this.stateRestored,
       staleHooks: this.staleHooks,
@@ -3588,32 +3075,10 @@ export class Session {
   }
 }
 
-// Per-agent skip-permissions flag lookup. Anchored at the start of the
-// trimmed command (optionally path-qualified), same conservative "no
-// partial/substring match" posture as agent-detect.ts's KNOWN_AGENTS probing
-// and the hook adapters' matches() regexen. Only matches unchained, simple
-// invocations (no shell metacharacters) so the flag is never appended to the
-// wrong part of a pipeline or chain.
-/** Exported for the agents route to expose to the frontend. */
-export const SKIP_PERMISSION_FLAGS: Record<string, string> = {
-  claude: "--dangerously-skip-permissions",
-  codex: "--dangerously-bypass-approvals-and-sandbox",
-  opencode: "--auto",
-  gemini: "--approval-mode yolo",
-  agy: "--dangerously-skip-permissions",
-  aider: "--yes",
-};
-
-/** Exported for tests. */
-export function getSkipPermissionFlag(command: string): string | null {
-  const trimmed = command.trim();
-  for (const [bin, flag] of Object.entries(SKIP_PERMISSION_FLAGS)) {
-    if (new RegExp(`^(?:\\S*/)?${bin}(?:\\s|$)`).test(trimmed) && !/[;&|<>]/.test(trimmed)) {
-      return flag;
-    }
-  }
-  return null;
-}
+// SKIP_PERMISSION_FLAGS/getSkipPermissionFlag moved to launch-plan.ts in
+// PR 32 (Wave 6) alongside buildLaunchPlan(), the only other place that
+// calls getSkipPermissionFlag(); re-exported near the top of this file for
+// existing importers (src/routes/agents.ts, this module's own tests).
 
 export class PtyManager {
   private sessions = new Map<string, Session>();

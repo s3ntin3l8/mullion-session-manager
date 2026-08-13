@@ -18,7 +18,7 @@ import type {
   Project,
   Session,
   Task,
-} from "../api.js";
+} from "../api/index.js";
 import { makeSession, makeProject, makeTask } from "../test/fixtures.js";
 
 let sessions: Session[];
@@ -68,7 +68,7 @@ function storeState() {
   };
 }
 
-vi.mock("../store.js", () => {
+vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
     const state = storeState();
     return selector ? selector(state) : state;

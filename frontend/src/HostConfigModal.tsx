@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { HostsIcon, CloseIcon } from "./icons.js";
-import { api } from "./api.js";
-import type { HostConfig } from "./api.js";
+import { HostsIcon, CloseIcon } from "./ui/icons.js";
+import { api } from "./api/index.js";
+import type { HostConfig } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { ErrorText } from "./ui/ErrorText.js";
 

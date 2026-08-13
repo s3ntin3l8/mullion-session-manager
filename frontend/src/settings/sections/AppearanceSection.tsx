@@ -1,4 +1,4 @@
-import { useDashboardStore } from "../../store.js";
+import { useDashboardStore } from "../../store/index.js";
 import { Dropdown, GroupHeading, Row, Segmented, Slider, Toggle } from "../../ui/primitives.js";
 import { SwatchGrid, TerminalPreview } from "../TerminalPreview.js";
 

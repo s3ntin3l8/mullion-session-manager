@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GridIcon, CloseIcon } from "./icons.js";
+import { GridIcon, CloseIcon } from "./ui/icons.js";
 
 interface CreateGroupModalProps {
   onClose: () => void;

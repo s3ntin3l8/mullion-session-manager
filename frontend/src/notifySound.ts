@@ -1,4 +1,4 @@
-import type { SoundName } from "./api.js";
+import type { SoundName } from "./api/index.js";
 
 // Settings -> Notifications & status' "Sound" channel — three short
 // programmatic tones (Web Audio oscillator beeps) rather than shipping

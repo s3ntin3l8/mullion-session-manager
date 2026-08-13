@@ -1,4 +1,4 @@
-import { GridIcon, LayersIcon } from "./icons.js";
+import { GridIcon, LayersIcon } from "./ui/icons.js";
 
 // The task board (formerly TasksPanel.tsx, a dockview panel) is now the
 // unified Kanban view (UnifiedBoard.tsx) — see the "combine TaskPanel into

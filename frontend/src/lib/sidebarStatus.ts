@@ -10,7 +10,7 @@
 // plan's own (stale) line-range citation for this cluster, but are the same
 // character of helper and were included here rather than splitting the
 // dot-class family across two homes.
-import type { GitHubCiStatus, GitStatus, NotificationEvent, SubagentInfo } from "../api.js";
+import type { GitHubCiStatus, GitStatus, NotificationEvent, SubagentInfo } from "../api/index.js";
 
 // Same clean/dirty/conflict/none taxonomy as ProjectHeader's own inline
 // gitStatus handling in Sidebar.tsx — that call site stays inline rather

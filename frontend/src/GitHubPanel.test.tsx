@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubPanel } from "./GitHubPanel.js";
-import type { GitHubJob, GitHubLogResponse, GitHubPRsStatus, GitHubStatus } from "./api.js";
+import type { GitHubJob, GitHubLogResponse, GitHubPRsStatus, GitHubStatus } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const STATUS: GitHubStatus = {

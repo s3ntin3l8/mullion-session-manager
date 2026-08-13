@@ -100,6 +100,16 @@ up automatically on its next update: `self-update.sh` (re)links
 `install.sh` does on a fresh install — no need to re-run `install.sh` by
 hand.
 
+**Updating an agent (issue #647 / roadmap 7.8):** an agent runs the exact
+same `self-update.sh`, triggered from the primary's Settings → Hosts row
+instead of run by hand — see
+[`docs/multi-host.md`](../docs/multi-host.md)'s "Agent updates" section for
+the full flow, including why it's `/internal/updates/apply` and not the
+primary's own `/api/updates/apply` path. One exception: a host still running
+a pre-#647 build has no `/internal/updates/*` routes yet, so its first
+update still needs a manual re-run of the install steps above (or your own
+config-management run); every update after that can go through the button.
+
 ## Host prerequisites
 
 Beyond `systemd --user` itself: **Node 26**, **`dtach`**, and — needed only
@@ -433,12 +443,11 @@ primary side is needed at all: `MULLION_ENROLLMENT_SECRET` is set once
 there, and every agent booted with the matching
 `MULLION_AGENT_ENROLLMENT_TOKEN` self-registers.
 
-**Known limitation:** an agent has no self-update surface today —
-`POST /api/updates/apply` (`src/routes/updates.ts`) is a primary-only
-route, since `updatesRoute` is registered only in `src/app.ts`'s primary
-branch. Updating an agent means re-running the install steps above (or your
-own config-management run) against the new release; there's no in-app
-"Update now" button for it yet.
+**Updating an agent:** as of issue #647 / roadmap 7.8, an agent has its own
+self-update surface — see "Layout and updates" above and
+[`docs/multi-host.md`](../docs/multi-host.md)'s "Agent updates" section.
+Only a host still running a pre-#647 build needs the manual re-run described
+there.
 
 ## What still needs a real, live check
 

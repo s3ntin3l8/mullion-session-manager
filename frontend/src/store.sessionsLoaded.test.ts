@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useDashboardStore } from "./store.js";
-import { api } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import { api } from "./api/index.js";
 
 // Independent review finding (PR #430) — App.tsx's auto-open-child-panel
 // effect needs to tell "sessions is [] because nothing has loaded yet" apart

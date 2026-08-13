@@ -300,10 +300,59 @@ The primary polls every registered remote host's `/health` route (the same
 unauthenticated liveness check `ping()`/**Ping** already used) on a
 background timer — `HOST_HEARTBEAT_INTERVAL_SECONDS` (default `30`, `0`
 disables it). Settings → Hosts shows a continuously-updated status dot:
-green (online), amber (degraded — up to 2 consecutive missed pings), or red
-(offline — 3 or more). This is live, in-memory state only, never written to
-the `hosts` table — an unreachable primary restart resets every host back
-to "pending" until the next sweep, same as a fresh boot.
+green (online), amber (degraded — up to 2 consecutive missed pings), or a
+hollow dim ring with a red text label (offline — 3 or more). This is live,
+in-memory state only, never written to the `hosts` table — an unreachable
+primary restart resets every host back to "pending" until the next sweep,
+same as a fresh boot.
+
+## Agent updates
+
+Issue [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647)
+/ roadmap 7.8 — an agent updates the same way the primary does
+(`scripts/self-update.sh`, unchanged), just triggered remotely instead of
+from its own dashboard. Settings → Hosts shows each registered agent's
+running version next to the primary's own, and — when they differ — an
+"Update" button. There is deliberately no "update all hosts": applying is
+always a per-host, manually-triggered action, since a concurrent fleet-wide
+apply is how every host goes down at once.
+
+An agent is always updated **to the primary's own currently running
+version**, never to "whatever is newest on GitHub" — the goal is keeping the
+fleet in sync with the primary's release, not each host chasing its own
+latest. If the primary's own release has no downloadable tarball yet (a dev
+build with no matching tag, or a release whose `build-tarball` CI job hasn't
+finished), the Update button is disabled with that reason shown instead of
+attempting an update to nothing.
+
+The request path is the same authenticated, signed internal channel every
+other primary→agent call in this doc already uses:
+`POST /internal/updates/apply` and `GET /internal/updates/status` sit behind
+this file's own bearer + (for a registered session) HMAC-signature gate —
+**not** the primary's unauthenticated-by-default `/api/updates/*` path,
+which relies entirely on `MULLION_AUTH_TOKEN`/OIDC or a reverse-proxy
+gateway being configured. Mounting the literal `/api/updates/*` routes on an
+agent would mean anyone who could reach the agent's port at all could
+trigger a `systemd-run`'d download-and-`npm ci` with no credential
+whatsoever — the one thing this feature does differently from a naive read
+of the routes it reuses.
+
+During an apply, the agent's own `systemctl --user restart` step (the same
+last step `self-update.sh` always takes) briefly makes the agent
+unreachable — the update-status proxy call fails at the transport layer for
+that window, and the heartbeat sweep above will flap the host's dot to
+degraded/offline. Both are expected parts of a normal update, not a failure;
+the Settings row keeps showing its last known update phase rather than an
+error, and the dot recovers on its own once the process comes back up.
+`.update-status.json` lives outside the versioned release directory the
+restart flips, so the final phase (`done`/`failed`) is still readable
+immediately after the restart completes.
+
+**Bootstrapping:** an agent host running a build older than #647 has no
+`/internal/updates/*` routes at all, so the first update attempt against it
+404s. That one update has to happen by hand (re-run `deploy/install.sh
+--role agent`, or your own config-management run) — every update after that
+can go through the button.
 
 ## Current limitations
 

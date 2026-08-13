@@ -7,8 +7,8 @@ import {
   isCoalesced,
   NOTIFICATION_COALESCE_MS,
 } from "./desktopNotify.js";
-import { DEFAULT_SETTINGS } from "./api.js";
-import type { NotificationEvent } from "./api.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
+import type { NotificationEvent } from "./api/index.js";
 
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
   return {

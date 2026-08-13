@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFocusTrap } from "./useFocusTrap.js";
+import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
   AppearanceIcon,
@@ -17,7 +17,7 @@ import {
   ServerRackIcon,
   SkillIcon,
   TerminalPromptIcon,
-} from "./icons.js";
+} from "./ui/icons.js";
 import { AppearanceSection } from "./settings/sections/AppearanceSection.js";
 import { TerminalSection } from "./settings/sections/TerminalSection.js";
 import { ProjectsSection } from "./settings/sections/ProjectsSection.js";
@@ -155,6 +155,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "hosts", text: "remote host agent register base url token" },
   { section: "hosts", text: "test connection ping online offline" },
   { section: "hosts", text: "cascade delete host projects" },
+  { section: "hosts", text: "agent update version skew self-update" },
   { section: "launchers", text: "detected clis shells agents refresh" },
   { section: "launchers", text: "ai agents skip perms status show" },
   { section: "launchers", text: "default shell" },

@@ -1,4 +1,4 @@
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 
 // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
 // Mullion tab previously gave no signal at all that something happened: the

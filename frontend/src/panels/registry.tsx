@@ -23,8 +23,8 @@ import type { TaskDetailParams } from "../TaskDetail.js";
 import { ErrorBoundary } from "../ErrorBoundary.js";
 import { PaneTab } from "../PaneTab.js";
 import { Spinner } from "../ui/Spinner.js";
-import { useDashboardStore } from "../store.js";
-import type { Session } from "../api.js";
+import { useDashboardStore } from "../store/index.js";
+import type { Session } from "../api/index.js";
 import { formatPaneTitle } from "../paneTitle.js";
 import { openSessionPanel } from "../panelUtils.js";
 

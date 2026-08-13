@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useDashboardStore } from "./store.js";
-import type { GitStatus, Project } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import type { GitStatus, Project } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 // Mirrors Dock.test.tsx's fake-in-memory-backend pattern: a mocked global

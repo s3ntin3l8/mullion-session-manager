@@ -15,7 +15,7 @@
 // so an api.ts shape change that adds/renames a required field is a
 // same-file compile error here, not a silent gap a consuming test's
 // `Partial<T>` override would otherwise mask.
-import type { Host, Project, Session, Task, Workspace } from "../api.js";
+import type { Host, Project, Session, Task, Workspace } from "../api/index.js";
 
 export function makeSession(overrides: Partial<Session> = {}): Session {
   return {

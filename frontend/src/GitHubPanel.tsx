@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api.js";
+import { api } from "./api/index.js";
 import type {
   GitHubActionsRun,
   GitHubJob,
@@ -7,10 +7,10 @@ import type {
   GitHubPRsStatus,
   GitHubPROrWithChecks,
   GitHubStatus,
-} from "./api.js";
-import { ChevronDownIcon, GitHubIcon } from "./icons.js";
+} from "./api/index.js";
+import { ChevronDownIcon, GitHubIcon } from "./ui/icons.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore } from "./store/index.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 
 export interface GitHubPanelParams {

@@ -4,9 +4,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
-import { ApiError } from "./api.js";
-import type * as ApiModule from "./api.js";
-import type { Host, Project, Session } from "./api.js";
+import { ApiError } from "./api/index.js";
+import type * as ApiModule from "./api/index.js";
+import type { Host, Project, Session } from "./api/index.js";
 import { makeSession, makeProject, makeHost } from "./test/fixtures.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
@@ -67,7 +67,7 @@ function storeState() {
   };
 }
 
-vi.mock("./store.js", () => {
+vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
     const state = storeState();
     return selector ? selector(state) : state;
@@ -88,7 +88,7 @@ vi.mock("./SourceControlSection.js", () => ({
 // DiscoverProjects (inline in Sidebar.tsx, not separately mockable) calls
 // api.discoverProjects on mount — overridden to resolve empty rather than
 // hitting a real fetch() jsdom can't serve.
-vi.mock("./api.js", async (importOriginal) => {
+vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
   return { ...actual, api: { ...actual.api, discoverProjects: vi.fn().mockResolvedValue([]) } };
 });
@@ -571,7 +571,7 @@ describe("Sidebar P9 — inline error on a failed delete", () => {
 
 describe("DiscoverProjects — a failed Add surfaces an inline error", () => {
   it("a rejected createProject shows an error next to the candidate row instead of an unhandled rejection", async () => {
-    const { api } = await import("./api.js");
+    const { api } = await import("./api/index.js");
     vi.mocked(api.discoverProjects).mockResolvedValueOnce([
       { name: "widgets", cwd: "/repos/widgets", isGitRepo: true, isRegistered: false },
     ]);

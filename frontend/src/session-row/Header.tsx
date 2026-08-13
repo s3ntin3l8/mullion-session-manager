@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { GitStatus } from "../api.js";
-import { ConfirmButton } from "../ConfirmButton.js";
-import { KebabMenu } from "../KebabMenu.js";
-import { ChevronDownIcon, CloseIcon, GitBranchIcon, RenameIcon } from "../icons.js";
+import type { GitStatus } from "../api/index.js";
+import { ConfirmButton } from "../ui/ConfirmButton.js";
+import { KebabMenu } from "../ui/KebabMenu.js";
+import { ChevronDownIcon, CloseIcon, GitBranchIcon, RenameIcon } from "../ui/icons.js";
 
 // SessionRow's row 1 — the `.session-item-row` strip (status dot, agent
 // logo/name, rename-in-place, status label, git-details toggle, kebab menu,

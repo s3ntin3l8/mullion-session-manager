@@ -1,10 +1,10 @@
 import { useState } from "react";
-import type { Session, Project } from "./api.js";
-import { useDashboardStore } from "./store.js";
+import type { Session, Project } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { useGitBranches } from "./hooks/useGitBranches.js";
 import { Dropdown } from "./ui/primitives.js";
 import { Modal } from "./ui/Modal.js";
-import { GitBranchIcon } from "./icons.js";
+import { GitBranchIcon } from "./ui/icons.js";
 
 // Issue #271, option 2 — "promote an existing session" into a fresh git
 // worktree. Reused for two triggers: a human's SessionRow kebab action

@@ -1,5 +1,5 @@
-import type { Launcher } from "./api.js";
-import type { Theme } from "./store.js";
+import type { Launcher } from "./api/index.js";
+import type { Theme } from "./store/index.js";
 
 import claudeAiLogo from "./assets/cli-logos/claude-ai.svg";
 import codexColorLogo from "./assets/cli-logos/codex-color.svg";

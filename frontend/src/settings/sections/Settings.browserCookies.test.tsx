@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
-import { useDashboardStore } from "../../store.js";
-import type { BrowserCookieProfile, GitHubIntegration, Project } from "../../api.js";
+import { useDashboardStore } from "../../store/index.js";
+import type { BrowserCookieProfile, GitHubIntegration, Project } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
 // Mirrors Settings.integrations.test.tsx / Settings.hosts.test.tsx's

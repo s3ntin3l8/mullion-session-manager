@@ -3,7 +3,7 @@
 // tasksBoard.ts/kanban.ts convention) so it's independently unit-testable
 // and keeps Settings.tsx react-refresh-clean. See settings.ts's doc comment
 // on the backend's taskMaster field for the full sentinel rationale.
-import type { AppSettings, ServerInfo } from "./api.js";
+import type { AppSettings, ServerInfo } from "./api/index.js";
 
 export interface ResolvedTaskMasterConfig {
   enabled: boolean;

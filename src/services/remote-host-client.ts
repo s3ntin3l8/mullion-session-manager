@@ -20,6 +20,7 @@ import type { GitHubRepoRef } from "./git-remote.js";
 import type { GitStatus } from "./git-status.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
+import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 import {
   assertAllowedUrl,
@@ -406,6 +407,21 @@ export class RemoteHostClient {
   // what's (and isn't — no idle timeout, no DB-backed anything) included.
   resolveConfig(): Promise<AgentConfig> {
     return this.request("/internal/config");
+  }
+
+  // Issue #647 / roadmap 7.8 — mirrors GET /internal/updates/status; see
+  // that route's own comment for why it lives under /internal/ rather than
+  // the primary's /api/updates/* path.
+  getUpdateStatus(): Promise<UpdateStatus> {
+    return this.request("/internal/updates/status");
+  }
+
+  applyUpdate(body: ApplyUpdateBody): Promise<{ phase: string; version: string }> {
+    return this.request("/internal/updates/apply", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
   }
 
   resolveActions(cwd: string): Promise<Launcher[]> {

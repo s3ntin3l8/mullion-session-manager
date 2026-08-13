@@ -3,14 +3,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ViewModeToggle } from "./ViewModeToggle.js";
-import type { ViewMode } from "./store.js";
+import type { ViewMode } from "./store/index.js";
 
 let viewMode: ViewMode;
 const setViewMode = vi.fn((next: ViewMode) => {
   viewMode = next;
 });
 
-vi.mock("./store.js", () => ({
+vi.mock("./store/index.js", () => ({
   useDashboardStore: (selector?: (s: unknown) => unknown) => {
     const state = { viewMode, setViewMode };
     return selector ? selector(state) : state;

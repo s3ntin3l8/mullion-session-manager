@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DragEvent } from "react";
-import type { Project, Session } from "../api.js";
+import type { Project, Session } from "../api/index.js";
 import { SessionRow } from "../Sidebar.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of

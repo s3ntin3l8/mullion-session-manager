@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api } from "../api.js";
+import { api } from "../api/index.js";
 import { useAsyncData } from "./useAsyncData.js";
 
 // CommandPalette.tsx's worktree base-ref picker and PromoteDialog.tsx's own

@@ -70,6 +70,8 @@ const cache = new Map<string, CacheEntry>();
 /** Test-only introspection/reset — mirrors github.ts's getCacheSizeForTests. */
 export function clearUpdateCheckCacheForTests(): void {
   cache.clear();
+  releaseByTagCache.clear();
+  releaseByTagFailureCache.clear();
 }
 
 interface GitHubReleaseAsset {
@@ -234,5 +236,117 @@ export async function checkForUpdate(
   };
 
   cache.set(repoSlug, { ts: Date.now(), result });
+  return result;
+}
+
+// Issue #647 / roadmap 7.8 — resolves a SPECIFIC tag's release, not "latest".
+// The primary uses this to hand an agent its own running version's assets
+// (keeping the fleet in sync with the primary's release, per #647's stated
+// goal), rather than reusing checkForUpdate and silently updating agents to
+// whatever is newest on GitHub — which could put an agent AHEAD of the
+// primary, a skew direction host-git.ts's degradation was never designed
+// for.
+export interface ReleaseByTagResult {
+  version: string;
+  releaseUrl: string | null;
+  // Same "null is a successful-but-incomplete lookup, not an error" contract
+  // as UpdateCheckResult.assetUrl/checksumUrl — a release predating this
+  // feature, or one whose build-tarball job hasn't finished yet, has no
+  // .tgz/.sha256 asset. Callers must treat null here as "can't update to
+  // this version yet," not throw.
+  assetUrl: string | null;
+  checksumUrl: string | null;
+}
+
+interface ReleaseByTagCacheEntry {
+  ts: number;
+  // null is cached too — a repeatedly-checked missing tag (e.g. the primary
+  // running an unreleased dev build) shouldn't re-hit GitHub every poll.
+  result: ReleaseByTagResult | null;
+}
+
+const releaseByTagCache = new Map<string, ReleaseByTagCacheEntry>();
+
+// Independent review — resolveReleaseByTag is polled every
+// LIVE_REFRESH_INTERVAL_MS (4s) per behind-version host from
+// routes/hosts.ts's GET /api/hosts/:id/update, but only the 404 ("no
+// release for this tag") and success paths were cached; a network failure
+// or a non-404 GitHub error (e.g. a 429/5xx during an outage) re-threw on
+// every single call with nothing cached. With even one behind-version host
+// registered, that's ~900 unauthenticated api.github.com requests/hour
+// during any GitHub hiccup — comfortably past the 60/hr unauthenticated
+// budget this whole module is built around avoiding (see CACHE_TTL_MS's own
+// comment), which then also starves checkForUpdate's own GitHub calls for
+// the primary's unrelated "check for updates" feature. A short failure
+// cooldown (much shorter than CACHE_TTL_MS's 1h, since an outage should
+// self-heal fast once GitHub recovers) bounds this the same way the 404
+// cache already bounds a permanently-missing tag.
+const FAILURE_CACHE_TTL_MS = 60 * 1000; // 1 minute
+
+interface ReleaseByTagFailureCacheEntry {
+  ts: number;
+  error: UpdateCheckError;
+}
+
+const releaseByTagFailureCache = new Map<string, ReleaseByTagFailureCacheEntry>();
+
+/**
+ * Fetches the release tagged "v{version}" (GitHub's /releases/tags/{tag}
+ * endpoint) for `repoSlug`. Returns null — not an error — when no release
+ * has that tag: the same conservative "can't compare, don't crash" posture
+ * checkForUpdate takes, since this is the expected state for a primary
+ * running a dev/unreleased build. Throws UpdateCheckError only for an actual
+ * network failure or a non-404 non-2xx response — see FAILURE_CACHE_TTL_MS's
+ * own comment for why that failure is itself cached, briefly.
+ */
+export async function resolveReleaseByTag(
+  repoSlug: string,
+  version: string,
+): Promise<ReleaseByTagResult | null> {
+  const cacheKey = `${repoSlug}@${version}`;
+  const cached = releaseByTagCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.result;
+  }
+  const cachedFailure = releaseByTagFailureCache.get(cacheKey);
+  if (cachedFailure && Date.now() - cachedFailure.ts < FAILURE_CACHE_TTL_MS) {
+    throw cachedFailure.error;
+  }
+
+  let res: Response;
+  try {
+    res = await githubApiFetch(`/repos/${repoSlug}/releases/tags/v${version}`);
+  } catch (err) {
+    const error = new UpdateCheckError(err instanceof Error ? err.message : String(err), 0);
+    releaseByTagFailureCache.set(cacheKey, { ts: Date.now(), error });
+    throw error;
+  }
+
+  if (res.status === 404) {
+    releaseByTagCache.set(cacheKey, { ts: Date.now(), result: null });
+    return null;
+  }
+  if (!res.ok) {
+    const error = new UpdateCheckError(
+      `GitHub release lookup failed for ${repoSlug}@v${version} (HTTP ${res.status})`,
+      res.status,
+    );
+    releaseByTagFailureCache.set(cacheKey, { ts: Date.now(), error });
+    throw error;
+  }
+
+  const release = (await res.json()) as GitHubReleaseApiResponse;
+  const asset = findTarballAsset(release.assets);
+  const checksumAsset = findChecksumAsset(release.assets);
+  const result: ReleaseByTagResult = {
+    version,
+    releaseUrl: release.html_url ?? null,
+    assetUrl: asset?.browser_download_url ?? null,
+    checksumUrl: checksumAsset?.browser_download_url ?? null,
+  };
+  releaseByTagCache.set(cacheKey, { ts: Date.now(), result });
+  // A success clears any prior failure cooldown for this key — no reason to
+  // keep suppressing lookups once GitHub is demonstrably reachable again.
+  releaseByTagFailureCache.delete(cacheKey);
   return result;
 }

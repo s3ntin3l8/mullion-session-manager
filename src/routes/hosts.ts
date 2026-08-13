@@ -16,6 +16,10 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { buildAgentConfig } from "./internal.js";
+import { appVersion } from "./server-info.js";
+import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
+import type { ReleaseByTagResult } from "../services/update-checker.js";
+import type { UpdateStatus } from "../services/update-apply.js";
 
 interface CreateHostBody {
   name: string;
@@ -192,6 +196,161 @@ export async function hostsRoute(app: FastifyInstance) {
       // distinction issue #244 already makes in projects.ts).
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, config unavailable");
+      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+    }
+  });
+
+  // Issue #647 / roadmap 7.8 — per-host update status for the Settings ->
+  // Hosts row: the agent's own version (via the existing #247/7.4 config
+  // fetch), whether it's already on the primary's version, and — if not —
+  // whether the primary's own release actually has a downloadable asset to
+  // send it (resolveReleaseByTag can legitimately come back empty: a dev
+  // build with no matching tag, or a release whose build-tarball job hasn't
+  // finished — see that function's own doc comment). That last case is
+  // surfaced as `updatable: false` with a reason, not a 502 that would read
+  // like GitHub itself is down.
+  app.get<{ Params: { id: string } }>("/api/hosts/:id/update", async (request, reply) => {
+    const { id } = request.params;
+    if (id === LOCAL_HOST_ID) {
+      return reply.badRequest("the local host updates from Settings -> Server info, not here");
+    }
+    if (!getHostRow(app, id)) return reply.notFound();
+    const client = getRemoteHostClient(app, id);
+
+    let hostVersion: string;
+    try {
+      hostVersion = (await client.resolveConfig()).version;
+    } catch (err) {
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+      app.log.warn({ hostId: id, err }, "host unreachable, update status unavailable");
+      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+    }
+
+    let status: UpdateStatus;
+    try {
+      status = await client.getUpdateStatus();
+    } catch (err) {
+      // A 404 here specifically means this agent's build predates #647's
+      // /internal/updates/* routes — the same statusCode === 404 "old
+      // agent build" discipline host-git.ts's viaRemote uses, not any
+      // other 4xx (a genuine request failure would be conflated with a
+      // version-skew message that tells the operator to do the wrong
+      // thing).
+      if (err instanceof HostRequestError && err.statusCode === 404) {
+        return {
+          hostVersion,
+          primaryVersion: appVersion,
+          upToDate: hostVersion === appVersion,
+          updatable: false,
+          unavailableReason:
+            "This agent's build predates auto-update — update it by hand once (see deploy/README.md), after which every future update can go through this button.",
+          assetUrl: null,
+          checksumUrl: null,
+          status: { phase: "unavailable" },
+        };
+      }
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+      app.log.warn({ hostId: id, err }, "host unreachable, update status unavailable");
+      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+    }
+
+    const upToDate = hostVersion === appVersion;
+    let release: ReleaseByTagResult | null = null;
+    // Independent review — distinguished from "no asset yet" below: a
+    // failed lookup (GitHub unreachable, rate-limited, ...) is a different,
+    // transient condition, and reporting it with the "no asset yet, wait
+    // for the build" message actively misleads an operator into waiting on
+    // a build that already finished. resolveReleaseByTag itself now caches
+    // this failure briefly (see its own FAILURE_CACHE_TTL_MS comment), so
+    // this route's own 4s poll interval no longer hammers GitHub while this
+    // branch is hit repeatedly.
+    let releaseLookupFailed = false;
+    if (!upToDate) {
+      try {
+        release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
+      } catch (err) {
+        if (!(err instanceof UpdateCheckError)) throw err;
+        releaseLookupFailed = true;
+        app.log.warn(
+          { repo: app.config.MULLION_UPDATE_REPO, statusCode: err.statusCode },
+          "release lookup unavailable for host update",
+        );
+      }
+    }
+
+    return {
+      hostVersion,
+      primaryVersion: appVersion,
+      upToDate,
+      updatable: !upToDate && Boolean(release?.assetUrl) && Boolean(release?.checksumUrl),
+      unavailableReason: upToDate
+        ? null
+        : releaseLookupFailed
+          ? "Could not check the primary's own release right now — this is usually transient (a GitHub outage or rate limit); try again shortly."
+          : (release?.assetUrl ?? null) === null
+            ? "The primary's own release has no downloadable asset yet — try again once its build finishes, or update the fleet by hand."
+            : null,
+      assetUrl: release?.assetUrl ?? null,
+      checksumUrl: release?.checksumUrl ?? null,
+      status,
+    };
+  });
+
+  // Issue #647 / roadmap 7.8 — triggers an already-registered agent's own
+  // self-update to the PRIMARY's currently running version (not "latest on
+  // GitHub" — see resolveReleaseByTag's own doc comment on why that
+  // distinction matters), proxied over the existing signed/authenticated
+  // internal channel. Per-host only, deliberately: no "update all hosts" —
+  // a fleet-wide concurrent apply is how every host goes down at once, and
+  // at a small fleet size the convenience buys nothing.
+  app.post<{ Params: { id: string } }>("/api/hosts/:id/update/apply", async (request, reply) => {
+    const { id } = request.params;
+    if (id === LOCAL_HOST_ID) {
+      return reply.badRequest("the local host updates from Settings -> Server info, not here");
+    }
+    if (!getHostRow(app, id)) return reply.notFound();
+    const client = getRemoteHostClient(app, id);
+
+    // Independent review — the frontend only renders the Update button when
+    // the GET route above reported `updatable: true`, but this route has no
+    // server-side equivalent check: a stale poll response, a direct API
+    // call, or a race could otherwise trigger a redundant re-install/
+    // restart on an already-current agent.
+    try {
+      const hostVersion = (await client.resolveConfig()).version;
+      if (hostVersion === appVersion) {
+        return reply.badRequest("this host is already on the primary's version");
+      }
+    } catch (err) {
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
+      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+    }
+
+    let release;
+    try {
+      release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
+    } catch (err) {
+      if (!(err instanceof UpdateCheckError)) throw err;
+      return reply.badGateway(`could not resolve the primary's own release: ${err.message}`);
+    }
+    if (!release?.assetUrl || !release.checksumUrl) {
+      return reply.badRequest(
+        "the primary's own release has no downloadable asset yet — cannot update this agent to it",
+      );
+    }
+
+    try {
+      const status = await client.applyUpdate({
+        version: appVersion,
+        assetUrl: release.assetUrl,
+        checksumUrl: release.checksumUrl,
+      });
+      reply.code(202);
+      return status;
+    } catch (err) {
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
       return reply.serviceUnavailable(`Host ${id} is unreachable`);
     }
   });

@@ -6,7 +6,7 @@ import {
   orderTasksForColumn,
   computeTaskReorder,
 } from "./tasksBoard.js";
-import type { Task, TaskStatus } from "./api.js";
+import type { Task, TaskStatus } from "./api/index.js";
 
 function makeTask(overrides: Partial<Task>): Task {
   return {

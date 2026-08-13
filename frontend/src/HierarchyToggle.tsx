@@ -1,5 +1,5 @@
-import { useDashboardStore } from "./store.js";
-import { ListIcon, LayersIcon } from "./icons.js";
+import { useDashboardStore } from "./store/index.js";
+import { ListIcon, LayersIcon } from "./ui/icons.js";
 
 // Phase 5 (Track B, issue #195 5.5b) — flat vs hierarchical sidebar toggle.
 // Split out of Sidebar.tsx into its own tiny component, same

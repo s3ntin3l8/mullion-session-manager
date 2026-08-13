@@ -3,7 +3,6 @@ import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import type { DockviewGroupDropLocation, DockviewGroupPanel, Position } from "dockview";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
@@ -16,62 +15,41 @@ import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { GridIcon, RefreshIcon, ServerRackIcon, CloseIcon } from "./icons.js";
+import { GridIcon, RefreshIcon, ServerRackIcon, CloseIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
-} from "./store.js";
+} from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
-import type { Session } from "./api.js";
+import type { Session } from "./api/index.js";
 import { getSchemeBackground } from "./terminalTheme.js";
-import { playNotificationSound } from "./notifySound.js";
-import { randomPanelId } from "./random-id.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import { resolveAgentLogo } from "./cliLogos.js";
+import { components, tabComponents, KanbanBoardOverlay } from "./panels/registry.js";
 import {
-  components,
-  tabComponents,
-  KanbanBoardOverlay,
-  MOBILE_BREAKPOINT_QUERY,
-} from "./panels/registry.js";
-import {
-  hasTiledPanels,
   openSessionPanel,
-  openTimelinePanel,
-  dropSessionPanel,
-  serializeForPersist,
-  applyMobilePresentation,
   attentionTransitionPanelIds,
-  findSessionWorkspace,
-  parseDeepLinkSessionId,
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
-  closeLegacyPanels,
-  handleGlobalEscape,
   panelSessionId,
 } from "./panelUtils.js";
-import { describeEvent, unreadEventSummary } from "./eventDescriptions.js";
-import { useVisualViewportInset } from "./useVisualViewportInset.js";
+import { unreadEventSummary } from "./eventDescriptions.js";
+import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
+import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
+import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
+import { useMobileLayout } from "./hooks/useMobileLayout.js";
+import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
+import { useAppStreams } from "./hooks/useAppStreams.js";
+import { useAttentionNotifications } from "./hooks/useAttentionNotifications.js";
+import { usePanelOpener } from "./hooks/usePanelOpener.js";
 import { usePolling } from "./hooks/usePolling.js";
-import {
-  pickNewNotifiableEvents,
-  notificationChannelEnabled,
-  shouldRequestNotificationPermission,
-  requestNotificationPermission,
-  canShowBrowserNotification,
-  isCoalesced,
-} from "./desktopNotify.js";
 import { ensurePushSubscribed } from "./pushClient.js";
-import {
-  countAttentionRequired,
-  formatDocumentTitle,
-  updateFaviconBadge,
-} from "./documentBadge.js";
 
 // B2 — code-split Settings' ~2,700-line modal out of the initial bundle via
 // React.lazy (the two browser/preview panes and the Kanban board get the
@@ -106,22 +84,12 @@ function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
   );
 }
 
-const AUTOSAVE_DEBOUNCE_MS = 800;
 const DEFAULT_WORKSPACE_NAME = "Default";
 // Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
 // to decide whether to surface the hook-trust banner (issue #259) for a
 // currently-active session, never to make any backend decision. The
 // backend's own match against the actual spawned command is authoritative.
 const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
-
-interface PendingSave {
-  // Captured at *schedule* time, not read live at fire time — the load-
-  // bearing property that keeps a fast A->B workspace switch from writing
-  // A's (or a half-formed) layout into B's row, or vice versa. See the
-  // flush call in the restore effect below.
-  workspaceId: number;
-  timer: ReturnType<typeof setTimeout>;
-}
 
 interface PaletteState {
   open: boolean;
@@ -246,48 +214,21 @@ export function App() {
   // state-setters don't re-run the check reliably) and from the fetch race
   // below (workspacesLoaded flips exactly once).
   const bootstrappedRef = useRef(false);
-  // True only while a programmatic fromJSON() restore is in flight, so the
-  // onDidLayoutChange events it fires aren't mistaken for a real edit and
-  // echoed back into an autosave.
-  const restoringRef = useRef(false);
-  const pendingSaveRef = useRef<PendingSave | null>(null);
-  // Which workspace id the grid currently reflects a restore for. Lets the
-  // restore effect safely list `workspaces` as a dependency (needed so it
-  // retries once the initial fetch resolves, if dockviewApi became ready
-  // first and saw an empty list) without re-restoring — and blowing away
-  // in-progress edits — every time `workspaces` changes for an unrelated
-  // reason (e.g. renaming some other workspace).
-  const restoredWorkspaceIdRef = useRef<number | null>(null);
-  // Issue #170's per-session "already considered" bookkeeping for the
-  // desktop-notification effect below — the event-stream equivalent of the
-  // old seenAttentionRef/seenExitedRef poll-diff Sets (removed), just keyed
-  // by the /ws/events channel's own monotonic seq (desktopNotify.ts's
-  // pickNewNotifiableEvents) instead of Set membership.
-  const notifiedThroughSeqRef = useRef<Map<number, number>>(new Map());
-  // The moment the desktop-notification effect below first ran — passed as
-  // `notBefore` to pickNewNotifiableEvents so the /ws/events channel's
-  // on-connect replay of each session's buffered event *history* (store.ts's
-  // `events` slice — "live + replayed events") doesn't get misclassified as
-  // a burst of fresh notifications on every page load; only events at/after
-  // this instant (genuinely new, not backlog) can fire. See that function's
-  // own doc comment for why `alreadyProcessed` alone can't substitute for
-  // this. Lazily set inside the effect itself (not `useRef(Date.now())`) —
-  // reading the clock belongs in an effect, not render.
-  const notifyStreamStartRef = useRef<number | null>(null);
-  // Whether Notification permission has already been requested this page
-  // session — gates desktopNotify.ts's shouldRequestNotificationPermission
-  // to the FIRST attention event only (issue #170), independent of
-  // Settings.tsx's own request-on-toggle path.
-  const permissionRequestedRef = useRef(false);
-  // Rich statuses (issue: extend surfaced session statuses) — per-session
-  // notification coalescing (desktopNotify.ts's isCoalesced), so a burst of
-  // notifiable events for the same session in quick succession fires at
-  // most one sound/desktop-notification every NOTIFICATION_COALESCE_MS,
-  // not one per event.
-  const lastNotifiedAtRef = useRef<Map<number, number>>(new Map());
-  // The #98 auto-focus effect below is deliberately NOT part of this
+  // restoringRef/restoredWorkspaceIdRef used to be declared here, but now
+  // come from useWorkspacePersistence's return value (see the hook call
+  // further down, at the exact position the restore/autosave effects used
+  // to occupy) — several effects further down in this file (auto-open-
+  // child-panel, deep-link, push-message) still read them.
+  // notifiedThroughSeqRef/notifyStreamStartRef/permissionRequestedRef/
+  // lastNotifiedAtRef used to be declared here — Issue #170's per-session
+  // "already considered" bookkeeping for the desktop-notification effect,
+  // keyed by the /ws/events channel's own monotonic seq
+  // (desktopNotify.ts's pickNewNotifiableEvents) — but now live inside
+  // useAttentionNotifications (hooks/useAttentionNotifications.ts), which
+  // owns that effect; see that hook's own header comment.
+  // The #98 auto-focus effect below is deliberately NOT part of that
   // migration — it stays on the poll-diff `sessions.attention` snapshot
-  // (own Set, independent of notifiedThroughSeqRef above) rather than the
+  // (own Set, independent of the moved refs above) rather than the
   // /ws/events stream; see that effect's own comment for why.
   const seenAttentionForFocusRef = useRef<Set<number>>(new Set());
   // Phase 5 (Track B, issue #194 5.4) — same "poll-diff, own Set" shape as
@@ -302,59 +243,17 @@ export function App() {
   // qualifying tick without acting; only a transition AFTER that counts.
   const hasSeededChildSessionsRef = useRef(false);
 
-  // Issue #95 prerequisite — a deep link (e.g. a push notification's
-  // notificationclick) should only ever be consumed once per page load, not
-  // re-applied on every subsequent render once its gate conditions hold.
-  const deepLinkHandledRef = useRef(false);
-  // Forces the deep-link effect below to retry once restoringRef.current
-  // flips false, since that's a bare ref write and triggers no re-render on
-  // its own — see the effect's own comment for the scheduling argument.
-  const [deepLinkRetryTick, setDeepLinkRetryTick] = useState(0);
+  // deepLinkHandledRef/deepLinkRetryTick used to be declared here — Issue
+  // #95 prerequisite bookkeeping for the `?session=<id>` deep-link effect —
+  // but now live inside useSessionDeepLink (hooks/useSessionDeepLink.ts),
+  // which owns that effect; see the hook call further down (right after
+  // useWorkspacePersistence) and that hook's own header comment for the
+  // ordering/coupling contract with restoringRef/restoredWorkspaceIdRef.
   // Keyed by panel id (not a boolean) so the post-workspace-switch highlight
   // effect below only acts once per highlight, not on every dependency
   // change (e.g. a live-refresh poll tick) that happens to land inside the
   // highlight's own ~1200ms window — see that effect's own comment.
   const lastHandledHighlightRef = useRef<string | null>(null);
-
-  // Ref to the dockview container element for native DnD event handling
-  // (sidebar session drag-to-dock — Task 3).
-  const dockviewRef = useRef<HTMLDivElement>(null);
-  const lastDropTargetRef = useRef<{
-    group: DockviewGroupPanel | undefined;
-    location: DockviewGroupDropLocation;
-    position: Position;
-  } | null>(null);
-
-  const flushPendingSave = useCallback((api: DockviewApi) => {
-    const pending = pendingSaveRef.current;
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    pendingSaveRef.current = null;
-    // Read *before* the caller clears/replaces the grid — this is still
-    // the outgoing workspace's own layout at this point. Issue #85: goes
-    // through serializeForPersist (not raw api.toJSON()) so a
-    // workspace-switch save strips floating panels AND maximization the
-    // same way the debounced scheduleSave below does — this previously
-    // wrote the raw blob and leaked both.
-    void useDashboardStore
-      .getState()
-      .saveWorkspaceLayout(
-        pending.workspaceId,
-        serializeForPersist(api) as unknown as Record<string, unknown>,
-      );
-  }, []);
-
-  const scheduleSave = useCallback((api: DockviewApi, workspaceId: number) => {
-    if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
-    const timer = setTimeout(() => {
-      pendingSaveRef.current = null;
-      const serialized = serializeForPersist(api);
-      void useDashboardStore
-        .getState()
-        .saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
-    }, AUTOSAVE_DEBOUNCE_MS);
-    pendingSaveRef.current = { workspaceId, timer };
-  }, []);
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     setDockviewApi(event.api);
@@ -414,120 +313,22 @@ export function App() {
     if (!stillExists) useDashboardStore.getState().setActiveWorkspaceId(workspaces[0].id);
   }, [workspaces, activeWorkspaceId]);
 
-  // Restore the active workspace's saved layout whenever it changes
-  // (including the first time dockview itself becomes ready). `workspaces`
-  // is deliberately in the dependency array — dockviewApi frequently becomes
-  // ready before the initial refreshWorkspaces() fetch resolves, and without
-  // it this effect would see an empty list, bail out once, and never get a
-  // second chance to run once the real data arrived. The
-  // restoredWorkspaceIdRef guard is what keeps that from also re-restoring
-  // (and fighting in-progress edits) on every unrelated `workspaces` refetch,
-  // e.g. after renaming some other workspace.
-  useEffect(() => {
-    if (!dockviewApi || activeWorkspaceId === null) return;
-    if (restoredWorkspaceIdRef.current === activeWorkspaceId) return;
-    const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
-    if (!workspace) return;
-
-    // Flush the OUTGOING workspace's pending autosave synchronously before
-    // tearing down its layout below.
-    flushPendingSave(dockviewApi);
-
-    restoringRef.current = true;
-    let closedKilledPanels = false;
-    let closedLegacyPanels = false;
-    try {
-      dockviewApi.clear();
-      if (workspace.layout) {
-        dockviewApi.fromJSON(workspace.layout as unknown as Parameters<DockviewApi["fromJSON"]>[0]);
-      }
-      // Remove any panels that reference killed sessions — the restored
-      // layout may have been saved before those sessions were killed.  This
-      // catches stale layouts; the reactive `useEffect` below (commented
-      // "Close any dockview panel whose session has been killed") catches
-      // the case where sessions haven't loaded yet at this point.
-      const currentSessions = useDashboardStore.getState().sessions;
-      const stalePanelIds: string[] = [];
-      for (const panel of dockviewApi.panels) {
-        let sessionId = (panel.params as { sessionId?: number } | undefined)?.sessionId;
-        if (sessionId == null) {
-          const match = panel.id.match(/^(?:timeline|browserPane)-(\d+)$/);
-          if (match) sessionId = parseInt(match[1], 10);
-        }
-        if (sessionId != null) {
-          const session = currentSessions.find((s) => s.id === sessionId);
-          if (panel.id.startsWith("session-")) {
-            if (session?.status === "killed") {
-              stalePanelIds.push(panel.id);
-            }
-          } else if (panel.id.startsWith("timeline-") || panel.id.startsWith("browserPane-")) {
-            if (!session || session.status === "killed" || session.status === "exited") {
-              stalePanelIds.push(panel.id);
-            }
-          }
-        }
-      }
-      if (stalePanelIds.length > 0) {
-        closedKilledPanels = true;
-        for (const id of stalePanelIds) {
-          dockviewApi.getPanel(id)?.api.close();
-        }
-      }
-      // Self-heals a restored "tasks" panel away (see TasksPanelRedirect.tsx
-      // and panelUtils.ts's own doc comments) — kept as its own flag rather
-      // than folded into closedKilledPanels above since the two sweeps close
-      // panels for unrelated reasons.
-      closedLegacyPanels = closeLegacyPanels(dockviewApi);
-    } catch (err) {
-      // A corrupt or version-incompatible layout blob must never brick the
-      // whole dashboard — this runs outside any panel's own ErrorBoundary,
-      // since it's not inside a panel at all. Fall back to an empty grid.
-      console.error("[workspace] failed to restore layout, resetting to empty grid", err);
-      dockviewApi.clear();
-    } finally {
-      // fromJSON can fire onDidLayoutChange asynchronously for some panel
-      // mount events — give it a tick before re-arming autosave so the
-      // restore itself is never echoed back as a save.  If the post-restore
-      // cleanup above closed any killed panels, persist the cleaned layout
-      // explicitly (the close events were suppressed by restoringRef being
-      // true, so the killed panels would otherwise stay in the blob).
-      setTimeout(() => {
-        restoringRef.current = false;
-        if (closedKilledPanels || closedLegacyPanels) {
-          scheduleSave(dockviewApi, activeWorkspaceId);
-        }
-      }, 0);
-    }
-    // Issue #85 — a layout restored from a blob saved on a different
-    // breakpoint (desktop -> mobile, or a stale pre-#85 blob that still
-    // carries a persisted maximizedNode) must present per the CURRENT
-    // breakpoint, not whatever the blob implies. Deliberately OUTSIDE the
-    // try/catch above: if this ever threw, landing in the catch would
-    // dockviewApi.clear() and wipe a layout that had just restored
-    // successfully. Placed here it's also safe on the error path — clear()
-    // leaves an empty grid, and applyMobilePresentation no-ops on that.
-    // Safe regardless of whether restoringRef suppresses this call's own
-    // onDidLayoutChange echo, since serializeForPersist strips
-    // maximizedNode unconditionally on every future save.
-    applyMobilePresentation(dockviewApi, isMobile);
-    restoredWorkspaceIdRef.current = activeWorkspaceId;
-  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, isMobile]);
-
-  // Any real layout change (add/remove/move panel, or a splitter-drag
-  // resize) schedules a debounced autosave, unless it's the restore
-  // effect's own echo. Also bumps panelsVersion so the toolbar/mobile-tabs
-  // pane count/list re-render (dockview's own panel list isn't otherwise
-  // reactive from React's perspective).
-  useEffect(() => {
-    if (!dockviewApi || activeWorkspaceId === null) return;
-    const workspaceId = activeWorkspaceId;
-    const disposable = dockviewApi.onDidLayoutChange(() => {
-      setPanelsVersion((v) => v + 1);
-      if (restoringRef.current) return;
-      scheduleSave(dockviewApi, workspaceId);
-    });
-    return () => disposable.dispose();
-  }, [dockviewApi, activeWorkspaceId, scheduleSave]);
+  // Restores the active workspace's saved dockview layout on mount/
+  // workspace-switch, and autosaves layout changes back as they happen —
+  // extracted to useWorkspacePersistence (hooks/useWorkspacePersistence.ts).
+  // Called here, at the EXACT position its two effects previously occupied
+  // in this component's body, so their execution order relative to every
+  // other effect in this file (in particular the auto-open-child-panel,
+  // deep-link, and push-message effects further down, which read
+  // restoringRef/restoredWorkspaceIdRef and depend on a restore having
+  // already run) is unchanged — see that hook's own header comment.
+  const { restoringRef, restoredWorkspaceIdRef } = useWorkspacePersistence({
+    dockviewApi,
+    activeWorkspaceId,
+    workspaces,
+    isMobile,
+    setPanelsVersion,
+  });
 
   // Issue #107: opening a new panel (dockview's addPanel/floating-group path)
   // corrupts the already-rendered WebGL canvas pixels of every OTHER live
@@ -563,51 +364,19 @@ export function App() {
     return () => disposable.dispose();
   }, [dockviewApi]);
 
-  // Mobile breakpoint detection — mirrors the design's own matchMedia usage
-  // (699px) rather than duplicating the value as a magic number elsewhere.
-  // Issue #85: applyMobilePresentation (not a bare exitMaximizedGroup) so
-  // this is symmetric — entering mobile now maximizes too, not just leaving
-  // it. onChange() already runs immediately on mount, and this effect
-  // re-runs when dockviewApi transitions from null to non-null, so "first
-  // mount while already mobile" is covered without a separate call.
-  useEffect(() => {
-    const mq = window.matchMedia(MOBILE_BREAKPOINT_QUERY);
-    const onChange = () => {
-      setIsMobile(mq.matches);
-      if (dockviewApi) applyMobilePresentation(dockviewApi, mq.matches);
-    };
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [dockviewApi]);
-
-  // Mobile UI/UX overhaul, item A.2 — applyMobilePresentation (above) syncs
-  // every group's header.hidden on restore and on breakpoint change, but a
-  // group created and maximized *between* those two moments (e.g. opening a
-  // session's timeline or Agent Browser panel on mobile — panelUtils.ts's
-  // openTimelinePanel/openBrowserPanePanel/openTaskDetailPanel, or the ~14
-  // inline `if (isMobile) dockviewApi.maximizeGroup(...)` call sites further
-  // down this file) would otherwise show its header un-hidden until the next
-  // breakpoint change. Every one of those calls `maximizeGroup`, which fires
-  // this event — subscribing here once covers all of them (current and
-  // future) without editing each call site individually. Also covers
-  // `onDidAddGroup` (Hermes review, PR #613): a group created WITHOUT an
-  // intervening maximizeGroup — a drag-split, or a future programmatic
-  // `addGroup()` — would otherwise render dockview's own tab strip un-hidden
-  // until the next breakpoint change, reintroducing this PR's own "doubled
-  // switcher" bug for that one group.
-  useEffect(() => {
-    if (!dockviewApi) return;
-    const hideIfMobile = (group: DockviewGroupPanel) => {
-      group.header.hidden = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-    };
-    const maximizedSub = dockviewApi.onDidMaximizedGroupChange(({ group }) => hideIfMobile(group));
-    const addedSub = dockviewApi.onDidAddGroup((group) => hideIfMobile(group));
-    return () => {
-      maximizedSub.dispose();
-      addedSub.dispose();
-    };
-  }, [dockviewApi]);
+  // Keeps dockview's presentation in sync with the mobile breakpoint —
+  // extracted to useMobileLayout (hooks/useMobileLayout.ts). Called here, at
+  // the EXACT position its two effects previously occupied in this
+  // component's body, so their execution order relative to every other
+  // effect in this file — in particular, running AFTER the
+  // useWorkspacePersistence restore effect above on the commit where
+  // dockviewApi first becomes non-null — is unchanged. `isMobile` itself
+  // stays owned by this component's own useState (rather than being
+  // returned from the hook) specifically because it's read EARLIER in this
+  // render body, at the useWorkspacePersistence call above — see that hook's
+  // own `setIsMobile` param comment for why returning it here instead would
+  // be a real ordering regression, not just a style difference.
+  useMobileLayout({ dockviewApi, setIsMobile });
 
   // Focuses the mobile pane bar's inline rename input the moment it opens —
   // same "explicit transition, not a bare mount effect" shape as
@@ -643,138 +412,17 @@ export function App() {
     );
   }, [activePanelId]);
 
-  // Sidebar drag-to-dock: subscribe to dockview's external drag-over events
-  // so it shows drop indicators when a session row is dragged over the
-  // workspace (the drag source sets application/x-mullion-session in dataTransfer).
-  useEffect(() => {
-    if (!dockviewApi) return;
-    const disposable = dockviewApi.onUnhandledDragOver((event) => {
-      const dt = event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
-      if (!dt || !dt.types.includes("application/x-mullion-session")) return;
-      event.accept();
-      lastDropTargetRef.current = {
-        group: event.group,
-        location: event.target,
-        position: event.position,
-      };
-    });
-    return () => disposable.dispose();
-  }, [dockviewApi]);
-
-  // Sidebar drag-to-dock onto an existing group: dockview's own droptarget
-  // (the quadrant overlay shown while dragging over a pane) calls
-  // stopPropagation() on the native `drop` event once it handles it, so the
-  // native listener below never sees drops onto a group — only drops onto
-  // empty grid space. dockview re-surfaces those handled drops via
-  // onDidDrop, which is the only way to actually dock a session dragged onto
-  // a pane (issue #121: "drag-and-drop onto a pane silently does nothing").
-  // event.position is dockview's own quadrant classification for the drop:
-  // "center" (including any drop on the tab bar) means add as a tab within
-  // the group; any edge quadrant means split.
-  useEffect(() => {
-    if (!dockviewApi) return;
-    const disposable = dockviewApi.onDidDrop((event) => {
-      const dt = event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
-      const sessionIdStr = dt?.getData("application/x-mullion-session");
-      if (!sessionIdStr) return;
-      const sessionId = Number(sessionIdStr);
-      if (isNaN(sessionId)) return;
-
-      const panelId = `session-${sessionId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        return;
-      }
-
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) return;
-
-      dropSessionPanel(dockviewApi, session, projects, {
-        group: event.group,
-        location: event.position === "center" ? "content" : "edge",
-        position: event.position,
-      });
-      lastDropTargetRef.current = null;
-      setSidebarOpen(false);
-    });
-    return () => disposable.dispose();
-  }, [dockviewApi, setSidebarOpen]);
-
-  // Handle the native drop event for sidebar session drag-to-dock onto
-  // *empty grid space* (dockview has no group there to intercept the drop, so
-  // it reaches this listener rather than onDidDrop above). Reads the session
-  // ID from dataTransfer and places the panel at the position tracked by
-  // onUnhandledDragOver above, or docks into the grid when there's no target.
-  useEffect(() => {
-    const el = dockviewRef.current;
-    if (!el) return;
-
-    const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("application/x-mullion-session")) {
-        e.preventDefault();
-      }
-    };
-
-    const onDragEndOrLeave = (e: DragEvent) => {
-      if (
-        e.type === "dragleave" &&
-        e.relatedTarget &&
-        (e.currentTarget as Node)?.contains(e.relatedTarget as Node)
-      ) {
-        return;
-      }
-      lastDropTargetRef.current = null;
-    };
-
-    const onDrop = (e: DragEvent) => {
-      const sessionIdStr = e.dataTransfer?.getData("application/x-mullion-session");
-      if (!sessionIdStr) {
-        e.preventDefault();
-        lastDropTargetRef.current = null;
-        return;
-      }
-      const sessionId = Number(sessionIdStr);
-      if (isNaN(sessionId) || !dockviewApi) {
-        e.preventDefault();
-        lastDropTargetRef.current = null;
-        return;
-      }
-
-      const panelId = `session-${sessionId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        e.preventDefault();
-        existing.api.setActive();
-        lastDropTargetRef.current = null;
-        return;
-      }
-
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) {
-        e.preventDefault();
-        lastDropTargetRef.current = null;
-        return;
-      }
-
-      dropSessionPanel(dockviewApi, session, projects, lastDropTargetRef.current);
-      lastDropTargetRef.current = null;
-      setSidebarOpen(false);
-    };
-
-    el.addEventListener("dragover", onDragOver);
-    el.addEventListener("drop", onDrop);
-    el.addEventListener("dragend", onDragEndOrLeave);
-    el.addEventListener("dragleave", onDragEndOrLeave);
-    return () => {
-      el.removeEventListener("dragover", onDragOver);
-      el.removeEventListener("drop", onDrop);
-      el.removeEventListener("dragend", onDragEndOrLeave);
-      el.removeEventListener("dragleave", onDragEndOrLeave);
-    };
-  }, [dockviewApi, setSidebarOpen]);
+  // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
+  // and dropping it onto the dockview grid to open/dock its panel —
+  // extracted to useDockviewDrop (hooks/useDockviewDrop.ts). Called here, at
+  // the position its three effects previously occupied in this component's
+  // body (right after the mobile pane bar's rename-cancel effect, right
+  // before the global keyboard shortcuts effect below). Unlike
+  // useWorkspacePersistence/useMobileLayout above, this position is NOT
+  // load-bearing: none of the three extracted effects share state with any
+  // other effect in this file, or with each other beyond the ref the hook
+  // now owns internally — see that hook's own header comment.
+  const { dockviewRef } = useDockviewDrop({ dockviewApi, setSidebarOpen });
 
   const openSettings = useCallback((section: SettingsSection = "appearance") => {
     setSettingsSection(section);
@@ -783,36 +431,14 @@ export function App() {
 
   // Global keyboard shortcuts: ⌘K/Ctrl+K opens the launcher, ⌘,/Ctrl+, opens
   // settings, Esc closes whichever overlay is open. Registered once,
-  // independent of what currently has DOM focus.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPalette((p) => ({ ...p, open: true, scope: "global" }));
-      } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        openSettings();
-      } else if (e.key === "Escape") {
-        // U9 — see handleGlobalEscape's own doc comment for why
-        // clearSplitRequest belongs here: the palette also renders for a
-        // pending split-right/split-down splitRequest (paletteOpen's own
-        // `palette.open || (splitRequest !== null && ...)` computation
-        // below), and the palette's OWN Escape handler only fires while
-        // focus is actually inside its search input — moving focus to the
-        // project picker, a launcher row, the worktree checkbox, or the
-        // base-ref dropdown (all still inside the palette) leaves this
-        // global, window-level handler as the only one that still sees the
-        // keypress.
-        handleGlobalEscape({
-          clearPalette: () => setPalette((p) => ({ ...p, open: false })),
-          closeSettings: () => setSettingsOpen(false),
-          clearSplitRequest: () => useDashboardStore.getState().clearSplitRequest(),
-        });
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [openSettings]);
+  // independent of what currently has DOM focus — extracted to
+  // useGlobalShortcuts (hooks/useGlobalShortcuts.ts). Called here, at the
+  // EXACT position this effect previously occupied in this component's body
+  // — not because it's load-bearing (see that hook's own header comment for
+  // the ordering/coupling analysis proving this effect is independent of
+  // every other effect in this file), but to keep the diff minimal and the
+  // file's effect ordering easy to audit.
+  useGlobalShortcuts({ setPalette, setSettingsOpen, openSettings });
 
   // Check for updates on mount and re-check every 30 minutes.
   // The backend caches results for 1h, so most re-checks are no-ops.
@@ -830,24 +456,17 @@ export function App() {
   // actually re-probes the filesystem.
   usePolling(() => useDashboardStore.getState().checkCodexHookTrust(), 60 * 1000);
 
-  // Starts the ~4s session-status poll once (paused while the tab is
-  // hidden) so status badges reflect the backend without a mutation.
-  useEffect(() => useDashboardStore.getState().startLiveRefresh(), []);
-
-  // Connects the single /ws/events push channel once (issue #166) — not
-  // per-pane, unlike TerminalPane.tsx's own per-session WS. Additive
-  // alongside the poll above, which stays exactly as-is; nothing in this PR
-  // yet renders from the resulting `events` store slice.
-  useEffect(() => useDashboardStore.getState().startEventsStream(), []);
-
-  // #488 — connects the /ws/tasks push channel once on mount so the Tasks
-  // panel picks up a transition within ~1s instead of on the next 60s poll
-  // tick. Additive alongside that poll, which stays as the fallback.
-  useEffect(() => useDashboardStore.getState().startTasksStream(), []);
-
-  // Phase 2 GitHub WS — connects the /ws/github push channel once on mount
-  // so real-time PR/CI/issue updates from webhooks reach the store.
-  useEffect(() => useDashboardStore.getState().connectGitHubWS(), []);
+  // Starts this app's live data feeds from the backend once on mount: the
+  // ~4s session-status poll plus the /ws/events, /ws/tasks, and /ws/github
+  // push channels — extracted to useAppStreams (hooks/useAppStreams.ts).
+  // Called here, at the position its four effects previously occupied in
+  // this component's body (right after the global keyboard shortcuts effect
+  // above, right before the update-check poll below), though — like
+  // useDockviewDrop/useGlobalShortcuts before it — this position is NOT
+  // load-bearing: none of the four extracted effects share state with any
+  // other effect in this file, or with each other — see that hook's own
+  // header comment for the full ordering/coupling analysis.
+  useAppStreams();
 
   // Fetches the server-persisted Settings blob once on mount (store.ts seeds
   // sane defaults synchronously so nothing blocks on this) and starts
@@ -856,99 +475,18 @@ export function App() {
   useEffect(() => void useDashboardStore.getState().hydrateSettings(), []);
   useEffect(() => useDashboardStore.getState().startThemeWatch(), []);
 
-  // Issue #170: fires a browser Notification (and/or the notification
-  // sound) when the live /ws/events channel (issue #166, store.ts's
-  // `events` slice) delivers a genuinely notification-worthy event —
-  // desktopNotify.ts's pickNewNotifiableEvents, which reuses
-  // eventDescriptions.ts's notifyKind (the exact same "attention actually
-  // ringing, or a program exited" filter the tab badge (#168) and
-  // notification panel feed (#169) already use, so all three surfaces agree
-  // on what counts). Replaces the old poll-diff seenAttentionRef/
-  // seenExitedRef effects (removed above) that diffed polled SessionInfo
-  // snapshots each live-refresh tick — leaving both live would double-fire
-  // during the migration. The backend's attention state machine (#171)
-  // already debounces per-kind before an `attention` event is ever emitted,
-  // so this deliberately does not add a second debounce layer on top: one
-  // NotificationEvent is one candidate notification.
-  useEffect(() => {
-    if (notifyStreamStartRef.current === null) notifyStreamStartRef.current = Date.now();
-    const { notifiable, processedThrough } = pickNewNotifiableEvents(
-      events,
-      notifiedThroughSeqRef.current,
-      notifyStreamStartRef.current,
-    );
-    notifiedThroughSeqRef.current = processedThrough;
-
-    for (const { sessionId, event, kind } of notifiable) {
-      // Issue #404 — every OTHER notifyKind-classified event kind has a
-      // matching SessionStatus that's simultaneously true when it fires
-      // (e.g. a permission_request event and session.sessionStatus ===
-      // "awaiting_permission" land together), which is what makes gating
-      // this loop by session.sessionStatus below meaningful: the matrix
-      // entry checked is actually the entry FOR this event. dev_server_detected
-      // deliberately has no SessionStatus of its own (see sessionStatus.ts —
-      // this is a background housekeeping signal, not an agent-state
-      // transition), so that same lookup would instead check whatever ELSE
-      // the session happens to be doing right now (idle/working/etc) —
-      // orthogonal to this event, and in practice almost always notify:false
-      // by default, silently defeating the feature. Skipped here entirely:
-      // it still gets the in-app treatment (bell icon, panel row with
-      // accept/dismiss, tab badge via PaneTab.tsx's own notifyKind use) —
-      // just never an OS-level Notification/sound/auto-focus, which would be
-      // gated by the wrong axis anyway.
-      if (event.kind === "dev_server_detected") continue;
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) continue;
-      if (!notificationChannelEnabled(session.sessionStatus, settings.notifications)) continue;
-
-      const now = Date.now();
-      if (isCoalesced(sessionId, now, lastNotifiedAtRef.current)) continue;
-      lastNotifiedAtRef.current.set(sessionId, now);
-
-      const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
-      if (shouldRequestNotificationPermission(kind, permission, permissionRequestedRef.current)) {
-        permissionRequestedRef.current = true;
-        requestNotificationPermission();
-      }
-
-      // Per-status sound: the global channels.sound toggle AND the
-      // per-status matrix column must both be on for a sound to fire.
-      if (
-        settings.notifications.channels.sound &&
-        settings.notifications.notificationMatrix[session.sessionStatus]?.sound
-      ) {
-        playNotificationSound(settings.notifications.soundName);
-      }
-
-      // Issue #170's Page Visibility requirement: only actually raise the
-      // desktop notification while the tab is hidden/unfocused — a visible
-      // tab already surfaces the change some other way (status line, tab
-      // badge, the bell itself). Issue #322: also fires for backgrounded
-      // dockview panes in a visible tab — only the currently-active pane
-      // (the one the user is looking at) is suppressed.
-      const sessionIsActive = activePanelId === `session-${sessionId}`;
-      if (
-        !canShowBrowserNotification({
-          browserChannelEnabled: settings.notifications.channels.browser,
-          permission,
-          documentHidden: document.visibilityState !== "visible",
-          sessionIsActive,
-        })
-      ) {
-        continue;
-      }
-
-      const described = describeEvent(event);
-      const notification = new Notification(session.name || session.command || "Mullion", {
-        body: described?.text ?? "Needs your attention",
-      });
-      notification.onclick = () => {
-        window.focus();
-        useDashboardStore.getState().openNotificationsPanel();
-        notification.close();
-      };
-    }
-  }, [events, sessions, settings.notifications, activePanelId]);
+  // Fires a browser Notification (+ sound) on a notification-worthy
+  // /ws/events arrival (issue #170), and keeps the backgrounded-tab
+  // document.title/favicon badge current — extracted to
+  // useAttentionNotifications (hooks/useAttentionNotifications.ts). Called
+  // here, at the desktop-notification effect's original position in this
+  // component's body, purely to keep the diff minimal and the file's effect
+  // ordering easy to audit — like useDockviewDrop/useGlobalShortcuts/
+  // useAppStreams before it, this call-site position is NOT load-bearing.
+  // See that hook's own header comment for the full ordering/coupling
+  // analysis, including why the title/favicon effect's own position
+  // (originally further down this file) safely moved here too.
+  useAttentionNotifications({ events, sessions, settings, activePanelId });
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
   // via Settings -> Notifications & status (default off — see api.ts's
@@ -1098,19 +636,22 @@ export function App() {
     dockviewApi,
     activeWorkspaceId,
     projects,
+    // restoringRef/restoredWorkspaceIdRef now come from
+    // useWorkspacePersistence's return value rather than a bare useRef() in
+    // this component, so eslint's exhaustive-deps rule can no longer
+    // statically prove they're stable ref identities and flags them as
+    // missing — listed here purely to satisfy the lint rule; both are
+    // ordinary refs (mutated in place, never reassigned), so including them
+    // has no effect on when this effect re-runs.
+    restoringRef,
+    restoredWorkspaceIdRef,
   ]);
 
-  // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
-  // tab previously gave no signal at all that something happened (static
-  // favicon, document.title never assigned — see documentBadge.ts's own
-  // header comment). Runs unconditionally (no Settings gate): unlike a sound
-  // or a desktop notification, a tab title/favicon change is not disruptive
-  // and costs nothing to always keep current.
-  useEffect(() => {
-    const count = countAttentionRequired(sessions);
-    document.title = formatDocumentTitle(count);
-    updateFaviconBadge(count);
-  }, [sessions]);
+  // The backgrounded-tab document.title/favicon-badge effect used to be
+  // declared here — moved into useAttentionNotifications above (called
+  // higher up in this file); see that hook's own header comment for why
+  // moving its execution position earlier is safe (it shares no ref/state
+  // with anything between its old and new position).
 
   // Issue #87 — apple-mobile-web-app-status-bar-style: iOS reads this once
   // at standalone launch and does NOT re-read it on later DOM mutations, so
@@ -1156,134 +697,65 @@ export function App() {
     }
   }, [sessions, dockviewApi]);
 
-  const onOpenSession = useCallback(
-    (session: Session) => {
-      if (!dockviewApi) return;
-      const panelId = `session-${session.id}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        useDashboardStore.getState().triggerPanelHighlight(panelId);
-      } else {
-        const wsId = findSessionWorkspace(session.id, workspaces);
-        if (wsId != null && wsId !== activeWorkspaceId) {
-          useDashboardStore.getState().triggerPanelHighlight(panelId);
-          useDashboardStore.getState().setActiveWorkspaceId(wsId);
-        } else {
-          openSessionPanel(dockviewApi, session, isMobile, projects);
-        }
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, isMobile, projects, workspaces, activeWorkspaceId],
-  );
+  // The 12 `onOpen*` panel-opening callbacks (session/session-as-float/
+  // timeline/GitHub/Git/Agent Rules/Dock Config/Skills/Browser/Tasks/
+  // Browser-URL/Blank-Browser) used to be declared individually here and
+  // further down (immediately before the split-launch handler) — extracted
+  // to usePanelOpener (hooks/usePanelOpener.ts). Called here, at
+  // onOpenSession's own former position, because that's a closure-order
+  // requirement, not an effect-ordering one: this hook registers no effects
+  // at all (every value it returns is a useCallback), so unlike
+  // useWorkspacePersistence/useMobileLayout/useSessionDeepLink above, WHERE
+  // in this component's body it's called doesn't affect behavior — but
+  // onOpenSession itself must still be defined before useSessionDeepLink's
+  // call and the onOpenSessionRef mirroring effect below, both of which
+  // read it. See that hook's own header comment for the full design
+  // rationale (why 6 of the 12 share one generic helper and 6 don't, and
+  // why the actual count is 12 rather than the roadmap's estimated 16).
+  const {
+    onOpenSession,
+    onOpenSessionAsFloat,
+    onOpenTimeline,
+    onOpenGitHub,
+    onOpenGit,
+    onOpenAgentRules,
+    onOpenDockConfig,
+    onOpenSkills,
+    onOpenBrowser,
+    onOpenTasks,
+    onOpenBrowserUrl,
+    onOpenBlankBrowser,
+  } = usePanelOpener({
+    dockviewApi,
+    isMobile,
+    projects,
+    workspaces,
+    activeWorkspaceId,
+    setSidebarOpen,
+  });
 
-  // Sidebar kebab "Open as new window" — always opens as float in the
-  // current workspace regardless of which workspace the session belongs to.
-  const onOpenSessionAsFloat = useCallback(
-    (session: Session) => {
-      if (!dockviewApi) return;
-      openSessionPanel(dockviewApi, session, isMobile, projects);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, isMobile, projects],
-  );
-
-  // Issue #270 — notification-row click opens the timeline instead of the
-  // terminal (see NotificationBell.tsx's own onOpenTimeline doc). Hoisted
-  // into a stable useCallback, same shape as onOpenSession/
-  // onOpenSessionAsFloat above, specifically so it doesn't skip
-  // setSidebarOpen(false) the way an inline JSX-computed closure did in an
-  // earlier version of this change — on mobile the notification bell stays
-  // reachable above the open sidebar's scrim, so a row tap without this
-  // left the timeline opening BEHIND the still-open sidebar overlay.
-  const onOpenTimeline = useCallback(
-    (session: Session) => {
-      if (!dockviewApi) return;
-      openTimelinePanel(dockviewApi, session);
-      setSidebarOpen(false);
-    },
-    [dockviewApi],
-  );
-
-  // Issue #95 prerequisite — deep-link a session via ?session=<id> (e.g. a
-  // push notification's notificationclick handler, which can't reach into
-  // dockview state the way an in-page click can). Query param, not a path
-  // segment: there's no client-side router in this app and
-  // src/plugins/static.ts serves the build with no SPA rewrite, so
-  // /session/3 would 404 while /?session=3 is still "/".
-  //
-  // Gated the same way the auto-open-child-panel effect above is (workspace
-  // restore complete, not mid-restore, sessions loaded) — same reasoning:
-  // opening a panel before the restore effect has applied the CURRENT
-  // workspace's saved layout would get silently wiped by that effect's
-  // dockviewApi.clear()+fromJSON() a moment later. Reuses onOpenSession
-  // rather than reimplementing its cross-workspace-switch logic (find which
-  // workspace the session's panel actually lives in, switch to it if
-  // different) — that function already does exactly what a deep link needs.
-  // onOpenSession itself calls setState (setActiveWorkspaceId/
-  // setSidebarOpen) — deferred via setTimeout(0), same pattern the restore
-  // effect above uses, since this repo's react-hooks/set-state-in-effect
-  // lint rule disallows calling a setState-triggering function synchronously
-  // from inside an effect body.
-  useEffect(() => {
-    if (deepLinkHandledRef.current) return;
-    const workspaceRestored =
-      activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
-    if (!dockviewApi || !workspaceRestored || !sessionsLoaded) return;
-    if (restoringRef.current) {
-      // restoringRef flips to false via a bare ref write in the restore
-      // effect's own re-arm setTimeout(0) (above) — that write triggers no
-      // re-render, so without an explicit retry this effect would sit
-      // stalled until an unrelated store update happens to re-render this
-      // component. Both setTimeout(0)s are scheduled in the same
-      // synchronous effect flush, the restore effect's first (it's declared
-      // earlier) — macrotasks with equal delay run in scheduling order, so
-      // by the time this one fires, restoringRef.current is already false
-      // and the retry succeeds deterministically.
-      const timer = setTimeout(() => setDeepLinkRetryTick((t) => t + 1), 0);
-      return () => clearTimeout(timer);
-    }
-
-    deepLinkHandledRef.current = true;
-    const url = new URL(window.location.href);
-    const sessionId = parseDeepLinkSessionId(url.search);
-    if (sessionId !== null) {
-      // Clears only the `session` param regardless of whether a matching
-      // session is found, so a reload never re-triggers this for a session
-      // that's since been killed/renamed away, and the URL doesn't linger
-      // looking "sticky" — while leaving any other query params/hash intact.
-      url.searchParams.delete("session");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      const session = sessions.find((s) => s.id === sessionId);
-      // Killed sessions stay in `sessions` (see the panel-cleanup effect
-      // above); opening one would show a panel that the next `sessions`
-      // update closes right back out from under the user.
-      if (session && session.status !== "killed") {
-        // Cleaned up on unmount (dev HMR, app teardown) — same reasoning as
-        // the restoringRef retry timer above, since onOpenSession reads
-        // dockviewApi by closure and would otherwise run against a
-        // torn-down instance if unmount lands inside this window.
-        const timer = setTimeout(() => onOpenSession(session), 0);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [
+  // `?session=<id>` deep-link effect (issue #95 prerequisite) — extracted to
+  // useSessionDeepLink (hooks/useSessionDeepLink.ts). Called here rather than
+  // right after useWorkspacePersistence's own call further up, because it
+  // needs onOpenSession (defined above) in closure — but the ordering
+  // guarantee that matters (this hook's effect registering AFTER
+  // useWorkspacePersistence's restore effect, so their same-delay
+  // setTimeout(0)s fire in scheduling order) only requires this call to come
+  // AFTER useWorkspacePersistence(...) in render-body order, which it does.
+  // restoringRef/restoredWorkspaceIdRef passed through are the exact same ref
+  // objects useWorkspacePersistence's own restore effect writes to — see
+  // that hook's UseWorkspacePersistenceResult doc comments and this hook's
+  // own header comment for the full ordering/coupling contract.
+  useSessionDeepLink({
     dockviewApi,
     activeWorkspaceId,
     sessionsLoaded,
     sessions,
-    onOpenSession,
-    deepLinkRetryTick,
-    // workspaces itself is never read directly in this effect body, but
-    // workspaceRestored above depends on the restore effect having already
-    // run for the current activeWorkspaceId — and that effect's own gate is
-    // `workspaces.find(...)`, so it can't complete until workspaces has
-    // loaded. Without this dependency, a load order where sessions resolve
-    // before workspaces would leave this effect's gate unsatisfiable with no
-    // dependency change to retry on once workspaces finally arrives.
     workspaces,
-  ]);
+    onOpenSession,
+    restoringRef,
+    restoredWorkspaceIdRef,
+  });
 
   // Issue #95 — public/push-sw.js's notificationclick handler posts this
   // message to an already-open window instead of navigate()-ing it (that
@@ -1373,7 +845,15 @@ export function App() {
         pushRetryTimerRef.current = null;
       }
     };
-  }, [dockviewApi, activeWorkspaceId, sessionsLoaded]);
+  }, [
+    dockviewApi,
+    activeWorkspaceId,
+    sessionsLoaded,
+    // See the auto-open-child-panel effect's own comment above on why
+    // these two are listed here despite never changing identity.
+    restoringRef,
+    restoredWorkspaceIdRef,
+  ]);
 
   // Issue #95 — re-syncs a push subscription on load (settings.notifications
   // .channels.push is the source of truth, not the presence of a live
@@ -1464,240 +944,6 @@ export function App() {
     },
     [dockviewApi],
   );
-
-  // Opens (or focuses an already-open) GitHub panel for a project — one
-  // stable panel id per project, so re-triggering this (Dock widget click,
-  // CommandPalette's Integrations entry) never duplicates the tab, same
-  // "existing ? focus : addPanel" shape as onOpenSession above.
-  const onOpenGitHub = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `github-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "github",
-          title: project ? `GitHub: ${project.name}` : "GitHub",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) the git status panel for a project (issue #76) —
-  // same open-or-focus-by-stable-id shape as onOpenGitHub above, just a
-  // distinct "git-<projectId>" panel id/component so it never collides with
-  // the GitHub integration's own panel for the same project.
-  const onOpenGit = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `git-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "git",
-          title: project ? `Git: ${project.name}` : "Git",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) the agent-rules editor for a project (issue #431) —
-  // same open-or-focus-by-stable-id shape as onOpenGit above.
-  const onOpenAgentRules = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `agent-rules-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "agent-rules",
-          title: project ? `Agent Rules: ${project.name}` : "Agent Rules",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // U4 — opens (or focuses) the dock-config editor for a project, same
-  // open-or-focus-by-stable-id shape as onOpenAgentRules above.
-  const onOpenDockConfig = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `dock-config-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "dock-config",
-          title: project ? `Dock: ${project.name}` : "Dock",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) the (read-only) skills panel for a project (issue
-  // #432) — same open-or-focus-by-stable-id shape as onOpenAgentRules above.
-  const onOpenSkills = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `skills-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "skills",
-          title: project ? `Skills: ${project.name}` : "Skills",
-          params: { projectId },
-          ...(!isMobile &&
-            (hasTiledPanels(dockviewApi)
-              ? { floating: true }
-              : { position: { direction: "right" } })),
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // Opens (or focuses) a browser preview pane for a project's dev server
-  // (issue #28) — same open-or-focus-by-stable-id shape as onOpenGitHub
-  // above. BrowserPanel itself resolves/creates the preview and handles the
-  // "not configured"/"not enabled" states, so this handler doesn't need to
-  // pre-check anything (see BrowserPanel.tsx's own comment on why params
-  // only ever need to carry projectId).
-  const onOpenBrowser = useCallback(
-    (projectId: number) => {
-      if (!dockviewApi) return;
-      const project = projects.find((p) => p.id === projectId);
-      const panelId = `browser-${projectId}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-      } else {
-        const panel = dockviewApi.addPanel({
-          id: panelId,
-          component: "browser",
-          title: project ? `Preview: ${project.name}` : "Preview",
-          params: { projectId },
-        });
-        if (isMobile) dockviewApi.maximizeGroup(panel);
-      }
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, isMobile],
-  );
-
-  // The task board is no longer a dockview panel — it's the unified Kanban
-  // view (UnifiedBoard.tsx). Both entry points (Sidebar's Tasks nav row,
-  // CommandPalette -> Tasks) now switch views rather than opening a panel;
-  // the old "tasks" panel id survives only as a deserialization stub (see
-  // TasksPanelRedirect.tsx) so an already-saved workspace layout referencing
-  // it doesn't throw on restore.
-  const onOpenTasks = useCallback(() => {
-    useDashboardStore.getState().setViewMode("kanban");
-    setSidebarOpen(false);
-  }, []);
-
-  // Issue #109: opens a browser pane for a specific favorited URL. Creates
-  // an external pane pre-filled with the URL, same shape as onOpenBlankBrowser
-  // but with a specific target and label so there's nothing to type.
-  const onOpenBrowserUrl = useCallback(
-    (projectId: number, url: string, label: string) => {
-      if (!dockviewApi) return;
-      const panel = dockviewApi.addPanel({
-        id: `browser-url-${projectId}-${randomPanelId()}`,
-        component: "browser",
-        title: label,
-        params: { kind: "external", url, projectId },
-      });
-      if (isMobile) dockviewApi.maximizeGroup(panel);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, isMobile],
-  );
-
-  // Issue #28's general-purpose browser tile: the CommandPalette's "New
-  // browser tab" entry — an empty external browser pane (nothing typed
-  // into its address bar yet; BrowserPanel's own "empty" state, address
-  // bar auto-focused), reachable straight from +/⌘K. No preview to
-  // pre-create (there's no URL yet, and the subdomain proxy — when
-  // configured — only ever gets involved once BrowserPanel's own mount
-  // effect creates one for whatever URL the user navigates to), so this
-  // never touches the network itself. Always opens a fresh pane rather than
-  // open-or-focus: unlike a project (at most one preview pane makes sense),
-  // opening a second blank tab is a reasonable, ordinary thing to want; id
-  // has no natural stable identity to derive from, so it's random —
-  // randomPanelId() rather than a bare crypto.randomUUID() since this pane
-  // exists specifically to support the plain-http LAN/Tailscale deployment
-  // docs/browser-previews.md documents, which is not a secure context (see
-  // that helper's own comment).
-  const onOpenBlankBrowser = useCallback(() => {
-    if (!dockviewApi) return;
-    const panel = dockviewApi.addPanel({
-      id: `browser-ext-${randomPanelId()}`,
-      component: "browser",
-      title: "Preview",
-      params: { kind: "external" },
-    });
-    if (isMobile) dockviewApi.maximizeGroup(panel);
-    setSidebarOpen(false);
-  }, [dockviewApi, isMobile]);
 
   const openGlobalLauncher = useCallback(() => {
     setPalette({ open: true, scope: "global", projectId: null });
@@ -1834,9 +1080,10 @@ export function App() {
   // terminal session is the active mobile pane (not the timeline/Agent
   // Browser/task-detail/git/github panels, which don't accept keystrokes).
   // `session-${id}` is the terminal panel's own id format everywhere else in
-  // this file (e.g. the sessionIsActive check in the auto-focus-on-attention
-  // effect above) — reused here rather than inspecting dockview's internal
-  // component-type metadata. Also requires `status === "active"` (Hermes
+  // this file (e.g. the `#98 item 4` auto-focus effect's own
+  // `` `session-${s.id}` === panelId `` lookup above) — reused here rather
+  // than inspecting dockview's internal component-type metadata. Also
+  // requires `status === "active"` (Hermes
   // review, PR #616 round 1): a killed/exited session's pane can still be
   // the active one (closing is a separate, explicit action from the program
   // exiting — see PaneTab.tsx's own close-vs-kill distinction), and there's

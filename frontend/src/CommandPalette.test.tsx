@@ -4,9 +4,9 @@ import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
-import { useDashboardStore } from "./store.js";
-import { DEFAULT_SETTINGS } from "./api.js";
-import type { Launcher, Project, Session } from "./api.js";
+import { useDashboardStore } from "./store/index.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
+import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeWorkspace } from "./test/fixtures.js";
 
