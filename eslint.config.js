@@ -37,7 +37,8 @@ export default tseslint.config(
         clearInterval: "readonly",
         setImmediate: "readonly",
         Buffer: "readonly",
-        // Node 18+ global (scripts/capture-screenshots.mjs's own seed call).
+        // Node 18+ global, for any of these files that talks HTTP directly
+        // (e.g. scripts/capture-screenshots.mjs's own seed calls).
         fetch: "readonly",
       },
     },
