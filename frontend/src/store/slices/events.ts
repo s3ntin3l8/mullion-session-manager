@@ -1,14 +1,76 @@
 import type { StateCreator } from "zustand";
 import { connectEventsStream, type EventsClientHandle } from "../../eventsClient.js";
 import { addEvent, eventKey } from "../helpers.js";
+import { EVENTS_REFRESH_THROTTLE_MS } from "../constants.js";
 import type { DashboardState, EventsSlice } from "../types.js";
+import type { NotificationEvent } from "../../api/index.js";
 
-export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice> = (set, _get) => {
+// Issue #673 — kinds that cannot move any SessionInfo-derived field AND
+// dominate the /ws/events stream, so refreshing sessions on them would be
+// pure waste. Deliberately a DENY-list, not an allow-list: any kind added to
+// NotificationEvent's union later (src/shared/types.ts) defaults to
+// triggering a refresh, which can only ever be too conservative, never
+// stale. Measured over 24h of live traffic (1887 events): title_change
+// (583) and file_change (333) together were 49% of all events, neither is
+// read into SessionInfo by anything today, and title_change is separately
+// already debounced at the source (pty-manager.ts's
+// scheduleTitleChangeEvent) because it was once 93.6% of all rows on its
+// own. Every other kind — including "todo"/"session_diff", which never
+// appeared at all in that same 24h window — stays refresh-triggering.
+const NON_STATUS_EVENT_KINDS = new Set<NotificationEvent["kind"]>(["title_change", "file_change"]);
+
+export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice> = (set, get) => {
   // Set once startEventsStream() connects (App.tsx's mount effect) — the
   // handle markEventSeen() below sends "seen" messages through. Stays null
   // until then (and after cleanup), matching eventsClient.ts's own
   // "no-op while disconnected" semantics rather than throwing.
   let eventsClientHandle: EventsClientHandle | null = null;
+
+  // Issue #673 — fixed-window throttle (not the tasks.ts/github.ts precedent's
+  // pure trailing debounce): refreshSessions() is called immediately on the
+  // first status-bearing frame, then suppressed for EVENTS_REFRESH_THROTTLE_MS;
+  // if another status-bearing frame arrived during that window, exactly one
+  // more refresh fires at its end. A pure trailing debounce would delay every
+  // transition by the full window (this feeds a latency-sensitive badge, see
+  // documentBadge.ts) and can starve entirely under sustained traffic — a real
+  // risk here given clearStaleBlockedIfOlderThan can emit up to 10
+  // status_change frames per session in one sweep tick, and a reconnect
+  // replays up to 500 frames (routes/events.ts's REPLAY_MAX_EVENTS) in one
+  // burst. This shape bounds both at exactly 2 refreshSessions() calls.
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingDuringWindow = false;
+
+  const scheduleRefresh = () => {
+    // refreshSessions() has no in-flight/overlap guard of its own (unlike
+    // refreshGitStatuses/refreshTasks) — deliberately not adding one here.
+    // Five mutations (createSession/renameSession/deleteSession/
+    // promoteSession/declinePromote) await it to observe their own write;
+    // PR #477 showed a naive in-flight dedup on a function like that
+    // silently drops the mutation's own result. Not warranted anyway: on
+    // the live host, GET /api/sessions took 7-14ms for 66KB gzipped (317
+    // sessions) — far below this throttle window, so overlap isn't a
+    // realistic concern. refreshSessions() also rethrows on failure, so
+    // .catch() here is required, not stylistic — this call has no awaiting
+    // caller and would otherwise surface as an unhandled rejection.
+    void get()
+      .refreshSessions()
+      .catch(() => {});
+  };
+
+  const onStatusBearingEvent = () => {
+    if (throttleTimer === null) {
+      scheduleRefresh();
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null;
+        if (pendingDuringWindow) {
+          pendingDuringWindow = false;
+          onStatusBearingEvent();
+        }
+      }, EVENTS_REFRESH_THROTTLE_MS);
+    } else {
+      pendingDuringWindow = true;
+    }
+  };
 
   return {
     events: {},
@@ -18,11 +80,17 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
     startEventsStream: () => {
       const handle = connectEventsStream((event) => {
         set((state) => ({ events: addEvent(state.events, event) }));
+        if (!NON_STATUS_EVENT_KINDS.has(event.kind)) onStatusBearingEvent();
       });
       eventsClientHandle = handle;
       return () => {
         handle.close();
         if (eventsClientHandle === handle) eventsClientHandle = null;
+        if (throttleTimer !== null) {
+          clearTimeout(throttleTimer);
+          throttleTimer = null;
+        }
+        pendingDuringWindow = false;
       };
     },
 
