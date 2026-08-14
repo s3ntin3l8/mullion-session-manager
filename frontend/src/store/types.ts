@@ -116,6 +116,15 @@ export interface SessionsSlice {
   // consecutiveSessionFetchFailures (slices/sessions.ts) for why this lives
   // outside any one specific call site.
   backendReachable: boolean;
+  // Distinct from backendReachable — a gateway forward-auth session expiry
+  // (api/client.ts's AuthExpiredError) is neither "backend down" nor
+  // something a plain retry can fix, so App.tsx renders a different banner
+  // for it (correct copy, a real recovery action) instead of folding it
+  // into the generic unreachable state. Set on the first AuthExpiredError
+  // that reaches refreshSessions() *after* the reload guard has already
+  // fired once this session — before that, client.ts's own top-level
+  // reload handles recovery invisibly and this never becomes visible UI.
+  sessionExpired: boolean;
   refreshSessions: () => Promise<void>;
   createSession: (
     projectId: number,

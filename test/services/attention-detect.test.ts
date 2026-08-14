@@ -666,7 +666,21 @@ describe("advanceAttention — output-immune confirmed kinds (attention-hook har
     },
   );
 
-  it.each(["bell", "notification", "titleIdle", "altScreenExit", "silence", "agentIdle"] as const)(
+  it.each([
+    "bell",
+    "notification",
+    "titleIdle",
+    "altScreenExit",
+    "silence",
+    "agentIdle",
+    // Fix: sticky needs_input (D1) — toolFailure/apiError are deliberately
+    // NOT in OUTPUT_IMMUNE_KINDS (see that set's own doc comment): a tool
+    // failure or API error the agent is actively recovering from is
+    // turbulence, not "blocked pending a human decision", so plain output
+    // must clear it exactly like the pre-existing non-immune kinds do.
+    "toolFailure",
+    "apiError",
+  ] as const)(
     "plain output still clears a confirmed %s exactly as before (output-immunity is opt-in, not global)",
     (kind) => {
       const confirmed = confirmedWith(kind);
@@ -746,6 +760,75 @@ describe("advanceAttention — output-immune confirmed kinds (attention-hook har
     expect(next).toBe(INITIAL_ATTENTION_STATE);
     expect(emit).toEqual([]);
     expect(log).toEqual([]);
+  });
+
+  // Fix: sticky needs_input (D2) — GENERIC_IMMUNE_KINDS. Claude Code fires
+  // its own generic Notification hook (mapped to `hookNotification`)
+  // ALONGSIDE a specific hook like permissionRequest/planReady/reviewGate
+  // for the same dialog. Before this fix, moreAuthoritativeKind's
+  // last-immune-wins rule let the generic one silently steal confirmedKind,
+  // orphaning the specific kind's own exact-match release path
+  // (clearIfConfirmedKind).
+  it.each([
+    "permissionRequest",
+    "planReady",
+    "reviewGate",
+    "promoteRequest",
+    "elicitation",
+    "question",
+  ] as const)(
+    "a co-fired generic hookNotification does NOT steal confirmedKind from an already-confirmed specific %s",
+    (specificKind) => {
+      const confirmed = confirmedWith(specificKind);
+      const { next } = advanceAttention(confirmed, {
+        type: "signal",
+        kind: "hookNotification",
+        now: T0 + 50,
+      });
+      expect(next.confirmedKind).toBe(specificKind);
+      // confirmedAt still refreshes — this isn't a no-op transition, just a
+      // refused kind downgrade (mirrors the pre-existing bell/titleIdle
+      // "routine repaint" case above).
+      expect(next.confirmedAt).toBe(T0 + 50);
+    },
+  );
+
+  it("a hookNotification arriving well AFTER a specific kind was confirmed, with intervening output in between, still does not steal confirmedKind (not just the same-chunk/adjacent-transition case)", () => {
+    // Mirrors the real incident: seq 85 planReady confirmed, seq 87
+    // permissionRequest (a second specific kind, handled by the
+    // "otherwise -> incoming" branch below) then seq 89 hookNotification
+    // ~22s later, with ordinary program output in between — not just an
+    // immediately-adjacent transition.
+    const confirmed = confirmedWith("permissionRequest");
+    const afterOutput = advanceAttention(confirmed, { type: "output", now: T0 + 1_000 }).next;
+    // Output cannot touch an immune kind at all — still confirmed.
+    expect(afterOutput.confirmedKind).toBe("permissionRequest");
+    const afterDelayedGeneric = advanceAttention(afterOutput, {
+      type: "signal",
+      kind: "hookNotification",
+      now: T0 + 22_000,
+    }).next;
+    expect(afterDelayedGeneric.confirmedKind).toBe("permissionRequest");
+  });
+
+  it("two DISTINCT specific immune kinds still replace each other, newest wins (the generic-vs-specific guard doesn't touch this case)", () => {
+    const confirmed = confirmedWith("planReady");
+    const { next } = advanceAttention(confirmed, {
+      type: "signal",
+      kind: "permissionRequest",
+      now: T0 + 50,
+    });
+    expect(next.confirmedKind).toBe("permissionRequest");
+  });
+
+  it("a generic hookNotification confirmed FIRST can still be upgraded by a specific kind landing after it", () => {
+    const confirmed = confirmedWith("hookNotification");
+    const { next } = advanceAttention(confirmed, {
+      type: "signal",
+      kind: "reviewGate",
+      now: T0 + 50,
+    });
+    expect(next.confirmedKind).toBe("reviewGate");
   });
 
   it("confirmedKind is null in INITIAL_ATTENTION_STATE and after cancelPending/clearAttention", () => {

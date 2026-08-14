@@ -62,6 +62,31 @@ export default defineConfig(({ command, mode }) => {
           // unauthenticated before it can even call GET /api/auth/me, so
           // the precached shell contains no authed content to begin with —
           // nothing here can go stale or leak.
+          //
+          // IMPORTANT — this does NOT make navigations to "/" NetworkOnly on
+          // its own (found in production, self-hosted behind Traefik +
+          // Authentik forward-auth): navigateFallback only controls the
+          // separate NavigationRoute Workbox registers for URLs that aren't
+          // precached. index.html *is* precached by default (globPatterns
+          // below includes **/*.html), and precacheAndRoute's own
+          // PrecacheRoute matches a request to a directory URL against its
+          // directoryIndex option (default "index.html") independently of
+          // navigateFallback/runtimeCaching — see
+          // workbox-precaching/utils/generateURLVariations.js. So a plain
+          // reload of "/" was being answered cache-first from Cache Storage
+          // and never reached the network at all. Behind a forward-auth
+          // gateway that's fatal: the only thing that can re-run the
+          // provider's redirect dance and mint a fresh proxy session cookie
+          // is a real top-level navigation reaching the gateway, and a
+          // browser refresh could never produce one. index.html is excluded
+          // from the precache manifest below (globIgnores) specifically to
+          // close this — every navigation to "/" now goes to the network,
+          // same as before the service worker existed. The tradeoff: an
+          // installed PWA no longer launches its shell while fully offline.
+          // Not a real loss here — the app is non-functional without the
+          // backend WS regardless of what's cached, and the self-hosted
+          // font imports (main.tsx) were already outside the precache set
+          // for the same "no offline claim being made" reason.
           runtimeCaching: [],
           // Issue #95 — imports public/push-sw.js's push/notificationclick/
           // pushsubscriptionchange handlers into the generated service
@@ -88,11 +113,20 @@ export default defineConfig(({ command, mode }) => {
           // Bumping the version string forces sw.js's own content to
           // differ, triggering the normal update flow.
           importScripts: ["push-sw.js?v=1"],
-          // Without this, the default globPatterns would precache
+          // push-sw.js: without this, the default globPatterns would precache
           // push-sw.js's own bytes into the manifest it's imported into —
           // harmless (SW script fetches bypass the SW's own fetch handler)
           // but confusing noise in the generated manifest.
-          globIgnores: ["**/push-sw.js"],
+          //
+          // index.html: load-bearing, see the long note on runtimeCaching
+          // above. Keeping index.html out of the precache manifest is what
+          // stops PrecacheRoute's directoryIndex resolution from answering
+          // "/" from Cache Storage, which is what broke recovery from
+          // forward-auth session expiry. Do not remove this without also
+          // setting `directoryIndex: null` (and `cleanUrls: false`) — the
+          // regression test in frontend/vite.config.test.ts asserts the
+          // generated manifest has no index.html entry.
+          globIgnores: ["**/push-sw.js", "**/index.html"],
           // cleanupOutdatedCaches (+ skipWaiting/clientsClaim, which
           // registerType: "autoUpdate" sets automatically, and main.tsx's
           // explicit registerSW() call, which is what actually reloads an

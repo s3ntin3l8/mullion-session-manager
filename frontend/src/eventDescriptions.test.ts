@@ -55,6 +55,40 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
     });
   });
 
+  // Fix: sticky needs_input — stop_failure/tool_failure now raise apiError/
+  // toolFailure instead of hookNotification (src/services/hook-handlers.ts),
+  // so these need their own cases or the feed silently regresses to a bare
+  // "Needs input" via the default branch. Same formatting/fallback rules as
+  // hookNotification above.
+  describe.each(["toolFailure", "apiError"] as const)("describeEvent — %s signal", (signal) => {
+    it("shows title and body when both present", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal, title: "Tool failed: Bash", body: "Exit code 2" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Tool failed: Bash — Exit code 2",
+        attention: true,
+      });
+    });
+
+    it("falls back to title alone when body is missing", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal, title: "API Error" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "API Error", attention: true });
+    });
+
+    it("falls back to a generic 'Needs input' message when neither is present", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Needs input", attention: true });
+    });
+  });
+
   describe("describeEvent — reviewGate signal (the attention-flip half)", () => {
     it("shows the prompt when present", () => {
       const event = makeEvent({

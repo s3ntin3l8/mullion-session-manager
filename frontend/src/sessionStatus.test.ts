@@ -32,6 +32,10 @@ const CLAUDE_CODE_EMITS = [
   "permission_resolved",
   "elicitation",
   "promote_request",
+  // Fix: AskUserQuestion mislabelled — forwarder-core.mjs now remaps
+  // AskUserQuestion's PermissionRequest hook to `question` instead of
+  // `permission_request`, so claude-code can reach awaiting_question.
+  "question",
 ] as const satisfies readonly string[];
 const OPENCODE_EMITS = [
   "progress",
@@ -192,12 +196,13 @@ describe("isStatusReachable", () => {
     }
   });
 
-  it("Claude Code (full emits) — expected subset reachable", () => {
-    const reachable: SessionStatus[] = ALL_STATUSES.filter(
-      (status) => status !== "awaiting_question",
-    );
+  it("Claude Code (full emits) — every status reachable, including awaiting_question", () => {
+    // Fix: AskUserQuestion mislabelled — awaiting_question used to be the
+    // one status excluded here (#550 → #554): CLAUDE_CODE_EMITS had no
+    // "question" entry, so claude-code sessions rendered an `.estimated`
+    // dot for it. Now reachable like every other status.
     for (const status of ALL_STATUSES) {
-      expect(isStatusReachable(status, CLAUDE_CODE_EMITS)).toBe(reachable.includes(status));
+      expect(isStatusReachable(status, CLAUDE_CODE_EMITS)).toBe(true);
     }
   });
 

@@ -15,7 +15,13 @@ import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { GridIcon, RefreshIcon, ServerRackIcon, CloseIcon } from "./ui/icons.js";
+import {
+  GridIcon,
+  RefreshIcon,
+  ServerRackIcon,
+  CloseIcon,
+  WarningTriangleIcon,
+} from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import {
   useDashboardStore,
@@ -176,6 +182,7 @@ export function App() {
     sidebarCollapsed,
     splitRequest,
     backendReachable,
+    sessionExpired,
     currentVersion,
     updateCheck,
     dismissedUpdateVersion,
@@ -199,6 +206,7 @@ export function App() {
       sidebarCollapsed: s.sidebarCollapsed,
       splitRequest: s.splitRequest,
       backendReachable: s.backendReachable,
+      sessionExpired: s.sessionExpired,
       currentVersion: s.currentVersion,
       updateCheck: s.updateCheck,
       dismissedUpdateVersion: s.dismissedUpdateVersion,
@@ -208,6 +216,14 @@ export function App() {
       activePanelId: s.activePanelId,
     })),
   );
+
+  // Pending state for the "Mullion server unreachable" banner's Reconnect
+  // button (design States doc section 04) — the click handler used to just
+  // `void` the refreshSessions() promise with no feedback at all, so a
+  // click during a genuine outage looked identical to a dead button. Also
+  // means the click's rejection is now actually caught here instead of
+  // becoming an unhandled promise rejection.
+  const [reconnecting, setReconnecting] = useState(false);
 
   // Guards against auto-creating "Default" twice — both from React
   // StrictMode's dev-mode double-invoke of effects (refs survive that,
@@ -1149,19 +1165,54 @@ export function App() {
               design's "frozen body" — a visual cue, not an actual input
               lock, so nothing gets destructively stuck if this signal
               itself turns out wrong. Reuses the existing live-refresh poll
-              (store.ts) rather than a separate health-check mechanism. */}
-          {!backendReachable && (
+              (store.ts) rather than a separate health-check mechanism.
+              Gated on !sessionExpired below it: a gateway forward-auth
+              session expiry (self-hosted behind Traefik + Authentik or
+              similar) also fails every request this poll makes, but it
+              isn't "the backend is down" — the process is fine, only the
+              gateway is rejecting the request — so it gets its own banner
+              instead of this one asserting a cause that isn't true. */}
+          {!backendReachable && !sessionExpired && (
             <div className="backend-down-banner">
               <ServerRackIcon size={16} style={{ color: "var(--r)" }} />
               <span className="backend-down-title">Mullion server unreachable</span>
               <span className="backend-down-subtext">
-                unix socket · retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…
+                retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…
               </span>
               <button
                 className="backend-down-reconnect"
-                onClick={() => void useDashboardStore.getState().refreshSessions()}
+                disabled={reconnecting}
+                onClick={() => {
+                  setReconnecting(true);
+                  useDashboardStore
+                    .getState()
+                    .refreshSessions()
+                    .catch(() => {
+                      // Surfaced through backendReachable/sessionExpired
+                      // themselves (both already drive their own banner) —
+                      // nothing further to do with the rejection here,
+                      // just don't let it become an unhandled rejection.
+                    })
+                    .finally(() => setReconnecting(false));
+                }}
               >
-                Reconnect
+                {reconnecting ? "Reconnecting…" : "Reconnect"}
+              </button>
+            </div>
+          )}
+          {/* A gateway forward-auth session expiry that survived
+              api/client.ts's own silent top-level reload attempt (its
+              guard already fired once this session — see
+              AuthExpiredError's doc comment) — the one case where recovery
+              genuinely needs the user, so it gets an explicit action
+              rather than another silent reload. */}
+          {sessionExpired && (
+            <div className="backend-down-banner">
+              <WarningTriangleIcon size={16} style={{ color: "var(--o)" }} />
+              <span className="backend-down-title">Session expired</span>
+              <span className="backend-down-subtext">sign in again to continue</span>
+              <button className="backend-down-reconnect" onClick={() => window.location.reload()}>
+                Sign in
               </button>
             </div>
           )}
@@ -1242,7 +1293,7 @@ export function App() {
                 </span>
               </div>
             )}
-          <div className={`grid-area-body${!backendReachable ? " dimmed" : ""}`}>
+          <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
             {/* Mobile UI/UX overhaul, item A — the single mobile pane
                 switcher (dockview's own tab strip is now hidden here, via
                 applyMobilePresentation's header.hidden sync in

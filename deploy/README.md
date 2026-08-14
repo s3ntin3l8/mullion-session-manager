@@ -157,6 +157,15 @@ placeholders there need real values only you have:
 3. **Your Traefik dynamic-config directory path**, so `traefik-dynamic.yml`
    ends up somewhere Traefik's file provider actually watches.
 
+Before you fill in the `services.claude-remote-session.loadBalancer.servers`
+URL, read the network-exposure comment at the top of `traefik-dynamic.yml` —
+if Traefik runs in Docker and this app runs natively on the host (the normal
+shape here), the URL you pick determines whether the app is reachable _only_
+from Traefik or from every other container on whatever Docker network
+Traefik happens to share with it. Getting this wrong doesn't fail loudly:
+the app comes up, forwardAuth works for browser traffic, and the gap is
+invisible until something else on that network gets compromised.
+
 ## Optional: in-process auth (issues #19, #30)
 
 See [`docs/auth.md`](../docs/auth.md) for the full setup/security writeup;
@@ -452,12 +461,8 @@ there.
 ## What still needs a real, live check
 
 Milestones 1–3 were each verified end-to-end against the real running app.
-M4 can't be: the one thing that actually matters here — **whether a WS
-upgrade request survives Authentik's forwardAuth redirect/cookie dance all
-the way through Traefik** (Risk 3 in the plan) — only exists once this is
-installed against your real Traefik/Authentik stack. Everything above this
-line is "drafted and CI is green"; the actual GO/no-go for M4 is a joint
-step after installing these for real:
+M4 can't be fully verified from this repo alone — the actual GO/no-go for it
+is a joint step after installing these for real:
 
 - `curl`/a browser **without** an Authentik session gets rejected at
   Traefik, before ever reaching the app.
@@ -467,3 +472,30 @@ step after installing these for real:
 - `systemctl --user restart mullion.service` — sessions
   survive (same guarantee M1 already verified against a bare `systemd-run
 --user --scope`, now through the real unit).
+
+**Risk 3 — whether a WS upgrade survives Authentik's forwardAuth
+redirect/cookie dance through Traefik — is now answered**, from a real
+production deployment: yes for the initial upgrade (`/ws/terminal` opens and
+stays open through forwardAuth correctly), but **no for a reconnect after
+the gateway session has expired**. A WebSocket handshake cannot follow the
+3xx a forward-auth gateway issues for an expired session, so `/ws/events`,
+`/ws/tasks` and `/ws/github` go silently dark on reconnect and never recover
+on their own — `/ws/terminal` is spared mainly because it tends to just stay
+open rather than reconnecting. Two related, and separately confirmed,
+consequences worth checking for on your own stack:
+
+- The app's frontend precaches its own shell as a PWA (`vite.config.ts`).
+  Before this fix, that meant a plain browser refresh after a gateway
+  session expired never even reached Traefik — it was served straight from
+  the browser's Cache Storage — so the only thing that looked like it
+  "fixed" the stuck app was any navigation that happened to bypass the
+  cache. That's now excluded from the precache manifest; verify after
+  deploying by checking a built `dist/sw.js` has no `index.html` entry.
+- Ordinary `/api/*` requests now detect a forward-auth redirect (a
+  same-origin-vs-cross-origin distinction — see `frontend/src/api/client.ts`)
+  and recover with a top-level reload, which re-runs the forward-auth dance
+  for every WS channel too, not just the one that made the failing request.
+  Verify by deleting your forward-auth gateway's session cookie (not your
+  IdP's core session cookie — see the distinction above) in DevTools and
+  reloading: the app should recover on its own within moments, with no
+  visible "unreachable" state and no manual visit to your IdP needed.

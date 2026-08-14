@@ -3184,6 +3184,78 @@ describe("PtyManager", () => {
       expect(session.toInfo().lastTurnEndedAt).toBeNull();
     });
 
+    it("fix: sticky needs_input (D4) — progress:done pairs its planState/permissionState/questionState resets with clearIfConfirmedKind, so a confirmed planReady no longer survives its own latch going idle", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "plan_ready", plan: "do the thing" });
+      expect(session.toInfo()).toMatchObject({
+        attention: true,
+        attentionKind: "planReady",
+        planState: "pending",
+      });
+
+      // progress:done resets planState to idle directly (see hook-handlers.ts's
+      // "progress" case), then its own resolveDeferredTurnEnd() unconditionally
+      // fires an `agentIdle` signal (nothing outstanding) — a legitimate,
+      // separate "the turn just ended" reason for attention to stay true
+      // (deriveSessionStatus reads this as `finished`, which outranks
+      // `needs_input` anyway). Before this fix, planState's own reset ran
+      // WITHOUT calling clearIfConfirmedKind first: the confirmed planReady
+      // (output-immune) survived that unrelated agentIdle signal too —
+      // moreAuthoritativeKind refuses to let a non-immune incoming kind
+      // downgrade an already-confirmed immune one — so confirmedKind stayed
+      // "planReady" forever, an orphan the sweep in
+      // clearStaleBlockedIfOlderThan can't reach either (it only clears a
+      // latch that's still stale-AND-set, and this path nulls it in the same
+      // statement). Fixed by pairing each latch reset with its own
+      // clearIfConfirmedKind call BEFORE resolveDeferredTurnEnd() runs: the
+      // orphaned planReady is cleared first, so agentIdle then confirms
+      // fresh as the CURRENT, honest confirmedKind instead.
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+
+      expect(session.toInfo()).toMatchObject({
+        planState: "idle",
+        attention: true,
+        attentionKind: "agentIdle",
+      });
+    });
+
+    it("fix: sticky needs_input (D4) — turn_start unconditionally clears the attention machine, closing the one orphan class progress:done's own paired clears can't reach: a bare, generic hookNotification with no owning per-state latch to pair a clear against", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      // No specific dialog behind this — a plain Notification hook message,
+      // exactly the "hookNotification has no owning latch" case the stale
+      // sweep also deliberately leaves alone (see that describe block's own
+      // negative test).
+      session.emitHookEvent({ kind: "notification", title: "heads up", body: "" });
+      expect(session.toInfo().attention).toBe(true);
+
+      // progress:done's own resolveDeferredTurnEnd() fires `agentIdle` here,
+      // but moreAuthoritativeKind refuses to let that non-immune signal
+      // downgrade the already-confirmed immune hookNotification — it
+      // survives, same as any other repaint/non-immune signal would.
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(session.toInfo().attention).toBe(true);
+
+      session.emitHookEvent({ kind: "turn_start" });
+
+      expect(session.toInfo().attention).toBe(false);
+    });
+
     it("file_change: emits a file_change event with path and action", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -3567,6 +3639,113 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(true);
     });
 
+    describe("ExitPlanMode dedup (Hermes review, PR #675)", () => {
+      it("the common-order case: plan_ready arrives first (as it reliably does — PreToolUse before PermissionRequest), so the later permission_request{ExitPlanMode} is a no-op and 'Plan ready' wins", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+        expect(session.toInfo()).toMatchObject({
+          planState: "pending",
+          permissionState: "idle",
+          attentionKind: "planReady",
+        });
+        const eventsBefore = session.getEvents().length;
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "ExitPlanMode",
+          summary: "ExitPlanMode",
+        });
+
+        // A genuine no-op: no new event at all, not even a suppressed one.
+        expect(session.getEvents().length).toBe(eventsBefore);
+        expect(session.toInfo()).toMatchObject({
+          planState: "pending",
+          permissionState: "idle",
+          attentionKind: "planReady",
+        });
+      });
+
+      it("the fallback case: plan_ready never arrives at all (PreToolUse hook missing/not registered) — permission_request{ExitPlanMode} still shows SOMETHING rather than nothing", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "ExitPlanMode",
+          summary: "ExitPlanMode",
+        });
+
+        expect(session.toInfo()).toMatchObject({
+          permissionState: "pending",
+          planState: "idle",
+          attentionKind: "permissionRequest",
+        });
+      });
+
+      it("the reordered case: permission_request{ExitPlanMode} arrives BEFORE plan_ready — the fallback permissionState is superseded once the real plan_ready lands, so 'Plan ready' still wins", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "ExitPlanMode",
+          summary: "ExitPlanMode",
+        });
+        expect(session.toInfo()).toMatchObject({ permissionState: "pending" });
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+
+        expect(session.toInfo()).toMatchObject({
+          permissionState: "idle",
+          planState: "pending",
+          attentionKind: "planReady",
+        });
+      });
+
+      it("permission_request for a DIFFERENT tool while planState is pending is NOT deduped — the dedup is scoped to ExitPlanMode specifically", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+
+        expect(session.toInfo()).toMatchObject({
+          planState: "pending",
+          permissionState: "pending",
+        });
+      });
+    });
+
     it("turn_start: releases permissionState/planState/elicitationState/errorState and the finished latch", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -3676,6 +3855,28 @@ describe("PtyManager", () => {
 
       session.emitHookEvent({ kind: "tool_done", tool: "ExitPlanMode" });
       expect(session.toInfo().planState).toBe("idle");
+    });
+
+    it("fix: AskUserQuestion mislabelled (D3) — tool_done releases a pending questionState only for AskUserQuestion, and clears the attention machine's confirmed 'question' kind with it", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "question", state: "started", header: "Approach?" });
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
+      expect(session.toInfo()).toMatchObject({ questionState: "pending", attention: true });
+
+      session.emitHookEvent({ kind: "tool_done", tool: "AskUserQuestion" });
+      expect(session.toInfo()).toMatchObject({
+        questionState: "idle",
+        questionHeader: null,
+        attention: false,
+      });
     });
 
     it("fix: status-clearing-semantics — a matched release clears pendingPermissionTool, so a LATER tool_done with the same name is a clean no-op rather than matching a stale pending tool", async () => {
@@ -3791,7 +3992,7 @@ describe("PtyManager", () => {
       expect(session.toInfo().permissionState).toBe("pending");
     });
 
-    it("fix: status-clearing-semantics — a stale errorState, the finished latch, and a confirmed hookNotification attention all survive a reattach-style repaint and later plain output; only a genuine keystroke (or a resolving hook) clears them now that markViewed() is gone", async () => {
+    it("fix: status-clearing-semantics — a stale errorState and the finished latch survive a reattach-style repaint and later plain output; only a genuine keystroke (or a resolving hook) clears them now that markViewed() is gone. Fix: sticky needs_input — unlike those two, tool_failure's OWN attention flag is no longer output-immune, so it clears on the very next real output chunk instead of waiting for that keystroke", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         const session = manager.getOrCreate({
@@ -3815,7 +4016,10 @@ describe("PtyManager", () => {
 
         // A reattach (opening the workspace tab) forces a repaint — the
         // exact byte pattern markViewed() used to piggyback its "user is
-        // looking" clear on. Must no longer clear anything.
+        // looking" clear on. Must no longer clear anything (repaints are
+        // suppressed from the attention machine entirely — see
+        // redrawNudge.suppressingOutput — regardless of which kind is
+        // confirmed).
         session.requestRedraw();
         pty.emitData("repainted frame");
         expect(session.toInfo()).toMatchObject({
@@ -3824,18 +4028,22 @@ describe("PtyManager", () => {
           attention: true,
         });
 
-        // Nor does arbitrary later output, once the repaint suppression
-        // window has fully elapsed.
+        // Fix: sticky needs_input (D1) — once the repaint suppression
+        // window has fully elapsed, arbitrary later output IS evidence the
+        // agent is working again: `toolFailure` is deliberately NOT in
+        // OUTPUT_IMMUNE_KINDS (attention-detect.ts), so it clears here —
+        // unlike errorState/lastTurnEndedAt, which have no such auto-clear
+        // and stay sticky until a keystroke or a resolving hook.
         await vi.advanceTimersByTimeAsync(300 + 400 + 500);
         pty.emitData("just more program output, not a decision");
         expect(session.toInfo()).toMatchObject({
           errorState: "tool_failure",
           lastTurnEndedAt: expect.any(Number),
-          attention: true,
+          attention: false,
         });
 
-        // A genuine keystroke is the replacement unblocking signal — clears
-        // all three, and records the transition.
+        // A genuine keystroke is the replacement unblocking signal for the
+        // two latches output alone can't touch.
         const eventsBefore = session.getEvents().length;
         session.write("y");
         const info = session.toInfo();
@@ -3995,6 +4203,53 @@ describe("PtyManager", () => {
           reason: "stale_blocked_cleared",
           state: "permissionState",
         });
+      });
+
+      it("fix: sticky needs_input (D4) — a stale permissionState sweep also drops the attention machine's permissionRequest-owned flag it confirmed", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+        expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: true });
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+
+        expect(session.toInfo().attention).toBe(false);
+      });
+
+      it("fix: sticky needs_input (D4) — the stale sweep does NOT drop a hookNotification-confirmed flag with no dedicated latch behind it (deliberately left to keystroke/notification_resolved only)", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        // A bare generic notification, nothing else pending — `hookNotification`
+        // has no owning per-state latch for this sweep to key its clear off,
+        // unlike the six blocked/busy latches above.
+        session.emitHookEvent({ kind: "notification", title: "heads up", body: "" });
+        expect(session.toInfo().attention).toBe(true);
+
+        // Nothing is stale from this sweep's perspective (every one of the
+        // six latches it checks is already idle) — correctly a no-op.
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(false);
+
+        expect(session.toInfo().attention).toBe(true);
       });
 
       it("a2: clears a stale planState past the TTL and emits status_change", async () => {
@@ -5134,14 +5389,22 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
-      // A fresh, unrelated notification supersedes the reviewGate as the
-      // currently-confirmed kind before the gate decision arrives.
-      session.emitHookEvent({ kind: "notification", title: "Build failed", body: "" });
+      // A fresh, unrelated permission request supersedes the reviewGate as
+      // the currently-confirmed kind before the gate decision arrives. Uses
+      // a second SPECIFIC immune kind, not a generic hookNotification —
+      // fix: sticky needs_input (D2) added a guard specifically so a
+      // generic hookNotification can no longer steal confirmedKind from an
+      // already-confirmed specific kind (see attention-detect.ts's
+      // GENERIC_IMMUNE_KINDS), which is the race this test used to rely on
+      // to construct "a newer, unrelated confirmed flag" in the first
+      // place — two distinct specific kinds still replace each other
+      // exactly as before.
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
       expect(session.toInfo().attention).toBe(true);
 
       session.resolveGate("approved");
 
-      // The stale gate resolution must not clear the newer notification.
+      // The stale gate resolution must not clear the newer permission request.
       expect(session.toInfo().attention).toBe(true);
     });
 

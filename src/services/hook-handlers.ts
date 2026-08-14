@@ -123,6 +123,12 @@ export interface SessionHookContext {
   exitCode: number | null;
 
   emitEvent(kind: NotificationEvent["kind"], payload: Record<string, unknown>): void;
+  // Deliberately a NARROWER subset than attention-tracker.ts's own
+  // identically-shaped Extract<> — that one also includes "agentIdle",
+  // which is never reached through this facade: it's only ever raised by
+  // resolveDeferredTurnEnd() (called directly on the tracker, not through
+  // ctx). No handler in this file needs to raise it, so it's correctly
+  // absent here — don't "fix" this asymmetry by widening it to match.
   emitAttentionSignalWithExtras(
     kind: Extract<
       AttentionSignalKind,
@@ -133,10 +139,15 @@ export interface SessionHookContext {
       | "planReady"
       | "elicitation"
       | "question"
+      | "toolFailure"
+      | "apiError"
     >,
     extras: Record<string, unknown>,
   ): void;
   clearIfConfirmedKind(kind: AttentionSignalKind): void;
+  /** Fix: sticky needs_input — see AttentionTracker.clearAttention()'s own
+   * doc comment for why `turn_start` needs this over `clearIfConfirmedKind`. */
+  clearAttention(): void;
   resolveDeferredTurnEnd(): void;
   setBackgroundTasks(tasks: BackgroundTask[]): void;
   bumpSubagentActivity(agentId: string, kind: "file_change" | "tool_failure"): void;
@@ -225,14 +236,28 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // sidebar doesn't permanently show "Needs permission" / "Plan
         // ready" / "API error" after the agent has moved on. Unconditional
         // — none of these are affected by outstanding background work.
+        //
+        // Fix: sticky needs_input (D4) — each latch clear below is now
+        // paired with clearIfConfirmedKind() for the attention-machine kind
+        // it owns, same reasoning as clearStaleBlockedIfOlderThan's own
+        // latch-paired clears (pty-manager.ts). Without this, nulling
+        // planAt/permissionAt/questionAt HERE put the orphan they can
+        // create — a confirmed kind surviving its own now-idle latch —
+        // permanently out of that sweep's reach: it only clears a latch
+        // that's still stale-and-set, and this path sets it to idle+null in
+        // the same statement. A live incident (2026-08-14, session 331)
+        // reached exactly this state.
         ctx.permissionState = "idle";
         ctx.permissionAt = null;
         ctx.pendingPermissionTool = null;
+        ctx.clearIfConfirmedKind("permissionRequest");
         ctx.planState = "idle";
         ctx.planAt = null;
+        ctx.clearIfConfirmedKind("planReady");
         ctx.questionState = "idle";
         ctx.questionHeader = null;
         ctx.questionAt = null;
+        ctx.clearIfConfirmedKind("question");
         // Rich statuses — latches the `finished` status (see
         // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
         // latch rather than read off attentionState.confirmedKind). Stays
@@ -388,6 +413,23 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
     "permission_request",
     (ctx, message) => {
       const pr = message as PermissionRequestHookMessage;
+      // Hermes review, PR #675 — Claude Code's PreToolUse ExitPlanMode hook
+      // reliably fires BEFORE this one for the same dialog (48ms apart in
+      // the incident this PR traces; PreToolUse is evaluated ahead of the
+      // permission check in Claude Code's own hook order), so by the time
+      // this arrives, `plan_ready` has normally already set planState
+      // pending with the real plan text. Treat that as redundant rather
+      // than a second, plan-less signal that would outrank "Plan ready"
+      // with "Needs permission" — see mapClaudeCodePermissionRequest's own
+      // doc comment in forwarder-core.mjs for why this dedup lives here
+      // (where planState is visible) rather than in the stateless
+      // forwarder. If plan_ready never arrives at all (the hook missing,
+      // pre-#675 hooks.json, a future Claude Code change), planState stays
+      // idle and this falls through to the normal handling below — a
+      // fallback "Needs permission" beats no signal at all.
+      if (pr.tool === "ExitPlanMode" && ctx.planState === "pending") {
+        return;
+      }
       ctx.permissionState = "pending";
       ctx.permissionAt = Date.now();
       ctx.pendingPermissionTool = pr.tool;
@@ -409,7 +451,12 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // when the adapter couldn't classify the failure.
       ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
       ctx.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
-      ctx.emitAttentionSignalWithExtras("hookNotification", {
+      // Fix: sticky needs_input (D1) — `apiError`, not `hookNotification`:
+      // this is turbulence the agent's own next turn resolves, not "blocked
+      // pending a human decision" — see attention-detect.ts's
+      // OUTPUT_IMMUNE_KINDS doc comment for why raising the generic immune
+      // kind here used to leave `needs_input` stuck on a working session.
+      ctx.emitAttentionSignalWithExtras("apiError", {
         title: "API Error",
         body: sf.error,
       });
@@ -433,7 +480,8 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         summary: tf.summary ?? null,
         agentId: tf.agentId ?? null,
       });
-      ctx.emitAttentionSignalWithExtras("hookNotification", {
+      // Fix: sticky needs_input (D1) — see stop_failure's own comment above.
+      ctx.emitAttentionSignalWithExtras("toolFailure", {
         title: `Tool failed: ${tf.tool}`,
         body: tf.error,
       });
@@ -452,6 +500,19 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
     "plan_ready",
     (ctx, message) => {
       const plan = message as PlanReadyHookMessage;
+      // Hermes review, PR #675 — the symmetric case of permission_request's
+      // own dedup above: PreToolUse/PermissionRequest normally arrive in
+      // this order, but if they were ever reordered, the ExitPlanMode
+      // fallback permission_request's own handler would already have set
+      // permissionState pending (planState was still idle when it ran).
+      // Supersede that fallback now that the real plan_ready has arrived —
+      // it was never a genuine, unrelated permission request to begin with.
+      if (ctx.permissionState === "pending" && ctx.pendingPermissionTool === "ExitPlanMode") {
+        ctx.permissionState = "idle";
+        ctx.permissionAt = null;
+        ctx.pendingPermissionTool = null;
+        ctx.clearIfConfirmedKind("permissionRequest");
+      }
       ctx.planState = "pending";
       ctx.planAt = Date.now();
       ctx.emitEvent("plan_ready", {
@@ -509,12 +570,21 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // "awaiting_*" latch and the `finished` latch, same set
       // progress:done already releases (permissionState/planState) plus
       // the ones only this event can authoritatively clear
-      // (elicitationState, lastTurnEndedAt). Mirrors progress:done's own
-      // choice NOT to force-clear the attention machine's confirmedKind
-      // directly — see that case's own comment for why (moreAuthoritativeKind
-      // already keeps an immune kind from being silently downgraded;
-      // session-status.ts's precedence order is what actually protects
-      // against a stale confirmedKind here, not an explicit clear).
+      // (elicitationState, lastTurnEndedAt).
+      //
+      // Fix: sticky needs_input (D2/D4) — UNLIKE progress:done, this DOES
+      // force-clear the attention machine's confirmedKind (ctx.clearAttention()
+      // below). The prior comment here argued session-status.ts's precedence
+      // order was what protected against a stale confirmedKind — that
+      // premise is exactly what a live incident falsified: every one of the
+      // per-state latches above can go idle (as they do here) while
+      // confirmedKind stays orphaned (e.g. a specific immune kind stolen by
+      // a co-fired generic hookNotification — see attention-detect.ts's
+      // GENERIC_IMMUNE_KINDS), and `needs_input` outranks `working` in
+      // deriveSessionStatus. UserPromptSubmit is as authoritative a "the
+      // human just gave input" signal as a real keystroke, so clear it the
+      // same way write() does.
+      ctx.clearAttention();
       ctx.permissionState = "idle";
       ctx.permissionAt = null;
       ctx.pendingPermissionTool = null;
@@ -747,6 +817,20 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         ctx.planState = "idle";
         ctx.planAt = null;
         ctx.clearIfConfirmedKind("planReady");
+        changed = true;
+      }
+      // Fix: AskUserQuestion mislabelled (D3) — the `question` counterpart
+      // to the ExitPlanMode release just above. Live evidence this hook
+      // actually fires for AskUserQuestion: PermissionRequest hook
+      // 2026-08-14 session 331, tool_done immediately followed it. Without
+      // this release, questionState (and its confirmedKind — `question` is
+      // in OUTPUT_IMMUNE_KINDS) would stay latched until progress:done/
+      // turn_start backstops it — a fresh D2-shaped orphan.
+      if (td.tool === "AskUserQuestion" && ctx.questionState === "pending") {
+        ctx.questionState = "idle";
+        ctx.questionHeader = null;
+        ctx.questionAt = null;
+        ctx.clearIfConfirmedKind("question");
         changed = true;
       }
       if (changed) ctx.emitEvent("status_change", { reason: "tool_done", tool: td.tool });
