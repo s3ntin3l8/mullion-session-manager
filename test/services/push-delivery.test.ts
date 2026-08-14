@@ -221,6 +221,72 @@ describe("push-delivery (issue #95)", () => {
     await app.close();
   });
 
+  // Issue #674 — toInfo() defaults its idle threshold to a hardcoded 2s
+  // fallback (pty-manager.ts's IDLE_THRESHOLD_MS) when a caller omits the
+  // argument; every other production caller passes the live, persisted
+  // notifications.idleThresholdSeconds setting instead, and push-delivery.ts
+  // was the one silent omission. This pins the plumbing directly (the exact
+  // argument toInfo() is called with) rather than inferring it from a
+  // derived status, so a regression back to the bare default fails loudly
+  // here instead of only manifesting as an occasionally-wrong notify
+  // decision.
+  it("passes the live idleThresholdSeconds setting (not the 2s default) into toInfo()", async () => {
+    const app = await buildApp();
+    app.db.delete(pushSubscriptions).run();
+    const [project] = app.db.insert(projects).values({ name: "p", cwd: "/tmp" }).returning().all();
+    const [session] = app.db
+      .insert(sessions)
+      .values({ projectId: project.id, command: "bash", status: "active" })
+      .returning()
+      .all();
+    const endpoint = uniqueEndpoint();
+    app.db
+      .insert(pushSubscriptions)
+      .values({ endpoint, p256dhKey: "p256dh", authKeyEnc: "auth-fixture", createdAt: new Date() }) // pragma: allowlist secret
+      .run();
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        notifications: {
+          channels: { push: true },
+          // Deliberately not the 30s default (services/settings.ts) — a
+          // distinctive value the assertion below can only match if the
+          // live setting was actually threaded through, not some other
+          // constant (e.g. the module's own 2s fallback, or 30s coincidentally).
+          idleThresholdSeconds: 77,
+        },
+      },
+    });
+
+    const toInfo = vi.fn().mockReturnValue({
+      activity: "idle",
+      attention: false,
+      attentionKind: null,
+      permissionState: "pending",
+      planState: "idle",
+      gateState: "idle",
+      promoteState: "idle",
+      elicitationState: "idle",
+      questionState: "idle",
+      errorState: "idle",
+      errorDetail: null,
+      endedReason: null,
+      exitCode: null,
+      compactState: "idle",
+      subagentCount: 0,
+      lastTurnEndedAt: null,
+      outstandingBackgroundTasks: [],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(app.pty, "get").mockReturnValue({ toInfo } as any);
+
+    await deliverPushNotification(app, makeEvent({ sessionId: session.id }), createCoalesceState());
+
+    expect(toInfo).toHaveBeenCalledWith(77 * 1000);
+    await app.close();
+  });
+
   it("sends a status_change/exited push even though the DB row still says active", async () => {
     // Regression test for the race deriveSessionStatus's dbStatus axis has
     // with the 30s reconciler sweep: the exited event fires the instant
