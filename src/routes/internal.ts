@@ -1204,11 +1204,12 @@ export async function internalRoutes(app: FastifyInstance) {
   // resolveWithinRoots gate as every other filesystem-touching route in
   // this file; unlike those read-only routes, this one mutates (creates a
   // directory + a branch), so the gate matters even more here. Returns
-  // `null` (200, not an error status) when creation fails for a git-level
-  // reason (bad baseRef, not a repo) — same "not applicable, not
-  // unreachable" shape as /internal/git-branches above, which
-  // RemoteHostClient.request()'s HostUnreachableError/HostRequestError
-  // handling would otherwise conflate with a genuine connectivity failure.
+  // `{ created: false, reason, detail? }` (200, not an error status — issue
+  // #677) when creation fails for a git-level reason (bad baseRef, not a
+  // repo, a branch/path collision) — same "not applicable, not unreachable"
+  // shape as /internal/git-branches above, which RemoteHostClient.request()'s
+  // HostUnreachableError/HostRequestError handling would otherwise conflate
+  // with a genuine connectivity failure.
   app.post<{ Body: GitWorktreeCreateBody }>(
     "/internal/git-worktree",
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeCreateSchema },

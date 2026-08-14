@@ -365,7 +365,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (!result.ok) {
         if (result.reason === "unknown-project") return reply.badRequest("Unknown projectId");
         if (result.reason === "worktree-failed") {
-          return reply.badGateway("Failed to create worktree for this session");
+          // Issue #677 — surface the actual reason (e.g. "branch already
+          // exists") when the backend supplied one, instead of always
+          // showing the same generic message regardless of cause.
+          return reply.badGateway(result.detail ?? "Failed to create worktree for this session");
         }
         if (result.reason === "unknown-parent") return reply.badRequest("Unknown parentSessionId");
         if (result.reason === "parent-wrong-project") {
@@ -420,7 +423,15 @@ export async function sessionsRoute(app: FastifyInstance) {
         { baseRef, branchName },
         `promote-${sessionId}-${Date.now()}`,
       );
-      if (!resolvedWorktree) return reply.badGateway("Failed to create worktree for this session");
+      if (!resolvedWorktree.created || !resolvedWorktree.path || !resolvedWorktree.branch) {
+        // Issue #677 — surface the actual reason (e.g. "branch already
+        // exists") when the backend supplied one, instead of always
+        // showing the same generic "check that the base ref exists"
+        // regardless of cause.
+        return reply.badGateway(
+          resolvedWorktree.detail ?? "Failed to create worktree for this session",
+        );
+      }
       const worktreePath = resolvedWorktree.path;
 
       // Deliberately no `parentSessionId` — promote is a REPLACEMENT (this

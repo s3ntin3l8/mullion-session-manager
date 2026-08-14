@@ -168,8 +168,28 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("shows an error and stays open when promoteSession fails", async () => {
-    promoteSessionMock.mockRejectedValueOnce(new Error("boom"));
+  // Issue #677 — the backend now forwards the actual failure reason (the
+  // ApiError's message, taken straight from the response body) instead of
+  // always showing the same generic message regardless of cause.
+  it("shows the backend's actual failure reason and stays open when promoteSession fails", async () => {
+    promoteSessionMock.mockRejectedValueOnce(
+      new Error("a branch named 'mullion/foo' already exists"),
+    );
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={onClose} />);
+
+    await screen.findByRole("combobox");
+    await user.click(screen.getByText("Create worktree"));
+
+    expect(
+      await screen.findByText(/a branch named 'mullion\/foo' already exists/),
+    ).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a generic message when promoteSession rejects with something that isn't an Error", async () => {
+    promoteSessionMock.mockRejectedValueOnce("not an Error instance");
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={onClose} />);

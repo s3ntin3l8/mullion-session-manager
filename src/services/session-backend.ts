@@ -17,6 +17,7 @@ import {
   resumeTaskWorktree,
   syncWorktree,
   type ClearOrphanedTaskWorktreeResult,
+  type CreateWorktreeResult,
   type PruneWorktreesResult,
   type RemoveIfCleanResult,
   type RemoveListedWorktreeResult,
@@ -79,15 +80,17 @@ export interface SessionBackend {
   // this session (already resolved, timed out, or its connection died).
   resolveReviewGate(id: string, decision: "approved" | "denied", reason?: string): Promise<boolean>;
   // Issue #271 — creates a worktree on whichever host actually owns `cwd`'s
-  // filesystem, for the launcher-toggle and promote flows. Returns `null`
-  // when creation fails for a git-level reason (bad baseRef, not a repo);
-  // callers must not proceed to spawn a session against a nonexistent path.
+  // filesystem, for the launcher-toggle and promote flows. Returns
+  // `{ created: false, reason, detail? }` when creation fails for a
+  // git-level reason (bad baseRef, not a repo, a branch/path collision —
+  // see git-worktree.ts's CreateWorktreeReason, issue #677); callers must
+  // not proceed to spawn a session against a nonexistent path.
   createWorktree(
     cwd: string,
     baseRef: string,
     seed: string,
     branchName?: string,
-  ): Promise<WorktreeResult | null>;
+  ): Promise<CreateWorktreeResult>;
   // Checks out an existing branch into a fresh detached-HEAD worktree on
   // whichever host owns `cwd`'s filesystem (dock preview flow, issue #345).
   checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null>;
@@ -252,7 +255,7 @@ class LocalBackend implements SessionBackend {
     baseRef: string,
     seed: string,
     branchName?: string,
-  ): Promise<WorktreeResult | null> {
+  ): Promise<CreateWorktreeResult> {
     return createWorktree({ cwd, baseRef, seed, branchName });
   }
 
@@ -383,7 +386,7 @@ class RemoteBackend implements SessionBackend {
     baseRef: string,
     seed: string,
     branchName?: string,
-  ): Promise<WorktreeResult | null> {
+  ): Promise<CreateWorktreeResult> {
     return this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName);
   }
 

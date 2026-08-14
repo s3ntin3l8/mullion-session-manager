@@ -110,9 +110,17 @@ export function PromoteDialog({
           onClose();
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setSubmitting(false);
-        setError("Failed to create the worktree — check that the base ref exists.");
+        // Issue #677 — the backend now forwards the actual reason a
+        // worktree failed to create (e.g. "a branch named '...' already
+        // exists") as the error body's message, instead of always the same
+        // generic "check that the base ref exists" regardless of cause.
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to create the worktree — check that the base ref exists.",
+        );
       });
   };
 
