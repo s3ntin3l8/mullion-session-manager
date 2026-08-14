@@ -152,6 +152,41 @@ describe("AttentionTracker.clearIfConfirmedKind", () => {
   });
 });
 
+describe("AttentionTracker.clearAttention", () => {
+  // Fix: sticky needs_input (D2/D4) — unlike clearIfConfirmedKind, this is
+  // unconditional: `turn_start` (UserPromptSubmit) needs it because a
+  // confirmedKind can be orphaned (e.g. by the D2 generic/specific race)
+  // with no way to name the right kind to clear.
+  it("clears back to idle regardless of which kind is confirmed", () => {
+    const { tracker } = makeTracker();
+    tracker.emitAttentionSignalWithExtras("reviewGate", { prompt: "approve?" });
+    expect(tracker.state.state).toBe("attention");
+
+    tracker.clearAttention();
+
+    expect(tracker.state.state).toBe("idle");
+    expect(tracker.state.confirmedKind).toBeNull();
+  });
+
+  it("clears an immune kind too — unlike a plain output chunk, it isn't gated on OUTPUT_IMMUNE_KINDS", () => {
+    const { tracker, emitEvent } = makeTracker();
+    tracker.emitAttentionSignalWithExtras("permissionRequest", { tool: "Bash", summary: "ls" });
+    emitEvent.mockClear();
+
+    tracker.clearAttention();
+
+    expect(tracker.state.state).toBe("idle");
+    expect(emitEvent).toHaveBeenCalledWith("attention", { attention: false });
+  });
+
+  it("is a no-op outside the 'attention' state (e.g. still idle)", () => {
+    const { tracker, emitEvent } = makeTracker();
+    tracker.clearAttention();
+    expect(tracker.state.state).toBe("idle");
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+});
+
 describe("AttentionTracker.setBackgroundTasks", () => {
   it("stamps backgroundTasksAt to now when outstanding tasks remain", () => {
     const { tracker } = makeTracker();

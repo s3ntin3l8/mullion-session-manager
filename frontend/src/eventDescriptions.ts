@@ -138,6 +138,20 @@ export function describeEvent(
             attention: true,
           };
         }
+        // Fix: sticky needs_input — stop_failure/tool_failure now raise
+        // apiError/toolFailure instead of the generic hookNotification (see
+        // src/services/hook-handlers.ts), so without these two cases the
+        // feed would silently regress from "Tool failed: Bash — Exit code
+        // 2…" to a bare "Needs input" via the default branch below. Same
+        // `${title} — ${body}` formatting as hookNotification above, same
+        // extras shape (Session.emitAttentionSignalWithExtras call sites).
+        case "toolFailure":
+        case "apiError": {
+          const title = typeof event.payload.title === "string" ? event.payload.title : null;
+          const body = typeof event.payload.body === "string" ? event.payload.body : null;
+          if (title && body) return { text: `${title} — ${body}`, attention: true };
+          return { text: title || "Needs input", attention: true };
+        }
         default:
           // A future signal kind this hasn't been taught yet.
           return { text: "Needs input", attention: true };
