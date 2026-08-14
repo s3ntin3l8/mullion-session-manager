@@ -1236,6 +1236,22 @@ describe("PtyManager", () => {
     expect(fakePtyChildren[0].rows).toBe(10);
   });
 
+  it("does not clamp an initial spawn size that's already at or above the floor", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    expect(session.toInfo().cols).toBe(80);
+    expect(session.toInfo().rows).toBe(24);
+    expect(fakePtyChildren[0].cols).toBe(80);
+    expect(fakePtyChildren[0].rows).toBe(24);
+  });
+
   it("clamps a resize() call below the floor, and calls through to the pty with the clamped size", async () => {
     const session = manager.getOrCreate({
       id: "1",

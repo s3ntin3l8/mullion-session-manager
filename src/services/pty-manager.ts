@@ -435,20 +435,15 @@ const EVENTS_MAX = 100;
 // every failing point found in that repro rather than chasing the exact
 // curve — this is deliberately the same "floor it, don't chase the
 // racing timing" posture as RedrawNudge's own `Math.max(4, ...)` dip
-// floor (redraw-nudge.ts), which needs no change of its own for the crash
-// this fixes: a dip's rows target now also gets floored at MIN_ROWS by
-// resize() below, and that's fine for the crash itself (the repro's
-// rows-only sweep at cols=80 never crashed anything down to rows=4,
-// cols being the actually load-bearing dimension). One narrow, pre-
-// existing-shape corner case: if a session's rows is ever exactly
-// MIN_TERMINAL_ROWS, the dip's clamped target equals the current value —
-// a same-size resize, which resize()'s own comment notes is a kernel-
-// level TIOCSWINSZ no-op (no SIGWINCH), so that one repaint-forcing nudge
-// would silently do nothing. Judged not worth chasing here: reaching
-// exactly rows===MIN_TERMINAL_ROWS requires a client resize landing on
-// that precise value, which no real browser terminal organically
-// produces — flagged for whoever touches redraw-nudge.ts next, not fixed
-// preemptively.
+// floor (redraw-nudge.ts), which needs no change of its own here.
+// RedrawNudge's own `resize` callback (this file's `redrawNudge = new
+// RedrawNudge({ resize: (cols, rows) => this.ptyProcess?.resize(cols,
+// rows), ... })`) calls the pty directly, bypassing this Session's own
+// resize() and its clamp entirely — so a dip can genuinely still take
+// rows as low as 4, a real SIGWINCH, not a no-op. That stays safe for the
+// crash this fixes: the repro's rows-only sweep at cols=80 never crashed
+// anything down to rows=4, since cols — untouched by the dip — is the
+// actually load-bearing dimension.
 export const MIN_TERMINAL_COLS = 40;
 export const MIN_TERMINAL_ROWS = 10;
 
