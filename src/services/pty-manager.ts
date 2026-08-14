@@ -106,6 +106,16 @@ export interface CreateSessionOptions {
    * own doc comment for why this can't be delivered via stashSeed's
    * SessionStart `additionalContext` for an unattended worker. */
   initialPrompt?: string;
+  /** Issue #678 — the promote flow's seed prompt (POST
+   * /api/sessions/:id/promote's `seedPrompt` body field, or the launcher's
+   * own equivalent), stashed against this session's id (see
+   * PtyManager.stashSeed) and also threaded through to
+   * HookAdapterContext.seedPrompt for an adapter with no live hook round
+   * trip to deliver it through (opencode — see that adapter's own header).
+   * Distinct from `initialPrompt` above: this never submits a turn, it only
+   * injects context, matching what a hook-based agent's SessionStart
+   * `additionalContext` already does for it. */
+  seedPrompt?: string;
   projectId?: number;
 }
 
@@ -815,6 +825,11 @@ export class Session {
   // respawn never re-submits it. Not cleared after use (nothing re-reads it
   // once bootstrapMaster() has run for this Session instance).
   private readonly initialPrompt: string | undefined;
+  // Issue #678 — see CreateSessionOptions.seedPrompt's own doc comment.
+  // Consumed once, in bootstrapMaster() below, to build the LaunchPlanSession
+  // literal passed to buildLaunchPlan() — same "spawn-time snapshot, not
+  // re-read later" posture as initialPrompt/injectAgentGuide above.
+  private readonly seedPrompt: string | undefined;
   readonly projectId: number | null;
 
   private ptyProcess: IPty | null = null;
@@ -1128,6 +1143,7 @@ export class Session {
     injectAgentGuide?: boolean;
     skipPermissions?: boolean;
     initialPrompt?: string;
+    seedPrompt?: string;
     projectId?: number;
   }) {
     this.id = opts.id;
@@ -1144,6 +1160,7 @@ export class Session {
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.skipPermissions = opts.skipPermissions ?? false;
     this.initialPrompt = opts.initialPrompt;
+    this.seedPrompt = opts.seedPrompt;
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
     // `this.id` above is already assigned — the host object's `sessionId`
@@ -1644,6 +1661,7 @@ export class Session {
       injectAgentGuide: this.injectAgentGuide,
       skipPermissions: this.skipPermissions,
       initialPrompt: this.initialPrompt,
+      seedPrompt: this.seedPrompt,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -3262,6 +3280,7 @@ export class PtyManager {
         injectAgentGuide: this.getInjectAgentGuide(),
         skipPermissions: opts.skipPermissions,
         initialPrompt: opts.initialPrompt,
+        seedPrompt: opts.seedPrompt,
         projectId: opts.projectId,
       });
       // Subscribed exactly once, at creation — re-emits every event this
@@ -3437,12 +3456,17 @@ export class PtyManager {
    * Stashes a seed prompt (issue #271's promote flow) for a NEW session's
    * `SessionStart` hook to pick up once it fires — see consumeSeed() below
    * and hooks.ts's "session_start" handling. Keyed independently of the
-   * `sessions` map (rather than as a Session field) because the stash
-   * happens right after POST /api/sessions/:id/promote spawns the new
-   * session, and the corresponding Session object is guaranteed to exist by
-   * then (getOrCreate is synchronous), but keeping this as a flat,
-   * short-lived map avoids coupling a one-shot handoff value to a Session's
-   * full lifecycle.
+   * `sessions` map (rather than as a Session field) so a one-shot handoff
+   * value isn't coupled to a Session's full lifecycle — this works whether
+   * or not a Session object for `id` exists yet.
+   *
+   * Issue #678 — session-lifecycle.ts's createSessionRecord calls this
+   * BEFORE resolveBackend(...).spawn(...), not after (the previous ordering
+   * — see hooks.ts's own doc comment on the "session_start" branch for what
+   * that race looked like): the agent's own process, and therefore its
+   * SessionStart hook, can't fire until spawn() actually runs, so stashing
+   * ahead of that call guarantees the seed is already here by the time it
+   * does, for both local and remote hosts.
    */
   stashSeed(id: string, seed: string): void {
     this.pendingSeeds.set(id, seed);

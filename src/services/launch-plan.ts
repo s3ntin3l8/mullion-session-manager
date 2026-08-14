@@ -77,6 +77,11 @@ export interface LaunchPlanSession {
   readonly injectAgentGuide: boolean;
   readonly skipPermissions: boolean;
   readonly initialPrompt: string | undefined;
+  /** Issue #678 — see HookAdapterContext.seedPrompt's own doc comment for
+   * why this needs a spawn-time channel distinct from initialPrompt above
+   * (a submitted turn) and distinct from stashSeed's live SessionStart hook
+   * round trip (opencode has none). */
+  readonly seedPrompt: string | undefined;
 }
 
 export interface LaunchPlan {
@@ -199,6 +204,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     injectAgentGuide: session.injectAgentGuide,
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,
+    seedPrompt: session.seedPrompt,
   });
   Object.assign(sessionEnv, envAdditions);
 

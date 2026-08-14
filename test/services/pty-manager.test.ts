@@ -5833,6 +5833,43 @@ describe("PtyManager", () => {
       ungatedManager.killAll();
     });
 
+    // Issue #678 — the end-to-end proof the plumbing actually works: a
+    // `seedPrompt` passed into getOrCreate() survives the full six-hop
+    // chain (CreateSessionOptions -> Session's own field -> the
+    // LaunchPlanSession literal buildLaunchPlan() receives -> ctx ->
+    // openCodeAdapter.prepareLaunch()) and reaches the REAL env passed to
+    // the spawned systemd-run process, not just a typechecked-but-untested
+    // pass-through.
+    it("delivers a seedPrompt to opencode's OPENCODE_CONFIG_CONTENT instructions, independently of injectAgentGuide", async () => {
+      const ungatedManager = new PtyManager({ sessionsDir, getInjectAgentGuide: () => false });
+      const session = ungatedManager.getOrCreate({
+        id: "3",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+        seedPrompt: "resume the refactor",
+      });
+      await waitForSpawn(session);
+
+      const seedPath = path.join(sessionsDir, "3.opencode-seed.md");
+      expect(fs.existsSync(seedPath)).toBe(true);
+      expect(fs.readFileSync(seedPath, "utf8")).toBe("resume the refactor");
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+      // injectAgentGuide is off on this manager, so only the seed path
+      // should be present — proves the gate is independent of that setting.
+      expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        instructions: [seedPath],
+      });
+
+      ungatedManager.killAll();
+    });
+
     describe("Codex (issue #252)", () => {
       let codexHome: string;
       const originalCodexHome = process.env.CODEX_HOME;

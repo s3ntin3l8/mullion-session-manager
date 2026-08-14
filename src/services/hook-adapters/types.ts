@@ -64,6 +64,19 @@ export interface HookAdapterContext {
    * the posture a pre-trusted folder matches — a manual launch with this
    * off (the default) still sees agy's folder-trust prompt, unchanged. */
   skipPermissions?: boolean;
+  /** Issue #678 — the promote flow's seed prompt (POST
+   * /api/sessions/:id/promote's `seedPrompt` body field), threaded all the
+   * way from session-lifecycle.ts's createSessionRecord through spawn() so
+   * an adapter with no live hook round trip (opencode — see that file's own
+   * header) has a spawn-time channel to inject it, the same way
+   * `injectAgentGuide` above exists for opencode's agent-guide pointer.
+   * Every other adapter ignores this field entirely: their SessionStart is
+   * a live hook round trip (hooks.ts's "session_start" branch,
+   * app.pty.consumeSeed) that delivers the seed independently of this
+   * context. Gated INDEPENDENTLY of `injectAgentGuide` wherever it's
+   * consumed — a user-supplied promote seed must not vanish just because
+   * someone disabled the unrelated guide-injection setting. */
+  seedPrompt?: string;
 }
 
 export interface HookLaunchPlan {

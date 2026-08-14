@@ -148,6 +148,85 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
   });
 });
 
+describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #678)", () => {
+  let sessionsDir: string;
+  let baseCtx: {
+    sessionId: string;
+    sessionsDir: string;
+    hookSocketPath: string;
+    hookToken: string;
+    controlSocketPath: string;
+    forwarderPath: string;
+    reviewGateEnabled: boolean;
+    injectAgentGuide: boolean;
+  };
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-seed-"));
+    baseCtx = {
+      sessionId: "42",
+      sessionsDir,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      hookToken: "token123",
+      controlSocketPath: path.join(sessionsDir, "mullion.sock"),
+      forwarderPath: "/abs/path/forwarder.mjs",
+      reviewGateEnabled: false,
+      injectAgentGuide: false,
+    };
+  });
+
+  afterEach(() => {
+    rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  const seedPath = () => path.join(sessionsDir, "42.opencode-seed.md");
+
+  it("writes the seed to a per-session file and points instructions at it, independently of injectAgentGuide", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      injectAgentGuide: false,
+      seedPrompt: "resume the refactor",
+    });
+    const seedFile = plan.settingsFiles?.find((f) => f.path === seedPath());
+    expect(seedFile?.contents).toBe("resume the refactor");
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      instructions: [seedPath()],
+    });
+  });
+
+  it("still writes the plugin file alongside the seed file", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, seedPrompt: "resume here" });
+    expect(plan.settingsFiles).toHaveLength(2);
+    expect(plan.settingsFiles?.map((f) => f.path)).toContain(
+      path.join(sessionsDir, "42.opencode-config", "plugins", "mullion-hook-emitter.js"),
+    );
+  });
+
+  it("concatenates the seed path with the agent-guide path when both are gated on", () => {
+    writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      injectAgentGuide: true,
+      seedPrompt: "resume the refactor",
+    });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      instructions: [sessionAgentGuidePath(sessionsDir, "42"), seedPath()],
+    });
+  });
+
+  it("omits the seed entirely when seedPrompt is an empty string", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, seedPrompt: "" });
+    expect(plan.settingsFiles).toHaveLength(1);
+    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+  });
+
+  it("omits the seed entirely when seedPrompt is absent (existing agent-guide-only behavior unaffected)", () => {
+    const plan = openCodeAdapter.prepareLaunch(baseCtx);
+    expect(plan.settingsFiles).toHaveLength(1);
+    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+  });
+});
+
 describe("OPENCODE_EMITS (issue #321)", () => {
   it("includes compact for session.compacting events", () => {
     expect(openCodeAdapter.emits).toContain("compact");

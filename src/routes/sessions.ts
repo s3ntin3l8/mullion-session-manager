@@ -445,6 +445,13 @@ export async function sessionsRoute(app: FastifyInstance) {
         cwd: worktreePath,
         kind: row.kind,
         skipPermissions: row.skipPermissions ?? undefined,
+        // Issue #678 — passed straight through rather than stashed here
+        // AFTER createSessionRecord returns (the previous call site, and
+        // the actual race this issue is about): createSessionRecord now
+        // stashes it BEFORE spawning the new session, so it's guaranteed
+        // present by the time a hook-based agent's SessionStart fires, and
+        // also reaches opencode's own spawn-time delivery channel.
+        seedPrompt: seedPrompt && seedPrompt.length > 0 ? seedPrompt : undefined,
       });
       if (!created.ok) {
         // createSessionRecord's own spawn-failure rollback only fires for a
@@ -488,9 +495,6 @@ export async function sessionsRoute(app: FastifyInstance) {
         return reply.badGateway("Failed to spawn the promoted session");
       }
 
-      if (seedPrompt && seedPrompt.length > 0) {
-        await resolveBackend(app, project.hostId).stashSeed(String(created.row.id), seedPrompt);
-      }
       await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
         decision: "accepted",
         worktreePath,
