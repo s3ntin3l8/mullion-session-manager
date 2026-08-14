@@ -130,6 +130,11 @@ interface GitHubIssueApiItem {
   html_url: string;
   user: { login: string } | null;
   pull_request?: unknown;
+  // #667 — present on the plain issues-list response (verified live against
+  // the API during planning, no extra Accept header or API version needed).
+  // Only listLabeledIssues below reads it; getRepoStatus's own use of this
+  // interface just carries the extra field through unread.
+  issue_dependencies_summary?: { total_blocked_by?: number };
 }
 
 interface GitHubRepoApiResponse {
@@ -314,6 +319,14 @@ export interface TaskIssue {
   title: string;
   body: string | null;
   htmlUrl: string;
+  // #667 — GitHub's `issue_dependencies_summary.total_blocked_by`, when the
+  // response carried it. `undefined` (not `0`) when absent — a webhook-built
+  // TaskIssue (routes/webhooks.ts, which has no summary to read) omits this
+  // field entirely rather than coercing to 0, so upsertIssueTask can tell
+  // "known zero" from "unknown" and never resets a stored count. See
+  // task-watcher.ts's upsertIssueTask and task-dependencies.ts's
+  // dependencyGate.
+  dependencyCount?: number;
 }
 
 /**
@@ -360,6 +373,7 @@ export async function listLabeledIssues(
       title: item.title,
       body: item.body ?? null,
       htmlUrl: item.html_url,
+      dependencyCount: item.issue_dependencies_summary?.total_blocked_by,
     }));
 }
 

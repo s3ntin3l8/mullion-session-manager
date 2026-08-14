@@ -6,6 +6,7 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
+import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -128,6 +129,8 @@ const TASK_ROW_COLUMNS = {
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
   githubSyncError: tasks.githubSyncError,
+  dependencyCount: tasks.dependencyCount,
+  blockedBy: tasks.blockedBy,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
   claimedAt: tasks.claimedAt,
@@ -135,6 +138,36 @@ const TASK_ROW_COLUMNS = {
   reviewingAt: tasks.reviewingAt,
   completedAt: tasks.completedAt,
 };
+
+/**
+ * #667 — the single place `dependencyGate` (task-dependencies.ts) gets
+ * evaluated for API responses, so the board card and detail drawer both
+ * read the same server-computed truth rather than each re-deriving it —
+ * `frontend/` is a separate workspace with its own tsconfig and doesn't
+ * import backend source, so mirroring the gate table client-side would risk
+ * the two drifting. The raw `blockedBy` JSON column is replaced with a
+ * parsed `blockers` array; `unresolved`'s blockers are irrelevant (the UI
+ * shows "checking…" instead) so `?? []` is a safe fallback either way.
+ */
+function withBlockedState<
+  T extends {
+    issueNumber: number | null;
+    dependencyCount: number | null;
+    blockedBy: string | null;
+  },
+>(
+  row: T,
+): Omit<T, "blockedBy"> & {
+  blockedState: "clear" | "blocked" | "unresolved";
+  blockers: ReturnType<typeof parseBlockedBy>;
+} {
+  const { blockedBy, ...rest } = row;
+  return {
+    ...rest,
+    blockedState: dependencyGate(row),
+    blockers: parseBlockedBy(blockedBy) ?? [],
+  };
+}
 
 interface ListTasksQuery {
   status?: string;
@@ -177,7 +210,7 @@ export async function tasksRoute(app: FastifyInstance) {
         // insertion order (Hermes review, PR #471).
         .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
         .all();
-      return rows;
+      return rows.map(withBlockedState);
     },
   );
 
@@ -191,7 +224,7 @@ export async function tasksRoute(app: FastifyInstance) {
       .where(eq(tasks.id, taskId))
       .all();
     if (!row) return reply.notFound();
-    return row;
+    return withBlockedState(row);
   });
 
   function getProjectOr404(projectId: number) {

@@ -108,4 +108,9 @@ export type TaskEvent =
       to: TaskStatus;
       ts: number;
     }
-  | { taskId: number; projectId: number; kind: "ingested"; ts: number };
+  | { taskId: number; projectId: number; kind: "ingested"; ts: number }
+  // #667 — a task's resolved dependency state changed (task-dependencies.ts's
+  // refreshTaskBlockers, called from the auto-claim sweep or a webhook
+  // push). Same "doorbell, not a data channel" shape as the other two kinds
+  // — the frontend reacts with a debounced refetch, not payload patching.
+  | { taskId: number; projectId: number; kind: "blockers"; ts: number };

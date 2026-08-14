@@ -136,6 +136,89 @@ Every transition is logged and broadcast on the live `/ws/tasks` channel
 section calls through it rather than logging/broadcasting independently, so
 the two can't drift out of sync.
 
+### Dependency-aware claiming (`#667`)
+
+Auto-claim (`autoClaimReadyTasks`, `task-watcher.ts`) respects GitHub's
+native issue dependencies (`GET .../issues/{n}/dependencies/blocked_by`) —
+filing a fully-ordered roadmap and labeling every issue `mullion-task` +
+`ready` up front no longer requires hand-gating each one with `Manual: true`
+and promoting them one at a time. A `ready` task with an open blocker is
+**not** claimed — it stays `ready`, visible and manually claimable, rather
+than moving to a separate status. There is deliberately no `blocked`
+status: the seven-state lifecycle above is unchanged, and a blocked task
+un-blocks itself with no transition once its last blocker closes.
+
+The gate is a three-way read off two columns on `tasks`:
+`dependencyCount` (GitHub's `issue_dependencies_summary.total_blocked_by`,
+captured on every ingest) and `blockedBy` (a JSON array of currently-open
+blockers, resolved lazily — see below). `task-dependencies.ts`'s
+`dependencyGate` is the single truth table:
+
+| `dependencyCount` | `issueNumber` | `blockedBy` | Gate         |
+| ----------------- | ------------- | ----------- | ------------ |
+| `null`            | `null`        | `null`      | **clear**    |
+| `null`            | set           | any         | `unresolved` |
+| `0`               | set           | `null`      | **clear**    |
+| `>0`              | set           | `null`      | `unresolved` |
+| `>0`              | set           | `"[]"`      | **clear**    |
+| `>0`              | set           | `[{…}]`     | `blocked`    |
+
+`dependencyCount` is nullable rather than `NOT NULL DEFAULT 0` on purpose:
+`null` means "not yet observed," which is not the same as "verified to have
+no dependencies." A local task (no `issueNumber`) is always `clear` and
+never makes a GitHub call — the pre-`#667` "auto-claim needs no GitHub
+connection at all" behavior is unchanged. A GitHub-linked task whose
+dependency state has never been observed (a fresh webhook-ingested row, a
+row from before this shipped) reads `unresolved` and is skipped rather than
+assumed clear — **fail closed**: claiming a genuinely blocked task out of
+order is exactly the harm this feature exists to prevent, so an unknown
+state is treated the same as a known-blocked one.
+
+**The check is lazy, not eager, and that's deliberate.** The naive design —
+resolve blockers for every `ready` task with `dependencyCount > 0` during
+ingest — doesn't survive this feature's own motivating scenario: a
+32-issue roadmap labeled `ready` up front has ~31 candidates with
+dependencies, so "only check tasks with dependencies" filters nothing, and
+a per-sweep cap alone would still mean dozens of calls/project/poll against
+GitHub's rate limit (this repo has no 429/`Retry-After` handling anywhere).
+Instead, `autoClaimReadyTasks` only resolves blockers for a candidate it is
+actually about to try, bounded three ways, cheapest first:
+
+1. A **capacity pre-count** — zero GitHub calls once `claimed`/
+   `in_progress` tasks already fill `maxConcurrent`.
+2. A **5-minute re-check TTL** (`blockedByCheckedAt`) — a recently-checked
+   task isn't re-resolved every poll tick regardless of state.
+3. A **per-sweep cap** (`MAX_DEPENDENCY_CHECKS_PER_SWEEP`, 20, mirroring the
+   read-back sweep's own `MAX_READBACK_CHECKS_PER_SWEEP`) as a backstop for
+   the pathological case where the first N candidates in `boardOrder` are
+   all blocked — deferred, never permanently skipped, logged when hit.
+
+`autoClaimReadyTasks` also now orders its candidates by `boardOrder`, `id`
+— the missing `ORDER BY` this feature's issue was originally filed about —
+matching the board's own render order (`routes/tasks.ts`'s `GET /api/tasks`).
+
+A resolved `blocked_by` response's blocker count is compared against the
+stored `dependencyCount`: a shortfall (fewer blockers returned than GitHub's
+own summary reports) is treated as "some blockers aren't visible to this
+token" and recorded as blocked with a distinct reason, rather than assumed
+to mean fewer real blockers than reported — GitHub does not document
+whether the summary and the list endpoint count private/cross-org blockers
+the same way, so this fails toward blocked rather than risk an
+under-scoped-token false negative. Verified live (Hermes review) that
+`total_blocked_by` itself can lag GitHub's own dependency graph for a few
+seconds after an edge is added/removed — a re-fetch immediately after a
+`blocked_by_removed` API call can still return the pre-removal count — so a
+shortfall isn't always a genuine scope gap; it can be this transient lag.
+Because of that, a shortfall result does **not** stamp the task's re-check
+TTL — it self-corrects on the very next sweep instead of holding a possibly
+wrong "blocked" verdict for the full TTL window.
+
+`GET .../dependencies/blocking` (the reverse direction) drives a second,
+push-based path: when a labeled issue with dependents closes (webhook
+`issues`/`closed`, or the poll's own close-sync), its dependents are
+re-checked immediately rather than waiting for a poll tick — see GitHub
+sync below and `docs/github-integration.md`'s webhook event list.
+
 ## The task board
 
 The task board and the session board (originally two separate surfaces —
@@ -413,6 +496,12 @@ mapping each one to its Settings key and explaining what it actually gates.
 | Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
+No separate control for dependency-aware claiming (`#667`) — a
+zero-dependency issue costs nothing extra to begin with, so there's
+nothing to opt out of. Its own cost is bounded by the three mechanisms in
+Lifecycle's "Dependency-aware claiming" section above, not a Settings
+toggle.
+
 ## GitHub sync
 
 Best-effort with respect to the local transition: **the local row is the
@@ -438,6 +527,14 @@ PR #495, second pass): that field's only clearing path is a successful
 write, so a transient read hiccup recorded there would linger on the
 banner until some unrelated write happened to fire, long after the
 read-back problem itself resolved.
+
+A third, narrower read-back exists purely for dependency freshness
+(`#667`): closing a labeled issue that has dependents (`issues`/`closed`,
+webhook or poll-driven) re-checks each dependent's blockers immediately via
+`GET .../dependencies/blocking`, rather than waiting for that dependent's
+own next poll tick. Best-effort and fire-and-forget, same posture as
+everything else in this section — a failure here just leaves the dependent
+`unresolved` until its own next check.
 
 | Transition      | GitHub side effect                                                                                                                                                                                                                                                                                                     |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -626,3 +723,28 @@ extensive design comments.
   to check out and 502s `worktree-failed`, the same failure mode this
   section's "no automatic cleanup" gap above already describes for a
   crashed retry attempt.
+- **A GitHub-linked task whose reads fail is never auto-claimed, where
+  before `#667` it was.** A dead token, a rate limit, a 5xx — anything
+  that prevents a sweep from observing an issue's dependency state — leaves
+  `dependencyCount`/`blockedBy` unresolved, and `dependencyGate` treats
+  "never observed" the same as "known blocked" (see Lifecycle's
+  "Dependency-aware claiming" above for why that's the deliberate,
+  fail-closed choice, not an oversight). Visible on the board as the
+  blocked icon with a "Checking dependencies…" tooltip rather than silent;
+  manual Claim still works regardless.
+- **`.../dependencies/blocked_by` and `.../dependencies/blocking` are each
+  capped at one page (100 items)**, matching `listLabeledIssues`' own
+  documented page cap. A task with more than 100 blockers, or an issue with
+  more than 100 dependents, only sees the first page.
+- **A cyclic or permanently-open dependency stalls a task forever, with no
+  detection.** GitHub does not prevent transitive dependency cycles, and a
+  blocker closed as "not planned" unblocks its dependents exactly the same
+  as one closed as completed (GitHub's `state` is `closed` regardless of
+  `state_reason`) — but an abandoned, still-open blocker does not. The
+  board's blocked badge is the only signal; there is no timeout or cycle
+  detection.
+- **With webhooks off (or unreachable), a landed blocker's dependents wait
+  up to the poll interval, not the ~1s the webhook push gives them** — the
+  GitHub sync section's blocker-close read-back above requires a delivered
+  `issues`/`closed` webhook or the next poll's own read-back to fire; there
+  is no separate faster path for this specific case.

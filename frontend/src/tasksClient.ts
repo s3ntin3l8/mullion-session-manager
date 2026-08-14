@@ -37,6 +37,7 @@ export interface TasksClientHandle {
 const TASK_EVENT_KINDS: Record<TaskEvent["kind"], true> = {
   transition: true,
   ingested: true,
+  blockers: true,
 };
 
 function isTaskWireMessage(value: unknown): boolean {

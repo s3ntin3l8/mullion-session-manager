@@ -75,6 +75,7 @@ interface InsertedTaskRow {
   body: string | null;
   htmlUrl: string;
   status: string;
+  dependencyCount?: number | null;
 }
 
 interface TrackedTaskRow {
@@ -89,24 +90,47 @@ function mockApp(
   conflictConfigs: { set: object; where: unknown }[] = [],
   readyTasks: { id: number }[] = [],
   trackedNonTerminal: TrackedTaskRow[] = [],
+  // #667 — rows counted toward the capacity pre-count in
+  // autoClaimReadyTasks (CONCURRENCY_CAPPED_STATUSES). Empty by default so
+  // every pre-#667 test here keeps its original "capacity is never the
+  // limiting factor, only claimTask's own mocked outcome is" behavior.
+  inFlightRows: { id: number }[] = [],
 ): FastifyInstance {
   let nextInsertedId = 1;
   return {
     db: {
       // The ingest sweep's own project-discovery select (localProjectRows)
       // calls `.all()` directly with no `.where()` in its chain — that's
-      // `rows`. Everything past `.where()` is told apart by the projection
-      // passed to `select()`: a full-row `select()` (no args) is the
-      // read-back's own trackedNonTerminal query; a `{id}`-projected
-      // `select({id: ...})` is EITHER the auto-claim ready-tasks query
-      // (`.all()`) or upsertIssueTask's existed-check (`.get()`) — those two
-      // are told apart by which terminal method the caller invokes, since
-      // neither of THEM ever calls the other's.
+      // `rows`. Everything past `.where()` is told apart by CHAIN SHAPE, not
+      // the projection value (real drizzle allows both `.where().all()` and
+      // `.where().orderBy().all()`, so this mirrors that): a full-row
+      // `select()` (no args) is the read-back's own trackedNonTerminal
+      // query; a projected `select({...}).where(...).all()` with NO
+      // `.orderBy()` in between is EITHER upsertIssueTask's existed-check
+      // (`.get()`, a different terminal) or autoClaimReadyTasks's capacity
+      // pre-count (`.all()`) — `inFlightRows`; a projected
+      // `select({...}).where(...).orderBy(...).all()` is autoClaimReadyTasks's
+      // own ready-tasks query — `readyTasks`, the only one of the three that
+      // ever chains `.orderBy()`. Every readyTasks row gets #667's new
+      // columns defaulted to `issueNumber: null` (dependencyGate's "local
+      // task, always clear" case) so a pre-#667 test's `{id}`-only row keeps
+      // claiming exactly as before.
       select: (projection?: unknown) => ({
         from: () => ({
           all: () => rows,
           where: () => ({
-            all: () => (projection === undefined ? trackedNonTerminal : readyTasks),
+            all: () => (projection === undefined ? trackedNonTerminal : inFlightRows),
+            orderBy: () => ({
+              all: () =>
+                readyTasks.map((t) => ({
+                  projectId: 1,
+                  issueNumber: null,
+                  dependencyCount: null,
+                  blockedBy: null,
+                  blockedByCheckedAt: null,
+                  ...t,
+                })),
+            }),
             // upsertIssueTask's existed-check — this mock always answers
             // "doesn't exist yet" (undefined), so every ingest in these
             // tests takes the fresh-insert path and gets a real
@@ -285,8 +309,31 @@ describe("startTaskWatcher", () => {
         body: "details",
         htmlUrl: "https://x/42",
         status: "ready",
+        // #667 — absent from listLabeledIssues' mocked return above, so
+        // TaskIssue.dependencyCount is undefined; upsertIssueTask's insert
+        // still writes the column explicitly as null (not omitted), see
+        // the dedicated test below for the "present" case.
+        dependencyCount: null,
       },
     ]);
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("#667 — captures dependencyCount on ingest when the issue carries one", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([
+      { number: 47, title: "Has deps", body: null, htmlUrl: "https://x/47", dependencyCount: 3 },
+    ]);
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp(rows, inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(inserted).toEqual([expect.objectContaining({ issueNumber: 47, dependencyCount: 3 })]);
 
     cleanup();
     vi.useRealTimers();
@@ -362,6 +409,30 @@ describe("startTaskWatcher", () => {
     expect(conflictConfigs[0].where).toBeDefined();
     expect(conflictConfigs[0].set).not.toHaveProperty("status");
     expect(conflictConfigs[0].set).not.toHaveProperty("boardOrder");
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("#667 — a webhook-shaped re-sighting (no dependencyCount) doesn't add it to set/where, so a stored count survives", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    // dependencyCount deliberately absent — the shape upsertIssueTask sees
+    // from routes/webhooks.ts, which has no issue_dependencies_summary to
+    // read.
+    mockListLabeledIssues.mockResolvedValue([
+      { number: 48, title: "Fix the thing", body: "details", htmlUrl: "https://x/48" },
+    ]);
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+    const inserted: InsertedTaskRow[] = [];
+    const conflictConfigs: { set: object; where: unknown }[] = [];
+    const app = mockApp(rows, inserted, conflictConfigs);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(conflictConfigs).toHaveLength(1);
+    expect(conflictConfigs[0].set).not.toHaveProperty("dependencyCount");
 
     cleanup();
     vi.useRealTimers();
