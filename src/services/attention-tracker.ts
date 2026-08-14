@@ -144,6 +144,27 @@ export class AttentionTracker {
   }
 
   /**
+   * Fix: sticky needs_input (D2/D4) — an unconditional, kind-agnostic clear,
+   * for a signal as authoritative as a genuine keystroke but that isn't one:
+   * Claude Code's UserPromptSubmit (mapped to `turn_start`) is the
+   * deterministic "a new turn genuinely started" signal, i.e. the human
+   * just gave fresh input. Unlike clearIfConfirmedKind(), this isn't gated
+   * on `kind` — a confirmedKind can be silently orphaned by a specific-vs-
+   * generic hookNotification race (see attention-detect.ts's
+   * GENERIC_IMMUNE_KINDS), at which point nothing will ever match it again;
+   * `turn_start`'s own handler already unconditionally clears every other
+   * per-state latch (permissionState/planState/questionState/...) for the
+   * same reason. Routed through applyAttentionTransition (not a direct
+   * state mutation) so the resulting `{attention:false}` is actually
+   * emitted, same as write()'s own userInput clear.
+   */
+  clearAttention(): void {
+    this.applyAttentionTransition(
+      advanceAttention(this.state, { type: "userInput", now: Date.now() }),
+    );
+  }
+
+  /**
    * Drives the attention state machine with a zero-threshold hook signal
    * (hookNotification/reviewGate — see ATTENTION_CONFIRM_MS) to keep
    * `attentionState`/`SessionInfo.attention` correct, and unconditionally
@@ -183,6 +204,8 @@ export class AttentionTracker {
       | "planReady"
       | "elicitation"
       | "question"
+      | "toolFailure"
+      | "apiError"
     >,
     extras: Record<string, unknown>,
   ): void {

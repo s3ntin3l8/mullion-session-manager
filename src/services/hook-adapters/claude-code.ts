@@ -313,6 +313,14 @@ export const CLAUDE_CODE_EMITS = [
   "permission_resolved",
   "elicitation",
   "promote_request",
+  // Fix: AskUserQuestion mislabelled — forwarder-core.mjs's
+  // mapClaudeCodePermissionRequest now remaps AskUserQuestion's
+  // PermissionRequest hook to `question` instead of `permission_request`,
+  // so this agent can actually reach `awaiting_question`. Without this
+  // entry, EMITS_REQUIREMENTS (frontend/src/sessionStatus.ts) would treat
+  // that status as unreachable for claude-code and render its dot
+  // `.estimated`.
+  "question",
 ] as const;
 
 export function buildClaudeMcpConfig(

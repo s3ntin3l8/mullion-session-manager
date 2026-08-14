@@ -1241,6 +1241,70 @@ describe("mapClaudeCodePermissionRequest", () => {
       summary: "a tool",
     });
   });
+
+  // Hermes review, PR #675 — ExitPlanMode's PermissionRequest is no longer
+  // suppressed HERE: this mapper is a stateless, per-invocation subprocess
+  // with no view of `ctx.planState`, so it can't tell whether the PreToolUse
+  // ExitPlanMode hook's own `plan_ready` already covered this dialog or
+  // never fired at all. It still maps to a plain permission_request, same
+  // as every other tool — the dedup against a redundant plan_ready lives in
+  // hook-handlers.ts's "permission_request"/"plan_ready" cases instead,
+  // where that state is actually visible (see test/services/pty-manager.test.ts's
+  // "ExitPlanMode dedup" describe block for that behavior).
+  it("maps ExitPlanMode like any other tool — dedup against plan_ready happens downstream, not here", () => {
+    expect(
+      mapClaudeCodePermissionRequest({
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: "1. Fix the bug" },
+      }),
+    ).toEqual({ kind: "permission_request", tool: "ExitPlanMode", summary: "ExitPlanMode" });
+  });
+
+  // Fix: AskUserQuestion mislabelled (D3) — Claude Code has no dedicated
+  // hook for AskUserQuestion, so PermissionRequest is the only signal this
+  // tool ever produces; remapped to `question` so `awaiting_question`
+  // ("Needs answer") is reachable instead of "Needs permission".
+  describe("AskUserQuestion → question", () => {
+    it("maps to a started question, with a truncated header when tool_input carries one", () => {
+      expect(
+        mapClaudeCodePermissionRequest({
+          tool_name: "AskUserQuestion",
+          tool_input: {
+            questions: [
+              { header: "Which approach should we take here today", question: "A or B?" },
+            ],
+          },
+        }),
+      ).toEqual({
+        kind: "question",
+        state: "started",
+        header: "Which approach should we take …",
+        summary: "AskUserQuestion",
+      });
+    });
+
+    it("omits the header entirely when tool_input carries no usable questions array (unverified live shape — must not gate the message on it)", () => {
+      expect(
+        mapClaudeCodePermissionRequest({ tool_name: "AskUserQuestion", tool_input: {} }),
+      ).toEqual({ kind: "question", state: "started", summary: "AskUserQuestion" });
+    });
+
+    it("omits the header when tool_input is absent entirely", () => {
+      expect(mapClaudeCodePermissionRequest({ tool_name: "AskUserQuestion" })).toEqual({
+        kind: "question",
+        state: "started",
+        summary: "AskUserQuestion",
+      });
+    });
+  });
+
+  it("every other tool_name still maps to permission_request, unchanged", () => {
+    expect(mapClaudeCodePermissionRequest({ tool_name: "WebFetch", tool_input: {} })).toEqual({
+      kind: "permission_request",
+      tool: "WebFetch",
+      summary: "WebFetch",
+    });
+  });
 });
 
 describe("mapClaudeCodeStopFailure", () => {
@@ -1841,7 +1905,15 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
         { tool_name: "Write", tool_input: { file_path: "x" } },
         { tool_name: "Bash", tool_input: { command: "git worktree add -b fix /tmp/wt" } },
       ],
-      PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],
+      PermissionRequest: [
+        { tool_name: "Bash", tool_input: { command: "npm test" } },
+        // Fix: AskUserQuestion mislabelled (D3) — the one payload shape
+        // this parity check would otherwise never exercise: without
+        // "question" declared in CLAUDE_CODE_EMITS, this assertion is the
+        // guard that catches it (the array above alone doesn't, since its
+        // one entry never produces a "question" kind).
+        { tool_name: "AskUserQuestion", tool_input: { questions: [{ header: "Approach?" }] } },
+      ],
       StopFailure: [{ error: "rate_limit" }],
       PostToolUseFailure: [{ tool_name: "Bash", error: "boom" }],
       SessionEnd: [{ reason: "clear" }],
