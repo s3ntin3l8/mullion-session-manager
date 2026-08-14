@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.28](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.27...v0.2.28) (2026-08-14)
+
+
+### Features
+
+* dependency-aware task claiming ([#669](https://github.com/s3ntin3l8/mullion-session-manager/issues/669)) ([fa0db68](https://github.com/s3ntin3l8/mullion-session-manager/commit/fa0db6843623afe94d4ec858e0c8cf6a669ab565))
+* fix kanban board layout bugs, add a project filter, and make Tasks a top-level destination ([#668](https://github.com/s3ntin3l8/mullion-session-manager/issues/668)) ([076524e](https://github.com/s3ntin3l8/mullion-session-manager/commit/076524e459e57d54138cf3a6d0d7a18215f6df59))
+* refresh session status from the /ws/events push instead of only the 4s poll ([#682](https://github.com/s3ntin3l8/mullion-session-manager/issues/682)) ([4eb06ba](https://github.com/s3ntin3l8/mullion-session-manager/commit/4eb06bae158c5453c7fb0972d939f383b90ced66)), closes [#673](https://github.com/s3ntin3l8/mullion-session-manager/issues/673)
+* surface blocked tasks on the board and push dependency updates ([#670](https://github.com/s3ntin3l8/mullion-session-manager/issues/670)) ([190e8df](https://github.com/s3ntin3l8/mullion-session-manager/commit/190e8df092b119e90ccc57e807d83e9a04f21afa))
+
+
+### Bug Fixes
+
+* createWorktree returns discriminated errors instead of bare null ([#683](https://github.com/s3ntin3l8/mullion-session-manager/issues/683)) ([ee57521](https://github.com/s3ntin3l8/mullion-session-manager/commit/ee5752142a3dc8e8ad36dd4187b6f7de61775bad))
+* promote-to-worktree base ref, replacement handoff, and 429 storm ([#680](https://github.com/s3ntin3l8/mullion-session-manager/issues/680)) ([2b18b50](https://github.com/s3ntin3l8/mullion-session-manager/commit/2b18b5045490685bcd91566351522096b0fae84a))
+* promote's seed prompt race and opencode delivery channel ([#678](https://github.com/s3ntin3l8/mullion-session-manager/issues/678)) ([#684](https://github.com/s3ntin3l8/mullion-session-manager/issues/684)) ([a28b754](https://github.com/s3ntin3l8/mullion-session-manager/commit/a28b7541515a27653efbc6c9879a757fdcab741e))
+* recover from forward-auth session expiry instead of a stuck banner ([#672](https://github.com/s3ntin3l8/mullion-session-manager/issues/672)) ([fbc75ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/fbc75ae4e90fff0c961b74041d96fab6a9662a94))
+* stop needs_input from sticking on a working Claude Code session, and mislabelled plan/question dialogs ([#675](https://github.com/s3ntin3l8/mullion-session-manager/issues/675)) ([2f32beb](https://github.com/s3ntin3l8/mullion-session-manager/commit/2f32bebab442a4bdf61b90a329eb99875facf2f8))
+* surface remote promote-resolve failures as warnings, not a bare 500 ([#685](https://github.com/s3ntin3l8/mullion-session-manager/issues/685)) ([ede5eaa](https://github.com/s3ntin3l8/mullion-session-manager/commit/ede5eaaa4c81b8b99cf9477fa9f55b37ac8308b7))
+* use the live idle threshold for web-push status gating ([#681](https://github.com/s3ntin3l8/mullion-session-manager/issues/681)) ([2d09370](https://github.com/s3ntin3l8/mullion-session-manager/commit/2d093707b336f81c7f76c49aee7a86d824c85b32)), closes [#674](https://github.com/s3ntin3l8/mullion-session-manager/issues/674)
+
 ## [0.2.27](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.26...v0.2.27) (2026-08-13)
 
 
