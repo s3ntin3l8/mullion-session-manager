@@ -344,9 +344,15 @@ function handleConnection(
         // this same connection, rather than routed through emitHookEvent (it
         // has no Session-level state of its own — see
         // Session.emitHookEvent's "session_start" case). The stashed seed
-        // (if any) was written by POST /api/sessions/:id/promote before this
-        // NEW session's PTY was even spawned, so it's always already present
-        // by the time SessionStart fires.
+        // (if any) is always already present by the time SessionStart fires
+        // — but only because of issue #678's fix: session-lifecycle.ts's
+        // createSessionRecord now stashes it BEFORE calling
+        // resolveBackend(...).spawn(...), not after. Before that fix, POST
+        // /api/sessions/:id/promote stashed the seed only after
+        // createSessionRecord had already returned success — i.e. after the
+        // new session's PTY had already spawned — so a fast-starting agent
+        // could fire SessionStart before the stash ever landed, silently
+        // dropping the seed. See PtyManager.stashSeed's own doc comment.
         if (result.message.kind === "session_start") {
           // Follow-up to #275 (gap #1): SessionStart is Claude Code's own
           // genuinely-first hook at cold start, and — because it's answered

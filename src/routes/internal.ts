@@ -1397,8 +1397,17 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions",
     { ...INTERNAL_RATE_LIMIT, schema: spawnSessionSchema },
     async (request, reply) => {
-      const { id, cwd, command, cols, rows, skipPermissions, initialPrompt, projectId } =
-        request.body;
+      const {
+        id,
+        cwd,
+        command,
+        cols,
+        rows,
+        skipPermissions,
+        initialPrompt,
+        seedPrompt,
+        projectId,
+      } = request.body;
       app.pty.getOrCreate({
         id,
         cwd: expandHome(cwd),
@@ -1407,6 +1416,7 @@ export async function internalRoutes(app: FastifyInstance) {
         rows,
         skipPermissions,
         initialPrompt,
+        seedPrompt,
         projectId,
       });
       reply.code(201);

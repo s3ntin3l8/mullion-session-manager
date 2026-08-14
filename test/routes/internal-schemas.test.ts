@@ -70,6 +70,7 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           rows: { type: "integer", minimum: 1 },
           skipPermissions: { type: "boolean" },
           initialPrompt: { type: "string" },
+          seedPrompt: { type: "string" },
           projectId: { type: "integer" },
         },
       },

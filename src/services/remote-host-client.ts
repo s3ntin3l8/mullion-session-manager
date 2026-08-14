@@ -182,6 +182,10 @@ export interface SessionTarget {
   // openAttach() (attaching never re-spawns), but kept on the shared
   // SessionTarget shape rather than splitting it for one optional field.
   initialPrompt?: string;
+  // Issue #678 — the promote flow's seed prompt, for spawn() only (same
+  // "meaningless for openAttach" posture as initialPrompt above — attaching
+  // never re-spawns, so there's nothing to inject context into here).
+  seedPrompt?: string;
   projectId?: number;
 }
 

@@ -46,6 +46,7 @@ export interface SpawnSessionBody {
   rows: number;
   skipPermissions?: boolean;
   initialPrompt?: string;
+  seedPrompt?: string;
   projectId?: number;
 }
 
@@ -66,6 +67,12 @@ export const spawnSessionSchema = {
       // down (worktree create's promote flow): an issue body/task spec can
       // legitimately run long.
       initialPrompt: { type: "string" },
+      // Issue #678 — the promote flow's seed prompt, carried alongside the
+      // spawn request (rather than only via the separate stash-seed route
+      // below) so an adapter with no live hook round trip to deliver it
+      // through (opencode) can read it from HookAdapterContext at launch
+      // time. No maxLength, same posture as initialPrompt above.
+      seedPrompt: { type: "string" },
       projectId: { type: "integer" },
     },
   },

@@ -1816,6 +1816,51 @@ describe("sessions route", () => {
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();
       });
+
+      // Issue #678 — the test above fires SessionStart manually AFTER the
+      // promote POST has already fully returned, so it proves the seed is
+      // consumable but doesn't exercise the actual race createSessionRecord
+      // used to have: the previous code stashed the seed only AFTER the new
+      // session's spawn had already been kicked off, so a fast-starting
+      // agent's own SessionStart could in principle fire before the stash
+      // landed. This asserts the real ordering fix directly — stashSeed
+      // must be called before the new session's spawn is ever attempted,
+      // not just "both eventually get called."
+      it("stashes the seed BEFORE spawning the new session (issue #678 — the actual race fix)", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+
+        const callOrder: string[] = [];
+        const originalStashSeed = app.pty.stashSeed.bind(app.pty);
+        const originalGetOrCreate = app.pty.getOrCreate.bind(app.pty);
+        const stashSeedSpy = vi
+          .spyOn(app.pty, "stashSeed")
+          .mockImplementation((id: string, seed: string) => {
+            callOrder.push("stashSeed");
+            return originalStashSeed(id, seed);
+          });
+        const getOrCreateSpy = vi
+          .spyOn(app.pty, "getOrCreate")
+          .mockImplementation((opts: Parameters<typeof originalGetOrCreate>[0]) => {
+            callOrder.push("getOrCreate");
+            return originalGetOrCreate(opts);
+          });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(callOrder).toEqual(["stashSeed", "getOrCreate"]);
+
+        stashSeedSpy.mockRestore();
+        getOrCreateSpy.mockRestore();
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
     });
 
     describe("option 3 — dock preview worktree", () => {

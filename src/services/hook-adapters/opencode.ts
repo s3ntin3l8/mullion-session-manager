@@ -88,6 +88,13 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const pluginPath = path.join(configDir, "plugins", "mullion-hook-emitter.js");
   const pluginSource = readFileSync(resolveOpenCodePluginPath(), "utf8");
   const envAdditions: Record<string, string> = { OPENCODE_CONFIG_DIR: configDir };
+  const settingsFiles: Array<{ path: string; contents: string }> = [
+    { path: pluginPath, contents: pluginSource },
+  ];
+  // Issue #678 — the two `instructions` sources below (agent-guide,
+  // promote-flow seed) are independently gated and simply concatenate into
+  // one array; see each source's own comment for why.
+  const instructions: string[] = [];
 
   // Issue #437c — the agent-guide SessionStart nudge (#405/#437a/#437b), for
   // OpenCode. Unlike every other agent, OpenCode has no live hook round trip
@@ -142,12 +149,37 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   if (ctx.injectAgentGuide) {
     const guidePath = sessionAgentGuidePath(ctx.sessionsDir, ctx.sessionId);
     if (existsSync(guidePath)) {
-      envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify({ instructions: [guidePath] });
+      instructions.push(guidePath);
     }
   }
 
+  // Issue #678 — the promote flow's seed prompt (a user-supplied "resume
+  // here" note, POST /api/sessions/:id/promote's `seedPrompt` body field),
+  // for opencode specifically. Every other agent gets this delivered live,
+  // via hooks.ts's "session_start" branch replying to that agent's own
+  // SessionStart hook with `additionalContext` (app.pty.consumeSeed) —
+  // opencode has no such round trip (see this file's header), so it needs
+  // the same spawn-time `instructions` channel the agent-guide pointer
+  // above uses. Deliberately gated on `ctx.seedPrompt` alone, NOT on
+  // `ctx.injectAgentGuide`: a user explicitly asked for this seed when they
+  // submitted the promote dialog, and it must not silently vanish just
+  // because someone disabled the unrelated agent-guide setting. Written via
+  // `settingsFiles`, the same mechanism the plugin file above already uses
+  // — so it exists on disk before opencode's process actually starts, same
+  // ordering guarantee agent-guide.ts's own writeSessionAgentGuide has for
+  // the guide file (bootstrapMaster calls that before applyHookAdapters).
+  if (ctx.seedPrompt && ctx.seedPrompt.length > 0) {
+    const seedPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-seed.md`);
+    settingsFiles.push({ path: seedPath, contents: ctx.seedPrompt });
+    instructions.push(seedPath);
+  }
+
+  if (instructions.length > 0) {
+    envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify({ instructions });
+  }
+
   return {
-    settingsFiles: [{ path: pluginPath, contents: pluginSource }],
+    settingsFiles,
     envAdditions,
   };
 }

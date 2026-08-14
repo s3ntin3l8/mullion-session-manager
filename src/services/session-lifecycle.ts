@@ -195,6 +195,14 @@ export type CreateSessionParams = CreateSessionBody & {
   // a TS function, bypassing route body validation entirely — the public
   // launcher/promote flows have no equivalent of an unattended "first turn."
   initialPrompt?: string;
+  // Issue #678 — the promote flow's seed prompt (POST
+  // /api/sessions/:id/promote's `seedPrompt` body field). Also NOT part of
+  // CreateSessionBody: only the promote route ever sets this, the same
+  // "internal callers pass extra fields the public schema doesn't expose"
+  // shape as initialPrompt above. See stashSeed's own doc comment
+  // (pty-manager.ts) for why this is stashed BEFORE spawn() is called, not
+  // after — that ordering is the actual race fix this issue is about.
+  seedPrompt?: string;
 };
 
 export type CreateSessionResult =
@@ -248,6 +256,7 @@ export async function createSessionRecord(
     worktreeRefresh,
     skipPermissions,
     initialPrompt,
+    seedPrompt,
   } = params;
   let cwd = params.cwd;
 
@@ -380,6 +389,29 @@ export async function createSessionRecord(
   if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
   const [created] = inserted;
 
+  // Issue #678 — stashed BEFORE spawn() is called below, not after: the
+  // agent's own process (and therefore its SessionStart hook) can't start
+  // until spawn() actually runs, so this ordering guarantees the seed is
+  // already present by the time a hook-based agent's SessionStart fires —
+  // closing the race the previous call site (routes/sessions.ts's promote
+  // handler, AFTER this function returned success) had. Also passed through
+  // into spawn()'s own opts below so an adapter with no live hook round
+  // trip (opencode) can read it from HookAdapterContext at launch time
+  // instead — see hook-adapters/opencode.ts's own comment. Non-fatal on a
+  // remote-host throw (log and continue to spawn): a seed that fails to
+  // stash is a degraded promote, not a failed one — same posture as every
+  // other best-effort remote call in this function.
+  if (seedPrompt && seedPrompt.length > 0) {
+    try {
+      await resolveBackend(app, project.hostId).stashSeed(String(created.id), seedPrompt);
+    } catch (err) {
+      app.log.warn(
+        { hostId: project.hostId, sessionId: created.id, err },
+        "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
+      );
+    }
+  }
+
   let spawnResult: { initialPromptApplied?: boolean };
   try {
     spawnResult = await resolveBackend(app, project.hostId).spawn({
@@ -390,6 +422,7 @@ export async function createSessionRecord(
       rows: DEFAULT_ROWS,
       skipPermissions,
       initialPrompt,
+      seedPrompt,
       projectId,
     });
   } catch (err) {
