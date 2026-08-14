@@ -1,7 +1,7 @@
 // Session lifecycle + persisted event history. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
-import type { Session, EventHistoryPage, Preview } from "./types.js";
+import type { Session, EventHistoryPage, Preview, PromoteSessionResponse } from "./types.js";
 
 export const sessionsApi = {
   // `status` (perf audit finding A6) lets a caller ask for only e.g. "active"
@@ -84,7 +84,7 @@ export const sessionsApi = {
     id: number,
     opts: { baseRef: string; branchName?: string; seedPrompt?: string },
   ) =>
-    request<Session>(`/api/sessions/${id}/promote`, {
+    request<PromoteSessionResponse>(`/api/sessions/${id}/promote`, {
       method: "POST",
       body: JSON.stringify(opts),
     }),

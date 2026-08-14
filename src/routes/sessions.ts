@@ -4,6 +4,7 @@ import { projects, sessions } from "../db/schema.js";
 import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { HostRequestError } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import { isValidDevServerUrl } from "./projects.js";
@@ -495,22 +496,55 @@ export async function sessionsRoute(app: FastifyInstance) {
         return reply.badGateway("Failed to spawn the promoted session");
       }
 
-      await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
-        decision: "accepted",
-        worktreePath,
-        newSessionId: created.row.id,
-      });
+      // Issue #679 — the new session already exists and is running by this
+      // point; a failure here (a remote host that's unreachable or rejects
+      // the request) must not turn a genuinely successful promote into a
+      // bare 500, and must not skip killing the source session below either
+      // — resolvePendingPromote only clears the agent's own blocked
+      // `promote_request` MCP tool call, an entirely separate concern from
+      // whether the promote itself succeeded. Collected as a non-fatal
+      // `warnings` entry on the 201 response instead: the human/agent gets
+      // a working replacement session either way, just with a note that one
+      // side-effect didn't land. Same HostRequestError-vs-everything-else
+      // log split as session-lifecycle.ts's logPreviewWorktreeHostError —
+      // a rejection means the agent is up and said no (persistent), unlike
+      // an unreachable host (possibly transient).
+      const warnings: string[] = [];
+      try {
+        await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
+          decision: "accepted",
+          worktreePath,
+          newSessionId: created.row.id,
+        });
+      } catch (err) {
+        if (err instanceof HostRequestError) {
+          app.log.warn(
+            { hostId: project.hostId, sessionId, err },
+            "resolvePendingPromote: host rejected the request",
+          );
+        } else {
+          app.log.warn(
+            { hostId: project.hostId, sessionId, err },
+            "resolvePendingPromote: host unreachable",
+          );
+        }
+        warnings.push(
+          "The promoted session is running, but the source session's pending promote request could not be resolved on its host.",
+        );
+      }
 
       // Explicit "detach" (the default): this is the replacement's own
       // source session, which never has parentSessionId set (a promoted
       // row keeps no lineage of its own), so cascade has nothing to act on
       // here regardless — spelled out for clarity, not because it changes
-      // behavior.
+      // behavior. Always runs, even when resolvePendingPromote above failed
+      // — see this block's own comment for why the two are independent.
       await killSession(app, sessionId, "detach");
 
       reply.code(201);
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-      return withLiveStatus(app, created.row, idleThresholdMs, project.hostId);
+      const liveStatus = await withLiveStatus(app, created.row, idleThresholdMs, project.hostId);
+      return warnings.length > 0 ? { ...liveStatus, warnings } : liveStatus;
     },
   );
 

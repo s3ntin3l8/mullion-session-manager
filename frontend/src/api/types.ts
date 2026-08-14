@@ -379,6 +379,17 @@ export interface Session {
   pendingDevServerPort: string | null;
 }
 
+// Issue #679 — POST /api/sessions/:id/promote's own response shape, NOT a
+// field on Session itself: `warnings` only ever exists on this one 201
+// response (a non-fatal note that e.g. resolvePendingPromote failed on a
+// remote host, even though the promoted session itself is up and running),
+// and Session is consumed everywhere — sidebar rows, kanban cards, the
+// store's session maps — where that reach would be unwarranted. Assignable
+// to Session (a strict superset), so existing `onPromoted?: (newSession:
+// Session) => void` call sites compile unchanged; only PromoteDialog.tsx
+// itself needs to know about the extra field.
+export type PromoteSessionResponse = Session & { warnings?: string[] };
+
 // Issue #213 (roadmap 4.7) — a row from the persisted `session_events` table
 // (src/db/schema.ts / src/services/event-history.ts's StoredEventRow),
 // deliberately NOT the same shape as NotificationEvent (src/shared/types.ts):

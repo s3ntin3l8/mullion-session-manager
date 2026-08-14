@@ -12,6 +12,7 @@ import type {
   NotificationEvent,
   Project,
   ProjectUrl,
+  PromoteSessionResponse,
   ServerInfo,
   Session,
   SettingsPatch,
@@ -143,7 +144,7 @@ export interface SessionsSlice {
   promoteSession: (
     id: number,
     opts: { baseRef: string; branchName?: string; seedPrompt?: string },
-  ) => Promise<Session>;
+  ) => Promise<PromoteSessionResponse>;
   declinePromote: (id: number, reason?: string) => Promise<void>;
   // Starts the ~4s session-status poll (paused while the tab is hidden) and
   // returns a cleanup function — called once from App.tsx's mount effect.
