@@ -56,6 +56,19 @@ export function PromoteDialog({
   const [seedPrompt, setSeedPrompt] = useState(session.promoteSummary ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Issue #679 — non-fatal notes on an otherwise-successful promote (e.g.
+  // resolvePendingPromote failed on a remote host). Distinct from `error`
+  // above: the promoted session IS running, so this keeps the dialog open
+  // to show the note (rather than silently closing per usual) instead of
+  // treating it as a failed submission. Holds the promoted session itself
+  // too — `onPromoted` (which tears down the source pane and focuses the
+  // replacement) is deliberately deferred until the user acknowledges the
+  // warning below, not fired the moment the response comes back; see
+  // `acknowledgeWarnings`.
+  const [promotedWithWarnings, setPromotedWithWarnings] = useState<{
+    session: Session;
+    warnings: string[];
+  } | null>(null);
 
   const {
     branches,
@@ -99,12 +112,30 @@ export function PromoteDialog({
       seedPrompt: seedPrompt.trim() || undefined,
     })
       .then((newSession) => {
+        const newWarnings = newSession?.warnings ?? [];
+        if (newWarnings.length > 0) {
+          // Issue #679 — do NOT call onPromoted yet. onPromoted tears down
+          // the source pane and focuses the replacement (Sidebar.tsx's
+          // onSessionEnded+onOpenSession / PaneActionsMenu.tsx's
+          // api.close()+openOrFocusSessionPanel), and this dialog may be
+          // rendered from within that same source pane's tree. Running it
+          // now, while the warning still needs to be shown, risks the
+          // dialog being disposed alongside its parent before the user
+          // ever sees the note — the same class of problem PR #680's
+          // Hermes fix addressed for the throw case, just reached eagerly
+          // instead of via a throw. Stay open and defer onPromoted to
+          // `acknowledgeWarnings`, once the user closes this view.
+          setSubmitting(false);
+          setPromotedWithWarnings({ session: newSession, warnings: newWarnings });
+          return;
+        }
         // try/finally (Hermes review, PR #680): promote itself already
         // succeeded by this point — if onPromoted throws (e.g.
         // PaneActionsMenu's handler calling into a dockview api that's
-        // since been torn down), onClose must still run. Without this the
-        // dialog stayed mounted with `submitting` stuck true, on top of
-        // whatever onPromoted's own failure already did.
+        // since been torn down), the dialog must still leave `submitting`
+        // in a settled state. Without this the dialog stayed mounted with
+        // `submitting` stuck true, on top of whatever onPromoted's own
+        // failure already did.
         try {
           onPromoted?.(newSession);
         } finally {
@@ -138,6 +169,44 @@ export function PromoteDialog({
       onClose();
     }
   };
+
+  // Issue #679 — the promote already succeeded by the time
+  // `promotedWithWarnings` is set (see the `confirm` handler above); this
+  // is an acknowledgment view, not a retry/cancel one, so it deliberately
+  // doesn't reuse `cancel` (which would decline a since-resolved pending
+  // promote request) or the ordinary base-ref/branch-name/seed form below.
+  if (promotedWithWarnings) {
+    // Fires onPromoted (pane teardown + replacement focus) only now, on
+    // acknowledgment — see the comment in `confirm` for why this is
+    // deferred rather than run the moment the response came back. Used for
+    // the Close button AND Modal's own onClose (Escape/backdrop/header X),
+    // so every path out of this view still hands off to the replacement.
+    const acknowledgeWarnings = () => {
+      try {
+        onPromoted?.(promotedWithWarnings.session);
+      } finally {
+        onClose();
+      }
+    };
+    return (
+      <Modal
+        onClose={acknowledgeWarnings}
+        icon={<GitBranchIcon size={16} />}
+        title="Promoted with a warning"
+        footer={
+          <button className="create-modal-submit" onClick={acknowledgeWarnings}>
+            Close
+          </button>
+        }
+      >
+        {promotedWithWarnings.warnings.map((w) => (
+          <p key={w} className="create-modal-field-hint" style={{ color: "var(--y)" }}>
+            {w}
+          </p>
+        ))}
+      </Modal>
+    );
+  }
 
   // PR 24 pilot — migrated onto the shared `ui/Modal.tsx` shell. Every
   // field/behavior below is unchanged from the hand-rolled version this

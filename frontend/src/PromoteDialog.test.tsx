@@ -169,6 +169,46 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // Issue #679 — a non-fatal warning on an otherwise-successful promote
+  // (e.g. resolvePendingPromote failed on a remote host) must not be
+  // silently discarded by closing the dialog immediately, the way the
+  // ordinary success path does — the user needs to actually see it.
+  it("stays open and shows a warning when promoteSession succeeds with warnings, closing only once acknowledged", async () => {
+    const onClose = vi.fn();
+    const onPromoted = vi.fn();
+    promoteSessionMock.mockResolvedValueOnce({
+      ...makeSession({ id: 99 }),
+      warnings: ["The promoted session is running, but something else needs attention."],
+    });
+    const user = userEvent.setup();
+    render(
+      <PromoteDialog
+        session={makeSession()}
+        project={PROJECT}
+        onClose={onClose}
+        onPromoted={onPromoted}
+      />,
+    );
+
+    await screen.findByRole("combobox");
+    await user.click(screen.getByText("Create worktree"));
+
+    // onPromoted is deliberately NOT called yet — it tears down the source
+    // pane and focuses the replacement, and doing that while this dialog
+    // still needs to show the warning risks the dialog being disposed
+    // alongside its parent before the user ever sees the note. It only
+    // fires once the warning is acknowledged below.
+    expect(
+      await screen.findByText(/promoted session is running, but something else needs attention/),
+    ).toBeInTheDocument();
+    expect(onPromoted).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("Close"));
+    expect(onPromoted).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
   // Issue #677 — the backend now forwards the actual failure reason (the
   // ApiError's message, taken straight from the response body) instead of
   // always showing the same generic message regardless of cause.

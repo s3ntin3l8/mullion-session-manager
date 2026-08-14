@@ -92,6 +92,7 @@ export type {
   SubagentInfo,
   BackgroundTask,
   Session,
+  PromoteSessionResponse,
   StoredEventRow,
   EventHistoryPage,
   Workspace,

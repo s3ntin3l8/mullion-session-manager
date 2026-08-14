@@ -1863,6 +1863,168 @@ describe("sessions route", () => {
       });
     });
 
+    // Issue #679 — resolvePendingPromote only clears the SOURCE session's
+    // own blocked `promote_request` MCP tool call, a concern entirely
+    // separate from whether the promote itself succeeded (the replacement
+    // session already exists and is running by the time this call
+    // happens). A failure here must not turn a genuinely successful
+    // promote into a bare 500, and must not skip killing the source
+    // session either.
+    describe("option 2 — POST /:id/promote, when resolvePendingPromote fails on a remote host (issue #679)", () => {
+      async function createRemotePromoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          // Deliberately unreachable — resolveBackend is spied per-test to
+          // return a fake backend, so this baseUrl is never actually hit.
+          payload: { name: "promote-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const hostId = host.json().id as string;
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-promote-p", cwd: "/remote/project", hostId },
+        });
+        return { projectId: project.json().id as number, hostId };
+      }
+
+      function makeFakeBackend(resolvePendingPromote: ReturnType<typeof vi.fn>) {
+        return {
+          createWorktree: vi.fn().mockResolvedValue({
+            created: true,
+            path: "/remote/project/.mullion-worktrees/mullion-session-x",
+            branch: "mullion/session-x",
+          }),
+          spawn: vi.fn().mockResolvedValue({ initialPromptApplied: false }),
+          stashSeed: vi.fn().mockResolvedValue(undefined),
+          resolvePendingPromote,
+          terminate: vi.fn().mockResolvedValue(undefined),
+          liveStatus: vi.fn().mockResolvedValue({}),
+        };
+      }
+
+      it("201s with a warning (not a 500) when the host rejects the request (HostRequestError), and still kills the source", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+        const { projectId } = await createRemotePromoteProject(app);
+
+        const resolvePendingPromote = vi
+          .fn()
+          .mockRejectedValue(new HostRequestError("promote-remote", 409, "conflict"));
+        const fakeBackend = makeFakeBackend(resolvePendingPromote);
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+
+        // The spy must already be installed before the SOURCE session is
+        // created too — it also spawns through resolveBackend, against the
+        // same (deliberately unreachable) host.
+        const sourceRes = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(sourceRes.statusCode).toBe(201);
+        const sourceId = sourceRes.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        expect(body.id).not.toBe(sourceId);
+        expect(body.warnings).toBeDefined();
+        expect(body.warnings.length).toBeGreaterThan(0);
+        expect(fakeBackend.terminate).toHaveBeenCalledWith(String(sourceId));
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("201s with a warning (not a 500) when the host is unreachable (HostUnreachableError), and still kills the source", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+        const { projectId } = await createRemotePromoteProject(app);
+
+        const resolvePendingPromote = vi
+          .fn()
+          .mockRejectedValue(new HostUnreachableError("promote-remote", "connection refused"));
+        const fakeBackend = makeFakeBackend(resolvePendingPromote);
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+
+        const sourceRes = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(sourceRes.statusCode).toBe(201);
+        const sourceId = sourceRes.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        expect(body.warnings).toBeDefined();
+        expect(body.warnings.length).toBeGreaterThan(0);
+        expect(fakeBackend.terminate).toHaveBeenCalledWith(String(sourceId));
+
+        // The replacement session is genuinely usable, not a half-built
+        // stub — same bar the plan's own verification section set.
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        const newRow = list.json().find((s: { id: number }) => s.id === body.id);
+        expect(newRow).toBeDefined();
+        expect(newRow.status).toBe("active");
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("omits warnings entirely on the ordinary success path (no false-positive noise)", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { projectId } = await createRemotePromoteProject(app);
+
+        const fakeBackend = makeFakeBackend(vi.fn().mockResolvedValue(true));
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+
+        const sourceRes = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(sourceRes.statusCode).toBe(201);
+        const sourceId = sourceRes.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(res.json().warnings).toBeUndefined();
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+    });
+
     describe("option 3 — dock preview worktree", () => {
       it("creates a dock preview worktree and starts a session inside it", async () => {
         const app = await buildApp();
