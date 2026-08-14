@@ -50,7 +50,9 @@ export class AuthExpiredError extends Error {
 // upstream IdP) would reload forever with no visible error. Kept short: a
 // legitimate re-expiry this soon after a successful recovery is vanishingly
 // unlikely, and the fallback state's own "sign in again" button gives the
-// user a manual retry regardless.
+// user a manual retry regardless. Cleared on the next successful request
+// (see clearAuthExpiryReloadGuard) so a later, unrelated expiry still gets
+// a silent reload instead of jumping straight to the banner.
 const AUTH_EXPIRY_RELOAD_GUARD_KEY = "mullion:authExpiryReloadAt";
 const AUTH_EXPIRY_RELOAD_GUARD_WINDOW_MS = 3 * 60 * 1000;
 
@@ -60,21 +62,43 @@ function recentlyAttemptedAuthExpiryReload(): boolean {
     return last !== null && Date.now() - Number(last) < AUTH_EXPIRY_RELOAD_GUARD_WINDOW_MS;
   } catch {
     // Storage access can throw (privacy mode, disabled storage) — treat as
-    // "no prior attempt recorded". Worst case is one extra reload rather
-    // than a stuck fallback state; recordAuthExpiryReloadAttempt's own
-    // try/catch below means the guard simply never engages for a session
-    // that can't use sessionStorage at all, which is an acceptable
-    // degradation, not a loop (the reload itself still only fires once per
-    // detected redirect).
+    // "no prior attempt recorded" here too, but see
+    // recordAuthExpiryReloadAttempt below: the reload itself only fires if
+    // *recording* the attempt also succeeds, so a session that can't use
+    // sessionStorage never reloads at all, rather than looping.
     return false;
   }
 }
 
-function recordAuthExpiryReloadAttempt(): void {
+// Returns whether the attempt was actually recorded — the caller must NOT
+// reload unless this returns true. If sessionStorage throws, there is no
+// way to remember "a reload was already tried," so reloading anyway would
+// re-fire on every single detection of the same redirect: an unbounded
+// loop, not the "one extra reload" a missing guard would otherwise cause
+// (Hermes review — the original version of this function had no return
+// value and reloaded unconditionally, which was exactly that loop).
+function recordAuthExpiryReloadAttempt(): boolean {
   try {
     sessionStorage.setItem(AUTH_EXPIRY_RELOAD_GUARD_KEY, String(Date.now()));
+    return true;
   } catch {
-    // See recentlyAttemptedAuthExpiryReload's comment.
+    return false;
+  }
+}
+
+// Called on every genuine success (see the two call sites in request()) so
+// a later, unrelated auth expiry still gets a silent reload attempt instead
+// of the guard treating it as "already tried recently." Without this, any
+// recovery — successful reload or a manual sign-in — would leave the guard
+// armed for a full AUTH_EXPIRY_RELOAD_GUARD_WINDOW_MS, so a second,
+// legitimate expiry inside that window would skip straight to the banner
+// even though a silent reload was available again.
+function clearAuthExpiryReloadGuard(): void {
+  try {
+    sessionStorage.removeItem(AUTH_EXPIRY_RELOAD_GUARD_KEY);
+  } catch {
+    // Nothing to clean up if recordAuthExpiryReloadAttempt could never
+    // write it in the first place.
   }
 }
 
@@ -87,8 +111,7 @@ function recordAuthExpiryReloadAttempt(): void {
 // first-class, tested scenario, a reload just triggers the same reconnect
 // a network blip would"), so this isn't a new risk class for the app.
 function handleAuthExpiry(): never {
-  if (!recentlyAttemptedAuthExpiryReload()) {
-    recordAuthExpiryReloadAttempt();
+  if (!recentlyAttemptedAuthExpiryReload() && recordAuthExpiryReloadAttempt()) {
     window.location.reload();
   }
   throw new AuthExpiredError();
@@ -132,20 +155,28 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({}));
     throw new ApiError(body.message || `${path} failed with ${res.status}`, res.status, body.code);
   }
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) {
+    clearAuthExpiryReloadGuard();
+    return undefined as T;
+  }
 
   // Same-origin variant of the same signal: some gateways resolve an
   // expired session with a 200 interstitial (an IdP-branded HTML page)
   // rather than a 3xx, which the opaqueredirect check above can't see.
-  // Every real response this app's backend ever returns here is
+  // Narrowed to text/html specifically (Hermes review) rather than "isn't
+  // JSON" — that's what an IdP interstitial actually is, and treating any
+  // other non-JSON 200 (text/plain, octet-stream, ...) as the same signal
+  // would misreport a real, if unexpected, backend response as a session
+  // expiry. Every real response this app's own backend returns here is
   // application/json (confirmed: no `request<T>()` call site expects a
-  // non-JSON 200 body — non-JSON success is 204, handled above); a 200
-  // that isn't JSON is data from something other than this app's own
-  // backend, not a payload to parse.
+  // non-JSON 200 body — non-JSON success is 204, handled above) or 204, so
+  // a text/html 200 is data from something other than this app's own
+  // backend either way.
   const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
+  if (contentType.includes("text/html")) {
     return handleAuthExpiry();
   }
 
+  clearAuthExpiryReloadGuard();
   return res.json() as Promise<T>;
 }
