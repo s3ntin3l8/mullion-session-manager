@@ -11,10 +11,45 @@
 #
 # Traefik forwards WebSocket upgrade requests (Connection: Upgrade) through
 # an http router/service transparently — no special config needed here for
-# that part. What's NOT yet verified is whether the upgrade request carries
-# the Authentik session cookie through forwardAuth correctly end-to-end;
-# that's a real, live check against your actual stack (Risk 3 in the plan),
-# not something a template file can guarantee.
+# that part. Risk 3 (whether the upgrade survives forwardAuth) has since
+# been answered against a real production deployment: the initial upgrade
+# does carry the session cookie through correctly and the connection stays
+# open, but a *reconnect* after the gateway session has expired does not — a
+# WebSocket handshake cannot follow the 3xx a forward-auth gateway issues
+# for an expired session, so /ws/events, /ws/tasks and /ws/github (unlike
+# /ws/terminal, which tends to just stay open) go silently dark until the
+# next full page load. That's an application-level failure mode the app's
+# own frontend now handles (a same-origin session-expiry signal on ordinary
+# HTTP requests triggers a top-level reload, which re-runs the forward-auth
+# dance for every WS channel too) — nothing to configure here, but worth
+# knowing before you go looking for a Traefik-side fix that doesn't exist.
+#
+# Network exposure — read this before choosing the service URL below.
+# Because this app runs natively on the host (not in Docker — see the repo
+# README's "no Docker image" note), Traefik needs a way to reach a
+# process outside its own container network. Two real options, ordered by
+# how carefully they need to be gotten right:
+#
+#   1. RECOMMENDED — keep the app on loopback (HOST=127.0.0.1 in .env, the
+#      default) and give Traefik a way to reach loopback: `network_mode:
+#      host` for Traefik, or Docker's `host.docker.internal` gateway alias
+#      (add `extra_hosts: ["host.docker.internal:host-gateway"]` to
+#      Traefik's compose service, then point the service URL below at
+#      `http://host.docker.internal:<PORT>`).
+#   2. If Traefik can only reach the app via a shared Docker bridge network
+#      (binding the app to that bridge's own gateway address, e.g.
+#      HOST=172.x.0.1), that gateway address is reachable by **every**
+#      container on that bridge, not just Traefik — with MULLION_TRUST_GATEWAY
+#      set (the mode that lets this app boot with no in-process auth
+#      configured, relying entirely on this forwardAuth), that means every
+#      one of those containers gets unauthenticated access to this
+#      dashboard's full API, including session creation (a PTY). If you
+#      must do this, restrict it at the firewall (a `DOCKER-USER` iptables
+#      rule permitting only Traefik's container IP to reach that port) or
+#      put the app on a bridge with only Traefik attached — don't rely on
+#      "nothing else happens to probe it" as the security boundary. See
+#      docs/auth.md's "Network exposure" section for the app-side half of
+#      this.
 
 http:
   routers:
@@ -91,4 +126,31 @@ http:
           # Traefik terminates TLS and talks plain HTTP to the app — same
           # shape as local dev, which is why src/plugins/security.ts disables
           # Helmet's upgrade-insecure-requests CSP directive (see M1).
+          # See the router comment above for what URL belongs here — do NOT
+          # default to a shared Docker bridge gateway address without also
+          # reading that.
           - url: "http://127.0.0.1:3450"
+        serversTransport: claude-remote-session-transport
+
+  serversTransports:
+    # Without an explicit transport, Traefik's connection-pool defaults are
+    # tuned for ordinary request/response HTTP, not this app's long-lived
+    # WebSocket upgrades (/ws/terminal, /ws/tasks, /ws/events, /ws/github —
+    # a terminal session can legitimately sit idle for hours). Values below
+    # mirror the same long-lived-service pattern this deployment likely
+    # already uses elsewhere for other WS/streaming backends behind this
+    # Traefik instance (an LLM/MCP proxy, etc.) rather than inventing new
+    # numbers — copy this transport's shape, not necessarily its exact
+    # durations, from whatever precedent your own Traefik config already
+    # has for a comparable long-lived service.
+    #
+    # Note what this does NOT fix: it has no bearing on the forward-auth
+    # cookie-expiry failure mode described in the router comment above (a
+    # WS reconnect after the gateway session has expired) — that's a
+    # redirect a WebSocket handshake can't follow, not a timeout, and
+    # raising these numbers won't touch it either way.
+    claude-remote-session-transport:
+      forwardingTimeouts:
+        dialTimeout: 30s
+        responseHeaderTimeout: 30s
+        idleConnTimeout: 1800s

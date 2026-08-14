@@ -136,7 +136,7 @@ export type {
   PushSubscriptionPayload,
 } from "./types.js";
 
-export { ApiError } from "./client.js";
+export { ApiError, AuthExpiredError } from "./client.js";
 
 export { normalizeAgentId } from "./system.js";
 export { DEFAULT_SETTINGS } from "./settings.js";

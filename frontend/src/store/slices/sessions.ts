@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { api } from "../../api/index.js";
+import { api, AuthExpiredError } from "../../api/index.js";
 import { BACKEND_UNREACHABLE_THRESHOLD, LIVE_REFRESH_INTERVAL_MS } from "../constants.js";
 import { pruneDismissedEventKeys, pruneSessionKeyedRecord } from "../helpers.js";
 import type { DashboardState, SessionsSlice } from "../types.js";
@@ -19,6 +19,7 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
   sessions: [],
   sessionsLoaded: false,
   backendReachable: true,
+  sessionExpired: false,
 
   refreshSessions: async () => {
     try {
@@ -41,7 +42,26 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
         consecutiveSessionFetchFailures = 0;
         set({ backendReachable: true });
       }
+      // Auto-clear on any success, same as backendReachable above — if a
+      // background poll got through without the user ever clicking "Sign
+      // in" (e.g. the gateway session was refreshed some other way), the
+      // banner shouldn't keep asserting a problem that's already resolved.
+      if (get().sessionExpired) set({ sessionExpired: false });
     } catch (err) {
+      // A gateway forward-auth session expiry (see api/client.ts) is
+      // neither "backend down" nor something this same fetch retrying can
+      // ever fix — keep it entirely out of the backendReachable/
+      // consecutiveSessionFetchFailures bookkeeping below, which exists for
+      // genuine transport/process failures. By the time this is reachable,
+      // client.ts has already attempted one silent top-level reload for
+      // this session (AuthExpiredError only reaches a caller once that
+      // reload's own guard has already fired), so there's no "just retry"
+      // recovery left — only the explicit sign-in-again action App.tsx
+      // renders for sessionExpired.
+      if (err instanceof AuthExpiredError) {
+        set({ sessionExpired: true });
+        throw err;
+      }
       consecutiveSessionFetchFailures += 1;
       if (consecutiveSessionFetchFailures >= BACKEND_UNREACHABLE_THRESHOLD) {
         set({ backendReachable: false });
