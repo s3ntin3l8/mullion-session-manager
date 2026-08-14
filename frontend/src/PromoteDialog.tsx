@@ -98,8 +98,17 @@ export function PromoteDialog({
       seedPrompt: seedPrompt.trim() || undefined,
     })
       .then((newSession) => {
-        onPromoted?.(newSession);
-        onClose();
+        // try/finally (Hermes review, PR #680): promote itself already
+        // succeeded by this point — if onPromoted throws (e.g.
+        // PaneActionsMenu's handler calling into a dockview api that's
+        // since been torn down), onClose must still run. Without this the
+        // dialog stayed mounted with `submitting` stuck true, on top of
+        // whatever onPromoted's own failure already did.
+        try {
+          onPromoted?.(newSession);
+        } finally {
+          onClose();
+        }
       })
       .catch(() => {
         setSubmitting(false);

@@ -1701,16 +1701,18 @@ describe("sessions route", () => {
       // fix, a failed spawn left the worktree — and its branch — on disk;
       // proves the route's own explicit cleanup on the `!created.ok` path
       // now does what createSessionRecord's rollback would have.
-      it("removes the worktree it created when the promoted session's spawn fails (not just leaves the source alive)", async () => {
+      it("removes the worktree AND its branch when the promoted session's spawn fails, so a retry with the same branch name succeeds (Hermes review, PR #680)", async () => {
         const app = await buildApp();
         const cwd = createGitRepo();
         const projectId = await createProjectWithGitRepo(app, cwd);
         const sourceId = await createActiveSession(app, projectId);
 
         const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
+        let failNextSpawn = true;
         vi.mocked(spawnChildProcess).mockImplementation(
           (command: string, args?: readonly string[], options?: object) => {
-            if (command === "systemd-run") {
+            if (command === "systemd-run" && failNextSpawn) {
+              failNextSpawn = false;
               const ee = new EventEmitter();
               setImmediate(() => ee.emit("exit", 1));
               return ee;
@@ -1730,6 +1732,16 @@ describe("sessions route", () => {
           const worktreePath = path.join(cwd, ".mullion-worktrees", "feature-promote-spawn-fail");
           expect(fs.existsSync(worktreePath)).toBe(false);
 
+          // The branch half of the leak — removeWorktree alone never
+          // deletes it (git-worktree.ts's own doc comment on why). Left
+          // behind, a retry with the same branch name fails
+          // "branch already exists" even after the directory is gone.
+          const branches = execFileSync("git", ["branch", "--list", "feature/promote-spawn-fail"], {
+            cwd,
+            env: gitEnv(),
+          }).toString();
+          expect(branches.trim()).toBe("");
+
           // The source session is untouched — promote's own kill only runs
           // after a successful spawn, well past this failure.
           const list = await app.inject({
@@ -1738,6 +1750,16 @@ describe("sessions route", () => {
           });
           const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
           expect(sourceRow.status).toBe("active");
+
+          // The actual point of the fix: a retry with the identical branch
+          // name now succeeds instead of hitting a leftover-branch collision.
+          const retry = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", branchName: "feature/promote-spawn-fail" },
+          });
+          expect(retry.statusCode).toBe(201);
+          expect(fs.existsSync(worktreePath)).toBe(true);
         } finally {
           vi.mocked(spawnChildProcess).mockImplementation(originalSpawnImpl!);
           fs.rmSync(cwd, { recursive: true, force: true });

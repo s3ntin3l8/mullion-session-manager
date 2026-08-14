@@ -81,13 +81,24 @@ export interface CreateSessionBody {
 // (git-worktree.ts) — a typed `branchName` when given, else a generated,
 // session-scoped label so two worktrees created in the same second never
 // collide.
+//
+// Returns the resolved branch name alongside the path (Hermes review, PR
+// #680) — a caller that needs to clean up this worktree on a LATER failure
+// (e.g. sessions.ts's promote route, whose own spawn-failure cleanup runs
+// outside createSessionRecord's rollback) needs the actual branch name to
+// delete it too, not just the directory: `removeWorktree` only ever clears
+// the directory half (git-worktree.ts's own doc comment on why — a
+// worktree's branch is deliberately preserved for the "→ done"/"→ failed"
+// paths that need it to survive). Without the branch name, a retry with the
+// same (explicit or default `mullion/session-<id>`) branch name still fails
+// "branch already exists" even after the directory is cleaned up.
 export async function resolveWorktreeCwd(
   app: FastifyInstance,
   hostId: string,
   baseCwd: string,
   intent: WorktreeIntent,
   seedHint: string,
-): Promise<string | null> {
+): Promise<{ path: string; branch: string } | null> {
   const seed = intent.branchName && intent.branchName.length > 0 ? intent.branchName : seedHint;
   // Only called when baseRef is known to be present (guarded by caller)
   const result = await resolveBackend(app, hostId).createWorktree(
@@ -96,7 +107,7 @@ export async function resolveWorktreeCwd(
     seed,
     intent.branchName,
   );
-  return result?.path ?? null;
+  return result ? { path: result.path, branch: result.branch } : null;
 }
 
 // Issue #345 — the catch handler shared by a remote preview worktree's
@@ -254,15 +265,15 @@ export async function createSessionRecord(
       if (!result) return { ok: false, reason: "worktree-failed" };
       cwd = result.path;
     } else if (worktree.baseRef) {
-      const worktreePath = await resolveWorktreeCwd(
+      const resolved = await resolveWorktreeCwd(
         app,
         project.hostId,
         cwd ?? project.cwd,
         worktree,
         `session-${Date.now()}`,
       );
-      if (!worktreePath) return { ok: false, reason: "worktree-failed" };
-      cwd = worktreePath;
+      if (!resolved) return { ok: false, reason: "worktree-failed" };
+      cwd = resolved.path;
     }
   }
 

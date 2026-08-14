@@ -142,6 +142,32 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // Hermes review, PR #680: promote itself already succeeded by the time
+  // onPromoted runs (e.g. PaneActionsMenu's handler calling into a dockview
+  // api that's since been torn down) — a throw there must not skip onClose
+  // and leave the dialog stuck open with `submitting` true.
+  it("still calls onClose if onPromoted throws", async () => {
+    const onClose = vi.fn();
+    const onPromoted = vi.fn(() => {
+      throw new Error("dockview panel already gone");
+    });
+    const user = userEvent.setup();
+    render(
+      <PromoteDialog
+        session={makeSession()}
+        project={PROJECT}
+        onClose={onClose}
+        onPromoted={onPromoted}
+      />,
+    );
+
+    await screen.findByRole("combobox");
+    await user.click(screen.getByText("Create worktree"));
+
+    await vi.waitFor(() => expect(onPromoted).toHaveBeenCalled());
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("shows an error and stays open when promoteSession fails", async () => {
     promoteSessionMock.mockRejectedValueOnce(new Error("boom"));
     const onClose = vi.fn();

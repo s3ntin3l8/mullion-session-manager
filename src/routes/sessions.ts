@@ -413,14 +413,15 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (!project) return reply.notFound();
 
       const { baseRef, branchName, seedPrompt } = request.body;
-      const worktreePath = await resolveWorktreeCwd(
+      const resolvedWorktree = await resolveWorktreeCwd(
         app,
         project.hostId,
         row.cwd ?? project.cwd,
         { baseRef, branchName },
         `promote-${sessionId}-${Date.now()}`,
       );
-      if (!worktreePath) return reply.badGateway("Failed to create worktree for this session");
+      if (!resolvedWorktree) return reply.badGateway("Failed to create worktree for this session");
+      const worktreePath = resolvedWorktree.path;
 
       // Deliberately no `parentSessionId` — promote is a REPLACEMENT (this
       // creates the new session then kills `row` below), not a child. See
@@ -447,14 +448,31 @@ export async function sessionsRoute(app: FastifyInstance) {
         // shows for a genuinely bad ref, with no way to tell the two apart.
         // Real try/catch (not `.catch(() => {})`, same footgun as
         // session-lifecycle.ts's own createSessionRecord catch block) —
-        // RemoteBackend.removeWorktree can throw synchronously.
+        // RemoteBackend.removeWorktree/deleteBranch can throw synchronously.
+        //
+        // Hermes review, PR #680: removeWorktree alone only clears the
+        // worktree DIRECTORY, never the branch (git-worktree.ts's own doc
+        // comment — a worktree's branch is deliberately preserved for the
+        // normal "→ done"/"→ failed" cleanup paths, which need it to
+        // survive). Left un-deleted, a retry with the same explicit
+        // branchName (or the default `mullion/session-<id>`) still failed
+        // "branch already exists" even after this cleanup. Safe to force-
+        // delete here specifically: `git worktree add -b` creates the
+        // worktree and the branch atomically, and this only runs when the
+        // very next step (spawn) failed — no agent, no commit, ever
+        // touched it.
+        const backend = resolveBackend(app, project.hostId);
         try {
-          await resolveBackend(app, project.hostId).removeWorktree(
-            worktreePath,
-            row.cwd ?? project.cwd,
-          );
+          await backend.removeWorktree(worktreePath, row.cwd ?? project.cwd);
         } catch {
           // Best-effort: a leaked worktree directory is the cheaper failure.
+        }
+        try {
+          await backend.deleteBranch(row.cwd ?? project.cwd, resolvedWorktree.branch, {
+            force: true,
+          });
+        } catch {
+          // Best-effort, same posture as removeWorktree above.
         }
         return reply.badGateway("Failed to spawn the promoted session");
       }

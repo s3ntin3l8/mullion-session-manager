@@ -104,4 +104,76 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
 
     expect(useDashboardStore.getState().gitBranchesByProject[99]).toBeUndefined();
   });
+
+  // Hermes review, PR #680: the in-flight dedup used to return the CURRENTLY
+  // RUNNING promise for any call that arrived mid-flight, silently dropping
+  // a scoped call's own project ids if they weren't part of what was already
+  // running — project 2's refs would stay stale until the next WS event.
+  it("queues a scoped call that arrives while another is in flight, instead of dropping it", async () => {
+    let resolveProject1: (() => void) | undefined;
+    const project1Gate = new Promise<void>((resolve) => {
+      resolveProject1 = resolve;
+    });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const branchesMatch = /^\/api\/projects\/(\d+)\/git-branches$/.exec(url);
+      if (branchesMatch) {
+        if (branchesMatch[1] === "1") await project1Gate;
+        return jsonResponse(200, branchesFor(`branch-${branchesMatch[1]}`));
+      }
+      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
+      if (prsMatch) return jsonResponse(200, EMPTY_PRS);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const firstRun = useDashboardStore.getState().refreshGitRefs([1]);
+    // Arrives while project 1's fetch is still hung on project1Gate — must
+    // not be silently dropped just because a refresh is already running.
+    const secondRun = useDashboardStore.getState().refreshGitRefs([2]);
+    expect(secondRun).toBe(firstRun); // same in-flight promise, queued behind it
+
+    resolveProject1!();
+    await firstRun;
+    // The queued call re-fires in the `.finally()` once the first settles —
+    // it's its own async chain (fetch + JSON parsing), not one microtask tick.
+    await vi.waitFor(() =>
+      expect(useDashboardStore.getState().gitBranchesByProject[2]).toEqual(branchesFor("branch-2")),
+    );
+    expect(useDashboardStore.getState().gitBranchesByProject[1]).toEqual(branchesFor("branch-1"));
+  });
+
+  it("an unscoped call queued behind an in-flight scoped one wins over it (still refetches every project)", async () => {
+    let resolveProject2: (() => void) | undefined;
+    const project2Gate = new Promise<void>((resolve) => {
+      resolveProject2 = resolve;
+    });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const branchesMatch = /^\/api\/projects\/(\d+)\/git-branches$/.exec(url);
+      if (branchesMatch) {
+        if (branchesMatch[1] === "2") await project2Gate;
+        return jsonResponse(200, branchesFor(`branch-${branchesMatch[1]}`));
+      }
+      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
+      if (prsMatch) return jsonResponse(200, EMPTY_PRS);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    useDashboardStore.setState({
+      gitBranchesByProject: { 1: branchesFor("branch-1"), 99: branchesFor("stale") },
+      prsByProject: { 1: EMPTY_PRS, 99: EMPTY_PRS },
+    });
+
+    const firstRun = useDashboardStore.getState().refreshGitRefs([2]);
+    void useDashboardStore.getState().refreshGitRefs(); // unscoped, queued behind it
+
+    resolveProject2!();
+    await firstRun;
+    // The unscoped requeue prunes project 99, which neither call's own
+    // explicit scope named — proving it ran as a full refresh, not a
+    // scoped one that happened to include every current project.
+    await vi.waitFor(() =>
+      expect(useDashboardStore.getState().gitBranchesByProject[99]).toBeUndefined(),
+    );
+    expect(useDashboardStore.getState().gitBranchesByProject[1]).toEqual(branchesFor("branch-1"));
+  });
 });
