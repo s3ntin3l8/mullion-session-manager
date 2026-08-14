@@ -559,4 +559,31 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     );
     expect(screen.queryByText("Promote to worktree")).not.toBeInTheDocument();
   });
+
+  // 3a — SessionRow's own contribution to the fix: forward PromoteDialog's
+  // onPromoted callback through unchanged, so the caller (Sidebar.tsx's
+  // ProjectSection/VirtualizedProjectTree, which bind it to
+  // onSessionEnded+onOpenSession) actually gets told about the replacement
+  // session instead of it silently vanishing into the sidebar.
+  it("forwards onPromoted from PromoteDialog with the newly-created session", async () => {
+    const newSession = makeSession({ id: 999 });
+    promoteSessionMock.mockResolvedValueOnce(newSession);
+    const onPromoted = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SessionRow
+        session={makeSession({ promoteSuggestedBaseRef: "main" })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+        onPromoted={onPromoted}
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Promote to worktree…"));
+    await user.click(await screen.findByText("Create worktree"));
+
+    await vi.waitFor(() => expect(onPromoted).toHaveBeenCalledWith(newSession));
+  });
 });

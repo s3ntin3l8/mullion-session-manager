@@ -142,6 +142,32 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // Hermes review, PR #680: promote itself already succeeded by the time
+  // onPromoted runs (e.g. PaneActionsMenu's handler calling into a dockview
+  // api that's since been torn down) — a throw there must not skip onClose
+  // and leave the dialog stuck open with `submitting` true.
+  it("still calls onClose if onPromoted throws", async () => {
+    const onClose = vi.fn();
+    const onPromoted = vi.fn(() => {
+      throw new Error("dockview panel already gone");
+    });
+    const user = userEvent.setup();
+    render(
+      <PromoteDialog
+        session={makeSession()}
+        project={PROJECT}
+        onClose={onClose}
+        onPromoted={onPromoted}
+      />,
+    );
+
+    await screen.findByRole("combobox");
+    await user.click(screen.getByText("Create worktree"));
+
+    await vi.waitFor(() => expect(onPromoted).toHaveBeenCalled());
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("shows an error and stays open when promoteSession fails", async () => {
     promoteSessionMock.mockRejectedValueOnce(new Error("boom"));
     const onClose = vi.fn();
@@ -167,7 +193,7 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("agent-triggered (pending): shows Decline copy, pre-fills the seed and suggested base ref", async () => {
+  it("agent-triggered (pending): shows Decline copy, pre-fills the seed, and prefers the current branch over the agent's suggestion once branches load", async () => {
     render(
       <PromoteDialog
         session={makeSession({
@@ -185,11 +211,37 @@ describe("PromoteDialog (issue #271)", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Decline")).toBeInTheDocument();
     expect(screen.getByDisplayValue("start work on the bug fix")).toBeInTheDocument();
-    // The suggested base ref wins even after branches load with a
-    // different "current" branch — the model's own signal is authoritative
-    // until the human changes it.
+    // Production incident this locks in: the suggested base ref used to win
+    // even after branches loaded with a different current branch, silently
+    // cutting the worktree from the wrong commit. Now the current branch
+    // wins once it's known, and the suggestion surfaces as a distinct,
+    // user-applied hint instead.
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(select).toHaveDisplayValue("main (current)");
+    expect(screen.getByText("feature/x", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText("use it")).toBeInTheDocument();
+  });
+
+  it("clicking the agent's suggestion applies it and stops the branches load from overriding it again", async () => {
+    const user = userEvent.setup();
+    render(
+      <PromoteDialog
+        session={makeSession({
+          promoteState: "pending",
+          promoteSuggestedBaseRef: "feature/x",
+        })}
+        project={PROJECT}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(select).toHaveDisplayValue("main (current)");
+
+    await user.click(screen.getByText("use it"));
+
     expect(select).toHaveDisplayValue("feature/x");
+    expect(screen.queryByText("use it")).not.toBeInTheDocument();
   });
 
   it("Decline calls declinePromote (not promoteSession) and closes", async () => {
@@ -208,6 +260,55 @@ describe("PromoteDialog (issue #271)", () => {
     expect(declinePromoteMock).toHaveBeenCalledWith(42);
     expect(promoteSessionMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // Production incident this covers: git-branches rate-limited (429) while
+  // the dialog was open — branches stayed `[]`, the dropdown had zero
+  // options, and nothing told the user why. Now a failed fetch renders an
+  // inline error and falls back to a free-text field instead of an
+  // empty, unselectable dropdown.
+  describe("branches fetch fails (rate-limited / host unreachable)", () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.resolve(jsonResponse(429, { error: "slow down" }))),
+      );
+    });
+
+    it("shows an inline error and a free-text base-ref field instead of an empty dropdown", async () => {
+      render(
+        <PromoteDialog
+          session={makeSession({
+            promoteState: "pending",
+            promoteSuggestedBaseRef: "feature/x",
+          })}
+          project={PROJECT}
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText(/Couldn't load the branch list/)).toBeInTheDocument();
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+      // The agent's suggestion survives as the fallback value — visible and
+      // still overridable, not silently trusted.
+      const input = screen.getByPlaceholderText(/e\.g\. main or origin\/main/i) as HTMLInputElement;
+      expect(input).toHaveValue("feature/x");
+    });
+
+    it("lets the user type a base ref by hand and submits it", async () => {
+      const user = userEvent.setup();
+      render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={vi.fn()} />);
+
+      const input = await screen.findByPlaceholderText(/e\.g\. main or origin\/main/i);
+      await user.clear(input);
+      await user.type(input, "hand-typed-ref");
+      await user.click(screen.getByText("Create worktree"));
+
+      expect(promoteSessionMock).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ baseRef: "hand-typed-ref" }),
+      );
+    });
   });
 
   // PR 24 pilot — behavior newly added by the `ui/Modal.tsx` migration.

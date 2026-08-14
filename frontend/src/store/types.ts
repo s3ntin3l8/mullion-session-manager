@@ -198,7 +198,10 @@ export interface GitSlice {
   // Issue #202's other two git-refresh actions — see their own
   // implementations for the cadence each runs on.
   refreshGitDiffStats: () => Promise<void>;
-  refreshGitRefs: () => Promise<void>;
+  // `projectIds` omitted refreshes every project (and prunes ones that no
+  // longer exist); passed, it scopes the refetch to just those — see this
+  // action's own implementation in slices/git.ts for why.
+  refreshGitRefs: (projectIds?: number[]) => Promise<void>;
   fetchProjectGit: (projectId: number) => Promise<void>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
 }

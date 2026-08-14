@@ -22,6 +22,7 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
   openBrowserPanePanel: vi.fn(),
+  openOrFocusSessionPanel: vi.fn(),
 }));
 
 vi.mock("./api/index.js", () => ({
@@ -32,6 +33,7 @@ vi.mock("./api/index.js", () => ({
 
 let session: Session;
 let projects: Project[];
+let promoteSessionMock: ReturnType<typeof vi.fn>;
 
 function storeState() {
   return {
@@ -40,6 +42,8 @@ function storeState() {
     deleteSession: vi.fn().mockResolvedValue(undefined),
     theme: "dark",
     settings: { sessions: { confirmBeforeKill: false } },
+    promoteSession: promoteSessionMock,
+    declinePromote: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -115,6 +119,7 @@ const CONTAINER_API = { __marker: "containerApi" } as unknown as DockviewApi;
 beforeEach(() => {
   session = { ...BASE_SESSION };
   projects = [];
+  promoteSessionMock = vi.fn();
 });
 
 describe("PaneActionsMenu", () => {
@@ -281,5 +286,57 @@ describe("PaneActionsMenu", () => {
     await user.click(screen.getByText("Promote to worktree…"));
 
     expect(screen.getByText("Base ref")).toBeInTheDocument();
+  });
+
+  // 3a — a promote used to just kill the source pane with nothing visibly
+  // replacing it (the new session only ever showed up in the sidebar after
+  // its own next refresh). This pane's own session IS the one promote
+  // kills, so on success it must close itself and hand off to the
+  // replacement, not go quietly dead.
+  it("closes this pane and opens the replacement session's panel once promote succeeds", async () => {
+    projects = [
+      {
+        id: session.projectId,
+        name: "mullion",
+        cwd: "/home/x/mullion",
+        hostId: "local",
+        devServerUrl: null,
+        detectedDevServerPort: null,
+        currentBranch: "main",
+        autoFetch: null,
+        ruleFiles: [],
+        defaultAgent: null,
+        defaultReviewAgent: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    vi.mocked(api.getProjectGitBranches).mockResolvedValue({
+      branches: [{ name: "main", isCurrent: true }],
+      remoteBranches: [],
+      worktrees: [],
+    });
+    const newSession = { ...session, id: 999, cwd: "/home/x/mullion/.mullion-worktrees/x" };
+    promoteSessionMock.mockResolvedValue(newSession);
+    const { openOrFocusSessionPanel } = await import("./panelUtils.js");
+    const paneApi = makeApi();
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={paneApi}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(screen.getByText("Promote to worktree…"));
+    await screen.findByText("Base ref");
+    await user.click(screen.getByText("Create worktree"));
+
+    await vi.waitFor(() => expect(promoteSessionMock).toHaveBeenCalled());
+    expect(paneApi.close).toHaveBeenCalled();
+    expect(openOrFocusSessionPanel).toHaveBeenCalledWith(CONTAINER_API, newSession, projects);
   });
 });

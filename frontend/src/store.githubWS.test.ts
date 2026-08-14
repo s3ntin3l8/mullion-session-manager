@@ -115,6 +115,50 @@ describe("store /ws/github integration", () => {
     stop();
   });
 
+  // Production incident this pass fixes: an unscoped refreshGitRefs() call
+  // here refetched EVERY project's git-branches + github/prs on every
+  // debounce tick, regardless of which project's event triggered it. A
+  // busy check suite firing faster than the 250ms debounce window kept
+  // re-triggering that full-refetch, exhausting git-branches' 30/min rate
+  // limit within seconds and starving an unrelated dialog's own fetch.
+  it("scopes the refresh to the project id(s) an event actually named", async () => {
+    vi.useFakeTimers();
+    const refreshGitRefs = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshGitRefs });
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ projectId: "12" }));
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(refreshGitRefs).toHaveBeenCalledExactlyOnceWith([12]);
+
+    stop();
+  });
+
+  it("merges project ids from a burst spanning multiple projects into one scoped refresh", async () => {
+    vi.useFakeTimers();
+    const refreshGitRefs = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshGitRefs });
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ projectId: "1" }));
+    instances[0].__message(JSON.stringify({ projectId: "2" }));
+    instances[0].__message(JSON.stringify({ projectId: "1" }));
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refreshGitRefs).toHaveBeenCalledExactlyOnceWith([1, 2]);
+
+    // A later, separate burst starts from an empty accumulator rather than
+    // re-including project 1/2 from the already-fired batch above.
+    instances[0].__message(JSON.stringify({ projectId: "3" }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refreshGitRefs).toHaveBeenLastCalledWith([3]);
+
+    stop();
+  });
+
   it("does not refresh on a message with no projectId", async () => {
     vi.useFakeTimers();
     const refreshGitRefs = vi.fn(async () => {});

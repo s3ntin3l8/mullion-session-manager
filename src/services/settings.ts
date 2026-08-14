@@ -202,10 +202,14 @@ export interface AppSettings {
     // (Session.bootstrapMaster() -> writeSessionAgentGuide(), always
     // unconditional — see agent-guide.ts). Default true: a few lines of
     // pointer text is cheap, and the whole point of the feature is
-    // discovery. Also has no effect at all for any agent other than Claude
-    // Code — forwarder-core.mjs's formatSessionStartOutput only produces a
-    // real hookSpecificOutput for `agent === "claude-code"`; every other
-    // agent's forwarder invocation silently drops the reply.
+    // discovery. Affects all four agents, just via two different
+    // mechanisms: forwarder-core.mjs's formatSessionStartOutput produces a
+    // real hookSpecificOutput/injectSteps reply for claude-code, codex, and
+    // agy (opencode's forwarder invocation hits its `default:` case and
+    // drops the reply); opencode instead reads this same setting via
+    // ctx.injectAgentGuide in hook-adapters/opencode.ts's prepareLaunch,
+    // which points its `instructions` config at the per-session copy
+    // (issue #437c) — the guide's full text, not a pointer sentence.
     injectAgentGuide: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the

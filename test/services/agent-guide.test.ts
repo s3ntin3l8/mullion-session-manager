@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   agentGuideSourceExists,
+  buildSessionAgentGuideContent,
   sessionAgentGuidePath,
   writeSessionAgentGuide,
 } from "../../src/services/agent-guide.js";
@@ -35,13 +36,18 @@ describe("writeSessionAgentGuide", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("writes the shipped guide content verbatim to the right per-session path", () => {
+  it("writes the shipped guide content, self-identifying header prepended, to the right per-session path", () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-agent-guide-"));
     writeSessionAgentGuide(dir, "42");
 
     const written = readFileSync(sessionAgentGuidePath(dir, "42"), "utf8");
     const shipped = readFileSync(path.resolve(process.cwd(), "docs", "agent-guide.md"), "utf8");
-    expect(written).toBe(shipped);
+    expect(written).toBe(buildSessionAgentGuideContent(shipped, sessionAgentGuidePath(dir, "42")));
+    // Self-identifying: an agent whose only view of this is an unlabeled
+    // `instructions` blob (opencode) still sees what it is and where it
+    // lives, not just the guide's own body.
+    expect(written).toContain("Mullion agent guide");
+    expect(written).toContain(sessionAgentGuidePath(dir, "42"));
   });
 
   it("writes the per-session copy with 0600 permissions", () => {

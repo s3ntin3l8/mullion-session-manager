@@ -69,7 +69,8 @@ export function sessionAgentGuidePath(sessionsDir: string, sessionId: string): s
 }
 
 /**
- * Writes a per-session copy of the shipped agent guide doc to
+ * Writes a per-session copy of the shipped agent guide doc — prefixed with a
+ * short self-identifying header (buildSessionAgentGuideContent) — to
  * `sessionAgentGuidePath(sessionsDir, sessionId)` (issue #405). Called
  * unconditionally from Session.bootstrapMaster() — the same spawn-time seam
  * that writes Claude Code's ephemeral `<sessionId>.hooks.json`/`.mcp.json`
@@ -112,20 +113,38 @@ export function writeSessionAgentGuide(
     // its own CLI resolves at startup, not prose an LLM reads and ignores.
     return;
   }
-  let content: string;
+  let shipped: string;
   try {
-    content = readFileSync(sourcePath, "utf8");
+    shipped = readFileSync(sourcePath, "utf8");
   } catch (err) {
     log.error({ err, sourcePath }, "failed to read shipped docs/agent-guide.md");
     return;
   }
+  const destPath = sessionAgentGuidePath(sessionsDir, sessionId);
+  const content = buildSessionAgentGuideContent(shipped, destPath);
   try {
     // recursive: true, same defensive posture as hook-adapters/index.ts's
     // own settingsFiles writer — a no-op in the ordinary case (sessionsDir
     // already exists, it's where the hook socket itself lives).
     mkdirSync(sessionsDir, { recursive: true });
-    writeFileSync(sessionAgentGuidePath(sessionsDir, sessionId), content, { mode: 0o600 });
+    writeFileSync(destPath, content, { mode: 0o600 });
   } catch (err) {
     log.error({ err, sessionId }, "failed to write per-session agent guide copy");
   }
+}
+
+/**
+ * Prepends a short, self-identifying header to the shipped guide before it's
+ * written to a session's own copy. Claude Code/Codex/agy get an explicit
+ * SessionStart pointer sentence naming this file's path (hooks.ts); opencode
+ * instead gets the guide's full body loaded as an unlabeled `instructions`
+ * blob (hook-adapters/opencode.ts) — nothing in that blob previously said
+ * "this is the Mullion agent guide" or named its own on-disk path, so an
+ * opencode session asked to "read agent-guide.md" had the content but
+ * nothing connecting it to that name (a real production incident, not a
+ * hypothetical). Exported (not inlined) so the test suite can assert the
+ * header shape independently of file I/O.
+ */
+export function buildSessionAgentGuideContent(shippedContent: string, destPath: string): string {
+  return `> This is the Mullion agent guide — this session's own copy, on disk at \`${destPath}\`.\n\n${shippedContent}`;
 }
