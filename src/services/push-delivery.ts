@@ -129,7 +129,16 @@ export async function deliverPushNotification(
       ? "exited"
       : deriveSessionStatus({
           dbStatus: row.status,
-          info: defaultDeriveStatusInfo(app.pty.get(String(event.sessionId))?.toInfo()),
+          info: defaultDeriveStatusInfo(
+            app.pty
+              .get(String(event.sessionId))
+              // Live idle threshold, not toInfo()'s hardcoded 2s fallback
+              // (issue #674) — every other production caller of toInfo()
+              // already passes this same value; push-delivery was the one
+              // silent omission, so "working" vs "idle" here disagreed with
+              // what Settings -> Notifications & status actually says.
+              ?.toInfo(settings.notifications.idleThresholdSeconds * 1000),
+          ),
         }).status;
   if (!(settings.notifications.notificationMatrix[status]?.notify ?? false)) return;
 
