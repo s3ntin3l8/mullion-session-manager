@@ -15,12 +15,25 @@ export const EVENTS_PER_SESSION_CAP = 200;
 // is clicked in the sidebar (matches the CSS animation duration + buffer).
 export const HIGHLIGHT_DURATION_MS = 1200;
 
+// Issue #673 — the fixed window slices/events.ts's status-bearing /ws/events
+// frames are throttled onto before triggering a refreshSessions() call: fire
+// once immediately, then suppress further refreshes until this many ms have
+// passed, firing exactly one more if anything arrived during the window
+// (leading + trailing, NOT a pure trailing debounce — see that slice's own
+// comment for why sustained traffic mustn't be able to starve the trailing
+// call the way slices/tasks.ts's/slices/github.ts's 250ms debounce could).
+// LIVE_REFRESH_INTERVAL_MS above stays the fallback for whenever this push
+// channel is disconnected or reconnecting.
+export const EVENTS_REFRESH_THROTTLE_MS = 400;
+
 // Consecutive failed session-fetches (from any caller — the live poll,
-// Sidebar's own mount fetch, etc.) before the design's "whole backend down"
-// banner shows. >1 so a single transient blip doesn't flash it; in
-// practice only the frequent live-refresh poll realistically accumulates
-// this fast, since one-shot callers would need to independently fail twice
-// in a row for the same thing to happen from them alone.
+// Sidebar's own mount fetch, the /ws/events-triggered refresh added for
+// issue #673, etc.) before the design's "whole backend down" banner shows.
+// >1 so a single transient blip doesn't flash it. The live-refresh poll is
+// no longer the only frequent caller (issue #673 added a second, throttled
+// to EVENTS_REFRESH_THROTTLE_MS above) — a GET failing while the WS push is
+// still up and running is itself a meaningful signal, so counting it here
+// rather than exempting it is intentional, not an oversight.
 export const BACKEND_UNREACHABLE_THRESHOLD = 2;
 
 export const SIDEBAR_MIN_WIDTH = 288;

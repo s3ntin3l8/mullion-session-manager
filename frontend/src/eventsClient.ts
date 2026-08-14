@@ -11,10 +11,14 @@ import type { NotificationEvent } from "./api/index.js";
 // prefs.reconnect.maxAttempts and shows a "Disconnected" state a user can
 // retry from. This is a single background aggregate stream with no
 // per-instance UI of its own to show a give-up state in, so it retries
-// indefinitely instead — a live-refresh poll (store.ts's startLiveRefresh)
-// keeps SessionInfo itself fresh regardless of whether this channel is
-// currently connected, so there's no user-facing harm in it simply
-// continuing to retry in the background.
+// indefinitely instead. Issue #673: while the tab is VISIBLE, the
+// live-refresh poll (store.ts's startLiveRefresh) is still a fallback that
+// keeps SessionInfo eventually-fresh regardless of this channel's state —
+// but while hidden, that poll stops entirely (visibilitychange), so this
+// channel is the SOLE freshness source for session status until it
+// reconnects and replays. A long-hidden tab whose socket died therefore
+// shows a stale badge/status until this backoff catches up — a real,
+// accepted gap, not one this module tries to close on its own.
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8000;
 

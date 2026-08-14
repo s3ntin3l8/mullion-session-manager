@@ -67,8 +67,12 @@ export function useAppStreams(): void {
 
   // Connects the single /ws/events push channel once (issue #166) — not
   // per-pane, unlike TerminalPane.tsx's own per-session WS. Additive
-  // alongside the poll above, which stays exactly as-is; nothing in this PR
-  // yet renders from the resulting `events` store slice.
+  // alongside the poll above, which stays as the fallback for whenever this
+  // channel is disconnected or reconnecting (see eventsClient.ts). As of
+  // issue #673, this also throttled-triggers refreshSessions() on
+  // status-bearing frames (slices/events.ts), so status badges/the tab-title
+  // badge update well inside the poll's 4s interval and keep updating while
+  // the tab is hidden and the poll itself is paused.
   useEffect(() => useDashboardStore.getState().startEventsStream(), []);
 
   // #488 — connects the /ws/tasks push channel once on mount so the Tasks
