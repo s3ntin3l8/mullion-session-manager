@@ -120,16 +120,30 @@ export const PROMOTE_TIMEOUT_MS = 290_000;
 // only needs to make an agent aware it exists and summarize the one thing
 // most likely to trip it up (the scope model) before it reads the rest.
 //
-// This reaches Claude Code, Codex, and agy sessions so far (issue #437,
+// This reaches Claude Code, Codex, and agy sessions this way (issue #437,
 // landing per-agent): forwarder-core.mjs's formatSessionStartOutput
 // switches on `agent` and, as of this writing, produces a real reply for
 // `"claude-code"`, `"codex"`, and `"agy"` (agy's own dialect is UNVERIFIED
 // against a live SessionStart firing — see that case's own doc comment) —
 // opencode still falls through to `default: return {}`, silently dropping
 // whatever additionalContext this plugin sends back (verified by reading
-// forwarder-core.mjs directly, not assumed). opencode sessions still get
-// the on-disk guide file itself and their own MCP tools — just no
-// automatic pointer to it yet.
+// forwarder-core.mjs directly, not assumed).
+//
+// opencode is NOT left without a mechanism, though — it gets a materially
+// different one (issue #437c, hook-adapters/opencode.ts's prepareLaunch):
+// the guide's full text loaded via its own `instructions` config, not this
+// short pointer sentence. Confirmed live (not just by reading the adapter)
+// that the injected content actually reaches the model's context — an
+// `opencode run` probe against a real per-session config answered a
+// question only the guide's body could answer. What that mechanism does
+// NOT do is say "this is the Mullion agent guide, on disk at <path>" the
+// way this pointer does; a production incident had an opencode session
+// with the guide's content in context still fail to connect it to
+// `agent-guide.md` by name when asked. Fixed at the source instead of
+// here: agent-guide.ts's buildSessionAgentGuideContent now prepends a
+// short self-identifying header to the per-session copy every agent reads
+// (or, for opencode, has injected) — so this pointer and that header now
+// say the same thing via two different channels.
 export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean): string {
   return [
     `Mullion agent guide available at ${guidePath}.`,

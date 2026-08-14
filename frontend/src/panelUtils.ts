@@ -267,6 +267,19 @@ export function openSessionPanel(
   if (isMobile) api.maximizeGroup(panel);
 }
 
+// Self-contained variant of openSessionPanel for callers without `isMobile`
+// threaded through React state (e.g. PaneActionsMenu.tsx's promote flow,
+// which — like openTimelinePanel/openBrowserPanePanel below — has no access
+// to App.tsx's live `isMobile` state) — same live matchMedia() rationale as
+// those two.
+export function openOrFocusSessionPanel(
+  api: DockviewApi,
+  session: Session,
+  projects: { id: number; name: string | null }[],
+): void {
+  openSessionPanel(api, session, window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches, projects);
+}
+
 // Issue #212 — opens (or focuses) a session's structured-event timeline
 // panel (SessionTimeline.tsx). Same open-or-focus-by-stable-id and
 // float-if-tiled-else-dock shape as openSessionPanel above, just a distinct

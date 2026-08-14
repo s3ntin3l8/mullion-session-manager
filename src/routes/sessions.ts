@@ -434,7 +434,30 @@ export async function sessionsRoute(app: FastifyInstance) {
         kind: row.kind,
         skipPermissions: row.skipPermissions ?? undefined,
       });
-      if (!created.ok) return reply.badGateway("Failed to spawn the promoted session");
+      if (!created.ok) {
+        // createSessionRecord's own spawn-failure rollback only fires for a
+        // worktree IT created (its `worktree` intent param, unused here —
+        // this route pre-resolves worktreePath itself, above, so cwd !==
+        // params.cwd but `worktree` is undefined, and that guard never
+        // fires). Without this, a failed spawn left the worktree AND its
+        // branch on disk; a retry with the same (or default,
+        // `mullion/session-<id>`) branch name then failed inside
+        // `git worktree add -b` with "branch already exists" — surfacing as
+        // the same generic "check that the base ref exists" the dialog
+        // shows for a genuinely bad ref, with no way to tell the two apart.
+        // Real try/catch (not `.catch(() => {})`, same footgun as
+        // session-lifecycle.ts's own createSessionRecord catch block) —
+        // RemoteBackend.removeWorktree can throw synchronously.
+        try {
+          await resolveBackend(app, project.hostId).removeWorktree(
+            worktreePath,
+            row.cwd ?? project.cwd,
+          );
+        } catch {
+          // Best-effort: a leaked worktree directory is the cheaper failure.
+        }
+        return reply.badGateway("Failed to spawn the promoted session");
+      }
 
       if (seedPrompt && seedPrompt.length > 0) {
         await resolveBackend(app, project.hostId).stashSeed(String(created.row.id), seedPrompt);

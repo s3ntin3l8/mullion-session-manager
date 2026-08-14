@@ -13,7 +13,7 @@ import {
   RenameIcon,
   BotIcon,
 } from "./ui/icons.js";
-import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
+import { openTimelinePanel, openBrowserPanePanel, openOrFocusSessionPanel } from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
@@ -84,6 +84,7 @@ export function PaneActionsMenu({
   const project = useDashboardStore((s) =>
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
+  const projects = useDashboardStore((s) => s.projects);
 
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
@@ -401,7 +402,18 @@ export function PaneActionsMenu({
           document.body,
         )}
       {promoteOpen && session && project && (
-        <PromoteDialog session={session} project={project} onClose={() => setPromoteOpen(false)} />
+        <PromoteDialog
+          session={session}
+          project={project}
+          onClose={() => setPromoteOpen(false)}
+          onPromoted={(newSession) => {
+            // This pane's own session is the one that just got killed by
+            // promote — close it, then open/focus the replacement, so the
+            // pane visibly hands off rather than just going dead.
+            api.close();
+            openOrFocusSessionPanel(containerApi, newSession, projects);
+          }}
+        />
       )}
     </>
   );

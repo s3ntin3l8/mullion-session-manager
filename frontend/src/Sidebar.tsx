@@ -972,6 +972,10 @@ export function ProjectSection({
                     .deleteSession(session.id)
                     .then(() => onSessionEnded(session))
                 }
+                onPromoted={(newSession) => {
+                  onSessionEnded(session);
+                  onOpenSession(newSession);
+                }}
               />
             ))
           )}
@@ -1120,6 +1124,10 @@ function VirtualizedProjectTree({
                       .deleteSession(row.session.id)
                       .then(() => onSessionEnded(row.session))
                   }
+                  onPromoted={(newSession) => {
+                    onSessionEnded(row.session);
+                    onOpenSession(newSession);
+                  }}
                 />
               </div>
             )}
@@ -1204,6 +1212,7 @@ export function SessionRow({
   onOpen,
   onOpenAsFloat,
   onEnd,
+  onPromoted,
   alwaysExpandGit = false,
   showSubagents = true,
   depth = 0,
@@ -1212,6 +1221,10 @@ export function SessionRow({
   project: Project;
   onOpen: () => void;
   onOpenAsFloat?: () => void;
+  // Passed straight through to PromoteDialog (see that prop's own doc
+  // comment) — optional so UnifiedBoard.tsx's ad-hoc session lane and
+  // existing tests that don't exercise promote need no change.
+  onPromoted?: (newSession: Session) => void;
   // P9 — every caller (ProjectSection's plain rendering path and
   // VirtualizedProjectTree's above-threshold path, both in this file, plus
   // UnifiedBoard.tsx's ad-hoc session lane) builds this from
@@ -1585,7 +1598,12 @@ export function SessionRow({
         />
       </div>
       {promoteOpen && (
-        <PromoteDialog session={session} project={project} onClose={() => setPromoteOpen(false)} />
+        <PromoteDialog
+          session={session}
+          project={project}
+          onClose={() => setPromoteOpen(false)}
+          onPromoted={onPromoted}
+        />
       )}
     </>
   );

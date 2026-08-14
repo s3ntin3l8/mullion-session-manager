@@ -1691,6 +1691,60 @@ describe("sessions route", () => {
         await app.close();
       });
 
+      // This route pre-resolves worktreePath itself (resolveWorktreeCwd,
+      // above the createSessionRecord call) rather than passing a
+      // `worktree` intent into createSessionRecord — unlike the B6 test
+      // above (POST /api/sessions with `worktree: {...}`), so
+      // createSessionRecord's OWN spawn-failure rollback never fires here
+      // (its `if (worktree && cwd && cwd !== params.cwd)` guard is
+      // unconditionally false: `worktree` is never passed). Before this
+      // fix, a failed spawn left the worktree — and its branch — on disk;
+      // proves the route's own explicit cleanup on the `!created.ok` path
+      // now does what createSessionRecord's rollback would have.
+      it("removes the worktree it created when the promoted session's spawn fails (not just leaves the source alive)", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+
+        const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
+        vi.mocked(spawnChildProcess).mockImplementation(
+          (command: string, args?: readonly string[], options?: object) => {
+            if (command === "systemd-run") {
+              const ee = new EventEmitter();
+              setImmediate(() => ee.emit("exit", 1));
+              return ee;
+            }
+            return originalSpawnImpl!(command, args, options);
+          },
+        );
+
+        try {
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", branchName: "feature/promote-spawn-fail" },
+          });
+          expect(res.statusCode).toBe(502);
+
+          const worktreePath = path.join(cwd, ".mullion-worktrees", "feature-promote-spawn-fail");
+          expect(fs.existsSync(worktreePath)).toBe(false);
+
+          // The source session is untouched — promote's own kill only runs
+          // after a successful spawn, well past this failure.
+          const list = await app.inject({
+            method: "GET",
+            url: `/api/sessions?projectId=${projectId}`,
+          });
+          const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
+          expect(sourceRow.status).toBe("active");
+        } finally {
+          vi.mocked(spawnChildProcess).mockImplementation(originalSpawnImpl!);
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        }
+      });
+
       it("delivers the seed prompt to the new session's SessionStart hook", async () => {
         const app = await buildApp();
         const cwd = createGitRepo();

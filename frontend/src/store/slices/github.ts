@@ -16,6 +16,14 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
   // quick succession. Debounced so a burst collapses into one refetch.
   let gitRefsEventRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const GIT_REFS_EVENT_REFRESH_DEBOUNCE_MS = 250;
+  // Accumulates project ids touched since the last debounce fire, so the
+  // eventual refetch stays scoped to those projects instead of every
+  // project — see refreshGitRefs' own doc comment (slices/git.ts) for the
+  // production incident an unscoped refetch here caused (a busy check
+  // suite's rapid-fire events kept re-triggering, each one refetching ALL
+  // projects' git-branches + github/prs and exhausting git-branches' 30/min
+  // rate limit within seconds).
+  let gitRefsEventProjectIds: Set<number> = new Set();
 
   return {
     prsRefreshTrigger: 0,
@@ -68,11 +76,17 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
             // Debounced (not called directly) — refreshGitRefs itself has
             // no time throttle of its own, only in-flight dedup, so a check
             // suite's burst of started/completed events would otherwise
-            // fire one refetch per event.
+            // fire one refetch per event. Scoped to the project ids seen
+            // since the last fire (see gitRefsEventProjectIds' own doc
+            // comment above) — an event about one project's CI run has no
+            // reason to refetch every OTHER project too.
+            gitRefsEventProjectIds.add(Number(data.projectId));
             if (gitRefsEventRefreshTimer) clearTimeout(gitRefsEventRefreshTimer);
             gitRefsEventRefreshTimer = setTimeout(() => {
               gitRefsEventRefreshTimer = null;
-              void get().refreshGitRefs();
+              const projectIds = Array.from(gitRefsEventProjectIds);
+              gitRefsEventProjectIds = new Set();
+              void get().refreshGitRefs(projectIds);
             }, GIT_REFS_EVENT_REFRESH_DEBOUNCE_MS);
           }
         } catch (err) {
@@ -86,6 +100,7 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
           clearTimeout(gitRefsEventRefreshTimer);
           gitRefsEventRefreshTimer = null;
         }
+        gitRefsEventProjectIds = new Set();
         if (gitHubWS === ws) {
           gitHubWS = null;
           set({ githubWSConnected: false });

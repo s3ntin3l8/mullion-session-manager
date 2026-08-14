@@ -98,6 +98,18 @@
 .create-modal-field-hint.error {
   color: var(--r);
 }
+.create-modal-inline-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.create-modal-inline-link:hover {
+  color: var(--accent-hover, var(--accent));
+}
 .create-modal-input-row {
   display: flex;
   align-items: center;

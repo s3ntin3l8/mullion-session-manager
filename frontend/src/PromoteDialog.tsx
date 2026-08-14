@@ -16,39 +16,76 @@ import { GitBranchIcon } from "./ui/icons.js";
 //
 // Base-ref picker (the roadmap's "not one hardcoded rule" requirement for
 // the interactive path): local branches + remote-tracking branches, default
-// = the project's current branch, or the model's own suggestedBaseRef when
-// a promote request is pending.
+// = the project's current branch — the model's own suggestedBaseRef is a
+// starting point while branches are still loading, never a value the
+// current-branch fetch is prevented from correcting (see `userEditedBaseRef`
+// below: a bug found in production had the suggestion permanently pin
+// `baseRef` via a `prev || …` guard, so a successful branches load could
+// never override a stale/wrong suggestion — the worktree silently got cut
+// from the wrong commit).
 export function PromoteDialog({
   session,
   project,
   onClose,
+  onPromoted,
 }: {
   session: Session;
   project: Project;
   onClose: () => void;
+  // Called with the newly-created replacement session once promote
+  // succeeds, before onClose — lets the caller focus it (and close the
+  // now-dead source pane) instead of the replacement silently existing only
+  // in the sidebar. Without this, a promote from an open pane read as "my
+  // session died and nothing replaced it" even though the backend really
+  // did spawn a replacement.
+  onPromoted?: (newSession: Session) => void;
 }) {
   const promoteSession = useDashboardStore((s) => s.promoteSession);
   const declinePromote = useDashboardStore((s) => s.declinePromote);
 
   const isPending = session.promoteState === "pending";
+  const suggestedBaseRef = session.promoteSuggestedBaseRef ?? null;
 
-  const [baseRef, setBaseRef] = useState(session.promoteSuggestedBaseRef ?? "");
+  const [baseRef, setBaseRef] = useState(suggestedBaseRef ?? "");
+  // Tracks whether the user has explicitly chosen a ref (dropdown pick,
+  // free-text edit, or clicking "Use suggestion"). Once true, neither the
+  // branches load nor the initial suggestion is allowed to overwrite it.
+  const [userEditedBaseRef, setUserEditedBaseRef] = useState(false);
   const [branchName, setBranchName] = useState("");
   const [seedPrompt, setSeedPrompt] = useState(session.promoteSummary ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Pre-extraction, this fetch had no `.catch` at all (an unhandled
-  // rejection on failure) — useGitBranches always tracks its own `error`
-  // internally, which this dialog doesn't read/render, so that unhandled
-  // rejection is quietly absorbed rather than reproduced. A deliberate,
-  // strictly-an-improvement side effect of sharing this hook with
-  // CommandPalette.tsx (which does render its own error).
-  const { branches, currentBranch } = useGitBranches(project.id, {
+  const {
+    branches,
+    currentBranch,
+    error: branchesError,
+  } = useGitBranches(project.id, {
     onLoaded: ({ branches, currentBranch }) => {
-      setBaseRef((prev) => prev || currentBranch || branches[0] || "");
+      if (userEditedBaseRef) return;
+      // Current branch wins over the model's suggestion once we actually
+      // know it — the suggestion only exists as a fallback for when this
+      // fetch never succeeds (rate-limited, host unreachable, etc.).
+      setBaseRef(currentBranch || suggestedBaseRef || branches[0] || "");
     },
   });
+
+  const setBaseRefManually = (ref: string) => {
+    setUserEditedBaseRef(true);
+    setBaseRef(ref);
+  };
+
+  // The dropdown only ever offers what git-branches returned; if that fetch
+  // failed or is still pending, fall back to a free-text field so a known
+  // suggestion (or a ref the user types themselves) is still submittable —
+  // rather than an empty, unselectable control.
+  const canPickFromList = branches.length > 0;
+  const dropdownOptions = (
+    baseRef && !branches.includes(baseRef) ? [baseRef, ...branches] : branches
+  ).map((name) => ({
+    value: name,
+    label: name === currentBranch ? `${name} (current)` : name,
+  }));
 
   const confirm = () => {
     const trimmedBaseRef = baseRef.trim();
@@ -60,7 +97,10 @@ export function PromoteDialog({
       branchName: branchName.trim() || undefined,
       seedPrompt: seedPrompt.trim() || undefined,
     })
-      .then(onClose)
+      .then((newSession) => {
+        onPromoted?.(newSession);
+        onClose();
+      })
       .catch(() => {
         setSubmitting(false);
         setError("Failed to create the worktree — check that the base ref exists.");
@@ -114,18 +154,38 @@ export function PromoteDialog({
         <span className="create-modal-field-label">Base ref</span>
         <span className="create-modal-input-row">
           <GitBranchIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-          <Dropdown
-            value={baseRef}
-            onChange={setBaseRef}
-            options={branches.map((name) => ({
-              value: name,
-              label: name === currentBranch ? `${name} (current)` : name,
-            }))}
-          />
+          {canPickFromList ? (
+            <Dropdown value={baseRef} onChange={setBaseRefManually} options={dropdownOptions} />
+          ) : (
+            <input
+              className="mono"
+              value={baseRef}
+              onChange={(e) => setBaseRefManually(e.target.value)}
+              placeholder="e.g. main or origin/main"
+            />
+          )}
         </span>
         <span className="create-modal-field-hint">
           The new worktree's branch is created off this ref.
         </span>
+        {branchesError && (
+          <span className="create-modal-field-hint error">
+            Couldn't load the branch list ({branchesError}) — type the ref directly.
+          </span>
+        )}
+        {suggestedBaseRef && suggestedBaseRef !== baseRef && (
+          <span className="create-modal-field-hint">
+            The agent suggested <code className="mono">{suggestedBaseRef}</code> —{" "}
+            <button
+              type="button"
+              className="create-modal-inline-link"
+              onClick={() => setBaseRefManually(suggestedBaseRef)}
+            >
+              use it
+            </button>
+            .
+          </span>
+        )}
       </label>
 
       <label className="create-modal-field">

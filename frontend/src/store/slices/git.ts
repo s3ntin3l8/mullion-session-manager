@@ -133,15 +133,35 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   // (git-refs.ts's own on-demand-fetch reasoning) and the PR list already
   // rides its own 60s-ish server-side cache/poller, so refetching it every
   // 4s would just be wasted round trips for data that hasn't moved.
-  refreshGitRefs: () => {
+  //
+  // `projectIds` (optional): scopes the refetch to just these projects
+  // instead of every project, merging the result into the existing maps
+  // rather than replacing them wholesale. github.ts's WS-event debounce
+  // uses this — a project's own webhook activity only needs to refresh
+  // THAT project's branches/PRs, not every other project's too. Before this
+  // scoping existed, a single project's CI check-suite burst (each event
+  // debounced 250ms, but a busy suite fires far more often than that)
+  // refetched all N projects' git-branches + github/prs on every debounce
+  // tick, which — production incident — blew through git-branches' 30/min
+  // rate limit within seconds and left an unrelated dialog's own branches
+  // fetch caught in the resulting 429 storm. Omitted (the `refreshProjects`
+  // caller, and a fresh/deleted project) still does the full unscoped
+  // fetch + replace, since that path also needs to prune projects that no
+  // longer exist.
+  refreshGitRefs: (projectIds) => {
     if (gitRefsRefreshInFlight) return gitRefsRefreshInFlight;
 
     const run = async () => {
-      const projectList = get().projects;
-      if (projectList.length === 0) {
+      const allProjects = get().projects;
+      if (allProjects.length === 0) {
         set({ gitBranchesByProject: {}, prsByProject: {} });
         return;
       }
+      const scoped = projectIds !== undefined;
+      const projectList = scoped
+        ? allProjects.filter((p) => projectIds.includes(p.id))
+        : allProjects;
+      if (projectList.length === 0) return;
 
       const results = await Promise.allSettled(
         projectList.map(async (p) => {
@@ -153,8 +173,12 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
         }),
       );
 
-      const gitBranchesByProject: Record<number, GitBranchesResult | undefined> = {};
-      const prsByProject: Record<number, GitHubPRsStatus | undefined> = {};
+      const gitBranchesByProject: Record<number, GitBranchesResult | undefined> = scoped
+        ? { ...get().gitBranchesByProject }
+        : {};
+      const prsByProject: Record<number, GitHubPRsStatus | undefined> = scoped
+        ? { ...get().prsByProject }
+        : {};
       for (const result of results) {
         if (result.status !== "fulfilled") continue;
         gitBranchesByProject[result.value.id] = result.value.branches;
