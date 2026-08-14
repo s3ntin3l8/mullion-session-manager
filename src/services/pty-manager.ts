@@ -453,10 +453,19 @@ const MOUSE_ENCODING_ENABLE: Record<Exclude<MouseTrackingState["encoding"], "DEF
 // A session showing no output for this long is considered "idle" rather
 // than "working" — a coarse, admittedly heuristic threshold (see the plan's
 // WS-6: we plumb activity timing, we don't over-promise a precise
-// "waiting for input" classifier). Fallback used when a caller doesn't pass
-// its own threshold (mirrors DEFAULT_SETTINGS.notifications.idleThresholdSeconds
-// in services/settings.ts); routes/sessions.ts passes the live,
-// server-persisted value from Settings -> Notifications & status instead.
+// "waiting for input" classifier). This is a fallback only, used when a
+// caller doesn't pass its own threshold — it does NOT mirror
+// DEFAULT_SETTINGS.notifications.idleThresholdSeconds (services/settings.ts,
+// 30s live default); the two are deliberately different numbers, not the
+// same value read twice. Every production caller that actually cares about
+// `activity` passes the live, server-persisted setting explicitly
+// (routes/sessions.ts, push-delivery.ts, task-claim.ts, task-reconciler.ts,
+// session-live-info.ts, and over the wire via internal-schemas.ts's required
+// idleThresholdMs) — as of the fix for #674, that's every caller. The one
+// remaining caller that relies on this default, list() below, never reads
+// `activity` off its result, so the fallback value is inert there; it exists
+// only so toInfo() has a sane default for a hypothetical future caller that
+// doesn't have a settings row to read from.
 const IDLE_THRESHOLD_MS = 2_000;
 
 // Issue #320 staleness sweep — PTY output within this window of a latch
