@@ -214,6 +214,68 @@ export interface WorktreeResult {
   branch: string;
 }
 
+// Issue #677 — createWorktree's failure surface collapsed every distinct
+// cause (bad cwd, unresolvable baseRef, a branch/path collision, a stale
+// git process) into a single `null`, so every caller (the launcher's
+// worktree toggle, promote) could only ever show one generic "check that
+// the base ref exists" message regardless of what actually went wrong.
+// Mirrors git-branch-delete.ts's DeleteBranchResult shape exactly — same
+// `{ <verb>ed, reason?, detail? }` idiom, same truncated-stderr posture for
+// the catch-all reason. `checkoutBranchWorktree` has the identical `null`
+// defect but is left out of this change to keep the diff scoped to the
+// launcher/promote path that #677 was actually filed against.
+export type CreateWorktreeReason =
+  | "invalid-cwd"
+  | "invalid-base-ref"
+  | "invalid-base-dir"
+  | "not-a-repo"
+  | "no-such-ref"
+  | "branch-exists"
+  | "path-exists"
+  | "timeout"
+  | "create-failed"
+  // Never produced by createWorktree itself — only by session-lifecycle.ts's
+  // resolveWorktreeCwd, when a remote host's createWorktree call throws
+  // rather than resolving. Kept in this same union (rather than a second
+  // wrapper type) so the one result type flows end-to-end from the git call
+  // through to the route's response body. Split into two distinct reasons
+  // (not one "host-unreachable" catch-all) mirroring this same file's
+  // logPreviewWorktreeHostError and killSession's own HostRequestError
+  // split: a rejection (the agent is up and rejected the request — e.g.
+  // requireWithinRoots refusing the cwd) is a persistent, retry-forever
+  // condition, unlike a transient network blip, and the #484 postmortem
+  // ("HostRequestError covers any 4xx, not just 404") is exactly the
+  // mistake this split exists to avoid repeating.
+  | "host-unreachable"
+  | "host-rejected";
+
+export interface CreateWorktreeResult {
+  created: boolean;
+  path?: string;
+  branch?: string;
+  reason?: CreateWorktreeReason;
+  detail?: string;
+}
+
+/** Classifies a failed `git worktree add`'s stderr into a CreateWorktreeReason.
+ * Verified empirically against real git output (see the PR for the repro
+ * transcript) rather than guessed: "not a git repository..." for a bad cwd,
+ * "fatal: invalid reference: <ref>" for an unresolvable baseRef, "fatal: a
+ * branch named '<x>' already exists" for a branch collision, and "fatal:
+ * '<path>' already exists" for a non-empty target directory. The
+ * branch-collision check runs before the generic "already exists" one since
+ * both phrases contain that substring. Falls back to "create-failed" (with
+ * the truncated stderr as `detail`, same 300-char cap as deleteBranch) for
+ * anything else — a non-English git locale, a permissions error, or a git
+ * version whose wording differs. */
+function classifyCreateFailure(stderr: string): CreateWorktreeReason {
+  if (/not a git repository/i.test(stderr)) return "not-a-repo";
+  if (/a branch named .* already exists/i.test(stderr)) return "branch-exists";
+  if (/already exists/i.test(stderr)) return "path-exists";
+  if (/invalid reference/i.test(stderr)) return "no-such-ref";
+  return "create-failed";
+}
+
 /** Derives the on-disk worktree path a given `(cwd, seed)` pair would
  * produce, WITHOUT touching the filesystem — the same `sanitizeRefComponent`
  * derivation `createWorktree` uses internally, exposed so a caller can
@@ -233,13 +295,19 @@ export function deriveWorktreePath(cwd: string, seed: string, baseDir?: string):
 /**
  * Creates a new worktree off `cwd`, branched from `baseRef`, on a fresh
  * branch (`git worktree add -b <branch> <path> <baseRef>`, never `--detach`
- * — see the module doc comment). Returns `null` when `cwd` isn't a git
- * repo, `baseRef` doesn't resolve, or the `git worktree add` call fails;
- * never throws.
+ * — see the module doc comment). Returns `{ created: false, reason, detail?
+ * }` when `cwd` isn't a git repo, `baseRef` doesn't resolve, or the
+ * `git worktree add` call fails (see `CreateWorktreeReason`/
+ * `classifyCreateFailure` above) — never throws.
  */
-export async function createWorktree(opts: CreateWorktreeOptions): Promise<WorktreeResult | null> {
+export async function createWorktree(opts: CreateWorktreeOptions): Promise<CreateWorktreeResult> {
   const { cwd, baseRef, seed } = opts;
-  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) return null;
+  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes(".."))
+    return {
+      created: false,
+      reason: "invalid-cwd",
+      detail: `cwd "${cwd}" is not a valid absolute path`,
+    };
   const projectRoot = path.resolve(cwd);
   // baseRef reaches `git worktree add`'s argv as the final positional
   // argument, unsanitized (sanitizeRefComponent would mangle a legitimate
@@ -254,13 +322,26 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
   // (issue #271's promote_to_worktree MCP tool) that reaches this function
   // unchanged if a human submits the promote dialog without editing the
   // pre-filled base-ref picker.
-  if (baseRef.length === 0 || baseRef.startsWith("-")) return null;
+  if (baseRef.length === 0 || baseRef.startsWith("-"))
+    return {
+      created: false,
+      reason: "invalid-base-ref",
+      detail:
+        baseRef.length === 0
+          ? "baseRef must not be empty"
+          : `baseRef "${baseRef}" starts with "-" and would be reinterpreted as a flag`,
+    };
 
   const baseDir =
     opts.baseDir && opts.baseDir.length > 0
       ? opts.baseDir
       : path.join(projectRoot, ".mullion-worktrees");
-  if (!isSafeAbsolutePath(baseDir)) return null;
+  if (!isSafeAbsolutePath(baseDir))
+    return {
+      created: false,
+      reason: "invalid-base-dir",
+      detail: `baseDir "${baseDir}" is not a valid absolute path`,
+    };
 
   const dirName = sanitizeRefComponent(seed);
   const worktreePath = deriveWorktreePath(projectRoot, seed, baseDir);
@@ -283,8 +364,30 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
     worktreePath,
     baseRef,
   ]);
-  if (result.code !== 0) return null;
-  return { path: worktreePath, branch };
+  if (result.code !== 0) {
+    if (result.code === null) {
+      // Hermes review, this PR — runGit's `child.on("error")` handler also
+      // resolves `{code: null, stderr: String(err)}` for a genuine spawn
+      // failure (e.g. `git` not on PATH), the same shape a real timeout
+      // produces. A timeout's own kill path never sets stderr (the process
+      // is still running when the timer fires), so non-empty stderr here
+      // means this was a spawn error, not a timeout — classify it as such
+      // instead of dropping the detail under a misleading "timeout" reason.
+      const trimmedStderr = result.stderr.trim();
+      if (trimmedStderr.length > 0) {
+        return { created: false, reason: "create-failed", detail: trimmedStderr.slice(0, 300) };
+      }
+      return { created: false, reason: "timeout" };
+    }
+    const reason = classifyCreateFailure(result.stderr);
+    const trimmedStderr = result.stderr.trim();
+    return {
+      created: false,
+      reason,
+      detail: trimmedStderr.length > 0 ? trimmedStderr.slice(0, 300) : undefined,
+    };
+  }
+  return { created: true, path: worktreePath, branch };
 }
 
 const DOCK_PREVIEW_PREFIX = "dock-preview-";

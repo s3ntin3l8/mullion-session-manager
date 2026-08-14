@@ -33,6 +33,7 @@ import type { UrlGuardPolicy } from "./url-guard.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import type {
   ClearOrphanedTaskWorktreeResult,
+  CreateWorktreeResult,
   PruneWorktreesResult,
   RemoveIfCleanResult,
   RemoveListedWorktreeResult,
@@ -559,22 +560,35 @@ export class RemoteHostClient {
 
   /** Creates a worktree on this agent's own filesystem (issue #271's
    * launcher-toggle/promote flows) — mirrors /internal/git-worktree's
-   * `{cwd, baseRef, seed, branchName?}` -> `{path, branch} | null` shape.
-   * Unlike the read-only git methods above, a `null` result here isn't
-   * folded into an empty/absent value by the caller — it means creation
-   * genuinely failed and the caller (session-lifecycle.ts) must not proceed
-   * to spawn a session against a worktree that doesn't exist. */
+   * `{cwd, baseRef, seed, branchName?}` -> `CreateWorktreeResult` shape
+   * (issue #677: `{created, path?, branch?, reason?, detail?}`, not a bare
+   * `{path, branch} | null`). Unlike the read-only git methods above, a
+   * `created: false` result here isn't folded into an empty/absent value by
+   * the caller — it means creation genuinely failed and the caller
+   * (session-lifecycle.ts) must not proceed to spawn a session against a
+   * worktree that doesn't exist. Passes GIT_WORKTREE_REQUEST_TIMEOUT_MS
+   * explicitly (Hermes-style fix found during #677's research) — this was
+   * previously the only worktree-creating RPC on this client left at the
+   * 5s REQUEST_TIMEOUT_MS default, unlike its local-host counterpart
+   * (createWorktree's own GIT_TIMEOUT_MS = 15s) and its sibling
+   * resolveCheckoutBranchWorktree below (already on this same 45s budget),
+   * so a slow-but-legitimate remote `git worktree add` could time out here
+   * well before the git call itself would have. */
   resolveCreateWorktree(
     cwd: string,
     baseRef: string,
     seed: string,
     branchName?: string,
-  ): Promise<{ path: string; branch: string } | null> {
-    return this.request("/internal/git-worktree", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd, baseRef, seed, branchName }),
-    });
+  ): Promise<CreateWorktreeResult> {
+    return this.request(
+      "/internal/git-worktree",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, baseRef, seed, branchName }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /** Removes a task worktree on this agent's own filesystem — only when

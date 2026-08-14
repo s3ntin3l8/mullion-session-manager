@@ -63,26 +63,36 @@ describe("createWorktree (issue #271)", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("returns null for a non-git-repo directory", async () => {
-    expect(await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "s1" })).toBeNull();
+  // Issue #677 — createWorktree now returns a discriminated
+  // CreateWorktreeResult (`{created, reason?, detail?}`) instead of a bare
+  // `null`, so a caller can surface WHY creation failed.
+  it("classifies a non-git-repo directory as not-a-repo", async () => {
+    const result = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "s1" });
+    expect(result.created).toBe(false);
+    expect(result.reason).toBe("not-a-repo");
   });
 
-  it("returns null for a relative cwd, even one that would otherwise resolve correctly", async () => {
+  it("classifies a relative cwd as invalid-cwd, even one that would otherwise resolve correctly", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
     commitAll(tmpDir, "initial");
     const relative = path.relative(process.cwd(), tmpDir);
-    expect(await createWorktree({ cwd: relative, baseRef: "main", seed: "s1" })).toBeNull();
+    const result = await createWorktree({ cwd: relative, baseRef: "main", seed: "s1" });
+    expect(result.created).toBe(false);
+    expect(result.reason).toBe("invalid-cwd");
   });
 
-  it("returns null when baseRef does not resolve", async () => {
+  it("classifies an unresolvable baseRef as no-such-ref", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
     commitAll(tmpDir, "initial");
-    expect(await createWorktree({ cwd: tmpDir, baseRef: "no-such-ref", seed: "s1" })).toBeNull();
+    const result = await createWorktree({ cwd: tmpDir, baseRef: "no-such-ref", seed: "s1" });
+    expect(result.created).toBe(false);
+    expect(result.reason).toBe("no-such-ref");
+    expect(result.detail).toMatch(/invalid reference/i);
   });
 
-  it("rejects a baseRef starting with '-' — argument injection hardening, Hermes review on PR #277", async () => {
+  it("rejects a baseRef starting with '-' as invalid-base-ref — argument injection hardening, Hermes review on PR #277", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
     commitAll(tmpDir, "initial");
@@ -93,8 +103,52 @@ describe("createWorktree (issue #271)", () => {
     // suggestedBaseRef (the promote_to_worktree MCP tool) that reaches this
     // function unchanged if a human submits the promote dialog without
     // editing the pre-filled picker.
-    expect(await createWorktree({ cwd: tmpDir, baseRef: "--force", seed: "s1" })).toBeNull();
-    expect(await createWorktree({ cwd: tmpDir, baseRef: "-x", seed: "s1" })).toBeNull();
+    const r1 = await createWorktree({ cwd: tmpDir, baseRef: "--force", seed: "s1" });
+    expect(r1.created).toBe(false);
+    expect(r1.reason).toBe("invalid-base-ref");
+    const r2 = await createWorktree({ cwd: tmpDir, baseRef: "-x", seed: "s1" });
+    expect(r2.created).toBe(false);
+    expect(r2.reason).toBe("invalid-base-ref");
+  });
+
+  it("classifies a branch-name collision as branch-exists", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const first = await createWorktree({
+      cwd: tmpDir,
+      baseRef: "main",
+      seed: "collide",
+      branchName: "mullion/collide",
+    });
+    expect(first.created).toBe(true);
+    const second = await createWorktree({
+      cwd: tmpDir,
+      baseRef: "main",
+      seed: "collide-2",
+      branchName: "mullion/collide",
+    });
+    expect(second.created).toBe(false);
+    expect(second.reason).toBe("branch-exists");
+  });
+
+  // Verified empirically (not guessed): `git worktree add` happily reuses
+  // an EMPTY existing directory — only a non-empty one at the derived path
+  // fails with "already exists". A retry after a partial prior attempt is
+  // exactly how a real caller hits this (the same class of collision PR
+  // #680's own worktree-leak fix addressed).
+  it("classifies a non-empty pre-existing target directory as path-exists", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const worktreePath = deriveWorktreePath(tmpDir, "occupied");
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.writeFileSync(path.join(worktreePath, "leftover.txt"), "leftover");
+
+    const result = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "occupied" });
+    expect(result.created).toBe(false);
+    expect(result.reason).toBe("path-exists");
+    expect(result.detail).toMatch(/already exists/i);
   });
 
   it("creates a worktree under .mullion-worktrees, branched off baseRef, on a fresh branch", async () => {

@@ -496,6 +496,7 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       createWorktree: vi.fn().mockResolvedValue({
+        created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
         branch: "x",
       }),
@@ -550,6 +551,7 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       createWorktree: vi.fn().mockResolvedValue({
+        created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
         branch: "x",
       }),
@@ -607,6 +609,7 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       createWorktree: vi.fn().mockResolvedValue({
+        created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
         branch: "x",
       }),
@@ -664,6 +667,7 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       createWorktree: vi.fn().mockResolvedValue({
+        created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
         branch: "x",
       }),

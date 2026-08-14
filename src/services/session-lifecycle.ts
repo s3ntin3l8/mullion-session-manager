@@ -6,6 +6,7 @@ import {
   isDockPreviewWorktree,
   trackPreviewWorktree,
   cleanupPreviewWorktree,
+  type CreateWorktreeResult,
 } from "./git-worktree.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveBackend } from "./session-backend.js";
@@ -92,22 +93,52 @@ export interface CreateSessionBody {
 // paths that need it to survive). Without the branch name, a retry with the
 // same (explicit or default `mullion/session-<id>`) branch name still fails
 // "branch already exists" even after the directory is cleaned up.
+// Issue #677 — returns the full CreateWorktreeResult (created/path/branch/
+// reason/detail) rather than collapsing every failure into `null`, so a
+// caller can surface WHY creation failed instead of one generic message.
+// Wrapped in try/catch (Hermes-style gap found during #677's research): the
+// sibling `worktree.branch` call a few lines below this function's own call
+// site already guards against a remote-host throw
+// (HostUnreachableError/HostRequestError — see that call's own comment);
+// this path had no equivalent guard, so a remote failure here was a bare
+// 500 rather than the same clean `worktree-failed` result every other
+// failure in this function produces.
 export async function resolveWorktreeCwd(
   app: FastifyInstance,
   hostId: string,
   baseCwd: string,
   intent: WorktreeIntent,
   seedHint: string,
-): Promise<{ path: string; branch: string } | null> {
+): Promise<CreateWorktreeResult> {
   const seed = intent.branchName && intent.branchName.length > 0 ? intent.branchName : seedHint;
-  // Only called when baseRef is known to be present (guarded by caller)
-  const result = await resolveBackend(app, hostId).createWorktree(
-    baseCwd,
-    intent.baseRef!,
-    seed,
-    intent.branchName,
-  );
-  return result ? { path: result.path, branch: result.branch } : null;
+  try {
+    // Only called when baseRef is known to be present (guarded by caller)
+    return await resolveBackend(app, hostId).createWorktree(
+      baseCwd,
+      intent.baseRef!,
+      seed,
+      intent.branchName,
+    );
+  } catch (err) {
+    // Split the same way logPreviewWorktreeHostError (below) and
+    // killSession already do: a HostRequestError means the agent is up and
+    // REJECTED the request (e.g. requireWithinRoots refusing baseCwd) — a
+    // persistent condition that will recur on every retry, not a transient
+    // network blip. Conflating the two here previously mislabeled a
+    // rejection as "host-unreachable" in the 502 body the user sees (the
+    // #484 postmortem's "HostRequestError covers any 4xx, not just 404" is
+    // exactly this mistake).
+    if (err instanceof HostRequestError) {
+      app.log.warn({ hostId, err }, "resolveWorktreeCwd: host rejected the request");
+      return { created: false, reason: "host-rejected", detail: err.message };
+    }
+    app.log.warn({ hostId, err }, "resolveWorktreeCwd: host unreachable");
+    return {
+      created: false,
+      reason: "host-unreachable",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 // Issue #345 — the catch handler shared by a remote preview worktree's
@@ -180,7 +211,13 @@ export type CreateSessionResult =
       initialPromptApplied?: boolean;
     }
   | { ok: false; reason: "unknown-project" }
-  | { ok: false; reason: "worktree-failed" }
+  // `detail` (issue #677) — the actual reason a worktree creation call
+  // failed (e.g. "branch already exists"), forwarded from
+  // CreateWorktreeResult so routes/sessions.ts's error response can surface
+  // it instead of one hardcoded generic message. Mirrors task-claim.ts's
+  // own ClaimTaskOutcome.detail field, which routes/tasks.ts already reads
+  // straight through — that route needs no change for this.
+  | { ok: false; reason: "worktree-failed"; detail?: string }
   | { ok: false; reason: "spawn-failed" }
   // Phase 5 (Track B, issue #193 5.3b) — parentSessionId validation
   // failures, all clean 4xx per the roadmap's security guardrails for
@@ -272,7 +309,9 @@ export async function createSessionRecord(
         worktree,
         `session-${Date.now()}`,
       );
-      if (!resolved) return { ok: false, reason: "worktree-failed" };
+      if (!resolved.created || !resolved.path) {
+        return { ok: false, reason: "worktree-failed", detail: resolved.detail };
+      }
       cwd = resolved.path;
     }
   }
