@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ApiError } from "./api/index.js";
 import type { Session, Project } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { useGitBranches } from "./hooks/useGitBranches.js";
@@ -116,8 +117,14 @@ export function PromoteDialog({
         // worktree failed to create (e.g. "a branch named '...' already
         // exists") as the error body's message, instead of always the same
         // generic "check that the base ref exists" regardless of cause.
+        // Hermes review, this PR — specifically ApiError (a real response
+        // from the backend), not `instanceof Error` generally: a
+        // network-level failure (e.g. a fetch TypeError "Failed to fetch")
+        // is also an Error, but its message isn't a backend-supplied reason
+        // and would otherwise leak a confusing raw string instead of the
+        // generic fallback.
         setError(
-          err instanceof Error
+          err instanceof ApiError
             ? err.message
             : "Failed to create the worktree — check that the base ref exists.",
         );

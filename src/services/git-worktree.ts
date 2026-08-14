@@ -365,7 +365,20 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Creat
     baseRef,
   ]);
   if (result.code !== 0) {
-    if (result.code === null) return { created: false, reason: "timeout" };
+    if (result.code === null) {
+      // Hermes review, this PR — runGit's `child.on("error")` handler also
+      // resolves `{code: null, stderr: String(err)}` for a genuine spawn
+      // failure (e.g. `git` not on PATH), the same shape a real timeout
+      // produces. A timeout's own kill path never sets stderr (the process
+      // is still running when the timer fires), so non-empty stderr here
+      // means this was a spawn error, not a timeout — classify it as such
+      // instead of dropping the detail under a misleading "timeout" reason.
+      const trimmedStderr = result.stderr.trim();
+      if (trimmedStderr.length > 0) {
+        return { created: false, reason: "create-failed", detail: trimmedStderr.slice(0, 300) };
+      }
+      return { created: false, reason: "timeout" };
+    }
     const reason = classifyCreateFailure(result.stderr);
     const trimmedStderr = result.stderr.trim();
     return {

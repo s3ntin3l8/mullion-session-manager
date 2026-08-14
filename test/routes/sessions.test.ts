@@ -1366,6 +1366,10 @@ describe("sessions route", () => {
           payload: { projectId, command: "bash", worktree: { baseRef: "no-such-ref" } },
         });
         expect(created.statusCode).toBe(502);
+        // Issue #677 (Hermes review) — the actual reason forwarded from
+        // CreateWorktreeResult.detail, not just the hardcoded generic
+        // fallback string every failure used to show.
+        expect(created.json().message).toMatch(/invalid reference/i);
 
         const list = await app.inject({
           method: "GET",

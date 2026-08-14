@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PromoteDialog } from "./PromoteDialog.js";
+import { ApiError } from "./api/index.js";
 import type { Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
@@ -173,7 +174,7 @@ describe("PromoteDialog (issue #271)", () => {
   // always showing the same generic message regardless of cause.
   it("shows the backend's actual failure reason and stays open when promoteSession fails", async () => {
     promoteSessionMock.mockRejectedValueOnce(
-      new Error("a branch named 'mullion/foo' already exists"),
+      new ApiError("a branch named 'mullion/foo' already exists", 502),
     );
     const onClose = vi.fn();
     const user = userEvent.setup();
@@ -188,7 +189,24 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("falls back to a generic message when promoteSession rejects with something that isn't an Error", async () => {
+  // Hermes review, this PR — a network-level failure (fetch itself throwing,
+  // e.g. "Failed to fetch") is also `instanceof Error` but never went
+  // through the backend, so its message isn't a real failure reason; the
+  // dialog must fall back to the generic message rather than leaking it.
+  it("falls back to a generic message when promoteSession rejects with a non-ApiError Error", async () => {
+    promoteSessionMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={onClose} />);
+
+    await screen.findByRole("combobox");
+    await user.click(screen.getByText("Create worktree"));
+
+    expect(await screen.findByText(/Failed to create the worktree/)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a generic message when promoteSession rejects with something that isn't an Error at all", async () => {
     promoteSessionMock.mockRejectedValueOnce("not an Error instance");
     const onClose = vi.fn();
     const user = userEvent.setup();
