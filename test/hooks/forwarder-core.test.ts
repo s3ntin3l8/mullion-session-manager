@@ -1241,6 +1241,67 @@ describe("mapClaudeCodePermissionRequest", () => {
       summary: "a tool",
     });
   });
+
+  // Fix: sticky needs_input / plan dialog mislabelled (D2/D3) — ExitPlanMode's
+  // PermissionRequest fires ~48ms AFTER the PreToolUse ExitPlanMode hook has
+  // already produced `plan_ready` with the real plan text (see
+  // hook-adapters/claude-code.ts). Suppressed here: a second, plan-less
+  // message only outranks the specific one in deriveSessionStatus's
+  // precedence order and can steal the attention machine's confirmedKind.
+  it("suppresses ExitPlanMode entirely — plan_ready (from the PreToolUse hook) already covers this dialog", () => {
+    expect(
+      mapClaudeCodePermissionRequest({
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: "1. Fix the bug" },
+      }),
+    ).toBeNull();
+  });
+
+  // Fix: AskUserQuestion mislabelled (D3) — Claude Code has no dedicated
+  // hook for AskUserQuestion, so PermissionRequest is the only signal this
+  // tool ever produces; remapped to `question` so `awaiting_question`
+  // ("Needs answer") is reachable instead of "Needs permission".
+  describe("AskUserQuestion → question", () => {
+    it("maps to a started question, with a truncated header when tool_input carries one", () => {
+      expect(
+        mapClaudeCodePermissionRequest({
+          tool_name: "AskUserQuestion",
+          tool_input: {
+            questions: [
+              { header: "Which approach should we take here today", question: "A or B?" },
+            ],
+          },
+        }),
+      ).toEqual({
+        kind: "question",
+        state: "started",
+        header: "Which approach should we take …",
+        summary: "AskUserQuestion",
+      });
+    });
+
+    it("omits the header entirely when tool_input carries no usable questions array (unverified live shape — must not gate the message on it)", () => {
+      expect(
+        mapClaudeCodePermissionRequest({ tool_name: "AskUserQuestion", tool_input: {} }),
+      ).toEqual({ kind: "question", state: "started", summary: "AskUserQuestion" });
+    });
+
+    it("omits the header when tool_input is absent entirely", () => {
+      expect(mapClaudeCodePermissionRequest({ tool_name: "AskUserQuestion" })).toEqual({
+        kind: "question",
+        state: "started",
+        summary: "AskUserQuestion",
+      });
+    });
+  });
+
+  it("every other tool_name still maps to permission_request, unchanged", () => {
+    expect(mapClaudeCodePermissionRequest({ tool_name: "WebFetch", tool_input: {} })).toEqual({
+      kind: "permission_request",
+      tool: "WebFetch",
+      summary: "WebFetch",
+    });
+  });
 });
 
 describe("mapClaudeCodeStopFailure", () => {
@@ -1841,7 +1902,15 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
         { tool_name: "Write", tool_input: { file_path: "x" } },
         { tool_name: "Bash", tool_input: { command: "git worktree add -b fix /tmp/wt" } },
       ],
-      PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],
+      PermissionRequest: [
+        { tool_name: "Bash", tool_input: { command: "npm test" } },
+        // Fix: AskUserQuestion mislabelled (D3) — the one payload shape
+        // this parity check would otherwise never exercise: without
+        // "question" declared in CLAUDE_CODE_EMITS, this assertion is the
+        // guard that catches it (the array above alone doesn't, since its
+        // one entry never produces a "question" kind).
+        { tool_name: "AskUserQuestion", tool_input: { questions: [{ header: "Approach?" }] } },
+      ],
       StopFailure: [{ error: "rate_limit" }],
       PostToolUseFailure: [{ tool_name: "Bash", error: "boom" }],
       SessionEnd: [{ reason: "clear" }],

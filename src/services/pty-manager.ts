@@ -2235,6 +2235,7 @@ export class Session {
       emitAttentionSignalWithExtras: (kind, extras) =>
         self.attention.emitAttentionSignalWithExtras(kind, extras),
       clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
+      clearAttention: () => self.attention.clearAttention(),
       resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
       setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks),
       bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
@@ -2727,10 +2728,22 @@ export class Session {
       now - at >= maxAgeMs &&
       (this.lastActivityAt === null || this.lastActivityAt <= at + BLOCKED_STALE_GRACE_MS);
 
+    // Fix: sticky needs_input (D4) — each stale latch below also clears its
+    // OWN attention-machine kind via clearIfConfirmedKind(). isStale() has
+    // already established that latch is dead (its timestamp is past the
+    // TTL AND the session has been silent since); clearing the confirmed
+    // attention flag it owns at the same moment is safe by construction —
+    // no new silence/activity predicate needed. This is the generic net
+    // that catches ANY orphaned confirmedKind (not just the specific
+    // Claude Code races fixed elsewhere in this PR), for a session nobody
+    // ever returns to. `hookNotification` (the generic immune kind) has no
+    // owning latch here and is deliberately left alone — its release stays
+    // keystroke/notification_resolved-only, by design.
     if (this.permissionState !== "idle" && isStale(this.permissionAt, blockedMaxAgeMs)) {
       this.permissionState = "idle";
       this.permissionAt = null;
       this.pendingPermissionTool = null;
+      this.attention.clearIfConfirmedKind("permissionRequest");
       this.emitEvent("status_change", {
         reason: "stale_blocked_cleared",
         state: "permissionState",
@@ -2741,6 +2754,7 @@ export class Session {
     if (this.planState !== "idle" && isStale(this.planAt, blockedMaxAgeMs)) {
       this.planState = "idle";
       this.planAt = null;
+      this.attention.clearIfConfirmedKind("planReady");
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "planState" });
       changed = true;
     }
@@ -2749,6 +2763,7 @@ export class Session {
       this.gateState = "idle";
       this.gateAt = null;
       this.gatePrompt = null;
+      this.attention.clearIfConfirmedKind("reviewGate");
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "gateState" });
       changed = true;
     }
@@ -2758,6 +2773,7 @@ export class Session {
       this.promoteAt = null;
       this.promoteSummary = null;
       this.promoteSuggestedBaseRef = null;
+      this.attention.clearIfConfirmedKind("promoteRequest");
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "promoteState" });
       changed = true;
     }
@@ -2766,6 +2782,7 @@ export class Session {
       this.elicitationState = "idle";
       this.elicitationAt = null;
       this.elicitationServer = null;
+      this.attention.clearIfConfirmedKind("elicitation");
       this.emitEvent("status_change", {
         reason: "stale_blocked_cleared",
         state: "elicitationState",
@@ -2777,6 +2794,7 @@ export class Session {
       this.questionState = "idle";
       this.questionHeader = null;
       this.questionAt = null;
+      this.attention.clearIfConfirmedKind("question");
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "questionState" });
       changed = true;
     }

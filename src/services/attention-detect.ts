@@ -145,7 +145,9 @@ export type AttentionSignalKind =
   | "permissionRequest"
   | "planReady"
   | "elicitation"
-  | "question";
+  | "question"
+  | "toolFailure"
+  | "apiError";
 
 // How long a candidate signal must go uncontradicted (no further output at
 // all) before PENDING_ATTENTION confirms into ATTENTION. Deliberately
@@ -215,6 +217,13 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   // blocked waiting for a human decision — same "explicit, discrete, needs-
   // the-user-now" reasoning, zero debounce.
   question: 0,
+  // Fix: sticky needs_input — a `stop_failure`/`tool_failure` hook message is
+  // a discrete, one-shot event exactly like the other zero-debounce kinds
+  // above; nothing to gain from waiting it out. See OUTPUT_IMMUNE_KINDS'
+  // own comment for why these two are deliberately NOT in that set despite
+  // being zero-debounce like the ones that are.
+  toolFailure: 0,
+  apiError: 0,
 };
 
 // Follow-up to #275 (attention-hook hardening): kinds where the agent is
@@ -243,6 +252,30 @@ const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
   "question",
 ]);
 
+// Fix: sticky needs_input — deliberately excludes `toolFailure`/`apiError`.
+// A failed tool call or an API error the agent is actively recovering from
+// is NOT "blocked pending a human decision" — it's routine turbulence the
+// agent's own next turn resolves. session-status.ts's `tool_failure` status
+// already gates on `activity !== "working"` for exactly this reason; an
+// immune attention kind here would silently defeat that gate by keeping
+// `needs_input` alive (outranking `working`) for as long as the agent kept
+// working, clearable only by a literal keystroke. See hook-handlers.ts's
+// stop_failure/tool_failure cases, which raise these instead of
+// `hookNotification` for this reason.
+
+// `hookNotification` is the GENERIC immune kind: an agent's own catch-all
+// "something needs you" message, which Claude Code fires ALONGSIDE the
+// specific PermissionRequest/ExitPlanMode hooks (its own Notification hook,
+// mapped from `idle_prompt`-filtered notifications — see
+// forwarder-core.mjs's mapClaudeCodeNotification). Letting it replace an
+// already-confirmed SPECIFIC immune kind orphans that kind's exact-match
+// release path (clearIfConfirmedKind) — see hook-handlers.ts's
+// permission_resolved/plan_resolved/tool_done cases. moreAuthoritativeKind
+// below refuses that specific downgrade while still allowing the reverse
+// (a generic kind arriving first can still be upgraded by a more specific
+// one landing after it).
+const GENERIC_IMMUNE_KINDS = new Set<AttentionSignalKind>(["hookNotification"]);
+
 // Used by advanceAttention's "attention"+"signal" refresh case: a further
 // signal arriving while already confirmed must not silently downgrade an
 // immune confirmedKind to a non-immune one (e.g. a routine title-idle repaint
@@ -257,6 +290,19 @@ function moreAuthoritativeKind(
   incoming: AttentionSignalKind,
 ): AttentionSignalKind {
   if (current !== null && OUTPUT_IMMUNE_KINDS.has(current) && !OUTPUT_IMMUNE_KINDS.has(incoming)) {
+    return current;
+  }
+  // Fix: sticky needs_input (D2) — a specific immune kind (permissionRequest/
+  // planReady/...) must not be silently downgraded to the generic
+  // hookNotification either, for the same reason non-immune can't downgrade
+  // immune above: it would orphan the specific kind's own exact-match
+  // release path. See GENERIC_IMMUNE_KINDS' own doc comment.
+  if (
+    current !== null &&
+    OUTPUT_IMMUNE_KINDS.has(current) &&
+    !GENERIC_IMMUNE_KINDS.has(current) &&
+    GENERIC_IMMUNE_KINDS.has(incoming)
+  ) {
     return current;
   }
   return incoming;
