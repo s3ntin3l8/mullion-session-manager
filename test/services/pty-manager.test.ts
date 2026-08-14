@@ -3639,6 +3639,113 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(true);
     });
 
+    describe("ExitPlanMode dedup (Hermes review, PR #675)", () => {
+      it("the common-order case: plan_ready arrives first (as it reliably does — PreToolUse before PermissionRequest), so the later permission_request{ExitPlanMode} is a no-op and 'Plan ready' wins", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+        expect(session.toInfo()).toMatchObject({
+          planState: "pending",
+          permissionState: "idle",
+          attentionKind: "planReady",
+        });
+        const eventsBefore = session.getEvents().length;
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "ExitPlanMode",
+          summary: "ExitPlanMode",
+        });
+
+        // A genuine no-op: no new event at all, not even a suppressed one.
+        expect(session.getEvents().length).toBe(eventsBefore);
+        expect(session.toInfo()).toMatchObject({
+          planState: "pending",
+          permissionState: "idle",
+          attentionKind: "planReady",
+        });
+      });
+
+      it("the fallback case: plan_ready never arrives at all (PreToolUse hook missing/not registered) — permission_request{ExitPlanMode} still shows SOMETHING rather than nothing", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "ExitPlanMode",
+          summary: "ExitPlanMode",
+        });
+
+        expect(session.toInfo()).toMatchObject({
+          permissionState: "pending",
+          planState: "idle",
+          attentionKind: "permissionRequest",
+        });
+      });
+
+      it("the reordered case: permission_request{ExitPlanMode} arrives BEFORE plan_ready — the fallback permissionState is superseded once the real plan_ready lands, so 'Plan ready' still wins", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "ExitPlanMode",
+          summary: "ExitPlanMode",
+        });
+        expect(session.toInfo()).toMatchObject({ permissionState: "pending" });
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+
+        expect(session.toInfo()).toMatchObject({
+          permissionState: "idle",
+          planState: "pending",
+          attentionKind: "planReady",
+        });
+      });
+
+      it("permission_request for a DIFFERENT tool while planState is pending is NOT deduped — the dedup is scoped to ExitPlanMode specifically", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+
+        expect(session.toInfo()).toMatchObject({
+          planState: "pending",
+          permissionState: "pending",
+        });
+      });
+    });
+
     it("turn_start: releases permissionState/planState/elicitationState/errorState and the finished latch", async () => {
       const session = manager.getOrCreate({
         id: "1",

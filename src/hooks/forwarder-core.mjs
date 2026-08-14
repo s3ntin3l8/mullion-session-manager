@@ -447,13 +447,26 @@ export function detectGitCheckout(payload) {
 //  - ExitPlanMode: the PreToolUse ExitPlanMode hook (see
 //    hook-adapters/claude-code.ts) already produces `plan_ready` with the
 //    actual plan text, moments before PermissionRequest fires for the same
-//    dialog. A second, plan-less `permission_request` message adds nothing
-//    but outranks it in deriveSessionStatus's precedence order ("Needs
-//    permission" instead of "Plan ready") and, worse, can steal the
+//    dialog. A second, plan-less `permission_request` message for the same
+//    dialog would otherwise outrank it in deriveSessionStatus's precedence
+//    order ("Needs permission" instead of "Plan ready") and could steal the
 //    attention machine's confirmedKind from the already-confirmed
-//    `planReady` signal. Suppressed by returning `null` — the established
-//    "nothing to forward" contract this file already uses (see
-//    mapClaudeCodeGitBranch above).
+//    `planReady` signal.
+//
+//    Hermes review, PR #675 — an earlier version of this fix suppressed
+//    ExitPlanMode's PermissionRequest unconditionally (returning `null`,
+//    the established "nothing to forward" contract this file uses
+//    elsewhere — see mapClaudeCodeGitBranch above). That made `awaiting_plan`
+//    fully dependent on the PreToolUse ExitPlanMode hook actually firing: if
+//    it ever doesn't (a config gap, a stale pre-#675 hooks.json, a future
+//    Claude Code change), the plan dialog becomes entirely invisible —
+//    neither message reaches the backend at all. This mapper can't tell
+//    which case it's in — it's a stateless, per-invocation subprocess with
+//    no view of `ctx.planState` — so the dedup instead happens where that
+//    state IS visible: the "permission_request"/"plan_ready" hook handlers
+//    (hook-handlers.ts) now cross-check each other's latch before deciding
+//    whether to act, giving PermissionRequest{ExitPlanMode} a real fallback
+//    role instead of being unconditionally dropped here.
 //  - AskUserQuestion: Claude Code has no dedicated hook for its
 //    AskUserQuestion tool, so PermissionRequest is the only signal this
 //    tool ever produces — reaching `awaiting_question` ("Needs answer")
@@ -463,7 +476,6 @@ const QUESTION_HEADER_MAX_CHARS = 30;
 
 export function mapClaudeCodePermissionRequest(payload) {
   const toolName = payload?.tool_name;
-  if (toolName === "ExitPlanMode") return null;
   if (toolName === "AskUserQuestion") {
     const result = { kind: "question", state: "started" };
     // Unverified whether Claude Code's PermissionRequest payload actually

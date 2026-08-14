@@ -1242,19 +1242,22 @@ describe("mapClaudeCodePermissionRequest", () => {
     });
   });
 
-  // Fix: sticky needs_input / plan dialog mislabelled (D2/D3) — ExitPlanMode's
-  // PermissionRequest fires ~48ms AFTER the PreToolUse ExitPlanMode hook has
-  // already produced `plan_ready` with the real plan text (see
-  // hook-adapters/claude-code.ts). Suppressed here: a second, plan-less
-  // message only outranks the specific one in deriveSessionStatus's
-  // precedence order and can steal the attention machine's confirmedKind.
-  it("suppresses ExitPlanMode entirely — plan_ready (from the PreToolUse hook) already covers this dialog", () => {
+  // Hermes review, PR #675 — ExitPlanMode's PermissionRequest is no longer
+  // suppressed HERE: this mapper is a stateless, per-invocation subprocess
+  // with no view of `ctx.planState`, so it can't tell whether the PreToolUse
+  // ExitPlanMode hook's own `plan_ready` already covered this dialog or
+  // never fired at all. It still maps to a plain permission_request, same
+  // as every other tool — the dedup against a redundant plan_ready lives in
+  // hook-handlers.ts's "permission_request"/"plan_ready" cases instead,
+  // where that state is actually visible (see test/services/pty-manager.test.ts's
+  // "ExitPlanMode dedup" describe block for that behavior).
+  it("maps ExitPlanMode like any other tool — dedup against plan_ready happens downstream, not here", () => {
     expect(
       mapClaudeCodePermissionRequest({
         tool_name: "ExitPlanMode",
         tool_input: { plan: "1. Fix the bug" },
       }),
-    ).toBeNull();
+    ).toEqual({ kind: "permission_request", tool: "ExitPlanMode", summary: "ExitPlanMode" });
   });
 
   // Fix: AskUserQuestion mislabelled (D3) — Claude Code has no dedicated

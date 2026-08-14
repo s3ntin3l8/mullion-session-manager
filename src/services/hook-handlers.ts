@@ -413,6 +413,23 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
     "permission_request",
     (ctx, message) => {
       const pr = message as PermissionRequestHookMessage;
+      // Hermes review, PR #675 — Claude Code's PreToolUse ExitPlanMode hook
+      // reliably fires BEFORE this one for the same dialog (48ms apart in
+      // the incident this PR traces; PreToolUse is evaluated ahead of the
+      // permission check in Claude Code's own hook order), so by the time
+      // this arrives, `plan_ready` has normally already set planState
+      // pending with the real plan text. Treat that as redundant rather
+      // than a second, plan-less signal that would outrank "Plan ready"
+      // with "Needs permission" — see mapClaudeCodePermissionRequest's own
+      // doc comment in forwarder-core.mjs for why this dedup lives here
+      // (where planState is visible) rather than in the stateless
+      // forwarder. If plan_ready never arrives at all (the hook missing,
+      // pre-#675 hooks.json, a future Claude Code change), planState stays
+      // idle and this falls through to the normal handling below — a
+      // fallback "Needs permission" beats no signal at all.
+      if (pr.tool === "ExitPlanMode" && ctx.planState === "pending") {
+        return;
+      }
       ctx.permissionState = "pending";
       ctx.permissionAt = Date.now();
       ctx.pendingPermissionTool = pr.tool;
@@ -483,6 +500,19 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
     "plan_ready",
     (ctx, message) => {
       const plan = message as PlanReadyHookMessage;
+      // Hermes review, PR #675 — the symmetric case of permission_request's
+      // own dedup above: PreToolUse/PermissionRequest normally arrive in
+      // this order, but if they were ever reordered, the ExitPlanMode
+      // fallback permission_request's own handler would already have set
+      // permissionState pending (planState was still idle when it ran).
+      // Supersede that fallback now that the real plan_ready has arrived —
+      // it was never a genuine, unrelated permission request to begin with.
+      if (ctx.permissionState === "pending" && ctx.pendingPermissionTool === "ExitPlanMode") {
+        ctx.permissionState = "idle";
+        ctx.permissionAt = null;
+        ctx.pendingPermissionTool = null;
+        ctx.clearIfConfirmedKind("permissionRequest");
+      }
       ctx.planState = "pending";
       ctx.planAt = Date.now();
       ctx.emitEvent("plan_ready", {

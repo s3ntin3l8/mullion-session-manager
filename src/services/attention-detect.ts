@@ -305,6 +305,27 @@ function moreAuthoritativeKind(
   ) {
     return current;
   }
+  // Hermes review, PR #675 — this guard only protects an already-IMMUNE
+  // current kind. A confirmed NON-immune kind — including the new
+  // toolFailure/apiError (fix: sticky needs_input, D1) — can still be
+  // upgraded by a co-fired generic hookNotification, same as it always
+  // could for bell/notification/titleIdle/silence/agentIdle (see this
+  // function's own "a non-immune confirmedKind CAN be upgraded" comment
+  // above, and the "the inverse upgrades" test in attention-detect.test.ts):
+  // that's the top branch's `!OUTPUT_IMMUNE_KINDS.has(incoming)` check
+  // finding `incoming` (hookNotification) IS immune, so it falls straight
+  // through to `return incoming` below, re-arming output-immunity. This
+  // isn't a regression D1 reopens — it's the same pre-existing "an
+  // immune signal legitimately outranks a non-immune one" design every
+  // other non-immune kind was already subject to, now inherited by
+  // toolFailure/apiError too. Live evidence (the incident this PR traces)
+  // shows Claude Code's tool_failure/stop_failure hooks don't co-fire a
+  // separate Notification hook of their own — the only hookNotification
+  // in that trace was the OLD handler's own (now-removed) raise — so no
+  // known path triggers this today. If Claude Code ever does co-fire one
+  // during recovery, fixing it would mean deciding whether ANY non-immune
+  // kind should resist a generic upgrade (a broader, repo-wide behavior
+  // change), not a toolFailure/apiError-specific carve-out.
   return incoming;
 }
 

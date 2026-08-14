@@ -2737,8 +2737,17 @@ export class Session {
     // that catches ANY orphaned confirmedKind (not just the specific
     // Claude Code races fixed elsewhere in this PR), for a session nobody
     // ever returns to. `hookNotification` (the generic immune kind) has no
-    // owning latch here and is deliberately left alone — its release stays
-    // keystroke/notification_resolved-only, by design.
+    // owning latch here and is deliberately left alone within THIS sweep —
+    // it has no per-state timestamp to key a TTL clear off. It's still
+    // reachable through two other paths, both authoritative "the human
+    // responded" signals rather than a TTL guess: a genuine keystroke
+    // (write()'s userInput clear) or a resolved decision
+    // (notification_resolved's clearIfConfirmedKind), and — Hermes review,
+    // PR #675 — hook-handlers.ts's `turn_start` case, whose
+    // ctx.clearAttention() clears it unconditionally too (UserPromptSubmit
+    // is as authoritative a "the human just responded" signal as either of
+    // those, and clearAttention() isn't kind-gated the way this sweep's
+    // per-latch clears are).
     if (this.permissionState !== "idle" && isStale(this.permissionAt, blockedMaxAgeMs)) {
       this.permissionState = "idle";
       this.permissionAt = null;
