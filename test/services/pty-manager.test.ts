@@ -1213,6 +1213,61 @@ describe("PtyManager", () => {
     expect(fakePtyChildren[0].resizeSpy).toHaveBeenCalledWith(120, 40);
   });
 
+  // Issue #676 — a promoted session's brand-new dockview panel can attach
+  // with a garbage-tiny size (production incident: a real WS attach with
+  // cols=10&rows=13), which reaches here as a real resize and silently
+  // killed a freshly-booted opencode session (its own "terminal too small"
+  // exit path, reproduced in isolation with no dtach/nudge/worktree
+  // involved). Session must never construct or resize below the floor.
+  it("clamps an initial spawn size below the floor", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 10,
+      rows: 5,
+    });
+    await waitForSpawn(session);
+
+    expect(session.toInfo().cols).toBe(40);
+    expect(session.toInfo().rows).toBe(10);
+    // attachClient() spawns the pty at the (already-clamped) tracked size.
+    expect(fakePtyChildren[0].cols).toBe(40);
+    expect(fakePtyChildren[0].rows).toBe(10);
+  });
+
+  it("clamps a resize() call below the floor, and calls through to the pty with the clamped size", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    session.resize(10, 5);
+    expect(fakePtyChildren[0].resizeSpy).toHaveBeenCalledWith(40, 10);
+    expect(session.toInfo().cols).toBe(40);
+    expect(session.toInfo().rows).toBe(10);
+  });
+
+  it("does not clamp a resize() call that's already at or above the floor", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    session.resize(120, 40);
+    expect(fakePtyChildren[0].resizeSpy).toHaveBeenCalledWith(120, 40);
+    expect(session.toInfo().cols).toBe(120);
+    expect(session.toInfo().rows).toBe(40);
+  });
+
   it("requestRedraw dips then restores rows to force a repaint", async () => {
     // Fake only setTimeout/clearTimeout — RedrawNudge.trigger()'s the sole
     // user of real timers on this path, and leaving setImmediate real keeps
