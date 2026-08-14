@@ -11,6 +11,26 @@ function generateSecret(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
+// #667 — the hook's own subscribed-events list, bumped whenever it changes.
+// webhook-reconciler.ts re-registers (PATCHes) any hook whose stored
+// `eventsVersion` is behind this — the only path that reaches an
+// already-healthy hook, since the reconciler otherwise only touches
+// projects with no hook at all (see its own doc comment). Bump this,
+// and only this, when adding/removing an event below; there is
+// deliberately no per-event versioning — one hook, one list, one version.
+export const WEBHOOK_EVENTS_VERSION = 1;
+const WEBHOOK_EVENTS = [
+  "pull_request",
+  "push",
+  "issues",
+  "workflow_run",
+  "release",
+  // #667 — blocked_by_added/removed drives the "a dependency edge changed"
+  // push refresh (routes/webhooks.ts); blocking_added/removed is unused
+  // today but comes along for free on the same subscription.
+  "issue_dependencies",
+] as const;
+
 interface GitHubHookApiItem {
   id: number;
   active: boolean;
@@ -44,6 +64,14 @@ async function getExistingHooks(
  * 401ing every subsequent delivery until someone noticed and manually
  * disabled/re-enabled. PATCHing keeps the two in sync on every call, not
  * just the first.
+ *
+ * #667 — the PATCH body now also sends `events`, not just `active`/
+ * `config`. Before this, an event added to WEBHOOK_EVENTS below only ever
+ * reached a hook created AFTER the change — an already-registered hook's
+ * subscription was frozen at whatever it was on first creation, since
+ * PATCHing without `events` leaves GitHub's own stored list untouched. Same
+ * "keep it in sync on every call" reasoning as the secret above, just for
+ * the event list instead.
  */
 async function registerHook(
   token: string,
@@ -67,6 +95,7 @@ async function registerHook(
         },
         body: JSON.stringify({
           active: true,
+          events: WEBHOOK_EVENTS,
           config: { url: webhookUrl, content_type: "json", secret, insecure_ssl: "0" },
         }),
       },
@@ -91,7 +120,7 @@ async function registerHook(
       body: JSON.stringify({
         name: "web",
         active: true,
-        events: ["pull_request", "push", "issues", "workflow_run", "release"],
+        events: WEBHOOK_EVENTS,
         config: {
           url: webhookUrl,
           content_type: "json",
@@ -152,12 +181,31 @@ function upsertWebhookRegistration(
 ): void {
   const now = new Date();
   if ("hookId" in result) {
+    // #667 — stamped only on a successful (re-)registration, which is
+    // exactly what just PATCHed/POSTed WEBHOOK_EVENTS to GitHub — this is
+    // what lets webhook-reconciler.ts tell "this hook's subscription is
+    // current" apart from "it's registered but still on an old event list".
     app.db
       .insert(webhookRegistrations)
-      .values({ projectId, owner, repo, hookId: result.hookId, registeredAt: now, lastError: null })
+      .values({
+        projectId,
+        owner,
+        repo,
+        hookId: result.hookId,
+        registeredAt: now,
+        lastError: null,
+        eventsVersion: WEBHOOK_EVENTS_VERSION,
+      })
       .onConflictDoUpdate({
         target: webhookRegistrations.projectId,
-        set: { owner, repo, hookId: result.hookId, registeredAt: now, lastError: null },
+        set: {
+          owner,
+          repo,
+          hookId: result.hookId,
+          registeredAt: now,
+          lastError: null,
+          eventsVersion: WEBHOOK_EVENTS_VERSION,
+        },
       })
       .run();
   } else {

@@ -3,9 +3,10 @@ import type { DragEvent } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Theme } from "../store/index.js";
 import type { GitHubCiStatus, Session, Task } from "../api/index.js";
+import type { TaskBlocker } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
-import { BotIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
+import { BlockedIcon, BotIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
@@ -19,6 +20,14 @@ function taskCardPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" 
   if (status === "failure") return "bad";
   if (status === "in_progress") return "pending";
   return "none";
+}
+
+// #667 — the synthetic "N blocker(s) not visible to this token" entry
+// (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
+// case) has no real issue number to show — its own title carries the
+// message instead. Every other entry is a real GitHub issue, `#N`.
+function blockerLabel(b: TaskBlocker): string {
+  return b.htmlUrl === null ? b.title : `#${b.number}`;
 }
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
@@ -240,6 +249,42 @@ export function TaskCard({
           </span>
         )}
         {statusAgeLabel && <span className="task-card-age">{statusAgeLabel}</span>}
+        {/* #667 — without this, a task blocked on an open GitHub
+            dependency is indistinguishable from any other card sitting in
+            Ready, which is exactly the problem: it's the one card that
+            will never move on its own until a human notices. Same
+            role="img"/aria-label/aria-hidden treatment as the sync-error
+            badge below, which already carries the resolution of two
+            review rounds on that exact pattern. `unresolved` renders the
+            same icon, muted via a CSS modifier, rather than nothing — a
+            never-yet-checked task and a verified-clear one shouldn't look
+            identical while genuinely different. `clear` renders nothing:
+            a zero-dependency task's card stays byte-identical to before
+            #667. */}
+        {task.blockedState !== "clear" && (
+          <span
+            className={`task-card-blocked${task.blockedState === "unresolved" ? " task-card-blocked-unresolved" : ""}`}
+            role="img"
+            title={
+              task.blockedState === "unresolved"
+                ? "Checking dependencies…"
+                : `Blocked by ${task.blockers.map(blockerLabel).join(", ")}`
+            }
+            aria-label={
+              task.blockedState === "unresolved"
+                ? "Dependency state not yet checked"
+                : `Blocked by ${task.blockers.map(blockerLabel).join(", ")}`
+            }
+          >
+            <BlockedIcon size={11} aria-hidden="true" />
+            {task.blockedState === "blocked" && task.blockers.length > 0 && (
+              <>
+                {blockerLabel(task.blockers[0])}
+                {task.blockers.length > 1 && ` +${task.blockers.length - 1}`}
+              </>
+            )}
+          </span>
+        )}
         {/* D4 — #485's own drawer-only sync-error banner (TaskDetail.tsx)
             defeats its own stated motivation if a task can be happily
             in_progress while its GitHub sync is silently broken and nothing

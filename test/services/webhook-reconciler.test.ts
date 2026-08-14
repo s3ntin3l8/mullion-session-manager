@@ -14,10 +14,21 @@ vi.mock("../../src/services/github-integration.js", () => ({
   getToken: mockGetToken,
 }));
 
+// #667 — WEBHOOK_EVENTS_VERSION is a real export webhook-reconciler.ts now
+// imports (used in its gte(...) staleness check); a mock factory that omits
+// it would leave the import `undefined`, and drizzle's `gte(col, undefined)`
+// throws synchronously — silently failing every reconcile pass in this
+// file (caught by startWebhookReconciler's own top-level `.catch`, so it
+// would look like "zero calls" rather than a visible error). Any fixed
+// number works here; the mocked tests below don't exercise version
+// comparisons themselves (mockApp's hand-rolled router ignores the real
+// where-clause) — the real-db describe block below does, and imports the
+// actual constant instead of this mock.
 vi.mock("../../src/services/github-webhook.js", () => ({
   buildWebhookUrl: mockBuildWebhookUrl,
   getWebhookSecret: mockGetWebhookSecret,
   registerProjectWebhook: mockRegisterProjectWebhook,
+  WEBHOOK_EVENTS_VERSION: 1,
 }));
 
 import { startWebhookReconciler } from "../../src/services/webhook-reconciler.js";
@@ -251,6 +262,10 @@ describe("startWebhookReconciler (#490b)", () => {
             hookId: 1,
             registeredAt: new Date(),
             lastError: null,
+            // #667 — matches this file's mocked WEBHOOK_EVENTS_VERSION (1),
+            // so this row stays "up to date" and this test still isolates
+            // the pre-#667 lastError-vs-missing distinction it's named for.
+            eventsVersion: 1,
           },
           {
             projectId: errored.id,
@@ -259,6 +274,7 @@ describe("startWebhookReconciler (#490b)", () => {
             hookId: 2,
             registeredAt: new Date(),
             lastError: "PATCH failed: HTTP 500",
+            eventsVersion: 1,
           },
         ])
         .run();
@@ -279,6 +295,88 @@ describe("startWebhookReconciler (#490b)", () => {
         .map((call) => (call[1] as { id: number }).id)
         .sort((a, b) => a - b);
       expect(retriedProjectIds).toEqual([errored.id, missing.id].sort((a, b) => a - b));
+    });
+  });
+
+  // #667 — the gap that would otherwise leave an already-registered,
+  // pre-#667 hook on its old event subscription forever: nothing else
+  // re-invokes registerHook (github-webhook.ts) for a hook this reconciler
+  // already excludes as "healthy". Real-db, same pattern/rationale as the
+  // lastError describe block above — a hand-rolled mockApp can't
+  // distinguish eventsVersion states without re-simulating the real
+  // where-clause.
+  describe("real-db: re-registers a hookId-set, error-free row on a stale eventsVersion (#667)", () => {
+    const tmpDb = path.join(os.tmpdir(), `webhook-reconciler-realdb-events-test-${process.pid}.db`);
+
+    afterEach(async () => {
+      const { closeDb } = await import("../../src/db/client.js");
+      closeDb();
+      fs.rmSync(tmpDb, { force: true });
+    });
+
+    it("re-registers a stale (eventsVersion below current) row and skips an up-to-date one", async () => {
+      const { ensureDb } = await import("../../src/db/client.js");
+      const {
+        projects: projectsTable,
+        webhookRegistrations: whRegTable,
+        integrations: integrationsTable,
+      } = await import("../../src/db/schema.js");
+      const db = ensureDb(`file:${tmpDb}`);
+
+      db.insert(integrationsTable).values({ provider: "github", webhookEnabled: true }).run();
+
+      const [current, stale] = db
+        .insert(projectsTable)
+        .values([
+          { name: "current", cwd: "/tmp/current", hostId: "local" },
+          { name: "stale", cwd: "/tmp/stale", hostId: "local" },
+        ])
+        .returning()
+        .all();
+
+      db.insert(whRegTable)
+        .values([
+          {
+            projectId: current.id,
+            owner: "o",
+            repo: "r",
+            hookId: 1,
+            registeredAt: new Date(),
+            lastError: null,
+            // Matches this file's mocked WEBHOOK_EVENTS_VERSION (1).
+            eventsVersion: 1,
+          },
+          {
+            projectId: stale.id,
+            owner: "o",
+            repo: "r",
+            hookId: 2,
+            registeredAt: new Date(),
+            lastError: null,
+            // Below the mocked current version — pre-#667's implicit
+            // default, and any row registered before a future event-list
+            // bump.
+            eventsVersion: 0,
+          },
+        ])
+        .run();
+
+      const app = {
+        db,
+        log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+        config: { MULLION_WEBHOOK_BASE_URL: "https://hooks.example.com" },
+      } as unknown as FastifyInstance;
+
+      vi.useFakeTimers();
+      const cleanup = startWebhookReconciler(app);
+      await vi.advanceTimersByTimeAsync(30_000);
+      cleanup();
+      vi.useRealTimers();
+
+      const retriedProjectIds = mockRegisterProjectWebhook.mock.calls.map(
+        (call) => (call[1] as { id: number }).id,
+      );
+      expect(retriedProjectIds).toEqual([stale.id]);
     });
   });
 });

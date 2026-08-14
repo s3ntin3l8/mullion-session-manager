@@ -252,14 +252,21 @@ friendly quiet cycle after a webhook confirms there's nothing new.
 Webhooks are opt-in. Enable them in Settings → Integrations → GitHub and
 set `MULLION_WEBHOOK_BASE_URL` (see Configuration below). When enabled, the
 backend registers a webhook on every connected repo that has a github.com
-origin, using the stored PAT/OAuth token. A project added, or re-pointed at
-a different repo, after webhooks are already enabled gets a hook
-immediately too — `routes/projects.ts`'s create/update handlers register
-one the same way `enableWebhooks` does — with a periodic reconciler (every
-6h, plus a pass shortly after boot) as a backstop for anything that path
-doesn't cover (a project added by direct DB write, a seed script, or while
-the primary was down; a registration attempt that failed outright).
-Deleting a project unregisters its hook.
+origin, using the stored PAT/OAuth token, subscribed to `pull_request`,
+`push`, `issues`, `workflow_run`, `release`, and `issue_dependencies`
+(`#667` — see the Task Master paragraph below for what that last one
+drives). A project added, or re-pointed at a different repo, after
+webhooks are already enabled gets a hook immediately too —
+`routes/projects.ts`'s create/update handlers register one the same way
+`enableWebhooks` does — with a periodic reconciler (every 6h, plus a pass
+shortly after boot) as a backstop for anything that path doesn't cover (a
+project added by direct DB write, a seed script, or while the primary was
+down; a registration attempt that failed outright; **or, since `#667`, a
+hook whose subscribed-event list is behind the one this version of Mullion
+registers** — the reconciler diffs on `eventsVersion`, not just presence,
+so a hook registered by a version of this install that predates an
+event-list change re-registers automatically within one reconcile pass,
+no manual re-enable needed). Deleting a project unregisters its hook.
 
 Re-enabling webhooks (or the reconciler repairing a missing registration)
 updates an already-existing Mullion hook's secret in place rather than
@@ -308,6 +315,18 @@ any install without webhooks enabled, or (per-repo, briefly) for a project
 added after webhooks were already turned on, until the create/update
 handler's immediate registration or the periodic reconciler catches up
 (see the registration paragraph above).
+
+Dependency-aware claiming (`#667`, see
+[`tasks.md`](tasks.md#dependency-aware-claiming-667)) rides the same
+webhook two ways: an `issue_dependencies`/`blocked_by_added` or
+`blocked_by_removed` delivery re-checks the blocked task's own dependency
+state immediately, and a `closed` delivery for an issue with dependents
+(`issue_dependencies_summary.blocking > 0`) re-checks each of them via
+`GET .../dependencies/blocking` — the latter is what makes a landed
+blocker unblock its dependents in ~1s instead of waiting for the next poll
+tick. Both are fire-and-forget, same posture as the rest of this section;
+a failure just leaves the affected task's dependency state as it was until
+its next check.
 
 The adaptive poller continues as a safety net:
 
@@ -438,3 +457,6 @@ once did.
 - If the connected token lacks `Actions: read`, the CI dot just stays empty
   — there's no UI signal distinguishing "no workflows" from "no permission."
 - GitHub Enterprise and non-github.com remotes aren't supported.
+- `.../dependencies/blocked_by` and `.../dependencies/blocking` (`#667`)
+  are each capped at one page (100 items), matching the issue/PR listing
+  cap above.

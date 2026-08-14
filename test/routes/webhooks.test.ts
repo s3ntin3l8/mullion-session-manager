@@ -974,4 +974,334 @@ describe("webhook routes", () => {
       });
     });
   });
+
+  describe("dependency-aware claiming (#667)", () => {
+    beforeAll(() => {
+      process.env.MULLION_TASK_MASTER_ENABLED = "true";
+    });
+
+    afterAll(() => {
+      delete process.env.MULLION_TASK_MASTER_ENABLED;
+    });
+
+    it("an issue_dependencies/blocked_by_added delivery refreshes the matching task's blockers", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-depedge");
+      const app = await buildApp();
+      await connectPat(app, "ghp_test_token");
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const listBlockedByIssuesSpy = vi
+        .spyOn(githubWrite, "listBlockedByIssues")
+        .mockResolvedValue([
+          {
+            owner: "acme",
+            repo: "widgets-depedge",
+            number: 71,
+            title: "The new blocker",
+            htmlUrl: "https://github.com/acme/widgets-depedge/issues/71",
+            state: "open",
+          },
+        ]);
+
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-depedge-p", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 70,
+          title: "Newly blocked task",
+          status: "ready",
+          dependencyCount: 0,
+          blockedBy: null,
+        })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "blocked_by_added",
+        repository: { full_name: "acme/widgets-depedge", open_issues_count: 1 },
+        blocked_issue: { number: 70 },
+        blocking_issue: { number: 71 },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issue_dependencies",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const getRow = () => app.db.select().from(tasks).where(eq(tasks.id, task.id)).all()[0];
+      // Fire-and-forget, same as the closed/unlabeled sync above.
+      await waitUntil(() => getRow().blockedBy !== null);
+      expect(listBlockedByIssuesSpy).toHaveBeenCalledWith(
+        "ghp_test_token",
+        "acme",
+        "widgets-depedge",
+        70,
+      );
+      const row = getRow();
+      expect(JSON.parse(row.blockedBy!)).toMatchObject([{ number: 71 }]);
+      // Regression guard for the dependencyCount-staleness fix
+      // (task-dependencies.ts's refreshTaskBlockers doc comment) — without
+      // it this would stay 0 (the value at insert time) and
+      // dependencyGate would short-circuit to "clear" despite the real
+      // blocker just stored above.
+      expect(row.dependencyCount).toBe(1);
+
+      listBlockedByIssuesSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    // Hermes review, PR #670 — this is exactly the direction where the
+    // stored dependencyCount is stale in a way that used to trip the
+    // defensive shortfall check: GitHub's own total_blocked_by summary can
+    // still report the pre-removal count even on an immediate re-fetch
+    // (verified live), so passing the raw stored count straight through
+    // would manufacture a "1 blocker(s) not visible to this token" false
+    // positive on the single-blocker case this test exercises. The route
+    // decrements the known count by the one blocker this delivery itself
+    // proves was just removed, instead.
+    it("an issue_dependencies/blocked_by_removed delivery does not manufacture a false shortfall on the known removal", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-depedge-removed");
+      const app = await buildApp();
+      await connectPat(app, "ghp_test_token");
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      // The task's only blocker was just removed — GitHub's list endpoint
+      // already reflects that (empty), even though its own summary field
+      // may not have caught up yet.
+      const listBlockedByIssuesSpy = vi
+        .spyOn(githubWrite, "listBlockedByIssues")
+        .mockResolvedValue([]);
+
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-depedge-removed-p", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 70,
+          title: "Was blocked, edge just removed",
+          status: "ready",
+          dependencyCount: 1,
+          blockedBy: JSON.stringify([
+            {
+              owner: "acme",
+              repo: "widgets-depedge-removed",
+              number: 71,
+              title: "old blocker",
+              htmlUrl: "https://x/71",
+            },
+          ]),
+        })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "blocked_by_removed",
+        repository: { full_name: "acme/widgets-depedge-removed", open_issues_count: 1 },
+        blocked_issue: { number: 70 },
+        blocking_issue: { number: 71 },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issue_dependencies",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const getRow = () => app.db.select().from(tasks).where(eq(tasks.id, task.id)).all()[0];
+      await waitUntil(() => getRow().blockedBy === "[]");
+      const row = getRow();
+      // No synthetic "not visible to this token" entry, and the re-check
+      // TTL was stamped (a clean, non-shortfall result).
+      expect(JSON.parse(row.blockedBy!)).toEqual([]);
+      expect(row.dependencyCount).toBe(0);
+      expect(row.blockedByCheckedAt).not.toBeNull();
+
+      listBlockedByIssuesSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("an issues/closed delivery for an issue with dependents refreshes them via listBlockingIssues", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-blockerclose");
+      const app = await buildApp();
+      await connectPat(app, "ghp_test_token");
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const listBlockingIssuesSpy = vi.spyOn(githubWrite, "listBlockingIssues").mockResolvedValue([
+        {
+          owner: "acme",
+          repo: "widgets-blockerclose",
+          number: 90,
+          title: "The dependent",
+          htmlUrl: "https://github.com/acme/widgets-blockerclose/issues/90",
+          state: "open",
+        },
+      ]);
+      // The dependent's own blockers, resolved once the blocker-close push
+      // refreshes it. GitHub's blocked_by list still includes #80 itself
+      // — closing an issue doesn't remove the dependency edge, only flips
+      // its `state` — so this returns it as `closed`, not an empty array;
+      // that's what makes the dependent's own blockedBy resolve to "[]".
+      const listBlockedByIssuesSpy = vi
+        .spyOn(githubWrite, "listBlockedByIssues")
+        .mockResolvedValue([
+          {
+            owner: "acme",
+            repo: "widgets-blockerclose",
+            number: 80,
+            title: "The blocker",
+            htmlUrl: "https://github.com/acme/widgets-blockerclose/issues/80",
+            state: "closed",
+          },
+        ]);
+
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-blockerclose-p", cwd })
+        .returning()
+        .all();
+      const [dependent] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 90,
+          title: "Dependent task",
+          status: "ready",
+          dependencyCount: 1,
+          blockedBy: JSON.stringify([
+            {
+              owner: "acme",
+              repo: "widgets-blockerclose",
+              number: 80,
+              title: "old",
+              htmlUrl: null,
+            },
+          ]),
+        })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        repository: { full_name: "acme/widgets-blockerclose", open_issues_count: 0 },
+        issue: {
+          number: 80,
+          title: "The blocker",
+          body: null,
+          html_url: "https://github.com/acme/widgets-blockerclose/issues/80",
+          labels: [],
+          issue_dependencies_summary: { blocking: 1 },
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const getRow = () => app.db.select().from(tasks).where(eq(tasks.id, dependent.id)).all()[0];
+      await waitUntil(() => getRow().blockedBy === "[]");
+      expect(listBlockingIssuesSpy).toHaveBeenCalledWith(
+        "ghp_test_token",
+        "acme",
+        "widgets-blockerclose",
+        80,
+      );
+      expect(listBlockedByIssuesSpy).toHaveBeenCalledWith(
+        "ghp_test_token",
+        "acme",
+        "widgets-blockerclose",
+        90,
+      );
+
+      listBlockingIssuesSpy.mockRestore();
+      listBlockedByIssuesSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("a zero-dependents issues/closed delivery makes no listBlockingIssues call", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-noclose-deps");
+      const app = await buildApp();
+      await connectPat(app, "ghp_test_token");
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const listBlockingIssuesSpy = vi.spyOn(githubWrite, "listBlockingIssues");
+
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-noclose-deps-p", cwd })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 95,
+          title: "No dependents",
+          status: "reviewing",
+        })
+        .run();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        repository: { full_name: "acme/widgets-noclose-deps", open_issues_count: 0 },
+        issue: {
+          number: 95,
+          title: "No dependents",
+          body: null,
+          html_url: "https://github.com/acme/widgets-noclose-deps/issues/95",
+          labels: [],
+          issue_dependencies_summary: { blocking: 0 },
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      // Give the fire-and-forget close-sync path a tick to have run, same
+      // as every other test in this file that can't assert "instantly".
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(listBlockingIssuesSpy).not.toHaveBeenCalled();
+
+      listBlockingIssuesSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+  });
 });

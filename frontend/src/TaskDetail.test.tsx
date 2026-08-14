@@ -72,6 +72,9 @@ function makeTask(overrides: Partial<Task>): Task {
     failureReason: null,
     githubSyncError: null,
     baseSha: null,
+    dependencyCount: null,
+    blockedState: "clear",
+    blockers: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     claimedAt: null,
@@ -303,6 +306,63 @@ describe("TaskDetail", () => {
     tasks = [makeTask({ id: 1, status: "in_progress", githubSyncError: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/GitHub sync:/)).toBeNull();
+  });
+
+  it("#667 — shows a linked blocked-by list for a blocked task", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        blockedState: "blocked",
+        blockers: [
+          {
+            owner: "acme",
+            repo: "widgets",
+            number: 12,
+            title: "The blocker",
+            htmlUrl: "https://x/12",
+          },
+        ],
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/Blocked by/)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "#12" });
+    expect(link).toHaveAttribute("href", "https://x/12");
+  });
+
+  it("#667 — renders a synthetic not-visible-to-token blocker as plain text, not a link", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        blockedState: "blocked",
+        blockers: [
+          {
+            owner: "acme",
+            repo: "widgets",
+            number: 0,
+            title: "1 blocker(s) not visible to this token",
+            htmlUrl: null,
+          },
+        ],
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("1 blocker(s) not visible to this token")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /not visible/ })).toBeNull();
+  });
+
+  it("#667 — shows a checking-dependencies message for an unresolved task, not a blocker list", () => {
+    tasks = [makeTask({ id: 1, blockedState: "unresolved", blockers: [] })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Checking dependencies…")).toBeInTheDocument();
+    expect(screen.queryByText(/^Blocked by/)).toBeNull();
+  });
+
+  it("#667 — shows nothing for a clear task", () => {
+    tasks = [makeTask({ id: 1, blockedState: "clear", blockers: [] })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText("Checking dependencies…")).toBeNull();
+    expect(screen.queryByText(/^Blocked by/)).toBeNull();
   });
 
   it("shows the review section only when reviewSessionId is set", () => {

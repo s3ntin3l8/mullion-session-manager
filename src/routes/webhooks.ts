@@ -4,11 +4,14 @@ import { eq, and } from "drizzle-orm";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveRepoRef } from "../services/host-git.js";
+import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
 import { invalidatePRsCache } from "../services/github.js";
+import { listBlockingIssues } from "../services/github-write.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
 import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
+import { refreshTaskBlockers } from "../services/task-dependencies.js";
 
 const HUB_SIGNATURE_256 = "x-hub-signature-256";
 const HUB_EVENT = "x-github-event";
@@ -33,6 +36,20 @@ interface GitHubIssuePayload {
   body?: string | null;
   html_url?: string;
   labels?: Array<{ name?: string }>;
+  // #667 — present on the same "issues" webhook payload as the REST issue
+  // object (verified live during planning); read only for the
+  // blocker-close push below (`blocking`), on a `closed` delivery.
+  issue_dependencies_summary?: { blocking?: number };
+}
+
+// #667 — the `issue_dependencies` event's own two issue references.
+// `blocked_issue` is always in THIS delivery's own repo (`payload.repository`
+// below) — GitHub's docs list no separate `blocked_issue_repo` field, only
+// `blocking_issue_repo` for the cross-repo case, which this route doesn't
+// need: it only ever refreshes the blocked task, whose repo is already
+// known from the top-level `owner`/`repo` this handler already parses.
+interface GitHubIssueRefPayload {
+  number?: number;
 }
 
 interface GitHubPushPayload {
@@ -50,6 +67,10 @@ interface GitHubPushPayload {
   // list after the change; this is which one changed.
   label?: { name?: string };
   release?: Record<string, unknown>;
+  // #667 — issue_dependencies event only; blocked_by_added/removed carries
+  // both, blocking_added/removed (unused here) carries both too.
+  blocked_issue?: GitHubIssueRefPayload;
+  blocking_issue?: GitHubIssueRefPayload;
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -140,13 +161,28 @@ export async function webhookRoutes(app: FastifyInstance) {
       // too), unlike task-watcher.ts's own poll sweep, which only reads
       // local filesystem state — so webhook-driven ingest reaches
       // remote-hosted projects the poll loop can't, for free.
-      const matchedProjects: Array<{ id: number; cwd: string; hostId: string }> = [];
+      //
+      // #667 — every project's repoRef is resolved into `projectsByRepoKey`
+      // (not just this delivery's own repo), reusing the exact same
+      // resolveRepoRef calls this loop already makes. The blocker-close
+      // push below needs it: a closing issue's dependents can live in a
+      // DIFFERENT repo/project than the one this delivery arrived on, so
+      // matching against only `matchedProjects` (this delivery's repo)
+      // would miss them entirely.
+      const projectsByRepoKey = new Map<
+        string,
+        Array<{ id: number; cwd: string; hostId: string }>
+      >();
       for (const row of rows) {
         const repoRef = await resolveRepoRef(app, row);
-        if (repoRef && repoRef.owner === owner && repoRef.repo === repo) {
-          matchedProjects.push({ id: row.id, cwd: row.cwd, hostId: row.hostId ?? "local" });
-        }
+        if (!repoRef) continue;
+        const key = `${repoRef.owner}/${repoRef.repo}`;
+        const entry = { id: row.id, cwd: row.cwd, hostId: row.hostId ?? "local" };
+        const existing = projectsByRepoKey.get(key);
+        if (existing) existing.push(entry);
+        else projectsByRepoKey.set(key, [entry]);
       }
+      const matchedProjects = projectsByRepoKey.get(repoKey) ?? [];
       const projectIds = matchedProjects.map((p) => p.id);
 
       // Record in ActivityTracker (best-effort, may not be initialized yet).
@@ -156,6 +192,19 @@ export async function webhookRoutes(app: FastifyInstance) {
       // install ingests at all, and which label counts as a task label.
       const taskMasterEnabled = resolveTaskMasterConfig(app).enabled;
       const taskLabel = app.config.MULLION_TASK_LABEL;
+
+      // Hermes review, PR #670 — `owner`/`repo` are the same for every
+      // matched project (all matched via the same `repoKey`), so a token
+      // resolved for the `issue_dependencies` case below is the same
+      // regardless of which project the loop is currently on. Lazily
+      // resolved (only when the delivery actually needs it) and memoized
+      // per-delivery, so N matched projects on the same repo cost one
+      // resolveGitHubToken call instead of N.
+      let dependencyTokenPromise: Promise<string | null> | null = null;
+      function resolveDependencyToken(): Promise<string | null> {
+        dependencyTokenPromise ??= resolveGitHubToken(app, { owner, repo });
+        return dependencyTokenPromise;
+      }
 
       // Broadcast event to each matching project
       const action = payload.action;
@@ -288,6 +337,69 @@ export async function webhookRoutes(app: FastifyInstance) {
             }
             break;
           }
+          // #667 — a dependency edge changed on the blocked issue's own
+          // repo (this delivery's repo, per GitHub's payload shape — see
+          // GitHubIssueRefPayload's doc comment). `blocking_added`/
+          // `blocking_removed` fire on the same event but describe the
+          // OTHER direction (this issue newly blocks something else) —
+          // irrelevant to whether THIS project's own task is claimable, so
+          // only the `blocked_by_*` pair is handled.
+          case "issue_dependencies": {
+            if (
+              !taskMasterEnabled ||
+              (action !== "blocked_by_added" && action !== "blocked_by_removed")
+            ) {
+              break;
+            }
+            const blockedIssueNumber = payload.blocked_issue?.number;
+            if (blockedIssueNumber === undefined) break;
+            const [task] = app.db
+              .select({ id: tasks.id, dependencyCount: tasks.dependencyCount })
+              .from(tasks)
+              .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, blockedIssueNumber)))
+              .all();
+            if (!task) break;
+            // Hermes review, PR #670 — `blocked_by_removed` is exactly the
+            // action where the stored `dependencyCount` is known-stale in a
+            // direction that trips refreshTaskBlockers' defensive shortfall
+            // check: this delivery IS the evidence that one blocker just
+            // stopped counting, but GitHub's own `total_blocked_by` summary
+            // can still lag the removal for a few seconds even on an
+            // immediate re-fetch (verified live during review — see
+            // task-dependencies.ts's own comment). Decrementing the known
+            // count by the one blocker we know was just removed avoids
+            // manufacturing a "1 blocker(s) not visible" false positive on
+            // the single-blocker case, without needing an extra API round
+            // trip to re-fetch a summary that might still be stale anyway.
+            const expectedDependencyCount =
+              action === "blocked_by_removed"
+                ? Math.max(0, (task.dependencyCount ?? 0) - 1)
+                : task.dependencyCount;
+            resolveDependencyToken()
+              .then((token) => {
+                if (!token) return;
+                return refreshTaskBlockers(app, {
+                  taskId: task.id,
+                  projectId,
+                  owner,
+                  repo,
+                  issueNumber: blockedIssueNumber,
+                  dependencyCount: expectedDependencyCount,
+                  token,
+                });
+              })
+              // Not awaited, same "stay under GitHub's ~10s delivery
+              // timeout" posture as the closed/unlabeled sync above —
+              // refreshTaskBlockers never throws on its own, this only
+              // catches resolveGitHubToken itself failing.
+              .catch((err) => {
+                app.log.warn(
+                  { err, event, action, projectId, issueNumber: blockedIssueNumber },
+                  "[webhooks] dependency refresh failed",
+                );
+              });
+            break;
+          }
           case "push": {
             const ref: string | undefined = payload.ref;
             const sha: string | undefined = payload.head_commit?.id ?? payload.after;
@@ -313,6 +425,54 @@ export async function webhookRoutes(app: FastifyInstance) {
             break;
           }
         }
+      }
+
+      // #667 — blocker-close push: run ONCE per delivery, not per matched
+      // project like the switch above — a closing issue's dependents can
+      // live in an entirely different project/repo than the one THIS
+      // issue belongs to, so this can't be scoped to `projectIds`.
+      // Deliberately outside the per-project switch/loop and not awaited,
+      // same "stay under GitHub's ~10s delivery timeout" posture as the
+      // unlabeled/closed sync above; every failure is caught and logged,
+      // never surfaced as a 500.
+      if (
+        taskMasterEnabled &&
+        event === "issues" &&
+        action === "closed" &&
+        payload.issue?.number !== undefined &&
+        (payload.issue.issue_dependencies_summary?.blocking ?? 0) > 0
+      ) {
+        const closedIssueNumber = payload.issue.number;
+        (async () => {
+          const token = await resolveDependencyToken();
+          if (!token) return;
+          const dependents = await listBlockingIssues(token, owner, repo, closedIssueNumber);
+          for (const dep of dependents) {
+            const candidateProjects = projectsByRepoKey.get(`${dep.owner}/${dep.repo}`) ?? [];
+            for (const proj of candidateProjects) {
+              const [task] = app.db
+                .select({ id: tasks.id, dependencyCount: tasks.dependencyCount })
+                .from(tasks)
+                .where(and(eq(tasks.projectId, proj.id), eq(tasks.issueNumber, dep.number)))
+                .all();
+              if (!task) continue;
+              await refreshTaskBlockers(app, {
+                taskId: task.id,
+                projectId: proj.id,
+                owner: dep.owner,
+                repo: dep.repo,
+                issueNumber: dep.number,
+                dependencyCount: task.dependencyCount,
+                token,
+              });
+            }
+          }
+        })().catch((err) => {
+          app.log.warn(
+            { err, owner, repo, issueNumber: closedIssueNumber },
+            "[webhooks] blocker-close dependent refresh failed",
+          );
+        });
       }
 
       // Invalidate the per-repo PRs cache so the next REST read goes live

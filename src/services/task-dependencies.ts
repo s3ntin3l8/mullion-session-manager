@@ -92,8 +92,24 @@ export function dependencyGate(row: DependencyGateRow): DependencyGate {
  * task-watcher.ts's autoClaimReadyTasks (only for a candidate it's actually
  * about to try) and eagerly by routes/webhooks.ts's `issue_dependencies`/
  * blocker-close pushes. On any failure: logs and returns WITHOUT touching
- * `blockedBy`/`blockedByCheckedAt` — a prior "[]" stays valid, a
- * never-resolved null stays fail-closed. Never throws.
+ * `blockedBy`/`blockedByCheckedAt`/`dependencyCount` — a prior "[]" stays
+ * valid, a never-resolved null stays fail-closed. Never throws.
+ *
+ * Also refreshes `dependencyCount` itself, to `blockers.length` (the
+ * count actually stored, including the defensive-shortfall entry below when
+ * present) — NOT left at whatever `params.dependencyCount` was passed in.
+ * `params.dependencyCount` is only the shortfall check's "what did GitHub's
+ * summary say" baseline. Writing the observed count back matters most for
+ * the webhook push path (routes/webhooks.ts): a `blocked_by_added` delivery
+ * for a task whose `dependencyCount` was 0 before the edge existed would
+ * otherwise store a real open blocker in `blockedBy` while `dependencyCount`
+ * stayed 0 — and `dependencyGate` short-circuits to "clear" on
+ * `dependencyCount === 0` *before* ever looking at `blockedBy`, silently
+ * defeating the whole gate. Ingest (task-watcher.ts's upsertIssueTask)
+ * always refreshes `dependencyCount` before this runs in the poll path, so
+ * this is normally a no-op there — but making refreshTaskBlockers
+ * self-consistent removes the ordering dependency entirely rather than
+ * relying on every future caller to get it right.
  */
 export async function refreshTaskBlockers(
   app: FastifyInstance,
@@ -177,6 +193,11 @@ export async function refreshTaskBlockers(
     app.db
       .update(tasks)
       .set({
+        // #667 — self-consistency write-back: dependencyCount reflects what
+        // was actually just observed (blockers.length), not the caller's
+        // possibly-stale `params.dependencyCount` — see this function's own
+        // doc comment for why (the blocked_by_added-on-a-zero-count case).
+        dependencyCount: blockers.length,
         blockedBy: JSON.stringify(blockers),
         ...(shortfall ? {} : { blockedByCheckedAt: new Date() }),
       })

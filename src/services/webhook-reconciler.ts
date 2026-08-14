@@ -18,10 +18,15 @@
 // plus a single pass shortly after boot is what "eventually self-heals"
 // needs, not "immediately."
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNotNull, isNull, notInArray } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, notInArray } from "drizzle-orm";
 import { integrations, projects, webhookRegistrations } from "../db/schema.js";
 import { GITHUB_PROVIDER, getToken } from "./github-integration.js";
-import { buildWebhookUrl, getWebhookSecret, registerProjectWebhook } from "./github-webhook.js";
+import {
+  buildWebhookUrl,
+  getWebhookSecret,
+  registerProjectWebhook,
+  WEBHOOK_EVENTS_VERSION,
+} from "./github-webhook.js";
 
 // 6 hours: frequent enough that a missed project doesn't stay unregistered
 // for days, rare enough that this never resembles the adaptive PR/CI
@@ -53,44 +58,61 @@ async function reconcileOnce(app: FastifyInstance): Promise<void> {
   const webhookUrl = buildWebhookUrl(app);
 
   // Already-registered projects cost nothing to skip — only genuinely
-  // missing ones pay for a resolveRepoRef + GitHub round trip. This is
-  // what keeps a routine reconcile pass cheap regardless of how many
-  // projects are already covered. `lastError IS NULL` matters as much as
-  // `hookId IS NOT NULL` here: a rotation/PATCH that failed after an
-  // earlier successful registration leaves the old hookId in place
-  // alongside a fresh lastError (see `upsertWebhookRegistration`'s own
-  // comment) — that row still needs a retry, it just isn't "missing" in
-  // the hookId-null sense.
-  const registeredProjectIds = new Set(
+  // missing (or stale-event-list, #667) ones pay for a resolveRepoRef +
+  // GitHub round trip. This is what keeps a routine reconcile pass cheap
+  // regardless of how many projects are already covered. `lastError IS
+  // NULL` matters as much as `hookId IS NOT NULL` here: a rotation/PATCH
+  // that failed after an earlier successful registration leaves the old
+  // hookId in place alongside a fresh lastError (see
+  // `upsertWebhookRegistration`'s own comment) — that row still needs a
+  // retry, it just isn't "missing" in the hookId-null sense.
+  //
+  // #667 — `eventsVersion >= WEBHOOK_EVENTS_VERSION` is now part of this
+  // same "already covered" test. Without it, this is the ONLY gap:
+  // registerProjectWebhook's own registerHook (github-webhook.ts) PATCHes
+  // an existing hook with the current WEBHOOK_EVENTS on every call it's
+  // actually given — but nothing else ever re-invokes it for a hook this
+  // set already excludes as "healthy". A hook registered before an event
+  // was added to WEBHOOK_EVENTS would otherwise keep its stale
+  // subscription forever. A stale-but-otherwise-healthy row here still
+  // goes through the exact same `registerProjectWebhook` call as a
+  // genuinely missing one below — PATCH, not re-create — so this costs one
+  // extra round trip per stale project, once, the first reconcile pass
+  // after an upgrade.
+  const upToDateProjectIds = new Set(
     app.db
       .select({ projectId: webhookRegistrations.projectId })
       .from(webhookRegistrations)
-      .where(and(isNotNull(webhookRegistrations.hookId), isNull(webhookRegistrations.lastError)))
+      .where(
+        and(
+          isNotNull(webhookRegistrations.hookId),
+          isNull(webhookRegistrations.lastError),
+          gte(webhookRegistrations.eventsVersion, WEBHOOK_EVENTS_VERSION),
+        ),
+      )
       .all()
       .map((r) => r.projectId),
   );
 
-  const missingRows = app.db
+  const staleOrMissingRows = app.db
     .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
     .from(projects)
     .where(
-      registeredProjectIds.size > 0
-        ? notInArray(projects.id, [...registeredProjectIds])
-        : undefined,
+      upToDateProjectIds.size > 0 ? notInArray(projects.id, [...upToDateProjectIds]) : undefined,
     )
     .all();
 
-  if (missingRows.length === 0) return;
+  if (staleOrMissingRows.length === 0) return;
 
   let registered = 0;
-  for (const missingRow of missingRows) {
-    const outcome = await registerProjectWebhook(app, missingRow, token, webhookUrl, secret);
+  for (const row of staleOrMissingRows) {
+    const outcome = await registerProjectWebhook(app, row, token, webhookUrl, secret);
     if (outcome === "registered") registered++;
   }
   if (registered > 0) {
     app.log.info(
-      { registered, checked: missingRows.length },
-      "[webhook-reconciler] registered hooks for projects missed by earlier registration",
+      { registered, checked: staleOrMissingRows.length },
+      "[webhook-reconciler] registered/refreshed hooks for projects missed by earlier registration or on a stale event subscription",
     );
   }
 }

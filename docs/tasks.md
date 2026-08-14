@@ -536,6 +536,17 @@ own next poll tick. Best-effort and fire-and-forget, same posture as
 everything else in this section — a failure here just leaves the dependent
 `unresolved` until its own next check.
 
+An `issue_dependencies`/`blocked_by_added`/`blocked_by_removed` delivery
+drives the same kind of immediate re-check on the blocked task itself. For
+`blocked_by_removed` specifically, the delivery's own known count (the
+stored `dependencyCount` minus the one blocker this delivery proves was
+just removed) is passed to the refresh instead of the raw stored value —
+GitHub's `total_blocked_by` summary can still report the pre-removal count
+for a few seconds even on an immediate re-fetch (verified live during
+review), and passing it straight through would otherwise manufacture a
+false "blocker(s) not visible to this token" entry on the common
+single-blocker case.
+
 | Transition      | GitHub side effect                                                                                                                                                                                                                                                                                                     |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                                                                                                                                                                                                                                                        |

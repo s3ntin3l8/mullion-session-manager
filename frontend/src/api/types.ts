@@ -760,6 +760,18 @@ export interface ServerInfo {
   };
 }
 
+// #667 — mirrors task-dependencies.ts's StoredBlocker. htmlUrl is null only
+// for the synthetic "N blocker(s) not visible to this token" entry
+// refreshTaskBlockers adds when GitHub's summary count and the actually
+// visible blocker list disagree.
+export interface TaskBlocker {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  htmlUrl: string | null;
+}
+
 // Mirrors src/routes/tasks.ts's TASK_ROW_COLUMNS (GET /api/tasks and GET
 // /api/tasks/:id) 1:1 — issue #214/#219, extended through Phase 6 (#233,
 // #215, #217, #220, #283).
@@ -831,6 +843,16 @@ export interface Task {
   // next time any sync for this task succeeds. Null means no known problem,
   // not "never synced."
   githubSyncError: string | null;
+  // #667 — dependency-aware claiming. dependencyCount is GitHub's own
+  // total_blocked_by snapshot (null = never observed). blockedState is the
+  // server-computed dependencyGate() result (task-dependencies.ts) — NOT
+  // re-derived here, since frontend/ has no access to backend source; see
+  // routes/tasks.ts's withBlockedState. blockers is the parsed list of
+  // currently-open blockers (empty for "clear", irrelevant for
+  // "unresolved" — the UI shows "checking…" instead of the list then).
+  dependencyCount: number | null;
+  blockedState: "clear" | "blocked" | "unresolved";
+  blockers: TaskBlocker[];
   createdAt: string;
   updatedAt: string;
   claimedAt: string | null;
