@@ -414,6 +414,48 @@ type EventListener = (event: NotificationEvent) => void;
 // bytes, since events are small structured records, not raw terminal bytes.
 const EVENTS_MAX = 100;
 
+// Issue #676 — floor below which a Session's terminal geometry is never
+// allowed to sit, no matter which caller (browser WS attach, agent-side
+// attach, a resize control frame) supplied the number. Exists because a
+// promoted session's terminal pane can attach with a garbage-tiny size:
+// TerminalPane.tsx's mount effect calls `fitAddon.fit()` and opens the WS
+// connection synchronously, before dockview has necessarily finished
+// laying out a BRAND-NEW panel (the case a promote always creates, as
+// opposed to a reused, already-laid-out tab) — a live incident captured
+// `GET /ws/terminal?sessionId=330&cols=10&rows=13` in production. That
+// then reaches here as a real resize/SIGWINCH, and opencode's own "the
+// terminal is too small" TUI logic exits(0) cleanly and silently in
+// response — no crash, no log line, just gone before a human ever sees
+// it. Reproduced deterministically in isolation (a single resize to a
+// small size, no dtach/nudge/worktree involved) and binary-searched: the
+// actual boundary is a 2D curve (roughly cols>=38 alone is always safe
+// regardless of rows; below that, the rows needed to survive rises as
+// cols shrinks), which is opencode's own layout detail, not something to
+// hard-couple this floor to. MIN_COLS/MIN_ROWS sit comfortably clear of
+// every failing point found in that repro rather than chasing the exact
+// curve — this is deliberately the same "floor it, don't chase the
+// racing timing" posture as RedrawNudge's own `Math.max(4, ...)` dip
+// floor (redraw-nudge.ts), which needs no change of its own here.
+// RedrawNudge's own `resize` callback (this file's `redrawNudge = new
+// RedrawNudge({ resize: (cols, rows) => this.ptyProcess?.resize(cols,
+// rows), ... })`) calls the pty directly, bypassing this Session's own
+// resize() and its clamp entirely — so a dip can genuinely still take
+// rows as low as 4, a real SIGWINCH, not a no-op. That stays safe for the
+// crash this fixes: the repro's rows-only sweep at cols=80 never crashed
+// anything down to rows=4, since cols — untouched by the dip — is the
+// actually load-bearing dimension.
+export const MIN_TERMINAL_COLS = 40;
+export const MIN_TERMINAL_ROWS = 10;
+
+/** Floor a client-supplied terminal size at MIN_TERMINAL_COLS/ROWS — see
+ * those constants' own doc comment for why. Applied at every place a
+ * Session's geometry can be set (the constructor and resize() below), so
+ * it's impossible to construct or resize one below the floor regardless of
+ * which attach path or caller supplied the number. */
+function clampTerminalSize(cols: number, rows: number): { cols: number; rows: number } {
+  return { cols: Math.max(cols, MIN_TERMINAL_COLS), rows: Math.max(rows, MIN_TERMINAL_ROWS) };
+}
+
 // Phase 5 (Track A) — cap on each session's subagent registry, same
 // bounded-not-unbounded posture as EVENTS_MAX above. A runaway parent
 // spawning far more subagents than this evicts its OLDEST FINISHED entry
@@ -1150,8 +1192,12 @@ export class Session {
     this.cwd = opts.cwd;
     this.command = opts.command;
     this.socketPath = opts.socketPath;
-    this.cols = opts.cols;
-    this.rows = opts.rows;
+    // Issue #676 — clamp at construction too, not just resize() below: the
+    // very first attach can be the one that supplies a garbage-tiny size
+    // (see MIN_TERMINAL_COLS/ROWS's own doc comment).
+    const initialSize = clampTerminalSize(opts.cols, opts.rows);
+    this.cols = initialSize.cols;
+    this.rows = initialSize.rows;
     this.createdAt = Date.now();
     this.hookSocketPath = opts.hookSocketPath;
     this.controlSocketPath = opts.controlSocketPath;
@@ -2908,8 +2954,13 @@ export class Session {
   }
 
   resize(cols: number, rows: number): void {
-    this.cols = cols;
-    this.rows = rows;
+    // Issue #676 — floor every resize, not just the initial spawn size (the
+    // constructor does the same clamp): see MIN_TERMINAL_COLS/ROWS's own
+    // doc comment for why a too-small value here can silently kill the
+    // running program.
+    const clamped = clampTerminalSize(cols, rows);
+    this.cols = clamped.cols;
+    this.rows = clamped.rows;
     // Resizing the pty our dtach attach-client lives in delivers SIGWINCH to
     // it, which dtach forwards into the session — the same mechanism a real
     // resized SSH terminal would trigger. No special-casing needed here.
@@ -2928,7 +2979,7 @@ export class Session {
     // regardless of what resize() does in the meantime — its restore stage
     // reads this.cols/this.rows live (via RedrawNudgeHost.getSize()), so it
     // still lands at the right size either way.
-    this.ptyProcess?.resize(cols, rows);
+    this.ptyProcess?.resize(clamped.cols, clamped.rows);
   }
 
   /**
