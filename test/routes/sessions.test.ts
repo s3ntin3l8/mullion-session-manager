@@ -1771,6 +1771,159 @@ describe("sessions route", () => {
         }
       });
 
+      // Regression test for the reported 502 — the promote route used to
+      // anchor `createWorktree`'s cwd on the SOURCE session's own cwd
+      // (`row.cwd ?? project.cwd`). A source session whose cwd had been
+      // removed out from under it (its own worktree deleted, e.g. by a
+      // prior promote's cleanup or an out-of-band `git worktree remove`)
+      // made every future promote fail with `git`'s raw
+      // "fatal: cannot change to '<dir>': No such file or directory",
+      // surfaced verbatim as a 502. Anchoring at `project.cwd` instead
+      // (this fix) means a promote never depends on the source session's
+      // cwd still existing.
+      it("still promotes when the source session's own cwd has been deleted out from under it", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        // Give the source session a cwd that looks like a previous
+        // promote's worktree, then delete it — reproducing a session whose
+        // recorded cwd no longer resolves on disk.
+        const deadCwd = path.join(cwd, ".mullion-worktrees", "gone");
+        fs.mkdirSync(deadCwd, { recursive: true });
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", cwd: deadCwd },
+        });
+        const sourceId = created.json().id as number;
+        fs.rmSync(deadCwd, { recursive: true, force: true });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", branchName: "feature/from-dead-cwd" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const newSession = res.json();
+        expect(newSession.cwd).toBe(path.join(cwd, ".mullion-worktrees", "feature-from-dead-cwd"));
+        expect(fs.existsSync(newSession.cwd)).toBe(true);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      // Companion to the dead-cwd case above: a source session that's
+      // already INSIDE a worktree (e.g. a chained promote, or opencode's own
+      // worktree feature moving it there) must not nest the new worktree
+      // inside the old one. Before this fix, `createWorktree`'s `baseDir`
+      // defaulted to `<row.cwd>/.mullion-worktrees` — anchoring at
+      // `project.cwd` keeps every promote's worktree a direct sibling under
+      // the project root's `.mullion-worktrees/`, regardless of where the
+      // source session's own cwd happens to be.
+      it("does not nest the new worktree inside the source session's own worktree", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const sourceCreated = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: {
+            projectId,
+            command: "bash",
+            worktree: { baseRef: "main", branchName: "feature/source-worktree" },
+          },
+        });
+        const sourceId = sourceCreated.json().id as number;
+        const sourceCwd = sourceCreated.json().cwd as string;
+        expect(sourceCwd).toBe(path.join(cwd, ".mullion-worktrees", "feature-source-worktree"));
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", branchName: "feature/promoted-from-worktree" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const newSession = res.json();
+        // Directly under the project's own .mullion-worktrees/, not nested
+        // under the source session's worktree.
+        expect(newSession.cwd).toBe(
+          path.join(cwd, ".mullion-worktrees", "feature-promoted-from-worktree"),
+        );
+        expect(newSession.cwd.startsWith(sourceCwd)).toBe(false);
+        expect(fs.existsSync(newSession.cwd)).toBe(true);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      // Same rollback guarantee as the "removes the worktree AND its
+      // branch" test above, but from a source session whose cwd is already
+      // gone — proving the rollback's own `removeWorktree`/`deleteBranch`
+      // calls are anchored at `project.cwd` too, not just the initial
+      // `resolveWorktreeCwd` call. Before this fix, both rollback calls
+      // reused `row.cwd ?? project.cwd`, so a failed spawn from a dead
+      // source cwd leaked the worktree AND its branch with no cleanup.
+      it("still rolls back the worktree and branch on spawn failure when the source cwd is gone", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const deadCwd = path.join(cwd, ".mullion-worktrees", "gone-2");
+        fs.mkdirSync(deadCwd, { recursive: true });
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", cwd: deadCwd },
+        });
+        const sourceId = created.json().id as number;
+        fs.rmSync(deadCwd, { recursive: true, force: true });
+
+        const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
+        let failNextSpawn = true;
+        vi.mocked(spawnChildProcess).mockImplementation(
+          (command: string, args?: readonly string[], options?: object) => {
+            if (command === "systemd-run" && failNextSpawn) {
+              failNextSpawn = false;
+              const ee = new EventEmitter();
+              setImmediate(() => ee.emit("exit", 1));
+              return ee;
+            }
+            return originalSpawnImpl!(command, args, options);
+          },
+        );
+
+        try {
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", branchName: "feature/promote-from-dead-cwd-fail" },
+          });
+          expect(res.statusCode).toBe(502);
+
+          const worktreePath = path.join(
+            cwd,
+            ".mullion-worktrees",
+            "feature-promote-from-dead-cwd-fail",
+          );
+          expect(fs.existsSync(worktreePath)).toBe(false);
+
+          const branches = execFileSync(
+            "git",
+            ["branch", "--list", "feature/promote-from-dead-cwd-fail"],
+            { cwd, env: gitEnv() },
+          ).toString();
+          expect(branches.trim()).toBe("");
+        } finally {
+          vi.mocked(spawnChildProcess).mockImplementation(originalSpawnImpl!);
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        }
+      });
+
       it("delivers the seed prompt to the new session's SessionStart hook", async () => {
         const app = await buildApp();
         const cwd = createGitRepo();
