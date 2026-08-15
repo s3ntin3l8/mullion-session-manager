@@ -132,7 +132,7 @@ describe("PromoteDialog (issue #271)", () => {
     await screen.findByRole("combobox");
     await user.selectOptions(screen.getByRole("combobox"), "feature/x");
     await user.type(screen.getByPlaceholderText(/mullion\/session-42/), "my-branch");
-    await user.type(screen.getByPlaceholderText(/delivered as additional context/i), "resume here");
+    await user.type(screen.getByPlaceholderText(/sent as its first message/i), "resume here");
     await user.click(screen.getByText("Create worktree"));
 
     expect(promoteSessionMock).toHaveBeenCalledWith(42, {

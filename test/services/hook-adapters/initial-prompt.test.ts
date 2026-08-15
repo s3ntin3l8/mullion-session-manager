@@ -61,9 +61,14 @@ describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
     expect(adapterHasInitialPromptArgs("agy")).toBe(true);
   });
 
-  it("returns null for opencode — no initial-prompt argv form exists", () => {
-    expect(getAdapterInitialPromptArgs("opencode", "fix the bug")).toBeNull();
-    expect(adapterHasInitialPromptArgs("opencode")).toBe(false);
+  // `--prompt`, not the `--`-prefixed positional the other three use —
+  // opencode's own positional argument is `[project]`, a directory path, so
+  // an unflagged prompt would be silently misread as one. Verified live
+  // against the installed CLI (opencode.ts's own comment) that `--prompt`
+  // genuinely submits a turn, not just pre-fills the TUI's input box.
+  it("returns a --prompt <value> pair for opencode", () => {
+    expect(getAdapterInitialPromptArgs("opencode", "fix the bug")).toBe("--prompt 'fix the bug'");
+    expect(adapterHasInitialPromptArgs("opencode")).toBe(true);
   });
 
   it("returns null for an unmatched/unknown command", () => {
@@ -76,6 +81,7 @@ describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
     expect(getAdapterInitialPromptArgs("claude", dangerous)).toBe(`-- '${dangerous}'`);
     expect(getAdapterInitialPromptArgs("codex", dangerous)).toBe(`-- '${dangerous}'`);
     expect(getAdapterInitialPromptArgs("agy", dangerous)).toBe(`-i='${dangerous}'`);
+    expect(getAdapterInitialPromptArgs("opencode", dangerous)).toBe(`--prompt '${dangerous}'`);
   });
 
   it("handles a prompt starting with a hyphen — the exact failure mode this fixes", () => {
@@ -83,6 +89,12 @@ describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
     expect(getAdapterInitialPromptArgs("claude", leadingHyphen)).toBe(`-- '${leadingHyphen}'`);
     expect(getAdapterInitialPromptArgs("codex", leadingHyphen)).toBe(`-- '${leadingHyphen}'`);
     expect(getAdapterInitialPromptArgs("agy", leadingHyphen)).toBe(`-i='${leadingHyphen}'`);
+    // opencode's `--prompt` is a genuine flag (not a bare positional), so a
+    // leading hyphen in the prompt text was never ambiguous here the way it
+    // is for the other three's positional form — included for parity.
+    expect(getAdapterInitialPromptArgs("opencode", leadingHyphen)).toBe(
+      `--prompt '${leadingHyphen}'`,
+    );
   });
 
   it("path-qualified commands still match, mirroring matches()'s own anchoring", () => {

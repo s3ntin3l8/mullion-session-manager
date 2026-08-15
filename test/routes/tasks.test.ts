@@ -580,9 +580,11 @@ describe("tasks route", () => {
       await app.inject({
         method: "PATCH",
         url: `/api/projects/${projectId}`,
-        // opencode's hook adapter doesn't declare session_start — see
+        // gemini has no hook adapter at all, so no seed channel — see
         // task-agent-resolve.test.ts's commandSupportsSeed coverage.
-        payload: { defaultAgent: "opencode" },
+        // opencode used to be this test's example too, but it gained
+        // `initialPromptArgs` — see hook-adapters/opencode.ts.
+        payload: { defaultAgent: "gemini" },
       });
       const task = insertTask(app, projectId, 53);
 

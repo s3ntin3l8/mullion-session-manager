@@ -212,11 +212,23 @@ merge is per-key, not a whole-layer shadow: unrelated top-level keys
 when `OPENCODE_CONFIG_CONTENT` sets only `instructions`. This is a
 materially different mechanism from every other agent's SessionStart
 pointer, not just a different dialect: OpenCode has no live hook round
-trip to reply to at all, so there is no per-event pointer sentence and no
-way to compose in a promote-flow seed (issue #271) — Mullion can only
-point OpenCode's static startup config at the guide file itself, so
-OpenCode's context gets the guide's **full content**, loaded once at
-startup, not a short "here's where to find it" nudge. Gated on the live
+trip to reply to at all, so there is no per-event pointer sentence, and
+this static `instructions` channel alone still can't compose a live
+per-event reply — Mullion can only point OpenCode's static startup config
+at the guide file itself, so OpenCode's context gets the guide's **full
+content**, loaded once at startup, not a short "here's where to find it"
+nudge.
+
+As of the promote-flow first-turn fix, the promote-flow seed (issue
+#271/#678) no longer rides this `instructions` channel at all: it's sent
+as `--prompt <text>` argv instead, via `initialPromptArgs`, verified
+against the installed CLI to actually submit a turn rather than just add
+context — see `hook-adapters/opencode.ts`'s own comment. This
+`instructions`-based seed path survives only as a context-only fallback,
+for a caller that sets `seedPrompt` without also requesting
+`initialPrompt`.
+
+Gated on the live
 `sessions.injectAgentGuide` setting's value _at this session's own spawn
 time_ (`HookAdapterContext.injectAgentGuide`, threaded from
 `PtyManager`/`Session` in `pty-manager.ts` down to

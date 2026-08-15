@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveOpenCodePluginPath } from "./shared.js";
+import { resolveOpenCodePluginPath, shellQuote } from "./shared.js";
 import { sessionAgentGuidePath } from "../agent-guide.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
@@ -8,9 +8,14 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // no shell-command hooks at all — only a JS/TS plugin API (auto-discovered
 // from a `plugins/` subdirectory it scans, not referenced by argv or by the
 // config file's own `plugin` array, which is npm-package names only). This
-// adapter never touches the command line: it writes the shared plugin file
+// adapter has no `commandTransform`: it writes the shared plugin file
 // (src/hooks/opencode-plugin.js) into a per-session, ENTIRELY EPHEMERAL
-// scratch directory and points `OPENCODE_CONFIG_DIR` at it.
+// scratch directory and points `OPENCODE_CONFIG_DIR` at it, purely via env
+// vars, never by rewriting the command line. `initialPromptArgs` below is a
+// separate, narrower mechanism (an argv suffix appended by launch-plan.ts
+// after everything else, see that field's own doc comment in types.ts) —
+// not a contradiction of "no commandTransform," just a second, opt-in argv
+// channel this adapter also happens to support.
 //
 // Verified against the installed OpenCode CLI + its own `@opencode-ai/*`
 // package type definitions during this PR (the plan flagged this as an
@@ -153,21 +158,27 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     }
   }
 
-  // Issue #678 — the promote flow's seed prompt (a user-supplied "resume
-  // here" note, POST /api/sessions/:id/promote's `seedPrompt` body field),
-  // for opencode specifically. Every other agent gets this delivered live,
-  // via hooks.ts's "session_start" branch replying to that agent's own
-  // SessionStart hook with `additionalContext` (app.pty.consumeSeed) —
-  // opencode has no such round trip (see this file's header), so it needs
-  // the same spawn-time `instructions` channel the agent-guide pointer
-  // above uses. Deliberately gated on `ctx.seedPrompt` alone, NOT on
-  // `ctx.injectAgentGuide`: a user explicitly asked for this seed when they
-  // submitted the promote dialog, and it must not silently vanish just
-  // because someone disabled the unrelated agent-guide setting. Written via
-  // `settingsFiles`, the same mechanism the plugin file above already uses
-  // — so it exists on disk before opencode's process actually starts, same
-  // ordering guarantee agent-guide.ts's own writeSessionAgentGuide has for
-  // the guide file (bootstrapMaster calls that before applyHookAdapters).
+  // Issue #678, superseded in practice by the `initialPromptArgs` below for
+  // the promote flow specifically (see that field's own comment) — kept as
+  // a context-only fallback for any OTHER caller that sets `seedPrompt`
+  // without also requesting `initialPrompt` (routes/sessions.ts's promote
+  // handler now prefers `initialPrompt` for any adapter with argv support,
+  // opencode included, and passes `seedPrompt` only when the target adapter
+  // has none). A user-supplied "resume here" note (POST
+  // /api/sessions/:id/promote's `seedPrompt` body field), for opencode
+  // specifically. Every other agent gets this delivered live, via hooks.ts's
+  // "session_start" branch replying to that agent's own SessionStart hook
+  // with `additionalContext` (app.pty.consumeSeed) — opencode has no such
+  // round trip (see this file's header), so it needs the same spawn-time
+  // `instructions` channel the agent-guide pointer above uses. Deliberately
+  // gated on `ctx.seedPrompt` alone, NOT on `ctx.injectAgentGuide`: a user
+  // explicitly asked for this seed when they submitted the promote dialog,
+  // and it must not silently vanish just because someone disabled the
+  // unrelated agent-guide setting. Written via `settingsFiles`, the same
+  // mechanism the plugin file above already uses — so it exists on disk
+  // before opencode's process actually starts, same ordering guarantee
+  // agent-guide.ts's own writeSessionAgentGuide has for the guide file
+  // (bootstrapMaster calls that before applyHookAdapters).
   if (ctx.seedPrompt && ctx.seedPrompt.length > 0) {
     const seedPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-seed.md`);
     settingsFiles.push({ path: seedPath, contents: ctx.seedPrompt });
@@ -194,4 +205,17 @@ export const openCodeAdapter: HookAgentAdapter = {
   matches: (command) => OPENCODE_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: OPENCODE_EMITS,
+  // Verified empirically against the installed OpenCode CLI (`opencode
+  // --help`, and a live headless run checked against its own session DB):
+  // `--prompt <text>` is a top-level option on the DEFAULT `opencode
+  // [project]` command (the TUI, which is what Mullion always spawns — see
+  // this file's header, there's no `run`/`exec` subcommand involved), and
+  // it genuinely SUBMITS that text as the session's first turn rather than
+  // merely pre-filling the input box: a real user/assistant message pair
+  // landed in opencode's own SQLite session store, not just an unsent
+  // draft. `--prompt`, not the bare positional the other three adapters'
+  // `initialPromptArgs` use (`-- <prompt>`) — opencode's positional
+  // argument is `[project]`, a directory path, so an unflagged prompt would
+  // be silently misread as one.
+  initialPromptArgs: (prompt) => `--prompt ${shellQuote(prompt)}`,
 };

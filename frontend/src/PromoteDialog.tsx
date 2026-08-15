@@ -299,7 +299,7 @@ export function PromoteDialog({
           className="create-modal-textarea"
           value={seedPrompt}
           onChange={(e) => setSeedPrompt(e.target.value)}
-          placeholder="Context for the new session — delivered as additional context when it starts."
+          placeholder="Context for the new session — sent as its first message, so it starts working right away."
           rows={4}
         />
       </label>

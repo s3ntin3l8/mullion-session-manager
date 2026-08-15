@@ -100,10 +100,11 @@ export function resolveReviewAgentCommand(
  * `stashSeed`'s SessionStart `additionalContext` — see task-claim.ts's own
  * doc comment for why that mechanism never actually started a turn). A task
  * prompt is delivered as argv via the matched hook adapter's
- * `initialPromptArgs` (Claude Code, Codex, and agy today; OpenCode has no
- * such argv form, and neither does any `KNOWN_AGENTS` entry with no adapter
- * at all — currently `aider`, `gemini`, `pi` — see each adapter's own
- * `initialPromptArgs`, hook-adapters/index.ts's
+ * `initialPromptArgs` (Claude Code, Codex, agy, and — as of the promote
+ * first-turn fix — opencode too, via `--prompt`, verified to actually
+ * submit a turn; see opencode.ts's own comment). No `KNOWN_AGENTS` entry
+ * with no adapter at all has this — currently `aider`, `gemini`, `pi` — see
+ * each adapter's own `initialPromptArgs`, hook-adapters/index.ts's
  * `adapterHasInitialPromptArgs`). Spawning an autonomous claim with a
  * command that can't receive an initial prompt this way means the agent
  * starts with NO instructions at all — silent for a manual human claim (the

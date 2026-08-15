@@ -509,10 +509,12 @@ describe("reconcileTasks", () => {
 
     it("spawns the review agent even when its adapter can't receive a seed (#487), recording reviewSeedDelivered: false and logging a warning", async () => {
       const app = await buildApp();
+      // gemini, not opencode — opencode gained `initialPromptArgs`
+      // (`--prompt`) and is seed-capable now, see hook-adapters/opencode.ts.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
         "claimed",
-        "opencode",
+        "gemini",
       );
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
@@ -533,13 +535,14 @@ describe("reconcileTasks", () => {
         expect.objectContaining({ taskId }),
         expect.stringContaining("can't receive an initial prompt"),
       );
-      // opencode has no initial-prompt argv form — the spawned command is
-      // untouched, not carrying the review prompt anywhere.
+      // gemini has no adapter at all, so no initial-prompt argv form — the
+      // spawned command is untouched, not carrying the review prompt
+      // anywhere.
       const call = vi
         .mocked(childProcessSpawn)
         .mock.calls.findLast(([command]) => command === "systemd-run");
       const args = call?.[1] as string[];
-      expect(args[args.length - 1]).toBe("opencode");
+      expect(args[args.length - 1]).toBe("gemini");
 
       await app.close();
     });
@@ -1218,16 +1221,18 @@ describe("reconcileTasks", () => {
 
     // Hermes review, PR #576, finding #5 — reseedTaskIfSessionExited delivers
     // the findings as an argv initial prompt only; a non-seed-capable worker
-    // adapter (e.g. OpenCode) would auto-return to a fresh session with NO
-    // instructions, burning the task's one round for nothing and leaving it
-    // to ride its budget out. Findings must still be recorded/commented;
-    // only the auto-return itself is skipped.
+    // adapter (e.g. gemini, which has no adapter at all) would auto-return
+    // to a fresh session with NO instructions, burning the task's one round
+    // for nothing and leaving it to ride its budget out. Findings must
+    // still be recorded/commented; only the auto-return itself is skipped.
+    // (OpenCode used to be this test's example too, but it gained
+    // `initialPromptArgs` — see hook-adapters/opencode.ts.)
     it("records and comments findings but does not auto-return when the worker's agent can't receive a seeded prompt", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
-      // opencode matches no adapter with initialPromptArgs — see
+      // gemini matches no adapter at all, so no initialPromptArgs — see
       // task-agent-resolve.ts's commandSupportsSeed.
-      app.db.update(tasks).set({ agentCommand: "opencode" }).where(eq(tasks.id, taskId)).run();
+      app.db.update(tasks).set({ agentCommand: "gemini" }).where(eq(tasks.id, taskId)).run();
       writeFindings(app, taskId, 0, "This should reach the drawer and the PR, not the worker.");
 
       await reconcileTasks(app);

@@ -263,15 +263,17 @@ confirm which path got you here.
   `agy` case in `formatSessionStartOutput` for the full reasoning).
 - **opencode** — materially different in kind, not just dialect: opencode
   has no live hook round trip to reply to at all, so there's no per-event
-  pointer sentence and no way to compose in a promote-flow seed. Instead,
-  Mullion points opencode's own `instructions` config
-  (`OPENCODE_CONFIG_CONTENT`, additive — never replaces your own
+  pointer sentence. Instead, Mullion points opencode's own `instructions`
+  config (`OPENCODE_CONFIG_CONTENT`, additive — never replaces your own
   `instructions`) directly at your on-disk guide copy, so its **full
   content** loads into your context at startup, not a pointer to go read
   it yourself. See `hook-adapters/opencode.ts`'s `prepareLaunch` for the
   full reasoning, including why this can only reflect the
   `injectAgentGuide` setting's value at the moment your session was
-  spawned, not live like the other three agents.
+  spawned, not live like the other three agents. A promote-flow seed no
+  longer rides this channel, though: it's delivered as `--prompt <text>`
+  argv instead — a real submitted first turn, not more static context —
+  since opencode gained `initialPromptArgs`; see that field's own comment.
 
 If you're on an agent without a hook adapter, or the nudge didn't reach you
 for one of the reasons above, you got here some other way (or you're

@@ -2367,7 +2367,11 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
-  it("echoes initialPromptApplied: false when the spawn body's command has no initial-prompt argv form (opencode)", async () => {
+  // gemini, not opencode — opencode gained `initialPromptArgs` (`--prompt`)
+  // and now takes the `true` branch above like claude/codex/agy do; see
+  // hook-adapters/opencode.ts. gemini has no adapter at all, so it's a
+  // genuine example of "no initial-prompt argv form."
+  it("echoes initialPromptApplied: false when the spawn body's command has no initial-prompt argv form (gemini)", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
@@ -2376,7 +2380,7 @@ describe("internal routes (agent role, issue #26)", () => {
       payload: {
         id: "505",
         cwd: "/tmp",
-        command: "opencode",
+        command: "gemini",
         cols: 80,
         rows: 24,
         initialPrompt: "fix the bug",
