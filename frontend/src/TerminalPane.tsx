@@ -942,6 +942,11 @@ export function TerminalPane(props: {
     // `connectOnce` (its callback until then) are both declared in this
     // half of the effect.
     const resizeObserver = new ResizeObserver(() => {
+      // Hermes review, PR #689 — `connectOnce` already no-ops once
+      // `destroyed`, but a delivery already queued when cleanup runs could
+      // otherwise reach `refit()` (hence `fitAddon.fit()`) on an already-
+      // disposed terminal. Guarding here keeps both branches consistent.
+      if (destroyed) return;
       if (connectedOnce) refit();
       else connectOnce();
     });

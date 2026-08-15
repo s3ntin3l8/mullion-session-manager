@@ -2243,7 +2243,9 @@ describe("TerminalPane deferred initial connect (issue #676 frontend follow-up)"
     // — after the socket already opened and (see below) already sent the
     // bad size once. On fixed source this is connectOnce's own re-measure,
     // and connect() (hence "open") hasn't happened at all until now.
-    resizeObserver.fire();
+    act(() => {
+      resizeObserver.fire();
+    });
     // Fixed source only just registered its (real) open handler inside the
     // resizeObserver.fire() call above — fire "open" again so it gets a
     // chance to run too. Harmless on unfixed source: same already-registered
@@ -2284,7 +2286,9 @@ describe("TerminalPane deferred initial connect (issue #676 frontend follow-up)"
     });
 
     renderPane();
-    resizeObserver.fire();
+    act(() => {
+      resizeObserver.fire();
+    });
 
     // Exactly one connect() attempt so far, and its URL already carries the
     // corrected size — on unfixed source, connect() fires synchronously in
