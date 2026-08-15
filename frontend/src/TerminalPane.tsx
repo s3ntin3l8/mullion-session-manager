@@ -558,13 +558,12 @@ export function TerminalPane(props: {
       repaintAllTerminals(props.params.sessionId);
     });
 
-    const resizeObserver = new ResizeObserver(refit);
-    resizeObserver.observe(container);
-    // Redundant on top of the ResizeObserver above — Chromium doesn't
-    // always fire a ResizeObserver notification for every viewport change
-    // that shrinks/grows this element (observed missing the transition when
-    // DevTools docks/undocks, which resizes the viewport without a plain
-    // window resize). A plain `resize` listener catches those misses.
+    // Redundant on top of the ResizeObserver registered further down (right
+    // above connect()) — Chromium doesn't always fire a ResizeObserver
+    // notification for every viewport change that shrinks/grows this
+    // element (observed missing the transition when DevTools docks/
+    // undocks, which resizes the viewport without a plain window resize).
+    // A plain `resize` listener catches those misses.
     window.addEventListener("resize", refit);
 
     let copyToastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -893,13 +892,75 @@ export function TerminalPane(props: {
       connect();
     };
 
-    connect();
+    // Issue #676's own frontend follow-up — the backend clamp
+    // (pty-manager.ts's MIN_TERMINAL_COLS/ROWS) already stops a garbage-tiny
+    // size from ever reaching the pty, but this pane's very first connect()
+    // used to fire synchronously in this same mount effect, before dockview
+    // had necessarily finished laying out a brand-new panel (exactly what a
+    // promote creates) — so the FIRST thing the backend ever heard could
+    // still be a measurement taken before layout ran (the production
+    // incident's literal `cols=10&rows=13`). Deferring the initial connect
+    // to the first post-layout ResizeObserver delivery only guarantees "no
+    // size measured before this container's first layout is ever reported"
+    // — it can't tell a genuinely-small-but-real layout from a not-yet-laid-
+    // out one, which is exactly why there's no minimum-size threshold here;
+    // the backend clamp remains the safety net for that. Only the INITIAL
+    // connect is deferred — retryRef.current and the backoff reconnect below
+    // both call connect() directly, since by then layout has long settled
+    // and routing them through this one-shot guard would just make "retry
+    // now" a no-op on every call after the first.
+    //
+    // A mutable box (not a bare `let`) so the binding itself stays a `const`
+    // declared before connectOnce/resizeObserver below, even though the
+    // real timer is only assigned into it after them — the spec never
+    // delivers ResizeObserver's initial observation synchronously from
+    // observe() itself, but nothing here should rely on that ordering: if
+    // connectOnce ever ran synchronously during resizeObserver's own
+    // construction/observe() call, referencing a `let`/`const` declared
+    // afterward would throw (TDZ). A property on an already-initialized
+    // object avoids that regardless of timing.
+    const connectBackstopHolder: { timer: ReturnType<typeof setTimeout> | null } = {
+      timer: null,
+    };
+    let connectedOnce = false;
+    const connectOnce = () => {
+      if (connectedOnce || destroyed) return;
+      connectedOnce = true;
+      if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
+      // Re-measure now that layout has actually run — the fit() up in the
+      // mount path above ran before the container was necessarily sized.
+      fitAddon.fit();
+      lastCols = term.cols;
+      lastRows = term.rows;
+      connect();
+    };
+    // ResizeObserver delivers after layout (including one initial delivery
+    // on observe(), per spec) — requestAnimationFrame is not a substitute,
+    // its callbacks run BEFORE that frame's layout. Registered here, right
+    // above the deferred connect, rather than up near the mount effect's
+    // other observers/listeners: `refit` (its callback once connected) and
+    // `connectOnce` (its callback until then) are both declared in this
+    // half of the effect.
+    const resizeObserver = new ResizeObserver(() => {
+      if (connectedOnce) refit();
+      else connectOnce();
+    });
+    resizeObserver.observe(container);
+    // Backstop, not decoration: a `display:none` container (a dockview tab
+    // that isn't the active one — restoring a workspace keeps every pane
+    // mounted) may never get an initial ResizeObserver delivery at all, so
+    // connectOnce() needs a path that doesn't depend on one ever firing.
+    // Kept short and never bumped up — a pane's real first paint should
+    // still feel instant even when this path is the one that fires.
+    const CONNECT_LAYOUT_BACKSTOP_MS = 250;
+    connectBackstopHolder.timer = setTimeout(connectOnce, CONNECT_LAYOUT_BACKSTOP_MS);
 
     return () => {
       destroyed = true;
       cancelAnimationFrame(repaintSiblingsRaf);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (copyToastTimer) clearTimeout(copyToastTimer);
+      if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
       resizeObserver.disconnect();
       window.removeEventListener("resize", refit);
       container.removeEventListener("contextmenu", onContextMenu);
