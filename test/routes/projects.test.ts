@@ -1231,11 +1231,14 @@ describe("projects route", () => {
       vi.unstubAllGlobals();
       const toClose = apps;
       apps = [];
-      // Not all tracked apps in this block necessarily share one
-      // hooks.sock (the remote-agent test's agentApp deliberately uses its
-      // own SESSIONS_DIR) — this samples the first as a representative
-      // regression guard, same as the other two blocks above.
-      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
+      // Not all tracked apps in this block necessarily share one hooks.sock
+      // (the remote-agent test's agentApp deliberately uses its own
+      // SESSIONS_DIR, pushed onto `apps` before this block's own primary
+      // app) — sampling only toClose[0] would then check the agent's
+      // socket and never the primary's, the one this block's own
+      // SESSIONS_DIR exists to protect. Dedupe and check every distinct
+      // path instead.
+      const hookSocketPaths = [...new Set(toClose.map((app) => app.pty.hookSocketPath))];
       const results = await Promise.allSettled(toClose.map((app) => app.close()));
       const failures = results.filter(
         (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -1246,7 +1249,7 @@ describe("projects route", () => {
             failures.map((f) => String(f.reason)).join("; "),
         );
       }
-      if (hookSocketPath) {
+      for (const hookSocketPath of hookSocketPaths) {
         expect(
           fs.existsSync(hookSocketPath),
           `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
