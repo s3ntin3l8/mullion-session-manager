@@ -1817,6 +1817,72 @@ describe("sessions route", () => {
         await app.close();
       });
 
+      // Hermes review, this PR — the fix's actual headline behavior: for a
+      // source command with a matched adapter that has `initialPromptArgs`
+      // (opencode's `--prompt`, verified against the real CLI in
+      // hook-adapters/opencode.ts's own comment), the seed must reach the
+      // replacement session as a SUBMITTED FIRST TURN (argv), not as
+      // context injected via the SessionStart round trip above — the whole
+      // point of this fix is that the old context-only delivery left the
+      // replacement sitting idle with an unsubmitted seed.
+      it("delivers the promote seed as initialPrompt argv for a seed-capable source command (opencode), not the SessionStart channel", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "opencode" },
+        });
+        const sourceId = created.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+        });
+        expect(res.statusCode).toBe(201);
+        const newSessionId = res.json().id as number;
+
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([command]) => command === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).toBe("opencode --prompt 'resume the refactor'");
+
+        // Never delivered a second time via the SessionStart channel too —
+        // the never-both guard means this session has no stashed seed at
+        // all, so a manual session_start only gets the guide pointer.
+        const session = app.pty.get(String(newSessionId));
+        expect(session).toBeDefined();
+        const socket = await new Promise<net.Socket>((resolve, reject) => {
+          const s = net.createConnection(app.pty.hookSocketPath);
+          s.once("connect", () => resolve(s));
+          s.once("error", reject);
+        });
+        socket.write(`${JSON.stringify({ token: session!.hookToken })}\n`);
+        const replyPromise = new Promise<string>((resolve) => {
+          let buffer = "";
+          socket.on("data", (chunk: Buffer) => {
+            buffer += chunk.toString("utf8");
+            const idx = buffer.indexOf("\n");
+            if (idx !== -1) resolve(buffer.slice(0, idx));
+          });
+        });
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+        const guidePath = sessionAgentGuidePath(
+          path.dirname(app.pty.hookSocketPath),
+          String(newSessionId),
+        );
+        expect(JSON.parse(await replyPromise)).toEqual({
+          additionalContext: buildAgentGuidePointer(guidePath, false),
+        });
+        socket.destroy();
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
       // Issue #678 — the test above fires SessionStart manually AFTER the
       // promote POST has already fully returned, so it proves the seed is
       // consumable but doesn't exercise the actual race createSessionRecord
@@ -1888,14 +1954,23 @@ describe("sessions route", () => {
         return { projectId: project.json().id as number, hostId };
       }
 
-      function makeFakeBackend(resolvePendingPromote: ReturnType<typeof vi.fn>) {
+      function makeFakeBackend(
+        resolvePendingPromote: ReturnType<typeof vi.fn>,
+        // Hermes review, this PR — parameterized (default unchanged) so the
+        // version-skew warning tests below can simulate a remote spawn
+        // response that never echoes `initialPromptApplied` at all
+        // (`{}`, i.e. `undefined`) — an old agent build silently stripping
+        // the unknown field, not the same thing as it explicitly reporting
+        // `false`. See resolveSeedDelivered's own doc comment.
+        spawnResult: { initialPromptApplied?: boolean } = { initialPromptApplied: false },
+      ) {
         return {
           createWorktree: vi.fn().mockResolvedValue({
             created: true,
             path: "/remote/project/.mullion-worktrees/mullion-session-x",
             branch: "mullion/session-x",
           }),
-          spawn: vi.fn().mockResolvedValue({ initialPromptApplied: false }),
+          spawn: vi.fn().mockResolvedValue(spawnResult),
           stashSeed: vi.fn().mockResolvedValue(undefined),
           resolvePendingPromote,
           terminate: vi.fn().mockResolvedValue(undefined),
@@ -2007,6 +2082,144 @@ describe("sessions route", () => {
           method: "POST",
           url: "/api/sessions",
           payload: { projectId, command: "bash" },
+        });
+        expect(sourceRes.statusCode).toBe(201);
+        const sourceId = sourceRes.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(res.json().warnings).toBeUndefined();
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+    });
+
+    // Hermes review, this PR — the `initialPromptApplied` version-skew
+    // warning added alongside the initial-prompt delivery fix, exercised
+    // only for a remote host (a local spawn is always the same build as
+    // this route, so resolveSeedDelivered short-circuits to `true` there
+    // regardless of what the response says — see that helper's own doc
+    // comment and routes/sessions.ts's promote handler).
+    describe("option 2 — POST /:id/promote, initialPromptApplied version-skew warning (remote host)", () => {
+      async function createRemotePromoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "promote-remote-skew", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const hostId = host.json().id as string;
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-promote-skew-p", cwd: "/remote/project", hostId },
+        });
+        return { projectId: project.json().id as number, hostId };
+      }
+
+      function makeFakeBackend(spawnResult: { initialPromptApplied?: boolean }) {
+        return {
+          createWorktree: vi.fn().mockResolvedValue({
+            created: true,
+            path: "/remote/project/.mullion-worktrees/mullion-session-x",
+            branch: "mullion/session-x",
+          }),
+          spawn: vi.fn().mockResolvedValue(spawnResult),
+          stashSeed: vi.fn().mockResolvedValue(undefined),
+          resolvePendingPromote: vi.fn().mockResolvedValue(true),
+          terminate: vi.fn().mockResolvedValue(undefined),
+          liveStatus: vi.fn().mockResolvedValue({}),
+        };
+      }
+
+      it("warns when a remote spawn never echoes initialPromptApplied at all (undefined, not false — an old build silently stripping the field)", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { projectId } = await createRemotePromoteProject(app);
+
+        // `{}` — no `initialPromptApplied` key at all, exactly what an
+        // old-build response looks like: `initialPromptApplied` comes back
+        // `undefined`, not `false`.
+        const fakeBackend = makeFakeBackend({});
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+
+        const sourceRes = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "opencode" },
+        });
+        expect(sourceRes.statusCode).toBe(201);
+        const sourceId = sourceRes.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        expect(body.warnings).toBeDefined();
+        expect(body.warnings).toContain(
+          "The promoted session is running, but its seed prompt could not be submitted as a first turn — it may be sitting idle until you send it a message.",
+        );
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("omits the warning when a remote spawn confirms initialPromptApplied: true", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { projectId } = await createRemotePromoteProject(app);
+
+        const fakeBackend = makeFakeBackend({ initialPromptApplied: true });
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+
+        const sourceRes = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "opencode" },
+        });
+        expect(sourceRes.statusCode).toBe(201);
+        const sourceId = sourceRes.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(res.json().warnings).toBeUndefined();
+
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("never warns when no seed was requested at all, regardless of what the remote spawn reports", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const { projectId } = await createRemotePromoteProject(app);
+
+        const fakeBackend = makeFakeBackend({});
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockReturnValue(fakeBackend);
+
+        const sourceRes = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "opencode" },
         });
         expect(sourceRes.statusCode).toBe(201);
         const sourceId = sourceRes.json().id as number;

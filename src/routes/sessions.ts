@@ -21,7 +21,7 @@ import {
   resolveWorktreeCwd,
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
-import { commandSupportsSeed } from "../services/task-agent-resolve.js";
+import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import {
   withLiveInfo,
   resolveProjectHostId,
@@ -414,10 +414,12 @@ export async function sessionsRoute(app: FastifyInstance) {
   // session's own command has a matched adapter with argv-based
   // `initialPromptArgs` (every registered adapter today: Claude Code,
   // Codex, agy, opencode), the seed is sent as `initialPrompt` instead, so
-  // the replacement starts working immediately. Falls back to the old
-  // context-only `seedPrompt` path for anything with no adapter at all
-  // (`aider`, `gemini`, `pi`, or a plain shell) — never both; see the
-  // `createSessionRecord` call below.
+  // the replacement starts working immediately. For anything with no
+  // adapter at all (`aider`, `gemini`, `pi`, or a plain shell), this
+  // preserves the previous behavior unchanged — those commands have no hook
+  // round trip and no argv channel either, so the `seedPrompt` fallback
+  // below reaches nobody; it's a status-quo no-op, not an actual delivery
+  // channel. Never both; see the `createSessionRecord` call below.
   app.post<{ Params: { id: string }; Body: PromoteSessionBody }>(
     "/api/sessions/:id/promote",
     { schema: promoteSessionSchema },
@@ -530,14 +532,25 @@ export async function sessionsRoute(app: FastifyInstance) {
       // replacement session either way, just with a note that one
       // side-effect didn't land.
       const warnings: string[] = [];
-      // `initialPromptApplied` can come back `false` for a version-skewed
-      // remote agent (an older host build without this fix) — the seed was
-      // requested as a first turn but the replacement's own spawn reported
-      // it wasn't actually submitted, so it's sitting idle exactly like the
-      // symptom this whole change fixes. `undefined` (no `initialPrompt`
-      // was requested at all — either no seed, or this adapter has none)
-      // and `true` both need no warning.
-      if (deliverAsInitialPrompt && created.initialPromptApplied === false) {
+      // Hermes review — a naive `created.initialPromptApplied === false`
+      // check misses the WORST version-skew case: an old remote agent build
+      // doesn't know the `initialPrompt` field exists at all, so Fastify's
+      // default `removeAdditional` silently strips it from the spawn body
+      // before the route handler ever runs — the response never includes
+      // `initialPromptApplied` at all (`undefined`, not `false`), and the
+      // promoted session lands idle with no warning, the exact symptom this
+      // whole change fixes. `resolveSeedDelivered` (task-agent-resolve.ts,
+      // the same helper task-claim.ts's claim/retry/review spawns already
+      // use for this) treats both `undefined` and `false` as undelivered
+      // for a remote host, while returning `true` unconditionally for a
+      // local host (same build as this route, so no version-skew risk to
+      // begin with) regardless of what `initialPromptApplied` says.
+      const seedDelivered = resolveSeedDelivered(
+        deliverAsInitialPrompt,
+        project.hostId,
+        created.initialPromptApplied,
+      );
+      if (deliverAsInitialPrompt && !seedDelivered) {
         warnings.push(
           "The promoted session is running, but its seed prompt could not be submitted as a first turn — it may be sitting idle until you send it a message.",
         );
