@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.29](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.28...v0.2.29) (2026-08-15)
+
+
+### Bug Fixes
+
+* contain projects.test.ts's SocketAlreadyListeningError cascade ([#690](https://github.com/s3ntin3l8/mullion-session-manager/issues/690)) ([bdaaf20](https://github.com/s3ntin3l8/mullion-session-manager/commit/bdaaf203a13fe280fda30e4f9a2f2d07610c387f))
+* defer TerminalPane's initial connect until the first post-layout measurement ([#689](https://github.com/s3ntin3l8/mullion-session-manager/issues/689)) ([2a3ce8f](https://github.com/s3ntin3l8/mullion-session-manager/commit/2a3ce8f70d0ec71068bf1c0ebfb6853c37deefd4))
+* floor terminal geometry so a garbage-tiny resize can't kill a session ([#686](https://github.com/s3ntin3l8/mullion-session-manager/issues/686)) ([875dc26](https://github.com/s3ntin3l8/mullion-session-manager/commit/875dc26d08adc97ca13c6e436f4de73234227b30))
+* submit promote's seed as opencode's first turn instead of silent context ([#688](https://github.com/s3ntin3l8/mullion-session-manager/issues/688)) ([fcb946c](https://github.com/s3ntin3l8/mullion-session-manager/commit/fcb946ced7de4e678ad3856f4dbdbf7612865fa6))
+
 ## [0.2.28](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.27...v0.2.28) (2026-08-14)
 
 
