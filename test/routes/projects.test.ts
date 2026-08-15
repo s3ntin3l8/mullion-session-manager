@@ -871,16 +871,66 @@ describe("projects route", () => {
   });
 
   describe("GET /api/projects/:id/dock", () => {
-    it("404s for an unknown project", async () => {
+    // Issue #525's cascade recurred here (a different trigger: a 5s
+    // testTimeout hit on a loaded CI runner, not an unguarded throw) — a
+    // test that never reaches its own `await app.close()` used to leak a
+    // live hooks.sock listener that every *later* buildApp() in the whole
+    // file failed against with a misleading SocketAlreadyListeningError.
+    // Same containment as the "webhook registration" describe block below:
+    // this block's own SESSIONS_DIR plus an afterEach that closes every
+    // tracked app unconditionally, confining any future leak to this block.
+    let previousSessionsDir: string | undefined;
+    const sessionsDir = uniqueSessionsDir();
+
+    beforeAll(() => {
+      previousSessionsDir = process.env.SESSIONS_DIR;
+      process.env.SESSIONS_DIR = sessionsDir;
+    });
+
+    afterAll(() => {
+      if (previousSessionsDir === undefined) delete process.env.SESSIONS_DIR;
+      else process.env.SESSIONS_DIR = previousSessionsDir;
+      fs.rmSync(sessionsDir, { recursive: true, force: true });
+    });
+
+    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
+    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
       const app = await buildApp();
+      apps.push(app);
+      return app;
+    }
+
+    afterEach(async () => {
+      const toClose = apps;
+      apps = [];
+      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
+      const results = await Promise.allSettled(toClose.map((app) => app.close()));
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failures.length > 0) {
+        throw new Error(
+          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
+            failures.map((f) => String(f.reason)).join("; "),
+        );
+      }
+      if (hookSocketPath) {
+        expect(
+          fs.existsSync(hookSocketPath),
+          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
+        ).toBe(false);
+      }
+    });
+
+    it("404s for an unknown project", async () => {
+      const app = await makeApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/999999/dock" });
       expect(res.statusCode).toBe(404);
-      await app.close();
     });
 
     it("returns [] for a project with no .crs/dock.json", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-dock-empty-"));
-      const app = await buildApp();
+      const app = await makeApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -895,7 +945,6 @@ describe("projects route", () => {
       expect(res.json()).toEqual([]);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("reads the project's own .crs/dock.json controls", async () => {
@@ -910,7 +959,7 @@ describe("projects route", () => {
         }),
       );
 
-      const app = await buildApp();
+      const app = await makeApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -927,11 +976,36 @@ describe("projects route", () => {
       ]);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
   });
 
   describe("GET /api/projects/:id/github (issue #27)", () => {
+    // Same containment as the "dock" describe block above (issue #525's
+    // cascade, re-triggered here by a 5s testTimeout on a loaded CI runner):
+    // this block's own SESSIONS_DIR plus an afterEach that closes every
+    // tracked app unconditionally, confining any leak to this block instead
+    // of poisoning the rest of the file's buildApp() calls.
+    let previousSessionsDir: string | undefined;
+    const sessionsDir = uniqueSessionsDir();
+
+    beforeAll(() => {
+      previousSessionsDir = process.env.SESSIONS_DIR;
+      process.env.SESSIONS_DIR = sessionsDir;
+    });
+
+    afterAll(() => {
+      if (previousSessionsDir === undefined) delete process.env.SESSIONS_DIR;
+      else process.env.SESSIONS_DIR = previousSessionsDir;
+      fs.rmSync(sessionsDir, { recursive: true, force: true });
+    });
+
+    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
+    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
+      const app = await buildApp();
+      apps.push(app);
+      return app;
+    }
+
     let fetchMock: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
@@ -941,6 +1015,26 @@ describe("projects route", () => {
 
     afterEach(async () => {
       vi.unstubAllGlobals();
+      const toClose = apps;
+      apps = [];
+      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
+      const results = await Promise.allSettled(toClose.map((app) => app.close()));
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failures.length > 0) {
+        throw new Error(
+          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
+            failures.map((f) => String(f.reason)).join("; "),
+        );
+      }
+      if (hookSocketPath) {
+        expect(
+          fs.existsSync(hookSocketPath),
+          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
+        ).toBe(false);
+      }
+
       // github-integration's `integrations` row is a singleton shared
       // across this whole test file's DB — reset it after every test in
       // this block so a connected token doesn't leak into an unrelated
@@ -952,22 +1046,20 @@ describe("projects route", () => {
     });
 
     it("400s for a non-integer project id (loadProjectRepoContext's own validation)", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/not-a-number/github" });
       expect(res.statusCode).toBe(400);
-      await app.close();
     });
 
     it("404s for an unknown project", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/999999/github" });
       expect(res.statusCode).toBe(404);
-      await app.close();
     });
 
     it("204s for a local project with no github.com remote", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-none-"));
-      const app = await buildApp();
+      const app = await makeApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -981,7 +1073,6 @@ describe("projects route", () => {
       expect(res.statusCode).toBe(204);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("204s for a project with a github remote but no GitHub account connected", async () => {
@@ -991,7 +1082,7 @@ describe("projects route", () => {
         path.join(projectCwd, ".git", "config"),
         '[remote "origin"]\n\turl = git@github.com:o/r.git\n',
       );
-      const app = await buildApp();
+      const app = await makeApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -1006,7 +1097,6 @@ describe("projects route", () => {
       expect(fetchMock).not.toHaveBeenCalled();
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("returns issue/PR status for a project with a connected token and github remote", async () => {
@@ -1044,7 +1134,7 @@ describe("projects route", () => {
         return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
       });
 
-      const app = await buildApp();
+      const app = await makeApp();
       await app.inject({
         method: "PUT",
         url: "/api/integrations/github/token",
@@ -1069,7 +1159,6 @@ describe("projects route", () => {
       });
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("503s for a project on an unreachable remote host", async () => {
@@ -1079,7 +1168,7 @@ describe("projects route", () => {
       // existing "503s actions/dock" test below relies on.
       vi.unstubAllGlobals();
 
-      const app = await buildApp();
+      const app = await makeApp();
       const host = await app.inject({
         method: "POST",
         url: "/api/hosts",
@@ -1096,12 +1185,41 @@ describe("projects route", () => {
         url: `/api/projects/${project.json().id}/github`,
       });
       expect(res.statusCode).toBe(503);
-
-      await app.close();
     });
   });
 
   describe("GET /api/projects/:id/github/prs (issue #102)", () => {
+    // Same containment as the "dock" and "github" describe blocks above
+    // (issue #525's cascade, re-triggered here by a 5s testTimeout on a
+    // loaded CI runner): this block's own SESSIONS_DIR plus an afterEach
+    // that closes every tracked app unconditionally, confining any leak to
+    // this block instead of poisoning the rest of the file's buildApp()
+    // calls. The "remote-hosted project via the agent" test's own agentApp
+    // keeps using its own uniqueSessionsDir() (it's deliberately on a
+    // *different* SESSIONS_DIR than this block's primary apps, so its
+    // hooksPlugin listener doesn't collide with theirs) — it's still tracked
+    // via makeApp() below so afterEach closes it too.
+    let previousSessionsDir: string | undefined;
+    const sessionsDir = uniqueSessionsDir();
+
+    beforeAll(() => {
+      previousSessionsDir = process.env.SESSIONS_DIR;
+      process.env.SESSIONS_DIR = sessionsDir;
+    });
+
+    afterAll(() => {
+      if (previousSessionsDir === undefined) delete process.env.SESSIONS_DIR;
+      else process.env.SESSIONS_DIR = previousSessionsDir;
+      fs.rmSync(sessionsDir, { recursive: true, force: true });
+    });
+
+    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
+    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
+      const app = await buildApp();
+      apps.push(app);
+      return app;
+    }
+
     let fetchMock: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
@@ -1111,6 +1229,33 @@ describe("projects route", () => {
 
     afterEach(async () => {
       vi.unstubAllGlobals();
+      const toClose = apps;
+      apps = [];
+      // Not all tracked apps in this block necessarily share one hooks.sock
+      // (the remote-agent test's agentApp deliberately uses its own
+      // SESSIONS_DIR, pushed onto `apps` before this block's own primary
+      // app) — sampling only toClose[0] would then check the agent's
+      // socket and never the primary's, the one this block's own
+      // SESSIONS_DIR exists to protect. Dedupe and check every distinct
+      // path instead.
+      const hookSocketPaths = [...new Set(toClose.map((app) => app.pty.hookSocketPath))];
+      const results = await Promise.allSettled(toClose.map((app) => app.close()));
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failures.length > 0) {
+        throw new Error(
+          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
+            failures.map((f) => String(f.reason)).join("; "),
+        );
+      }
+      for (const hookSocketPath of hookSocketPaths) {
+        expect(
+          fs.existsSync(hookSocketPath),
+          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
+        ).toBe(false);
+      }
+
       const app = await buildApp();
       const { disconnect } = await import("../../src/services/github-integration.js");
       disconnect(app);
@@ -1118,15 +1263,14 @@ describe("projects route", () => {
     });
 
     it("404s for an unknown project", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/999999/github/prs" });
       expect(res.statusCode).toBe(404);
-      await app.close();
     });
 
     it("204s for a local project with no github.com remote", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prs-no-remote-"));
-      const app = await buildApp();
+      const app = await makeApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -1140,7 +1284,6 @@ describe("projects route", () => {
       expect(res.statusCode).toBe(204);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("204s for a project with a github remote but empty cache (poller hasn't run yet)", async () => {
@@ -1150,7 +1293,7 @@ describe("projects route", () => {
         path.join(projectCwd, ".git", "config"),
         '[remote "origin"]\n\turl = git@github.com:o/r.git\n',
       );
-      const app = await buildApp();
+      const app = await makeApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -1164,7 +1307,6 @@ describe("projects route", () => {
       expect(res.statusCode).toBe(204);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("204s when the poller cache is populated but has no PRs", async () => {
@@ -1183,7 +1325,7 @@ describe("projects route", () => {
         return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
       });
 
-      const app = await buildApp();
+      const app = await makeApp();
       await app.inject({
         method: "PUT",
         url: "/api/integrations/github/token",
@@ -1210,7 +1352,6 @@ describe("projects route", () => {
       expect(res.statusCode).toBe(204);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("returns per-PR status from the warm cache for a connected project", async () => {
@@ -1229,7 +1370,7 @@ describe("projects route", () => {
         return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
       });
 
-      const app = await buildApp();
+      const app = await makeApp();
       await app.inject({
         method: "PUT",
         url: "/api/integrations/github/token",
@@ -1280,7 +1421,6 @@ describe("projects route", () => {
       expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 });
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("?branch= filters the cached PR list down to that branch's PR (issue #202)", async () => {
@@ -1299,7 +1439,7 @@ describe("projects route", () => {
         return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
       });
 
-      const app = await buildApp();
+      const app = await makeApp();
       await app.inject({
         method: "PUT",
         url: "/api/integrations/github/token",
@@ -1372,7 +1512,6 @@ describe("projects route", () => {
       expect(unfiltered.json().prs).toHaveLength(2);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
-      await app.close();
     });
 
     it("503s for a project on an unreachable remote host (issue #222)", async () => {
@@ -1381,7 +1520,7 @@ describe("projects route", () => {
       // api.github.com fetch mock this describe's beforeEach installs.
       vi.unstubAllGlobals();
 
-      const app = await buildApp();
+      const app = await makeApp();
       const host = await app.inject({
         method: "POST",
         url: "/api/hosts",
@@ -1398,8 +1537,6 @@ describe("projects route", () => {
         url: `/api/projects/${project.json().id}/github/prs`,
       });
       expect(res.statusCode).toBe(503);
-
-      await app.close();
     });
 
     it("returns per-PR status for a remote-hosted project via the agent (issue #222)", async () => {
@@ -1442,7 +1579,7 @@ describe("projects route", () => {
         prevEnv[key] = process.env[key];
         process.env[key] = agentEnv[key as keyof typeof agentEnv];
       }
-      const agentApp = await buildApp();
+      const agentApp = await makeApp();
       for (const key of Object.keys(agentEnv)) {
         if (prevEnv[key] === undefined) delete process.env[key];
         else process.env[key] = prevEnv[key];
@@ -1453,7 +1590,7 @@ describe("projects route", () => {
         throw new Error("expected a real bound address");
       }
 
-      const primary = await buildApp();
+      const primary = await makeApp();
       await primary.inject({
         method: "PUT",
         url: "/api/integrations/github/token",
@@ -1503,8 +1640,6 @@ describe("projects route", () => {
       expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 });
 
       fs.rmSync(remoteCwd, { recursive: true, force: true });
-      await primary.close();
-      await agentApp.close();
     });
   });
 

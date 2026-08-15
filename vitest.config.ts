@@ -29,5 +29,23 @@ export default defineConfig({
     // `make test-e2e` instead.
     exclude: [...configDefaults.exclude, "frontend/**", ...worktreeExcludes, "test/e2e/**"],
     coverage: coverageConfig,
+    // Most tests here call buildApp(), which stands up a full Fastify
+    // instance (db migrations, PtyManager, hooks.sock). Under
+    // `test-shards: 2` on a CI runner (~90 files/shard, 51s of import alone
+    // observed in one run) that routinely brushes the 5000ms default — and
+    // a timeout mid-test leaks the app's hooks.sock, cascading into
+    // SocketAlreadyListeningError for every later buildApp() in the same
+    // file (issue #525's failure mode; see also the per-block containment
+    // in projects.test.ts's "webhook registration" describe).
+    //
+    // Deliberately global, not per-file (e.g. `test.setTimeout(20_000)`
+    // scoped to just the buildApp()-heavy route-test files): buildApp() is
+    // called across many files here, not just projects.test.ts, so scoping
+    // this per-file would just relocate the same trigger elsewhere. The
+    // tradeoff is a genuinely hung (not just slow) test now takes 20s
+    // instead of 5s to surface per shard — acceptable against how common
+    // buildApp() is in this suite.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });
