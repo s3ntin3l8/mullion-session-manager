@@ -21,6 +21,7 @@ import {
   resolveWorktreeCwd,
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
+import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import {
   withLiveInfo,
   resolveProjectHostId,
@@ -402,6 +403,23 @@ export async function sessionsRoute(app: FastifyInstance) {
   // (app.pty.resolvePendingPromote) if one exists for this session — see
   // hooks.ts's pendingPromotes. Works identically for a human-initiated
   // promote (the SessionRow kebab menu), which never has one pending.
+  //
+  // Follow-up to #678 — `seedPrompt` alone only ever injected CONTEXT (a
+  // hook-based agent's SessionStart `additionalContext`, or opencode's
+  // static `instructions` file), never actually submitted a turn: the
+  // replacement session landed idle with the summary loaded but invisible
+  // until a human noticed and typed something. Mirrors the fix already
+  // applied to Task Master's own worker/review-agent spawns
+  // (task-agent-resolve.ts's commandSupportsSeed) — when the source
+  // session's own command has a matched adapter with argv-based
+  // `initialPromptArgs` (every registered adapter today: Claude Code,
+  // Codex, agy, opencode), the seed is sent as `initialPrompt` instead, so
+  // the replacement starts working immediately. For anything with no
+  // adapter at all (`aider`, `gemini`, `pi`, or a plain shell), this
+  // preserves the previous behavior unchanged — those commands have no hook
+  // round trip and no argv channel either, so the `seedPrompt` fallback
+  // below reaches nobody; it's a status-quo no-op, not an actual delivery
+  // channel. Never both; see the `createSessionRecord` call below.
   app.post<{ Params: { id: string }; Body: PromoteSessionBody }>(
     "/api/sessions/:id/promote",
     { schema: promoteSessionSchema },
@@ -435,6 +453,15 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
       const worktreePath = resolvedWorktree.path;
 
+      // Never pass both `initialPrompt` and `seedPrompt`: for an adapter
+      // with argv support, `initialPrompt` alone starts a real turn — also
+      // setting `seedPrompt` would double-deliver the same text (e.g.
+      // opencode would get it once via `--prompt` AND once via its static
+      // `instructions` file; Claude Code once as the submitted turn AND
+      // once as SessionStart `additionalContext`).
+      const hasSeed = seedPrompt !== undefined && seedPrompt.length > 0;
+      const deliverAsInitialPrompt = hasSeed && commandSupportsSeed(row.command);
+
       // Deliberately no `parentSessionId` — promote is a REPLACEMENT (this
       // creates the new session then kills `row` below), not a child. See
       // this file's own test asserting the promoted row's parentSessionId
@@ -446,13 +473,16 @@ export async function sessionsRoute(app: FastifyInstance) {
         cwd: worktreePath,
         kind: row.kind,
         skipPermissions: row.skipPermissions ?? undefined,
+        initialPrompt: deliverAsInitialPrompt ? seedPrompt : undefined,
         // Issue #678 — passed straight through rather than stashed here
         // AFTER createSessionRecord returns (the previous call site, and
         // the actual race this issue is about): createSessionRecord now
         // stashes it BEFORE spawning the new session, so it's guaranteed
         // present by the time a hook-based agent's SessionStart fires, and
-        // also reaches opencode's own spawn-time delivery channel.
-        seedPrompt: seedPrompt && seedPrompt.length > 0 ? seedPrompt : undefined,
+        // also reaches opencode's own spawn-time delivery channel. Only
+        // used as the context-only fallback now — see this handler's own
+        // comment above for when `initialPrompt` is preferred instead.
+        seedPrompt: hasSeed && !deliverAsInitialPrompt ? seedPrompt : undefined,
       });
       if (!created.ok) {
         // createSessionRecord's own spawn-failure rollback only fires for a
@@ -496,20 +526,47 @@ export async function sessionsRoute(app: FastifyInstance) {
         return reply.badGateway("Failed to spawn the promoted session");
       }
 
+      // Collected as a non-fatal `warnings` entry on the 201 response (same
+      // posture as the resolvePendingPromote block below, and Task Master's
+      // own `initialPromptApplied` handling in task-claim.ts): a working
+      // replacement session either way, just with a note that one
+      // side-effect didn't land.
+      const warnings: string[] = [];
+      // Hermes review — a naive `created.initialPromptApplied === false`
+      // check misses the WORST version-skew case: an old remote agent build
+      // doesn't know the `initialPrompt` field exists at all, so Fastify's
+      // default `removeAdditional` silently strips it from the spawn body
+      // before the route handler ever runs — the response never includes
+      // `initialPromptApplied` at all (`undefined`, not `false`), and the
+      // promoted session lands idle with no warning, the exact symptom this
+      // whole change fixes. `resolveSeedDelivered` (task-agent-resolve.ts,
+      // the same helper task-claim.ts's claim/retry/review spawns already
+      // use for this) treats both `undefined` and `false` as undelivered
+      // for a remote host, while returning `true` unconditionally for a
+      // local host (same build as this route, so no version-skew risk to
+      // begin with) regardless of what `initialPromptApplied` says.
+      const seedDelivered = resolveSeedDelivered(
+        deliverAsInitialPrompt,
+        project.hostId,
+        created.initialPromptApplied,
+      );
+      if (deliverAsInitialPrompt && !seedDelivered) {
+        warnings.push(
+          "The promoted session is running, but its seed prompt could not be submitted as a first turn — it may be sitting idle until you send it a message.",
+        );
+      }
+
       // Issue #679 — the new session already exists and is running by this
       // point; a failure here (a remote host that's unreachable or rejects
       // the request) must not turn a genuinely successful promote into a
       // bare 500, and must not skip killing the source session below either
       // — resolvePendingPromote only clears the agent's own blocked
       // `promote_request` MCP tool call, an entirely separate concern from
-      // whether the promote itself succeeded. Collected as a non-fatal
-      // `warnings` entry on the 201 response instead: the human/agent gets
-      // a working replacement session either way, just with a note that one
-      // side-effect didn't land. Same HostRequestError-vs-everything-else
-      // log split as session-lifecycle.ts's logPreviewWorktreeHostError —
-      // a rejection means the agent is up and said no (persistent), unlike
-      // an unreachable host (possibly transient).
-      const warnings: string[] = [];
+      // whether the promote itself succeeded. Same HostRequestError-vs-
+      // everything-else log split as session-lifecycle.ts's own
+      // logPreviewWorktreeHostError — a rejection means the agent is up and
+      // said no (persistent), unlike an unreachable host (possibly
+      // transient).
       try {
         await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
           decision: "accepted",

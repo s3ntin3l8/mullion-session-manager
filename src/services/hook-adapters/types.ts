@@ -131,15 +131,20 @@ export interface HookAgentAdapter {
   emits: readonly HookMessageKind[];
   /** Builds the argv suffix that starts this agent with `prompt` as its
    * initial turn (e.g. Claude Code/Codex: the prompt as a shell-quoted
-   * positional; agy: `-i <prompt>`), for Task Master's unattended worker/
-   * review-agent spawns (see task-claim.ts, task-reconciler.ts). Pure, no
-   * I/O — same posture as `matches()`/`prepareLaunch()`. Absent for agents
-   * with no initial-prompt argv (OpenCode) or none wired yet; the caller
-   * (hook-adapters/index.ts's getAdapterInitialPromptArgs) treats a missing
-   * function the same as "this agent can't receive an initial prompt this
-   * way," matching commandSupportsSeed's existing eligibility set (only
-   * adapters that also declare `session_start` among `emits` are used for
-   * this in practice — see task-agent-resolve.ts). Deliberately NOT part of
+   * positional; agy: `-i <prompt>`; opencode: `--prompt <prompt>`, verified
+   * to actually submit a turn rather than just pre-fill the input — see
+   * opencode.ts's own comment), for Task Master's unattended worker/
+   * review-agent spawns (see task-claim.ts, task-reconciler.ts) and for
+   * routes/sessions.ts's promote handler. Pure, no I/O — same posture as
+   * `matches()`/`prepareLaunch()`. Absent for agents with no initial-prompt
+   * argv at all (currently `aider`/`gemini`/`pi`, none of which have an
+   * adapter) or none wired yet; the caller (hook-adapters/index.ts's
+   * getAdapterInitialPromptArgs) treats a missing function the same as
+   * "this agent can't receive an initial prompt this way." NOT gated on
+   * `session_start` being among `emits` — opencode has this field but never
+   * emits `session_start` (no live hook round trip at all, see opencode.ts's
+   * header), so that emit is not a reliable proxy for this capability.
+   * Deliberately NOT part of
    * `HookLaunchPlan`: `prepareLaunch`'s `ctx` has no task/prompt context, and
    * this needs to be called per-spawn with a prompt that varies per task,
    * not once per adapter registration. The returned string is appended to

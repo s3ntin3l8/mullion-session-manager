@@ -119,19 +119,22 @@ describe("claimTask", () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
-    // opencode's hook adapter doesn't declare session_start — see
-    // task-agent-resolve.test.ts's commandSupportsSeed coverage.
+    // gemini has no hook adapter at all (KNOWN_AGENTS with no adapter entry
+    // — currently aider/gemini/pi), so it's genuinely seed-incapable — see
+    // task-agent-resolve.test.ts's commandSupportsSeed coverage. opencode
+    // used to be this test's example too, but it gained `initialPromptArgs`
+    // (`--prompt`) and is seed-capable now — see hook-adapters/opencode.ts.
     await app.inject({
       method: "PATCH",
       url: `/api/projects/${projectId}`,
-      payload: { defaultAgent: "opencode" },
+      payload: { defaultAgent: "gemini" },
     });
     const task = insertReadyTask(app, projectId, 60);
 
     const outcome = await claimTask(app, task.id, { auto: true });
 
     expect(outcome).toMatchObject({ ok: false, reason: "no-seed-channel" });
-    if (!outcome.ok) expect(outcome.detail).toContain("opencode");
+    if (!outcome.ok) expect(outcome.detail).toContain("gemini");
 
     // The reservation must not be left behind — a refused auto-claim
     // leaves the task exactly as claimable as before the attempt.
@@ -150,7 +153,7 @@ describe("claimTask", () => {
     await app.inject({
       method: "PATCH",
       url: `/api/projects/${projectId}`,
-      payload: { defaultAgent: "opencode" },
+      payload: { defaultAgent: "gemini" },
     });
     const task = insertReadyTask(app, projectId, 61);
 
@@ -159,14 +162,15 @@ describe("claimTask", () => {
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
 
-    // opencode has no initial-prompt argv form (see hook-adapters/index.ts's
-    // getAdapterInitialPromptArgs) — the spawned command must be untouched,
-    // not carrying the task's title/body anywhere.
+    // gemini has no adapter at all, so no initial-prompt argv form (see
+    // hook-adapters/index.ts's getAdapterInitialPromptArgs) — the spawned
+    // command must be untouched, not carrying the task's title/body
+    // anywhere.
     const call = vi
       .mocked(childProcessSpawn)
       .mock.calls.findLast(([command]) => command === "systemd-run");
     const args = call?.[1] as string[];
-    expect(args[args.length - 1]).toBe("opencode");
+    expect(args[args.length - 1]).toBe("gemini");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
@@ -1061,10 +1065,12 @@ describe("retryTask (#483)", () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
+    // gemini, not opencode — opencode is seed-capable now (`--prompt`), see
+    // hook-adapters/opencode.ts's initialPromptArgs.
     await app.inject({
       method: "PATCH",
       url: `/api/projects/${projectId}`,
-      payload: { defaultAgent: "opencode" },
+      payload: { defaultAgent: "gemini" },
     });
     const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 73);
 

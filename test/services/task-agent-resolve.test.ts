@@ -133,8 +133,19 @@ describe("commandSupportsSeed", () => {
     expect(commandSupportsSeed("codex")).toBe(true);
   });
 
-  it("returns false for opencode (no session_start in its emits list)", () => {
-    expect(commandSupportsSeed("opencode")).toBe(false);
+  // Follow-up to #678/#684's promote-seed work — opencode gained
+  // `initialPromptArgs` (`--prompt`, verified to actually submit a turn;
+  // see opencode.ts's own comment) so its promoted/claimed sessions stop
+  // landing idle with an unsubmitted seed. This is NOT gated on
+  // `session_start` being in opencode's `emits` list (it still isn't —
+  // opencode has no live hook round trip at all) — `commandSupportsSeed`
+  // only ever checked `adapterHasInitialPromptArgs`, so the old title here
+  // ("no session_start in its emits list") described a correlation among
+  // the three adapters that had this at the time, not an actual gate. Same
+  // "pinned explicitly" posture as the agy case below: a future adapter
+  // change shouldn't silently regress this again.
+  it("returns true for opencode (--prompt genuinely submits a turn)", () => {
+    expect(commandSupportsSeed("opencode")).toBe(true);
   });
 
   // #487 — agy's adapter gained session_start in commit 7fd21ce1

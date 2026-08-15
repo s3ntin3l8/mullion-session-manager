@@ -97,14 +97,17 @@ export interface CreateSessionOptions {
    * permission prompt — see getSkipPermissionFlag() for the per-agent
    * mapping. Default false. */
   skipPermissions?: boolean;
-  /** Task Master (task-claim.ts/task-reconciler.ts) — a prompt to start the
-   * agent's first turn with, delivered as argv via the matched hook
-   * adapter's `initialPromptArgs` (hook-adapters/index.ts's
+  /** Task Master (task-claim.ts/task-reconciler.ts) and, as of the
+   * promote-flow first-turn fix, routes/sessions.ts's promote handler too —
+   * a prompt to start the agent's first turn with, delivered as argv via
+   * the matched hook adapter's `initialPromptArgs` (hook-adapters/index.ts's
    * getAdapterInitialPromptArgs). A no-op for an agent with no such argv
-   * form (e.g. OpenCode) — the session still spawns, just with no prompt
-   * submitted, same as before this option existed. See Session.spawn()'s
-   * own doc comment for why this can't be delivered via stashSeed's
-   * SessionStart `additionalContext` for an unattended worker. */
+   * form at all (currently only `aider`/`gemini`/`pi`, none of which have
+   * an adapter — every registered adapter, including OpenCode's `--prompt`,
+   * has one now) — the session still spawns, just with no prompt submitted,
+   * same as before this option existed. See Session.spawn()'s own doc
+   * comment for why this can't be delivered via stashSeed's SessionStart
+   * `additionalContext` for an unattended worker. */
   initialPrompt?: string;
   /** Issue #678 — the promote flow's seed prompt (POST
    * /api/sessions/:id/promote's `seedPrompt` body field, or the launcher's
@@ -114,7 +117,12 @@ export interface CreateSessionOptions {
    * trip to deliver it through (opencode — see that adapter's own header).
    * Distinct from `initialPrompt` above: this never submits a turn, it only
    * injects context, matching what a hook-based agent's SessionStart
-   * `additionalContext` already does for it. */
+   * `additionalContext` already does for it. Since the promote-flow
+   * first-turn fix, the promote route only ever sets this for an adapter
+   * with no `initialPromptArgs` at all — opencode itself now prefers
+   * `initialPrompt` instead (see routes/sessions.ts's promote handler), so
+   * this field's `HookAdapterContext.seedPrompt` delivery is a fallback,
+   * not opencode's primary channel anymore. */
   seedPrompt?: string;
   projectId?: number;
 }

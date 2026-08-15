@@ -355,19 +355,23 @@ it never touches session liveness or the time budget, and it must run even
 on a tick with zero claimed/in_progress tasks.
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
-initial-turn argv** (e.g. `claude -- '<prompt>'`, `agy -i='<prompt>'`),
-appended to the spawned command line at launch time — **not** via
-stashing a seed for the `SessionStart` hook to return as
-`additionalContext`, the mechanism this used before. `additionalContext`
-injects context into the agent's conversation but never submits a turn, so
-an unattended agent spawned that way sat at an empty prompt forever (never
-observed as anything other than `idle`, so the reconciler could never
-advance it past `claimed`) — this is what "seed" now means throughout this
-doc and the API's `seedDelivered`/`reviewSeedDelivered` fields: the initial
-prompt, however it's actually delivered, not literally a stashed
-SessionStart seed. (The promote-to-worktree flow, where a human is present
-to type the next message themselves, is unaffected and still uses the
-stashed-seed mechanism.) The leading `--` form (rather than a bare
+initial-turn argv** (e.g. `claude -- '<prompt>'`, `agy -i='<prompt>'`,
+`opencode --prompt '<prompt>'`), appended to the spawned command line at
+launch time — **not** via stashing a seed for the `SessionStart` hook to
+return as `additionalContext`, the mechanism this used before.
+`additionalContext` injects context into the agent's conversation but
+never submits a turn, so an unattended agent spawned that way sat at an
+empty prompt forever (never observed as anything other than `idle`, so the
+reconciler could never advance it past `claimed`) — this is what "seed"
+means throughout this doc and the API's `seedDelivered`/
+`reviewSeedDelivered` fields: the initial prompt, however it's actually
+delivered, not literally a stashed SessionStart seed. (The
+promote-to-worktree flow — a human present, but idle just the same until
+someone notices and types — had this exact bug too; it now prefers the
+same argv delivery whenever the adapter supports it, and only falls back
+to the stashed-seed mechanism for an adapter with none — see
+`routes/sessions.ts`'s promote handler.) The leading `--` form (rather than
+a bare
 `claude '<prompt>'`/`codex '<prompt>'`) matters: a task title starting with
 `-` would otherwise be parsed as an unrecognized option by claude's or
 codex's own CLI, and the agent would exit before its first turn — verified
@@ -378,8 +382,8 @@ either way — the equals form only matters for a print-mode invocation Task
 Master doesn't use today; kept anyway since it's strictly more robust.
 
 Not every agent can receive an initial prompt this way (only adapters that
-declare an `initialPromptArgs` argv form — Claude Code, Codex, and agy
-today, not OpenCode or any `KNOWN_AGENTS` entry with no adapter at all,
+declare an `initialPromptArgs` argv form — Claude Code, Codex, agy, and
+OpenCode today; no `KNOWN_AGENTS` entry with no adapter at all has one,
 currently `aider`/`gemini`/`pi`). For an **autonomous claim** (the worker
 agent only), a resolved agent with no such form is refused outright rather
 than spawning a blind agent with no instructions. A **manual** human claim
