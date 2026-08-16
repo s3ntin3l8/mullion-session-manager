@@ -148,9 +148,59 @@ describe("CommandPalette -> worktree isolation toggle", () => {
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
     const select = await screen.findByRole("combobox");
-    expect(select).toHaveDisplayValue("origin/main");
+    // Hermes review, PR #695 — WorktreeOptions now tags options the same
+    // way PromoteDialog's dropdown already does ("(default)"/"(current)").
+    expect(select).toHaveDisplayValue("origin/main (default)");
     expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "main (current)" })).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #695 — a `defaultBranch` the backend resolved (it
+  // verified against a real commit) can still be absent from the flat
+  // `branches` list `listRemoteBranches` returns, e.g. a symbolic-ref
+  // target enumeration doesn't happen to include. A native <select> with a
+  // `value` outside its own `<option>`s silently displays its first option
+  // instead — this must not happen silently.
+  it("still selects defaultBranch as the display value even when it's absent from the branches list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        branches: () =>
+          Promise.resolve(
+            jsonResponse(200, {
+              branches: [{ name: "main", isCurrent: true }],
+              worktrees: [],
+              remoteBranches: [],
+              defaultBranch: "origin/main",
+            }),
+          ),
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByLabelText("Isolate in a new worktree"));
+    const select = await screen.findByRole("combobox");
+    expect(select).toHaveDisplayValue("origin/main (default)");
+    expect(screen.getByRole("option", { name: "main (current)" })).toBeInTheDocument();
   });
 
   // Falls back to the current branch when there's no resolvable default —
@@ -196,7 +246,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
     const select = await screen.findByRole("combobox");
-    expect(select).toHaveDisplayValue("main");
+    expect(select).toHaveDisplayValue("main (current)");
     expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
   });
 

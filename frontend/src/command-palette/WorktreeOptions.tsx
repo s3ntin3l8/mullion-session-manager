@@ -39,11 +39,28 @@ export function WorktreeOptions({
   baseRef,
   onBaseRefChange,
 }: WorktreeOptionsProps) {
-  const { branches, error } = useGitBranches(projectId, {
+  const { branches, currentBranch, defaultBranch, error } = useGitBranches(projectId, {
     enabled,
     onLoaded: ({ branches, currentBranch, defaultBranch }) => {
       onBaseRefChange((prev) => prev || defaultBranch || currentBranch || branches[0] || "");
     },
+  });
+
+  // Hermes review, PR #695 — `baseRef` can be seeded to `defaultBranch`
+  // (or, on a later manual pick, anything) before it's actually present in
+  // `branches`: `resolveDefaultBaseRefNoFetch` now verifies a symbolic-ref
+  // target resolves to a real commit before returning it, but that's a
+  // different check than "listRemoteBranches enumerated this exact ref" —
+  // and unlike PromoteDialog, this picker had no fallback for the gap. A
+  // native `<select>` given a `value` that isn't among its `<option>`s
+  // renders the first option while React state still holds the mismatched
+  // value — same prepend-if-missing fix PromoteDialog.tsx's own
+  // `dropdownOptions` already uses.
+  const dropdownOptions = (
+    baseRef && !branches.includes(baseRef) ? [baseRef, ...branches] : branches
+  ).map((name) => {
+    const tag = name === defaultBranch ? "default" : name === currentBranch ? "current" : null;
+    return { value: name, label: tag ? `${name} (${tag})` : name };
   });
 
   return (
@@ -59,12 +76,7 @@ export function WorktreeOptions({
       </label>
       {enabled && (
         <div className="cmd-palette-worktree-picker">
-          <Dropdown
-            small
-            value={baseRef}
-            onChange={onBaseRefChange}
-            options={branches.map((name) => ({ value: name, label: name }))}
-          />
+          <Dropdown small value={baseRef} onChange={onBaseRefChange} options={dropdownOptions} />
           {error && (
             <span className="cmd-palette-inline-error" title={error}>
               {error}
