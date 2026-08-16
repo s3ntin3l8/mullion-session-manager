@@ -8,6 +8,7 @@ import {
   listRemoteBranches,
   listWorktrees,
   resolveDefaultBaseRef,
+  resolveDefaultBaseRefForPicker,
   resolveCommitSha,
 } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -297,6 +298,79 @@ describe("resolveDefaultBaseRef (issue #216)", () => {
     git(tmpDir, ["push", "origin", "main:master"]);
 
     expect(await resolveDefaultBaseRef(tmpDir)).toBe("origin/master");
+  });
+});
+
+describe("resolveDefaultBaseRefForPicker (issue #271 follow-up)", () => {
+  // The base-ref pickers' variant: same no-fetch chain as
+  // resolveDefaultBaseRef, but "HEAD" (a fine worktree-creation arg, a bad
+  // UI default) is normalized to `null` instead of leaking through.
+  let tmpDir: string;
+  let remoteDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-default-base-ref-picker-test-"));
+    remoteDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "git-refs-default-base-ref-picker-origin-test-"),
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("returns null for a non-git-repo directory", async () => {
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBeNull();
+  });
+
+  it("returns null (not the literal 'HEAD') for a repo with no origin remote configured", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBeNull();
+  });
+
+  it("resolves origin/main when origin/HEAD's symbolic ref is set", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    git(tmpDir, ["remote", "set-head", "origin", "main"]);
+
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBe("origin/main");
+  });
+
+  // Hermes review, PR #695 — a dangling `refs/remotes/origin/HEAD` (upstream
+  // default branch renamed/deleted, or a stale clone whose local
+  // remote-tracking ref got pruned) must not be returned unverified: the
+  // symbolic ref itself still resolves, but its target commit doesn't.
+  // Falls through to the same origin/main|origin/master check every other
+  // candidate already gets, same as if origin/HEAD had never been set at
+  // all. No-fetch is what makes this reproducible: resolveDefaultBaseRef's
+  // own `git fetch origin` would otherwise just re-download the "missing"
+  // ref from this test's still-intact bare remote and mask the bug.
+  it("falls through to origin/master when origin/HEAD points at a locally-pruned origin/main", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    git(tmpDir, ["push", "origin", "main:master"]);
+    git(tmpDir, ["remote", "set-head", "origin", "main"]);
+    // Simulates a stale clone whose local remote-tracking ref for the
+    // upstream default branch is gone (pruned, or the branch itself
+    // renamed/deleted upstream and never re-fetched): refs/remotes/
+    // origin/HEAD still symbolically points at refs/remotes/origin/main,
+    // but that ref itself no longer exists locally.
+    git(tmpDir, ["update-ref", "-d", "refs/remotes/origin/main"]);
+
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBe("origin/master");
   });
 });
 

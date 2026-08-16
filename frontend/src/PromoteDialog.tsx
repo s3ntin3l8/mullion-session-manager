@@ -17,13 +17,21 @@ import { GitBranchIcon } from "./ui/icons.js";
 //
 // Base-ref picker (the roadmap's "not one hardcoded rule" requirement for
 // the interactive path): local branches + remote-tracking branches, default
-// = the project's current branch — the model's own suggestedBaseRef is a
-// starting point while branches are still loading, never a value the
-// current-branch fetch is prevented from correcting (see `userEditedBaseRef`
-// below: a bug found in production had the suggestion permanently pin
-// `baseRef` via a `prev || …` guard, so a successful branches load could
-// never override a stale/wrong suggestion — the worktree silently got cut
-// from the wrong commit).
+// = the repo's resolved default branch (e.g. "origin/main") — promoting
+// means "start fresh work in isolation," which should branch off the
+// project's actual default, not off whatever the source session happens to
+// be sitting on. Falls back to the current branch when no default could be
+// resolved (no remote configured, older remote-host agent that predates
+// this field), then to the model's own suggestedBaseRef while branches are
+// still loading, then to the first branch in the list. Once loaded, neither
+// the branches fetch nor the initial suggestion is allowed to overwrite a
+// value the user has actually chosen (see `userEditedBaseRef` below: a bug
+// found in production had the suggestion permanently pin `baseRef` via a
+// `prev || …` guard, so a successful branches load could never override a
+// stale/wrong suggestion — the worktree silently got cut from the wrong
+// commit). A session on a feature branch now gets a worktree with none of
+// that branch's work by default — intended (promoting a feature branch
+// mid-work is one click away via the "(current)" option), not an oversight.
 export function PromoteDialog({
   session,
   project,
@@ -73,14 +81,17 @@ export function PromoteDialog({
   const {
     branches,
     currentBranch,
+    defaultBranch,
     error: branchesError,
   } = useGitBranches(project.id, {
-    onLoaded: ({ branches, currentBranch }) => {
+    onLoaded: ({ branches, currentBranch, defaultBranch }) => {
       if (userEditedBaseRef) return;
-      // Current branch wins over the model's suggestion once we actually
-      // know it — the suggestion only exists as a fallback for when this
-      // fetch never succeeds (rate-limited, host unreachable, etc.).
-      setBaseRef(currentBranch || suggestedBaseRef || branches[0] || "");
+      // The repo's default branch wins once we actually know it — current
+      // branch is the fallback for a repo with no resolvable default, and
+      // the model's suggestion only exists as a fallback for when the
+      // branches fetch never succeeds (rate-limited, host unreachable,
+      // etc.).
+      setBaseRef(defaultBranch || currentBranch || suggestedBaseRef || branches[0] || "");
     },
   });
 
@@ -96,10 +107,16 @@ export function PromoteDialog({
   const canPickFromList = branches.length > 0;
   const dropdownOptions = (
     baseRef && !branches.includes(baseRef) ? [baseRef, ...branches] : branches
-  ).map((name) => ({
-    value: name,
-    label: name === currentBranch ? `${name} (current)` : name,
-  }));
+  ).map((name) => {
+    // `defaultBranch` is a remote-tracking ref ("origin/main") and
+    // `currentBranch` is a local one ("main") — different list entries in
+    // the ordinary case, so both labels normally appear, just on different
+    // rows. `defaultBranch` is checked first only to keep a dropdown entry
+    // from ever showing both tags (there's no realistic way for the two
+    // strings to be equal, but the ordering still needs a tiebreaker).
+    const tag = name === defaultBranch ? "default" : name === currentBranch ? "current" : null;
+    return { value: name, label: tag ? `${name} (${tag})` : name };
+  });
 
   const confirm = () => {
     const trimmedBaseRef = baseRef.trim();
@@ -259,7 +276,9 @@ export function PromoteDialog({
           )}
         </span>
         <span className="create-modal-field-hint">
-          The new worktree's branch is created off this ref.
+          The new worktree's branch is created off this ref — defaults to the repo's default branch,
+          not the current one, so switch to the "(current)" entry to branch off this session's
+          committed work instead. Uncommitted changes never carry over to a new worktree either way.
         </span>
         {branchesError && (
           <span className="create-modal-field-hint error">

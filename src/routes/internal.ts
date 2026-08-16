@@ -49,6 +49,7 @@ import {
   listRemoteBranches,
   listWorktrees,
   resolveDefaultBaseRef,
+  resolveDefaultBaseRefForPicker,
   resolveCommitSha,
 } from "../services/git-refs.js";
 import {
@@ -1093,13 +1094,14 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      const [branches, worktrees, remoteBranches] = await Promise.all([
+      const [branches, worktrees, remoteBranches, defaultBranch] = await Promise.all([
         listBranches(resolvedCwd, { detail: detail === "1" }),
         listWorktrees(resolvedCwd),
         listRemoteBranches(resolvedCwd),
+        resolveDefaultBaseRefForPicker(resolvedCwd),
       ]);
       if (!branches || !worktrees || !remoteBranches) return null;
-      return { branches, worktrees, remoteBranches };
+      return { branches, worktrees, remoteBranches, defaultBranch };
     },
   );
 

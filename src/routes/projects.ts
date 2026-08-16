@@ -41,6 +41,7 @@ import {
   listBranches,
   listRemoteBranches,
   listWorktrees,
+  resolveDefaultBaseRefForPicker,
   type GitBranchInfo,
   type GitWorktreeInfo,
 } from "../services/git-refs.js";
@@ -1662,15 +1663,27 @@ export async function projectsRoute(app: FastifyInstance) {
         branches: GitBranchInfo[];
         worktrees: GitWorktreeInfo[];
         remoteBranches: string[];
+        // Issue #271 follow-up — the promote/launcher base-ref pickers'
+        // default. `undefined` on an old remote host that hasn't been
+        // upgraded yet (see the degradation convention at
+        // shared/types.ts's own doc comment); `null` when this host
+        // resolved it and found no usable default (no remote, or the
+        // fallback chain bottomed out at "HEAD" — see
+        // resolveDefaultBaseRefForPicker). Either way callers fall back to
+        // the current branch.
+        defaultBranch?: string | null;
       } | null;
       if (project.hostId === LOCAL_HOST_ID) {
-        const [branches, worktrees, remoteBranches] = await Promise.all([
+        const [branches, worktrees, remoteBranches, defaultBranch] = await Promise.all([
           listBranches(project.cwd, { detail }),
           listWorktrees(project.cwd),
           listRemoteBranches(project.cwd),
+          resolveDefaultBaseRefForPicker(project.cwd),
         ]);
         result =
-          branches && worktrees && remoteBranches ? { branches, worktrees, remoteBranches } : null;
+          branches && worktrees && remoteBranches
+            ? { branches, worktrees, remoteBranches, defaultBranch }
+            : null;
       } else {
         try {
           result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(

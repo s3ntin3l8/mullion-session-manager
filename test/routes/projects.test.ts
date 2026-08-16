@@ -2609,8 +2609,50 @@ describe("projects route", () => {
         true,
       );
       expect(body.worktrees).toEqual([{ path: projectCwd, branch: "main", isMain: true }]);
+      // Issue #271 follow-up — no remote configured, so there's nothing to
+      // resolve a default branch from; `null`, never the literal "HEAD".
+      expect(body.defaultBranch).toBeNull();
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("resolves defaultBranch from origin/HEAD for the promote/launcher base-ref pickers (issue #271 follow-up)", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-branches-default-"));
+      const remoteDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "projects-git-branches-default-origin-"),
+      );
+      const run = (cwd: string, args: string[]) =>
+        execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+
+      run(remoteDir, ["init", "--bare", "-b", "main"]);
+      run(projectCwd, ["init", "-b", "main"]);
+      run(projectCwd, ["config", "user.email", "test@example.com"]);
+      run(projectCwd, ["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      run(projectCwd, ["add", "-A"]);
+      run(projectCwd, ["commit", "-m", "initial", "--no-verify"]);
+      run(projectCwd, ["remote", "add", "origin", remoteDir]);
+      run(projectCwd, ["push", "origin", "main"]);
+      run(projectCwd, ["remote", "set-head", "origin", "main"]);
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "default-branch-repo", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/git-branches`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().defaultBranch).toBe("origin/main");
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      fs.rmSync(remoteDir, { recursive: true, force: true });
       await app.close();
     });
 

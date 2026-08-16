@@ -566,6 +566,15 @@ export interface GitBranchesResult {
   // separate from `branches` rather than merged in — see
   // src/services/git-refs.ts's listRemoteBranches doc comment.
   remoteBranches: string[];
+  // Issue #271 follow-up — the repo's resolved default branch (e.g.
+  // "origin/main"), for the promote/launcher base-ref pickers to prefer
+  // over the current branch. `undefined` when this response came from a
+  // pre-upgrade remote agent that doesn't send it yet; `null` when the
+  // fetching host resolved it and found no usable default (no remote
+  // configured, or the fallback chain bottomed out). Both cases mean
+  // "fall back to the current branch" — see git-refs.ts's
+  // resolveDefaultBaseRefForPicker.
+  defaultBranch?: string | null;
 }
 
 // Mirrors src/services/git-branch-delete.ts's DeleteBranchResult, plus the

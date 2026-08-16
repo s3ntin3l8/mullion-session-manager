@@ -223,12 +223,31 @@ export async function listRemoteBranches(cwd: string): Promise<string[] | null> 
  * `listBranches`' on-panel-open caller. Assumes `cwd` has already been
  * validated (`isSafeAbsolutePath` + `.git` exists) by the caller.
  */
-async function resolveDefaultBaseRefNoFetch(cwd: string): Promise<string> {
+export async function resolveDefaultBaseRefNoFetch(cwd: string): Promise<string> {
   const symbolic = await runGit(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   const remotePrefix = "refs/remotes/";
   if (symbolic) {
     const trimmed = symbolic.trim();
-    if (trimmed.startsWith(remotePrefix)) return trimmed.slice(remotePrefix.length);
+    if (trimmed.startsWith(remotePrefix)) {
+      const target = trimmed.slice(remotePrefix.length);
+      // Hermes review, PR #695 — unlike the origin/main|origin/master
+      // candidates below, `symbolic-ref` alone doesn't confirm `target`
+      // still resolves to a real commit: a stale clone whose upstream
+      // default branch was renamed/deleted leaves a dangling
+      // `refs/remotes/origin/HEAD` pointing at a ref that no longer exists
+      // locally. Verify before trusting it as the picker default — an
+      // unusable ref here would otherwise reach `git worktree add -b …
+      // <target>` and fail promote/the launcher's worktree toggle outright,
+      // instead of falling through to the same origin/main|origin/master
+      // check every other candidate already gets.
+      const verified = await runGit(cwd, [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        `${target}^{commit}`,
+      ]);
+      if (verified !== null) return target;
+    }
   }
 
   for (const candidate of ["origin/main", "origin/master"]) {
@@ -254,6 +273,38 @@ export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
   await runGit(cwd, ["fetch", "origin", "--quiet"]);
 
   return resolveDefaultBaseRefNoFetch(cwd);
+}
+
+/**
+ * The `/api/projects/:id/git-branches` route's variant for the promote and
+ * launcher base-ref pickers (issue #271 follow-up): same no-fetch chain as
+ * `resolveDefaultBaseRefNoFetch` (this route is on the sidebar's 60s
+ * background poll, so a `git fetch` per call is wrong here too — see that
+ * function's own doc comment), but returns `null` instead of the literal
+ * `"HEAD"` fallback. `"HEAD"` is a fine worktree-creation argument (git
+ * always accepts it) but a bad UI default: it isn't a real ref a human would
+ * recognize, and surfacing it would prepend an unfamiliar "HEAD" entry to
+ * the base-ref dropdown and preselect it. `null` lets callers fall back to
+ * the current branch instead, exactly like a repo with no `origin` at all
+ * (there's no meaningful way to distinguish "no remote" from "remote
+ * present but nothing resolved" here, and callers don't need to).
+ */
+export async function resolveDefaultBaseRefForPicker(cwd: string): Promise<string | null> {
+  // CodeQL's js/path-injection flags the existsSync call below since `cwd`
+  // traces back to request.body — the same "real mitigation, not a
+  // CodeQL-recognized sanitizer shape" situation this file's own
+  // resolveDefaultBaseRef/resolveCommitSha (and git-worktree.ts's/
+  // git-branch-delete.ts's own isSafeAbsolutePath-gated calls) already rely
+  // on for this identical query. Dismissed in GHAS as a false positive
+  // rather than reshaping already-verified-safe code to chase a query that
+  // doesn't model manual containment checks as sanitizers (this repo's
+  // codeql.yml has no follow-up step to turn an in-line `codeql[...]`
+  // suppression annotation into an actual Security-tab dismissal, so the
+  // dismissal happens via the API/UI instead — see git-worktree.ts's own
+  // note on this exact pattern).
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+  const resolved = await resolveDefaultBaseRefNoFetch(cwd);
+  return resolved === "HEAD" ? null : resolved;
 }
 
 /**
