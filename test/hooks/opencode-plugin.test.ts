@@ -29,8 +29,19 @@ describe("opencode-plugin.js module shape (regression: opencode startup crash)",
 });
 
 describe("mapOpenCodeEvent (issue #175)", () => {
-  it("maps session.idle to a done progress message", () => {
+  // Issue #271 follow-up — session.idle's own payload carries opencode's
+  // internal session id for free; mapOpenCodeEvent now also reports it as a
+  // second "agent_session" message alongside the existing progress one, so a
+  // later promote can transfer this session's real conversation history.
+  it("maps session.idle to a done progress message plus the live agent_session id", () => {
     expect(mapOpenCodeEvent({ type: "session.idle", properties: { sessionID: "1" } })).toEqual([
+      { kind: "progress", phase: "done" },
+      { kind: "agent_session", sessionId: "1" },
+    ]);
+  });
+
+  it("omits the agent_session message when session.idle carries no sessionID", () => {
+    expect(mapOpenCodeEvent({ type: "session.idle", properties: {} })).toEqual([
       { kind: "progress", phase: "done" },
     ]);
   });
@@ -605,14 +616,19 @@ describe("MullionHookEmitter (issue #175)", () => {
     process.env.MULLION_HOOK_SOCKET = socketPath;
     process.env.MULLION_HOOK_TOKEN = "tok-456";
 
-    const linesPromise = collectLines(3);
+    // 4 lines, not 3: session.idle now sends TWO messages (progress, then
+    // the issue #271 follow-up's agent_session — see mapOpenCodeEvent's own
+    // test above), still over the same reused connection as file.edited's
+    // single file_change message.
+    const linesPromise = collectLines(4);
     const hooks = await MullionHookEmitter();
     await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "1" } } });
     await hooks.event?.({ event: { type: "file.edited", properties: { file: "/repo/a.ts" } } });
 
-    const [, second, third] = await linesPromise;
+    const [, second, third, fourth] = await linesPromise;
     expect(JSON.parse(second)).toEqual({ kind: "progress", phase: "done" });
-    expect(JSON.parse(third)).toEqual({
+    expect(JSON.parse(third)).toEqual({ kind: "agent_session", sessionId: "1" });
+    expect(JSON.parse(fourth)).toEqual({
       kind: "file_change",
       path: "/repo/a.ts",
       action: "modify",

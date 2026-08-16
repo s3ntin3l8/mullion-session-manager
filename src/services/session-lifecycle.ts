@@ -203,6 +203,13 @@ export type CreateSessionParams = CreateSessionBody & {
   // (pty-manager.ts) for why this is stashed BEFORE spawn() is called, not
   // after — that ordering is the actual race fix this issue is about.
   seedPrompt?: string;
+  // Issue #271 follow-up — routes/sessions.ts's promote handler, when
+  // opencode-session-transfer.ts already imported the source session's full
+  // conversation history into this new session's own worktree cwd. Also NOT
+  // part of CreateSessionBody, same posture as initialPrompt/seedPrompt
+  // above. See SessionBackend.spawn's own doc comment for why this is
+  // local-only for now.
+  resumeAgentSessionId?: string;
 };
 
 export type CreateSessionResult =
@@ -257,6 +264,7 @@ export async function createSessionRecord(
     skipPermissions,
     initialPrompt,
     seedPrompt,
+    resumeAgentSessionId,
   } = params;
   let cwd = params.cwd;
 
@@ -423,6 +431,7 @@ export async function createSessionRecord(
       skipPermissions,
       initialPrompt,
       seedPrompt,
+      resumeAgentSessionId,
       projectId,
     });
   } catch (err) {

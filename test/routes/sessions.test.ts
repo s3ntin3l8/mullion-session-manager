@@ -39,10 +39,24 @@ vi.mock("node:child_process", async (importOriginal) => {
   return mockChildProcessSpawn(actual, { passthrough: ["git"] });
 });
 
+// Issue #271 follow-up — opencode-session-transfer.ts's own subprocess calls
+// (`opencode export`/`import`) would otherwise hit the generic
+// mockChildProcessSpawn fake above, which emits "exit" not "close" and so
+// would hang runOpencode() until its own internal timeout. Mocked one layer
+// up instead: the promote route tests below only need to verify the ROUTE's
+// own decision logic (call the transfer, wire a success into the spawn argv,
+// surface a failure as a warning and fall back to the ordinary seed) — the
+// transfer service's own internals (id rewriting, subprocess handling) are
+// already covered directly in opencode-session-transfer.test.ts.
+vi.mock("../../src/services/opencode-session-transfer.js", () => ({
+  transferOpencodeSession: vi.fn(),
+}));
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { buildAgentGuidePointer } = await import("../../src/plugins/hooks.js");
 const { sessionAgentGuidePath } = await import("../../src/services/agent-guide.js");
+const { transferOpencodeSession } = await import("../../src/services/opencode-session-transfer.js");
 
 const tmpDb = path.join(os.tmpdir(), `sessions-test-${process.pid}.db`);
 
@@ -2120,6 +2134,150 @@ describe("sessions route", () => {
         getOrCreateSpy.mockRestore();
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();
+      });
+
+      // Issue #271 follow-up — full-context transfer. transferOpencodeSession
+      // is mocked (see this file's own top-of-file comment on that mock) so
+      // these tests exercise only the route's own decision logic: when to
+      // attempt a transfer, and how its result changes what gets spawned.
+      describe("opencode full-context transfer (issue #271 follow-up)", () => {
+        async function createOpencodeSessionWithAgentSessionId(
+          app: Awaited<ReturnType<typeof buildApp>>,
+          projectId: number,
+          agentSessionId: string,
+        ): Promise<number> {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "opencode" },
+          });
+          const sourceId = created.json().id as number;
+          const session = app.pty.get(String(sourceId))!;
+
+          const socket = await new Promise<net.Socket>((resolve, reject) => {
+            const s = net.createConnection(app.pty.hookSocketPath);
+            s.once("connect", () => resolve(s));
+            s.once("error", reject);
+          });
+          socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+          socket.write(`${JSON.stringify({ kind: "agent_session", sessionId: agentSessionId })}\n`);
+          await waitUntil(() => session.agentSessionId === agentSessionId);
+          socket.destroy();
+          return sourceId;
+        }
+
+        it("wires a successful transfer's new session id into --session argv with no --prompt, and surfaces a note instead of a nudge", async () => {
+          // Empirically, opencode's bare TUI silently drops `--prompt` when
+          // paired with `--session`/`--continue` (see hook-adapters/
+          // opencode.ts's `resumeSessionArgs` comment) — so a successful
+          // transfer must NOT synthesize a continuation nudge as
+          // `initialPrompt`; it must ship `--session` alone and tell the
+          // user via `warnings[]` instead.
+          vi.mocked(transferOpencodeSession).mockReset().mockResolvedValue({
+            transferred: true,
+            newSessionId: "ses_transferred_abc",
+          });
+          const app = await buildApp();
+          const cwd = createGitRepo();
+          const projectId = await createProjectWithGitRepo(app, cwd);
+          const sourceId = await createOpencodeSessionWithAgentSessionId(
+            app,
+            projectId,
+            "ses_source_live",
+          );
+
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+          });
+          expect(res.statusCode).toBe(201);
+          expect(res.json().warnings).toEqual([
+            "Full conversation history was carried over — the new session is picking up right where you left off and is waiting for your next message.",
+          ]);
+
+          // Runs from `repoCwd` (the project root), not the source
+          // session's own `row.cwd` — #693's fix exists precisely because
+          // that directory can be a prior promote's now-deleted worktree.
+          expect(transferOpencodeSession).toHaveBeenCalledWith(
+            expect.objectContaining({ agentSessionId: "ses_source_live", sourceCwd: cwd }),
+          );
+
+          const call = vi
+            .mocked(spawnChildProcess)
+            .mock.calls.findLast(([command]) => command === "systemd-run");
+          const args = call?.[1] as string[];
+          const finalCommand = args[args.length - 1]!;
+          expect(finalCommand).toContain("--session 'ses_transferred_abc'");
+          expect(finalCommand).not.toContain("--prompt");
+          // The original seed text must NOT be resubmitted — it's already
+          // part of the transferred history, and --prompt would be dropped
+          // silently on resume anyway.
+          expect(finalCommand).not.toContain("resume the refactor");
+          expect(finalCommand).not.toContain("Continue where you left off");
+
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        });
+
+        it("falls back to the ordinary seed and surfaces a warning when the transfer fails", async () => {
+          vi.mocked(transferOpencodeSession)
+            .mockReset()
+            .mockResolvedValue({ transferred: false, reason: "opencode export failed" });
+          const app = await buildApp();
+          const cwd = createGitRepo();
+          const projectId = await createProjectWithGitRepo(app, cwd);
+          const sourceId = await createOpencodeSessionWithAgentSessionId(
+            app,
+            projectId,
+            "ses_source_live",
+          );
+
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+          });
+          expect(res.statusCode).toBe(201);
+          expect(res.json().warnings).toEqual([
+            "Couldn't carry over the full conversation history — the new session started with a summary instead.",
+          ]);
+
+          const call = vi
+            .mocked(spawnChildProcess)
+            .mock.calls.findLast(([command]) => command === "systemd-run");
+          const args = call?.[1] as string[];
+          const finalCommand = args[args.length - 1]!;
+          expect(finalCommand).toContain("--prompt 'resume the refactor'");
+          expect(finalCommand).not.toContain("--session");
+
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        });
+
+        it("never attempts a transfer when this session has no known live agentSessionId", async () => {
+          vi.mocked(transferOpencodeSession).mockReset();
+          const app = await buildApp();
+          const cwd = createGitRepo();
+          const projectId = await createProjectWithGitRepo(app, cwd);
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "opencode" },
+          });
+          const sourceId = created.json().id as number;
+
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+          });
+          expect(res.statusCode).toBe(201);
+          expect(transferOpencodeSession).not.toHaveBeenCalled();
+
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        });
       });
     });
 

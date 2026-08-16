@@ -45,6 +45,13 @@ export interface SessionBackend {
     skipPermissions?: boolean;
     initialPrompt?: string;
     seedPrompt?: string;
+    // Issue #271 follow-up — local-only for now (see routes/sessions.ts's
+    // promote handler, which never sets this for a non-LOCAL_HOST_ID
+    // project): RemoteBackend.spawn below accepts it for interface
+    // uniformity with LocalBackend but does NOT forward it over the wire,
+    // since the remote agent side of opencode-session-transfer.ts doesn't
+    // exist yet.
+    resumeAgentSessionId?: string;
     projectId?: number;
   }): Promise<SpawnResult>;
   liveStatus(
@@ -182,6 +189,7 @@ class LocalBackend implements SessionBackend {
     skipPermissions?: boolean;
     initialPrompt?: string;
     seedPrompt?: string;
+    resumeAgentSessionId?: string;
     projectId?: number;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
@@ -341,9 +349,17 @@ class RemoteBackend implements SessionBackend {
     skipPermissions?: boolean;
     initialPrompt?: string;
     seedPrompt?: string;
+    resumeAgentSessionId?: string;
     projectId?: number;
   }): Promise<SpawnResult> {
-    return this.client.spawn(opts);
+    // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
+    // here rather than forwarded: see SessionBackend.spawn's own doc comment
+    // for why remote-host transfer isn't implemented yet. The caller never
+    // sets it for a remote-hosted project in the first place (routes/
+    // sessions.ts's promote handler), so this is a defensive no-op, not a
+    // silently-lossy path a real caller would hit.
+    const { resumeAgentSessionId: _resumeAgentSessionId, ...remoteSpawnOpts } = opts;
+    return this.client.spawn(remoteSpawnOpts);
   }
 
   liveStatus(

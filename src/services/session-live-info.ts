@@ -25,7 +25,10 @@ import { resolveBackend } from "./session-backend.js";
 // session-reconciler's error staleness sweep (issue #320), not something the
 // frontend or deriveSessionStatus needs — see SessionInfo.errorAt's own doc
 // comment. `backgroundTasksAt` (issue #428) is excluded for the identical
-// reason — see SessionInfo.backgroundTasksAt's own doc comment.
+// reason — see SessionInfo.backgroundTasksAt's own doc comment. `agentSessionId`
+// (issue #271 follow-up) is excluded the same way: it's read directly off
+// `app.pty.get(id)` by the (local-only) promote route's own transfer
+// decision, never surfaced to the frontend or consumed by deriveSessionStatus.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
   | "id"
@@ -36,6 +39,7 @@ type LiveInfoKey = Exclude<
   | "createdAt"
   | "errorAt"
   | "backgroundTasksAt"
+  | "agentSessionId"
   | "stateRestored"
   | "staleHooks"
   | "restoredVersion"

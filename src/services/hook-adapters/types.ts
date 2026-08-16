@@ -153,4 +153,19 @@ export interface HookAgentAdapter {
    * through `matches()` or any other command-line parser, so prompt text
    * containing shell metacharacters can never confuse those. */
   initialPromptArgs?(prompt: string): string;
+  /** Issue #271 follow-up — builds the argv suffix that resumes an EXISTING
+   * agent-native session by id, for routes/sessions.ts's promote handler
+   * once opencode-session-transfer.ts has imported the source session's
+   * conversation history into the new worktree. Currently opencode-only
+   * (`--session <id>`, verified empirically to run subsequent tool calls
+   * with cwd = the directory opencode was invoked in, not the transferred
+   * session's original directory — see opencode-session-transfer.ts's own
+   * doc comment for the full empirical spike this rests on). Claude Code's
+   * `~/.claude/projects/` keys sessions by literal cwd, so it has no
+   * equivalent resume-by-id concept to implement this for. Same "pure, no
+   * I/O, appended last" posture as `initialPromptArgs` above — when both are
+   * present for a launch, `--session <id>` is appended first so a following
+   * `--prompt <text>` is unambiguously the resumed session's next turn, not
+   * a fresh one. */
+  resumeSessionArgs?(agentSessionId: string): string;
 }

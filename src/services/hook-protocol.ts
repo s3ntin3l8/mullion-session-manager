@@ -224,6 +224,23 @@ export interface CwdChangedHookMessage {
   cwd: string;
 }
 
+/** Promote-flow full-context carryover (issue #271 follow-up) — opencode's
+ * own internal session id, so a later promote can `opencode export`/`import`
+ * this session's real conversation history into the new worktree session
+ * instead of just a seed summary (see opencode-session-transfer.ts). Sent by
+ * opencode-plugin.js on every `session.idle` (the event already carries
+ * `properties.sessionID` for free — no extra hook registration needed),
+ * overwriting any previous value: this is a LIVE "what's the current
+ * opencode session id" fact, same posture as `cwd_changed`/`git_branch`
+ * above, not a one-time announcement. Only opencode currently produces this
+ * (see hook-adapters/opencode.ts's own `emits` declaration) — Claude Code's
+ * `~/.claude/projects/` keys by literal cwd, so it has no equivalent
+ * resumable-session-id concept to report in the first place. */
+export interface AgentSessionHookMessage {
+  kind: "agent_session";
+  sessionId: string;
+}
+
 /** Issue: extend surfaced session statuses — sent when an agent begins
  * processing a genuinely new user turn (Claude Code's `UserPromptSubmit`,
  * remapped from the generic `notification` it produced before this — see
@@ -403,6 +420,7 @@ export type HookMessage =
   | PlanReadyHookMessage
   | GitBranchHookMessage
   | CwdChangedHookMessage
+  | AgentSessionHookMessage
   | TurnStartHookMessage
   | CompactHookMessage
   | SubagentHookMessage
@@ -442,6 +460,7 @@ export type HookMessageKind =
   | "plan_ready"
   | "git_branch"
   | "cwd_changed"
+  | "agent_session"
   | "turn_start"
   | "compact"
   | "subagent"
@@ -721,6 +740,13 @@ function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageR
   return { ok: true, message: { kind: "cwd_changed", cwd: payload.cwd } };
 }
 
+function validateAgentSession(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.sessionId) || payload.sessionId.length === 0) {
+    return { ok: false, error: "agent_session requires a non-empty string 'sessionId' field" };
+  }
+  return { ok: true, message: { kind: "agent_session", sessionId: payload.sessionId } };
+}
+
 function validateStartedFinished(
   kind: "compact" | "subagent" | "elicitation" | "question",
   payload: Record<string, unknown>,
@@ -973,6 +999,8 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateGitBranch(payload);
     case "cwd_changed":
       return validateCwdChanged(payload);
+    case "agent_session":
+      return validateAgentSession(payload);
     case "turn_start":
       return { ok: true, message: { kind: "turn_start" } };
     case "compact":
