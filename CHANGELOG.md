@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.31](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.30...v0.2.31) (2026-08-16)
+
+
+### Features
+
+* carry full opencode conversation history into a promoted worktree session ([#696](https://github.com/s3ntin3l8/mullion-session-manager/issues/696)) ([ada9812](https://github.com/s3ntin3l8/mullion-session-manager/commit/ada98128d25b7d6725cb73484f7c9f52fda1cb38))
+
+
+### Bug Fixes
+
+* default promote/launcher base-ref pickers to origin/&lt;default&gt;, not the current branch ([#695](https://github.com/s3ntin3l8/mullion-session-manager/issues/695)) ([ca545fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/ca545fb018c9a7490d9b5dc6c7a72ca1b4169b8b))
+
 ## [0.2.30](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.29...v0.2.30) (2026-08-16)
 
 
