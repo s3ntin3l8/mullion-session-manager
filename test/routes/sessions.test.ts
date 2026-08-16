@@ -2216,6 +2216,18 @@ describe("sessions route", () => {
           expect(finalCommand).not.toContain("resume the refactor");
           expect(finalCommand).not.toContain("Continue where you left off");
 
+          // Hermes review, PR #696 — the caller's seedPrompt must not be
+          // silently discarded outright just because a transfer succeeded:
+          // it still has a live, resume-safe channel (opencode's static
+          // per-session seed file, NOT the CLI --prompt mechanism the
+          // assertions above correctly keep it out of).
+          const newSessionId = res.json().id as number;
+          const seedFilePath = path.join(
+            path.dirname(app.pty.hookSocketPath),
+            `${newSessionId}.opencode-seed.md`,
+          );
+          expect(fs.readFileSync(seedFilePath, "utf8")).toBe("resume the refactor");
+
           fs.rmSync(cwd, { recursive: true, force: true });
           await app.close();
         });
@@ -2239,8 +2251,10 @@ describe("sessions route", () => {
             payload: { baseRef: "main", seedPrompt: "resume the refactor" },
           });
           expect(res.statusCode).toBe(201);
+          // Hermes review, PR #696 — wording now depends on whether the
+          // caller actually supplied a seedPrompt (this test does).
           expect(res.json().warnings).toEqual([
-            "Couldn't carry over the full conversation history — the new session started with a summary instead.",
+            "Couldn't carry over the full conversation history — the new session started with your seed prompt instead.",
           ]);
 
           const call = vi
@@ -2250,6 +2264,36 @@ describe("sessions route", () => {
           const finalCommand = args[args.length - 1]!;
           expect(finalCommand).toContain("--prompt 'resume the refactor'");
           expect(finalCommand).not.toContain("--session");
+
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        });
+
+        // Hermes review, PR #696 — "started with a summary instead" was
+        // wrong when the caller supplied no seedPrompt at all: there's no
+        // summary in that case, just a cold start.
+        it("uses cold-start wording (not 'a summary') when the transfer fails and no seedPrompt was supplied", async () => {
+          vi.mocked(transferOpencodeSession)
+            .mockReset()
+            .mockResolvedValue({ transferred: false, reason: "opencode export failed" });
+          const app = await buildApp();
+          const cwd = createGitRepo();
+          const projectId = await createProjectWithGitRepo(app, cwd);
+          const sourceId = await createOpencodeSessionWithAgentSessionId(
+            app,
+            projectId,
+            "ses_source_live",
+          );
+
+          const res = await app.inject({
+            method: "POST",
+            url: `/api/sessions/${sourceId}/promote`,
+            payload: { baseRef: "main" },
+          });
+          expect(res.statusCode).toBe(201);
+          expect(res.json().warnings).toEqual([
+            "Couldn't carry over the full conversation history — the new session started fresh, with no prior context.",
+          ]);
 
           fs.rmSync(cwd, { recursive: true, force: true });
           await app.close();

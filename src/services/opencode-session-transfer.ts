@@ -77,6 +77,33 @@ function isSafeAbsolutePath(cwd: string): boolean {
   return path.isAbsolute(cwd) && !path.normalize(cwd).split(path.sep).includes("..");
 }
 
+// Hermes review, PR #696 — flagged that rewriteSessionIds below only knows
+// how to rewrite the specific id fields opencode's export format has today
+// (info.id, message info.id/sessionID, part id/messageID/sessionID), and
+// suggested nulling/validating any OTHER id-shaped field on the theory that
+// a forked session's export might carry a stale `parentID` pointing at the
+// source session's lineage. Investigated and REJECTED, not implemented:
+//  - Checked empirically against a real forked session's export (opencode
+//    1.18.18, `opencode run --session <id> --fork`): no `parentID` field
+//    exists in the export payload at all — the concern this would have
+//    guarded against doesn't currently occur.
+//  - Worse, a blind "any field ending in ID whose value looks like an
+//    opencode id" heuristic is actively unsafe: a real tool part carries
+//    `callID` (e.g. `"call_b8bc662c5c2e41c5b3157ea6"`, confirmed against a
+//    real bash-tool export), which matches that shape but is a
+//    same-message tool-call correlation id, NOT a cross-session reference —
+//    nulling it would silently corrupt the resumed session's rendering of
+//    every past tool call. There is no reliable way to tell "stale
+//    cross-session reference" apart from "legitimate same-payload
+//    correlation id" without opencode's real schema, which isn't published
+//    (this module's whole approach already rests on decompiled/observed
+//    behavior — see the header comment). An allowlist-of-known-safe-fields
+//    approach has the same problem in reverse: every export sample so far
+//    has turned up a new benign id field (`projectID`, now `callID`), so
+//    "everything not on the allowlist" is a moving, unverifiable target.
+//    Sticking to the exact, verified id fields already handled below is the
+//    safer choice.
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -89,11 +116,26 @@ function summarizeFailure(label: string, result: OpencodeResult): string {
   return `${label} (exit ${result.code ?? "timeout"})${detail ? `: ${detail.slice(0, 300)}` : ""}`;
 }
 
+// CodeQL js/insecure-randomness — `byte % 62` over a 256-value byte biases
+// the low 8 characters of the alphabet (256 % 62 == 8 extra values map to
+// them) toward a very slightly higher probability than the rest. Cosmetic
+// for an id suffix, not a security boundary, but trivial to do correctly:
+// reject any byte at or past the largest multiple of the alphabet length
+// that fits in a byte (`maxUnbiased`, 248) instead of taking it mod 62.
+const ID_SUFFIX_MAX_UNBIASED_BYTE =
+  ID_SUFFIX_ALPHABET.length * Math.floor(256 / ID_SUFFIX_ALPHABET.length);
+
 function randomIdSuffix(length: number): string {
-  const bytes = randomBytes(length);
   let out = "";
-  for (let i = 0; i < length; i++) {
-    out += ID_SUFFIX_ALPHABET[bytes[i]! % ID_SUFFIX_ALPHABET.length];
+  while (out.length < length) {
+    // Over-request a little so the ~3% rejection rate (8/256) rarely needs
+    // a second `randomBytes` call for the lengths this module actually uses.
+    const bytes = randomBytes(length - out.length + 4);
+    for (const byte of bytes) {
+      if (out.length === length) break;
+      if (byte >= ID_SUFFIX_MAX_UNBIASED_BYTE) continue;
+      out += ID_SUFFIX_ALPHABET[byte % ID_SUFFIX_ALPHABET.length];
+    }
   }
   return out;
 }
@@ -195,6 +237,19 @@ function runOpencode(cwd: string, args: string[]): Promise<OpencodeResult> {
     let stderr = "";
     let settled = false;
     let overCap = false;
+    // CodeQL's js/path-injection flags `cwd` here since it traces back to
+    // request.body — the same "real mitigation, not a CodeQL-recognized
+    // sanitizer shape" situation git-worktree.ts's/git-branch-delete.ts's
+    // own isSafeAbsolutePath-gated calls already document for this
+    // identical query (see e.g. dock-config.ts's readDockConfig). Both
+    // `runOpencode` call sites below gate their `cwd` argument through this
+    // module's own `isSafeAbsolutePath` in `transferOpencodeSession` before
+    // ever reaching here — dismissed in GHAS as a false positive rather than
+    // reshaping already-verified-safe code to chase a query that doesn't
+    // model manual containment checks as sanitizers (this repo's codeql.yml
+    // has no follow-up step to turn an in-line `codeql[...]` suppression
+    // annotation into an actual Security-tab dismissal, so the dismissal
+    // happens via the API/UI instead — see git-worktree.ts's own note).
     const child = spawnChild("opencode", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 
     const onStdoutData = (chunk: Buffer) => {
@@ -291,6 +346,19 @@ export async function transferOpencodeSession(opts: {
     return { transferred: false, reason: "invalid agentSessionId" };
   }
 
+  // Hermes review, PR #696 suggested `--sanitize` here (docs: "redact
+  // sensitive transcript and file data") to protect the temp file below
+  // against pasted secrets. Tested empirically against the real 1.18.18
+  // binary before adding it — REJECTED: `--sanitize` doesn't selectively
+  // scrub secret-shaped strings, it wholesale-replaces every message part's
+  // `text` with a `[redacted:text:<id>]` placeholder (confirmed against a
+  // real forked session's export). Using it here would silently defeat the
+  // entire point of this module — the "transferred" session would carry
+  // over zero real conversation content, indistinguishable at a glance from
+  // a successful transfer. The 0600 mkdtemp temp file + unlink-in-`finally`
+  // below is the actual mitigation for this payload sitting on disk
+  // briefly; do not add `--sanitize` without re-verifying this against
+  // whatever opencode version is installed at the time.
   const exportResult = await runOpencode(sourceCwd, ["export", agentSessionId, "--pure"]);
   if (exportResult.code !== 0 || exportResult.stdout.trim().length === 0) {
     return { transferred: false, reason: summarizeFailure("opencode export failed", exportResult) };

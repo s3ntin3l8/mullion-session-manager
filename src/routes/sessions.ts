@@ -525,8 +525,14 @@ export async function sessionsRoute(app: FastifyInstance) {
               { sessionId, reason: transferResult.reason },
               "opencode full-context transfer failed, promoting with the ordinary seed instead",
             );
+            // Hermes review, PR #696 — "started with a summary instead" is
+            // wrong when the caller supplied no seedPrompt at all (a plain
+            // promote with no explicit seed): there's no summary in that
+            // case, just a cold start. Word it to cover both.
             transferFailureWarning =
-              "Couldn't carry over the full conversation history — the new session started with a summary instead.";
+              seedPrompt !== undefined && seedPrompt.length > 0
+                ? "Couldn't carry over the full conversation history — the new session started with your seed prompt instead."
+                : "Couldn't carry over the full conversation history — the new session started fresh, with no prior context.";
           }
         }
       }
@@ -538,27 +544,37 @@ export async function sessionsRoute(app: FastifyInstance) {
       // `instructions` file; Claude Code once as the submitted turn AND
       // once as SessionStart `additionalContext`).
       //
-      // Once history has been transferred, do NOT synthesize a "continue
-      // where you left off" nudge and do NOT resend the original seed —
-      // verified empirically (spike, 2026-08-16) that opencode's bare TUI
-      // command (what Mullion actually spawns — see
-      // hook-adapters/opencode.ts's own header) only auto-submits `--prompt`
-      // when it CREATES a session; combined with `--session <id>` or
-      // `--continue` (i.e. any resume) the flag is silently accepted but
-      // never submitted as a turn — confirmed by both leaving the process
-      // running well past its response latency and inspecting the
-      // session's message rows directly. A synthesized `initialPrompt`
+      // Once history has been transferred, never deliver the caller's seed
+      // (or a synthesized "continue where you left off" nudge) as an
+      // `initialPrompt` argv turn — verified empirically (spike,
+      // 2026-08-16) that opencode's bare TUI command (what Mullion actually
+      // spawns — see hook-adapters/opencode.ts's own header) only
+      // auto-submits `--prompt` when it CREATES a session; combined with
+      // `--session <id>` or `--continue` (i.e. any resume) the flag is
+      // silently accepted but never submitted as a turn — confirmed by both
+      // leaving the process running well past its response latency and
+      // inspecting the session's message rows directly. An `initialPrompt`
       // here would therefore just be silently dropped, same failure shape
-      // as the `--fork` directory bug this feature replaces. The resumed
-      // session already shows the full imported transcript the moment it
-      // opens; the `transferSuccessNote` warning above (surfaced through
-      // the existing `warnings` array, same as any other promote note)
-      // tells the user it's waiting for their next message instead.
-      const hasSeed = resumeAgentSessionId
-        ? false
-        : seedPrompt !== undefined && seedPrompt.length > 0;
-      const effectiveSeedPrompt = resumeAgentSessionId ? undefined : seedPrompt;
-      const deliverAsInitialPrompt = hasSeed && commandSupportsSeed(row.command);
+      // as the `--fork` directory bug this feature replaces.
+      //
+      // A caller-supplied seedPrompt must NOT be silently discarded outright
+      // though (Hermes review, PR #696) — it still has a live, resume-safe
+      // channel: the context-only `seedPrompt` field below isn't the CLI
+      // `--prompt` mechanism at all (for opencode it's a static settings
+      // file read at startup, per hook-adapters/opencode.ts), so it's
+      // unaffected by the resume bug above. Route the caller's seed through
+      // that channel whenever an initial-prompt turn isn't being sent —
+      // which now includes the resumed-transfer case, not just
+      // adapters/commands with no argv seed support at all. The resumed
+      // session's imported transcript plus this extra context, together
+      // with `transferSuccessNote` in `warnings` above, is the full
+      // acknowledgment; no separate synthesized nudge is needed.
+      const callerSeedPrompt =
+        seedPrompt !== undefined && seedPrompt.length > 0 ? seedPrompt : undefined;
+      const deliverAsInitialPrompt =
+        !resumeAgentSessionId && callerSeedPrompt !== undefined && commandSupportsSeed(row.command);
+      const effectiveSeedPrompt = deliverAsInitialPrompt ? callerSeedPrompt : undefined;
+      const contextOnlySeedPrompt = !deliverAsInitialPrompt ? callerSeedPrompt : undefined;
 
       // Deliberately no `parentSessionId` — promote is a REPLACEMENT (this
       // creates the new session then kills `row` below), not a child. See
@@ -571,16 +587,18 @@ export async function sessionsRoute(app: FastifyInstance) {
         cwd: worktreePath,
         kind: row.kind,
         skipPermissions: row.skipPermissions ?? undefined,
-        initialPrompt: deliverAsInitialPrompt ? effectiveSeedPrompt : undefined,
+        initialPrompt: effectiveSeedPrompt,
         // Issue #678 — passed straight through rather than stashed here
         // AFTER createSessionRecord returns (the previous call site, and
         // the actual race this issue is about): createSessionRecord now
         // stashes it BEFORE spawning the new session, so it's guaranteed
         // present by the time a hook-based agent's SessionStart fires, and
-        // also reaches opencode's own spawn-time delivery channel. Only
-        // used as the context-only fallback now — see this handler's own
-        // comment above for when `initialPrompt` is preferred instead.
-        seedPrompt: hasSeed && !deliverAsInitialPrompt ? effectiveSeedPrompt : undefined,
+        // also reaches opencode's own spawn-time delivery channel. Used as
+        // the context-only fallback whenever `initialPrompt` isn't being
+        // sent — see this handler's own comment above for both when that's
+        // "adapter/command has no argv seed support" and, since PR #696,
+        // "a transfer succeeded, so --prompt would be silently dropped".
+        seedPrompt: contextOnlySeedPrompt,
         resumeAgentSessionId,
       });
       if (!created.ok) {
