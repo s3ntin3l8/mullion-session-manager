@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
@@ -434,22 +435,35 @@ export async function sessionsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
       if (!project) return reply.notFound();
 
-      // Anchor at the project root, never the source session's own cwd
-      // (Issue: "promote from opencode" 502 — `git -C <dead worktree>
-      // worktree add` can't chdir once the source cwd's directory is gone,
-      // and that raw git fatal was surfacing verbatim via #677's `detail`
-      // passthrough below). `row.cwd` can be a PREVIOUS promote's worktree
-      // (opencode's own worktree feature and a repeated promote both put a
-      // session there) — using it as `createWorktree`'s cwd both (a) breaks
-      // the moment that worktree directory is gone, out-of-band removal or
-      // not, since nothing ever revalidates `sessions.cwd`, and (b) when it
+      // Anchor at the project root INSTEAD OF the source session's own cwd,
+      // but only when that cwd is actually inside the project (Issue:
+      // "promote from opencode" 502 — `git -C <dead worktree> worktree add`
+      // can't chdir once the source cwd's directory is gone, and that raw
+      // git fatal was surfacing verbatim via #677's `detail` passthrough
+      // below). `row.cwd` can be a PREVIOUS promote's worktree (opencode's
+      // own worktree feature and a repeated promote both put a session
+      // there) — using it as `createWorktree`'s cwd both (a) breaks the
+      // moment that worktree directory is gone, out-of-band removal or not,
+      // since nothing ever revalidates `sessions.cwd`, and (b) when it
       // still exists, nests the new worktree inside the old one, because
       // `deriveWorktreePath` resolves `baseDir` under whatever cwd it's
-      // given rather than the repo's main tree. `createSessionRecord`
-      // already rejects any session whose cwd resolves outside
-      // `project.cwd` (`cwd-outside-project`), so `project.cwd` is always
-      // present and always the same repo `row.cwd` would have pointed at.
-      const repoCwd = project.cwd;
+      // given rather than the repo's main tree.
+      //
+      // Hermes review, this PR: `createSessionRecord`'s `cwd-outside-project`
+      // guard (session-lifecycle.ts) only fires for a CHILD spawn
+      // (`resolvedParentId !== null`) — a plain top-level session (this
+      // route's usual source) can carry an arbitrary `cwd`, including one
+      // in a completely different repo. Unconditionally substituting
+      // `project.cwd` would silently promote such a session into the
+      // WRONG repository instead of failing loudly. Only substitute when
+      // `row.cwd` genuinely resolves inside `project.cwd` — the only case
+      // this bug is actually about — and keep the untouched (if already
+      // odd) cross-repo behavior otherwise.
+      const projectRoot = path.resolve(project.cwd);
+      const sourceCwd = row.cwd ? path.resolve(row.cwd) : projectRoot;
+      const sourceWithinProject =
+        sourceCwd === projectRoot || sourceCwd.startsWith(projectRoot + path.sep);
+      const repoCwd = sourceWithinProject ? projectRoot : sourceCwd;
       const { baseRef, branchName, seedPrompt } = request.body;
       const resolvedWorktree = await resolveWorktreeCwd(
         app,

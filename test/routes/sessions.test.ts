@@ -1814,6 +1814,47 @@ describe("sessions route", () => {
         await app.close();
       });
 
+      // Hermes review, this PR — `createSessionRecord`'s `cwd-outside-project`
+      // guard only applies to a CHILD spawn (a nonzero `parentSessionId`);
+      // a plain top-level session (this test's shape) can carry an
+      // arbitrary `cwd` in a completely different repo. Anchoring
+      // unconditionally at `project.cwd` would silently promote such a
+      // session into the WRONG repository instead of the one it actually
+      // pointed at. Only a source cwd that resolves INSIDE the project gets
+      // substituted — this proves the substitution is skipped otherwise.
+      it("promotes from the source session's own (different) repo when its cwd is outside the project", async () => {
+        const app = await buildApp();
+        const projectCwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, projectCwd);
+
+        const foreignCwd = createGitRepo();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", cwd: foreignCwd },
+        });
+        const sourceId = created.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", branchName: "feature/from-foreign-repo" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const newSession = res.json();
+        // Landed under the FOREIGN repo's own .mullion-worktrees/, not the
+        // project's — the pre-fix behavior, preserved for this case.
+        expect(newSession.cwd).toBe(
+          path.join(foreignCwd, ".mullion-worktrees", "feature-from-foreign-repo"),
+        );
+        expect(fs.existsSync(newSession.cwd)).toBe(true);
+
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        fs.rmSync(foreignCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
       // Companion to the dead-cwd case above: a source session that's
       // already INSIDE a worktree (e.g. a chained promote, or opencode's own
       // worktree feature moving it there) must not nest the new worktree
