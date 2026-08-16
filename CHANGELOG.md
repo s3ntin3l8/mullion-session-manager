@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.30](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.29...v0.2.30) (2026-08-16)
+
+
+### Bug Fixes
+
+* anchor promote's worktree creation at the project root, not the source session's cwd ([#693](https://github.com/s3ntin3l8/mullion-session-manager/issues/693)) ([37dd0c1](https://github.com/s3ntin3l8/mullion-session-manager/commit/37dd0c1a79f42fde4137573190bdbce57d59ad88))
+
 ## [0.2.29](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.28...v0.2.29) (2026-08-15)
 
 
