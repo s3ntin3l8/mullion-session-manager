@@ -76,6 +76,10 @@ export const OPENCODE_EMITS = [
   "git_branch",
   "cwd_changed",
   "promote_request",
+  // Issue #271 follow-up — the live opencode session id, reported on every
+  // session.idle (see opencode-plugin.js's mapOpenCodeEvent) so a later
+  // promote can carry full conversation history, not just a seed summary.
+  "agent_session",
   // Issue #321 — wire compaction events from opencode's session.compacting
   "compact",
   // Issue #321 — wire subagent events from opencode's session.subagent
@@ -218,4 +222,43 @@ export const openCodeAdapter: HookAgentAdapter = {
   // argument is `[project]`, a directory path, so an unflagged prompt would
   // be silently misread as one.
   initialPromptArgs: (prompt) => `--prompt ${shellQuote(prompt)}`,
+  // Issue #271 follow-up — verified empirically TWICE against the real
+  // opencode 1.18.18 binary in an isolated scratch repo + worktree (no live
+  // session touched), because the first pass tested the wrong command form:
+  //
+  // 1. `opencode run --session <id> "…"` — the `run` subcommand, headless,
+  //    one-shot. Passed: recalled a fact planted only in the transferred
+  //    history, and a bash tool it ran had `cwd` = the worktree.
+  // 2. The bare `opencode [project] --session <id>` form — the actual TUI
+  //    Mullion spawns (this file's own header: no `run`/`exec` subcommand
+  //    involved). `run` and the bare TUI are separate code paths; passing
+  //    on (1) does NOT establish (2). Re-verified directly: launched the
+  //    bare command inside a real pty (matching how `dtach` attaches it),
+  //    typed a message into the loaded session as a real user would, and
+  //    confirmed via the session's own SQLite rows that the resulting bash
+  //    tool call had `cwd` = the worktree, not the source repo. Bare
+  //    `--session <id>` (no `--fork`, no `--continue`) is safe on both
+  //    command forms.
+  //
+  // This is the mechanism `--fork` was rejected for (see
+  // opencode-session-transfer.ts's own header comment): `--fork` pins the
+  // forked session's directory to the ORIGINAL session's stored directory
+  // even with `--dir` pointing elsewhere, silently redirecting tool calls
+  // back into the live main checkout. Bare `--session` on a session already
+  // re-keyed to the new directory (opencode-session-transfer.ts's import
+  // step) has no such pinning — this only works because the transfer step
+  // rewrites `directory` in the session's own DB row before this ever runs.
+  //
+  // IMPORTANT, and the actual reason two verification passes were needed:
+  // on the bare TUI form, `--prompt` auto-submits as a real turn ONLY when
+  // it creates a brand-new session (see `initialPromptArgs` above). Paired
+  // with `--session <id>` — or `--continue`, confirmed to behave
+  // identically — the flag is accepted but silently NEVER submitted: left
+  // running well past normal response latency, the session's message rows
+  // never gained a new turn. Do not combine `resumeSessionArgs` with
+  // `initialPromptArgs`/a synthesized nudge in the same launch — the
+  // caller (`routes/sessions.ts`'s promote handler) deliberately sends
+  // `--session` alone and surfaces a `warnings[]` note instead, precisely
+  // because that combination silently drops the prompt.
+  resumeSessionArgs: (agentSessionId) => `--session ${shellQuote(agentSessionId)}`,
 };

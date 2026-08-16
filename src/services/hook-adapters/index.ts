@@ -84,6 +84,33 @@ export function adapterHasInitialPromptArgs(command: string): boolean {
 }
 
 /**
+ * Issue #271 follow-up — returns the argv suffix that resumes the first
+ * adapter matching `command` at an existing agent-native session id, or
+ * `null` when no adapter matches, or the matched adapter has no
+ * `resumeSessionArgs` (every agent except opencode). Same pure lookup shape
+ * as getAdapterInitialPromptArgs above.
+ */
+export function getAdapterResumeSessionArgs(
+  command: string,
+  agentSessionId: string,
+): string | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.resumeSessionArgs?.(agentSessionId) ?? null;
+}
+
+/**
+ * Whether the adapter matching `command` can resume an existing agent-native
+ * session by id at all — a capability check, not a call. Used by
+ * opencode-session-transfer.ts to decide, ahead of running any subprocess,
+ * whether attempting a full-history transfer for this command is even worth
+ * trying. Same pure lookup shape as adapterHasInitialPromptArgs above.
+ */
+export function adapterHasResumeSessionArgs(command: string): boolean {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.resumeSessionArgs !== undefined;
+}
+
+/**
  * Finds the first adapter matching `command`, runs its launch plan's I/O
  * side effects (settings-file writes, managed installs), and returns the
  * possibly-transformed command plus any env additions. Deliberately

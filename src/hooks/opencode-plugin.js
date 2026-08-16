@@ -46,7 +46,20 @@ import path from "node:path";
  * liveCwd reflects the directory opencode is actually running from. */
 function mapOpenCodeEvent(event, cwd) {
   if (event?.type === "session.idle") {
-    return [{ kind: "progress", phase: "done" }];
+    // Issue #271 follow-up — session.idle's own payload already carries
+    // opencode's internal session id (properties.sessionID) for free, so
+    // reporting it here needs no extra hook registration. Sent alongside the
+    // existing progress message on every turn (not just once) — this is a
+    // LIVE fact, not an announcement, and PtyManager just overwrites its
+    // stored value each time. Lets a later promote export/import this
+    // session's real conversation history into the new worktree session
+    // instead of only a seed summary (see opencode-session-transfer.ts).
+    const messages = [{ kind: "progress", phase: "done" }];
+    const sessionId = event.properties?.sessionID;
+    if (typeof sessionId === "string" && sessionId.length > 0) {
+      messages.push({ kind: "agent_session", sessionId });
+    }
+    return messages;
   }
   if (event?.type === "file.edited") {
     const file = event.properties?.file;

@@ -25,6 +25,7 @@ import { writeSessionAgentGuide } from "./agent-guide.js";
 import {
   applyHookAdapters,
   getAdapterInitialPromptArgs,
+  getAdapterResumeSessionArgs,
   resolveForwarderPath,
 } from "./hook-adapters/index.js";
 import { scopeUnitName } from "./session-process.js";
@@ -82,6 +83,9 @@ export interface LaunchPlanSession {
    * (a submitted turn) and distinct from stashSeed's live SessionStart hook
    * round trip (opencode has none). */
   readonly seedPrompt: string | undefined;
+  /** Issue #271 follow-up — see CreateSessionOptions.resumeAgentSessionId's
+   * own doc comment (pty-manager.ts). */
+  readonly resumeAgentSessionId: string | undefined;
 }
 
 export interface LaunchPlan {
@@ -218,6 +222,33 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     ? `${launchCommand} ${getSkipPermissionFlag(launchCommand) ?? ""}`.trimEnd()
     : launchCommand;
 
+  // Issue #271 follow-up — resumes an existing agent-native session by id
+  // (currently opencode's `--session <id>` only). Same "matched against the
+  // ORIGINAL session.command, appended after commandTransform/skip-
+  // permissions" reasoning as initialPromptArgs below. A no-op for an agent
+  // with no `resumeSessionArgs`, or when no transfer was attempted/
+  // succeeded (routes/sessions.ts's promote handler only ever sets this
+  // once opencode-session-transfer.ts has actually imported the history —
+  // never speculatively).
+  //
+  // NOT a "resume, then submit this as its next turn" pipeline, despite
+  // the two being appended in sequence below — verified empirically
+  // (hook-adapters/opencode.ts's own `resumeSessionArgs` comment) that
+  // opencode's `--prompt` is silently ignored on ANY resumed session
+  // (`--session` or `--continue`), so a trailing `initialPromptArgs` after
+  // `resumeSessionArgs` would just be dropped, not delivered as a next
+  // turn. `session.initialPrompt` is therefore always unset whenever
+  // `resumeAgentSessionId` is set (routes/sessions.ts's promote handler
+  // keeps the two mutually exclusive) — this composition only still runs
+  // both blocks in the same function because a future agent adapter's
+  // `resumeSessionArgs` might not share opencode's `--prompt` limitation.
+  const resumeSessionArgs = session.resumeAgentSessionId
+    ? getAdapterResumeSessionArgs(session.command, session.resumeAgentSessionId)
+    : null;
+  const withResume = resumeSessionArgs
+    ? `${withSkipPermissions} ${resumeSessionArgs}`.trimEnd()
+    : withSkipPermissions;
+
   // Task Master's initial-turn prompt (see CreateSessionOptions.
   // initialPrompt's own doc comment) — appended LAST, after both
   // applyHookAdapters' own commandTransform and the skip-permissions flag
@@ -233,8 +264,8 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     ? getAdapterInitialPromptArgs(session.command, session.initialPrompt)
     : null;
   const finalCommand = initialPromptArgs
-    ? `${withSkipPermissions} ${initialPromptArgs}`.trimEnd()
-    : withSkipPermissions;
+    ? `${withResume} ${initialPromptArgs}`.trimEnd()
+    : withResume;
 
   return {
     shell,

@@ -124,6 +124,17 @@ export interface CreateSessionOptions {
    * this field's `HookAdapterContext.seedPrompt` delivery is a fallback,
    * not opencode's primary channel anymore. */
   seedPrompt?: string;
+  /** Issue #271 follow-up — routes/sessions.ts's promote handler, when
+   * opencode-session-transfer.ts successfully imported the source session's
+   * full conversation history into this session's own worktree directory
+   * under a fresh id. Delivered as argv via the matched adapter's
+   * `resumeSessionArgs` (hook-adapters/index.ts's getAdapterResumeSessionArgs)
+   * — currently opencode-only. When both this and `initialPrompt` are set,
+   * the resume flag is appended first (see launch-plan.ts) so the prompt
+   * reads as "the resumed session's next turn," not a fresh one. A no-op
+   * for any agent whose adapter has no `resumeSessionArgs` — the session
+   * still spawns as an ordinary fresh one, same as if this were never set. */
+  resumeAgentSessionId?: string;
   projectId?: number;
 }
 
@@ -266,6 +277,17 @@ export interface SessionInfo {
    * CwdChanged hook, or live branch tracking — null when unknown.
    * In-memory only. */
   liveBranch: string | null;
+  /** Issue #271 follow-up — opencode's own internal session id, kept live by
+   * the "agent_session" hook (hook-protocol.ts). Lets a later promote carry
+   * this session's real conversation history (opencode export/import) into
+   * the new worktree session instead of only a seed summary. `null` for
+   * every other agent, and for an opencode session before its first
+   * session.idle has fired. In-memory only, NOT part of `StoredStateFields`
+   * below — losing it across a restart just means the next promote falls
+   * back to the ordinary seed-only path, same as if opencode had never
+   * reported one; not worth the extra restore-path plumbing a state
+   * machine's own fields need. */
+  agentSessionId: string | null;
   /** Rich statuses (issue: extend surfaced session statuses) — which
    * attention-detect.ts signal kind is currently confirmed, or null when
    * `attention` is false. Mirrors `attentionState.confirmedKind` directly
@@ -880,6 +902,10 @@ export class Session {
   // literal passed to buildLaunchPlan() — same "spawn-time snapshot, not
   // re-read later" posture as initialPrompt/injectAgentGuide above.
   private readonly seedPrompt: string | undefined;
+  // Issue #271 follow-up — see CreateSessionOptions.resumeAgentSessionId's
+  // own doc comment. Same "spawn-time snapshot, consumed once in
+  // bootstrapMaster()" posture as initialPrompt/seedPrompt above.
+  private readonly resumeAgentSessionId: string | undefined;
   readonly projectId: number | null;
 
   private ptyProcess: IPty | null = null;
@@ -932,6 +958,11 @@ export class Session {
 
   get liveBranch(): string | null {
     return this._liveBranch;
+  }
+
+  // Issue #271 follow-up — see SessionInfo.agentSessionId's own doc comment.
+  get agentSessionId(): string | null {
+    return this._agentSessionId;
   }
   // Serializes this session's `file_change` git-ignore checks (issue:
   // sidebar worktree display's Part B) — each check is a real `git`
@@ -1056,6 +1087,8 @@ export class Session {
   private endedReason: string | null = null;
   private exitCode: number | null = null;
   private _liveBranch: string | null = null;
+  // Issue #271 follow-up — see SessionInfo.agentSessionId's own doc comment.
+  private _agentSessionId: string | null = null;
   // Rich statuses (issue: extend surfaced session statuses) — see each
   // field's own doc comment on SessionInfo above for what it means; toInfo()
   // reads these straight through (or, for attentionKind, off attentionState
@@ -1194,6 +1227,7 @@ export class Session {
     skipPermissions?: boolean;
     initialPrompt?: string;
     seedPrompt?: string;
+    resumeAgentSessionId?: string;
     projectId?: number;
   }) {
     this.id = opts.id;
@@ -1215,6 +1249,7 @@ export class Session {
     this.skipPermissions = opts.skipPermissions ?? false;
     this.initialPrompt = opts.initialPrompt;
     this.seedPrompt = opts.seedPrompt;
+    this.resumeAgentSessionId = opts.resumeAgentSessionId;
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
     // `this.id` above is already assigned — the host object's `sessionId`
@@ -1550,6 +1585,7 @@ export class Session {
     this.endedReason = null;
     this.exitCode = null;
     this._liveBranch = null;
+    this._agentSessionId = null;
     // Rich statuses — same "fresh session identity" reset as the fields
     // just above.
     this.errorDetail = null;
@@ -1716,6 +1752,7 @@ export class Session {
       skipPermissions: this.skipPermissions,
       initialPrompt: this.initialPrompt,
       seedPrompt: this.seedPrompt,
+      resumeAgentSessionId: this.resumeAgentSessionId,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -2110,6 +2147,12 @@ export class Session {
       },
       set liveBranch(v: string | null) {
         self._liveBranch = v;
+      },
+      get agentSessionId() {
+        return self._agentSessionId;
+      },
+      set agentSessionId(v: string | null) {
+        self._agentSessionId = v;
       },
       get fileChangeQueue() {
         return self.fileChangeQueue;
@@ -3157,6 +3200,7 @@ export class Session {
       endedReason: this.endedReason,
       exitCode: this.exitCode,
       liveBranch: this.liveBranch,
+      agentSessionId: this._agentSessionId,
       // Rich statuses — attentionKind mirrors attentionState.confirmedKind
       // directly (see its own SessionInfo doc comment for why), same
       // posture as attention/attentionAt just above.
@@ -3340,6 +3384,7 @@ export class PtyManager {
         skipPermissions: opts.skipPermissions,
         initialPrompt: opts.initialPrompt,
         seedPrompt: opts.seedPrompt,
+        resumeAgentSessionId: opts.resumeAgentSessionId,
         projectId: opts.projectId,
       });
       // Subscribed exactly once, at creation — re-emits every event this

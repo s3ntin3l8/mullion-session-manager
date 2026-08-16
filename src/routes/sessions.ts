@@ -23,6 +23,8 @@ import {
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
+import { adapterHasResumeSessionArgs } from "../services/hook-adapters/index.js";
+import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
   withLiveInfo,
   resolveProjectHostId,
@@ -483,14 +485,96 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
       const worktreePath = resolvedWorktree.path;
 
+      // Issue #271 follow-up — attempt full-context transfer BEFORE deciding
+      // the seed delivery channel below, since a successful transfer changes
+      // what that channel should even send. Local-only (SessionBackend.spawn
+      // never forwards resumeAgentSessionId to a remote host — see its own
+      // doc comment), and only for a session whose adapter can resume by id
+      // (currently opencode) AND whose live agentSessionId is actually
+      // known (populated by the "agent_session" hook — absent before the
+      // session's first turn, or for any non-opencode agent). Never blocks
+      // or fails the promote: opencode-session-transfer.ts is explicitly a
+      // capability probe, not a guarantee — any failure just logs and falls
+      // through to the ordinary seed-only path below, same as if this whole
+      // block didn't exist.
+      let resumeAgentSessionId: string | undefined;
+      let transferFailureWarning: string | null = null;
+      let transferSuccessNote: string | null = null;
+      if (project.hostId === LOCAL_HOST_ID && adapterHasResumeSessionArgs(row.command)) {
+        const liveAgentSessionId = app.pty.get(String(sessionId))?.agentSessionId ?? null;
+        if (liveAgentSessionId) {
+          // `repoCwd`, not `sourceCwd` — #693's own fix exists because
+          // `row.cwd` (sourceCwd) can be a PRIOR promote's worktree that no
+          // longer exists on disk (a session promoted twice). `export`
+          // only needs a valid cwd to launch opencode from; the session id
+          // it operates on is globally unique in the shared DB, so the
+          // directory doesn't need to be the session's own. `repoCwd` is
+          // the same guaranteed-to-exist root `resolveWorktreeCwd` above
+          // already used to cut the new worktree.
+          const transferResult = await transferOpencodeSession({
+            sourceCwd: repoCwd,
+            agentSessionId: liveAgentSessionId,
+            targetCwd: worktreePath,
+          });
+          if (transferResult.transferred && transferResult.newSessionId) {
+            resumeAgentSessionId = transferResult.newSessionId;
+            transferSuccessNote =
+              "Full conversation history was carried over — the new session is picking up right where you left off and is waiting for your next message.";
+          } else {
+            app.log.warn(
+              { sessionId, reason: transferResult.reason },
+              "opencode full-context transfer failed, promoting with the ordinary seed instead",
+            );
+            // Hermes review, PR #696 — "started with a summary instead" is
+            // wrong when the caller supplied no seedPrompt at all (a plain
+            // promote with no explicit seed): there's no summary in that
+            // case, just a cold start. Word it to cover both.
+            transferFailureWarning =
+              seedPrompt !== undefined && seedPrompt.length > 0
+                ? "Couldn't carry over the full conversation history — the new session started with your seed prompt instead."
+                : "Couldn't carry over the full conversation history — the new session started fresh, with no prior context.";
+          }
+        }
+      }
+
       // Never pass both `initialPrompt` and `seedPrompt`: for an adapter
       // with argv support, `initialPrompt` alone starts a real turn — also
       // setting `seedPrompt` would double-deliver the same text (e.g.
       // opencode would get it once via `--prompt` AND once via its static
       // `instructions` file; Claude Code once as the submitted turn AND
       // once as SessionStart `additionalContext`).
-      const hasSeed = seedPrompt !== undefined && seedPrompt.length > 0;
-      const deliverAsInitialPrompt = hasSeed && commandSupportsSeed(row.command);
+      //
+      // Once history has been transferred, never deliver the caller's seed
+      // (or a synthesized "continue where you left off" nudge) as an
+      // `initialPrompt` argv turn — verified empirically (spike,
+      // 2026-08-16) that opencode's bare TUI command (what Mullion actually
+      // spawns — see hook-adapters/opencode.ts's own header) only
+      // auto-submits `--prompt` when it CREATES a session; combined with
+      // `--session <id>` or `--continue` (i.e. any resume) the flag is
+      // silently accepted but never submitted as a turn — confirmed by both
+      // leaving the process running well past its response latency and
+      // inspecting the session's message rows directly. An `initialPrompt`
+      // here would therefore just be silently dropped, same failure shape
+      // as the `--fork` directory bug this feature replaces.
+      //
+      // A caller-supplied seedPrompt must NOT be silently discarded outright
+      // though (Hermes review, PR #696) — it still has a live, resume-safe
+      // channel: the context-only `seedPrompt` field below isn't the CLI
+      // `--prompt` mechanism at all (for opencode it's a static settings
+      // file read at startup, per hook-adapters/opencode.ts), so it's
+      // unaffected by the resume bug above. Route the caller's seed through
+      // that channel whenever an initial-prompt turn isn't being sent —
+      // which now includes the resumed-transfer case, not just
+      // adapters/commands with no argv seed support at all. The resumed
+      // session's imported transcript plus this extra context, together
+      // with `transferSuccessNote` in `warnings` above, is the full
+      // acknowledgment; no separate synthesized nudge is needed.
+      const callerSeedPrompt =
+        seedPrompt !== undefined && seedPrompt.length > 0 ? seedPrompt : undefined;
+      const deliverAsInitialPrompt =
+        !resumeAgentSessionId && callerSeedPrompt !== undefined && commandSupportsSeed(row.command);
+      const effectiveSeedPrompt = deliverAsInitialPrompt ? callerSeedPrompt : undefined;
+      const contextOnlySeedPrompt = !deliverAsInitialPrompt ? callerSeedPrompt : undefined;
 
       // Deliberately no `parentSessionId` — promote is a REPLACEMENT (this
       // creates the new session then kills `row` below), not a child. See
@@ -503,16 +587,19 @@ export async function sessionsRoute(app: FastifyInstance) {
         cwd: worktreePath,
         kind: row.kind,
         skipPermissions: row.skipPermissions ?? undefined,
-        initialPrompt: deliverAsInitialPrompt ? seedPrompt : undefined,
+        initialPrompt: effectiveSeedPrompt,
         // Issue #678 — passed straight through rather than stashed here
         // AFTER createSessionRecord returns (the previous call site, and
         // the actual race this issue is about): createSessionRecord now
         // stashes it BEFORE spawning the new session, so it's guaranteed
         // present by the time a hook-based agent's SessionStart fires, and
-        // also reaches opencode's own spawn-time delivery channel. Only
-        // used as the context-only fallback now — see this handler's own
-        // comment above for when `initialPrompt` is preferred instead.
-        seedPrompt: hasSeed && !deliverAsInitialPrompt ? seedPrompt : undefined,
+        // also reaches opencode's own spawn-time delivery channel. Used as
+        // the context-only fallback whenever `initialPrompt` isn't being
+        // sent — see this handler's own comment above for both when that's
+        // "adapter/command has no argv seed support" and, since PR #696,
+        // "a transfer succeeded, so --prompt would be silently dropped".
+        seedPrompt: contextOnlySeedPrompt,
+        resumeAgentSessionId,
       });
       if (!created.ok) {
         // createSessionRecord's own spawn-failure rollback only fires for a
@@ -562,6 +649,8 @@ export async function sessionsRoute(app: FastifyInstance) {
       // replacement session either way, just with a note that one
       // side-effect didn't land.
       const warnings: string[] = [];
+      if (transferFailureWarning) warnings.push(transferFailureWarning);
+      if (transferSuccessNote) warnings.push(transferSuccessNote);
       // Hermes review — a naive `created.initialPromptApplied === false`
       // check misses the WORST version-skew case: an old remote agent build
       // doesn't know the `initialPrompt` field exists at all, so Fastify's

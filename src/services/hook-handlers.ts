@@ -51,6 +51,7 @@ import type {
   PlanReadyHookMessage,
   GitBranchHookMessage,
   CwdChangedHookMessage,
+  AgentSessionHookMessage,
   CompactHookMessage,
   SubagentHookMessage,
   ElicitationHookMessage,
@@ -75,6 +76,11 @@ export interface SessionHookContext {
   readonly cwd: string;
   liveCwd: string | null;
   liveBranch: string | null;
+  /** Issue #271 follow-up — opencode's own internal session id, kept live by
+   * the "agent_session" hook (see hook-protocol.ts's own doc comment). Only
+   * opencode currently reports this; `null` for every other agent, and for
+   * an opencode session before its first session.idle has fired. */
+  agentSessionId: string | null;
   fileChangeQueue: Promise<void>;
   readonly gitIgnoreDirCache: Map<string, boolean>;
 
@@ -542,6 +548,17 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         ctx.liveCwd = gitBranch.worktree;
       }
       ctx.emitEvent("status_change", { phase: "done" });
+    },
+  ],
+  [
+    "agent_session",
+    (ctx, message) => {
+      // Issue #271 follow-up — a plain live-field write, same posture as
+      // liveCwd/liveBranch: no attention signal, no emitted event, since
+      // this is backend-internal plumbing for a later promote's transfer
+      // decision, never surfaced to the frontend directly.
+      const agentSession = message as AgentSessionHookMessage;
+      ctx.agentSessionId = agentSession.sessionId;
     },
   ],
   [
