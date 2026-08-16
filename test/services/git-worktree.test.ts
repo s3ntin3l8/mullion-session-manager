@@ -191,6 +191,51 @@ describe("createWorktree (issue #271)", () => {
     expect(fs.existsSync(path.join(result?.path ?? "", "b.txt"))).toBe(true);
   });
 
+  // Issue #271 follow-up — verified empirically that `git worktree add -b
+  // <branch> <path> origin/main` otherwise sets the new branch's upstream to
+  // origin/main (branch.autoSetupMerge's default tracks a remote-tracking
+  // start point, but not a local one), and a bare `git push` from that
+  // worktree then hard-fails with "The upstream branch of your current
+  // branch does not match the name of your current branch" instead of the
+  // ordinary --set-upstream prompt. Now that the base-ref pickers default to
+  // origin/<default> rather than the current local branch, this matters for
+  // every promoted/isolated worktree, not just a manually-picked remote ref.
+  it("does not set an upstream when branching off a remote-tracking baseRef", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+
+    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-origin-test-"));
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+
+    try {
+      const result = await createWorktree({
+        cwd: tmpDir,
+        baseRef: "origin/main",
+        seed: "no-track",
+      });
+      expect(result.created).toBe(true);
+      const upstream = execFileSync(
+        "git",
+        [
+          "-C",
+          result.path ?? "",
+          "for-each-ref",
+          "--format=%(upstream:short)",
+          "refs/heads/mullion/no-track",
+        ],
+        { env: gitEnv() },
+      )
+        .toString()
+        .trim();
+      expect(upstream).toBe("");
+    } finally {
+      fs.rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("honors an explicit branchName override, sanitizing each path segment", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");

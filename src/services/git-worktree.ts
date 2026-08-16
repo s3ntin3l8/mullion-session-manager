@@ -356,9 +356,22 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Creat
 
   ensureExcluded(projectRoot, baseDir);
 
+  // --no-track (issue #271 follow-up): verified empirically that `git
+  // worktree add -b <branch> <path> origin/main` otherwise sets the new
+  // branch's upstream to origin/main (branch.autoSetupMerge's default
+  // tracks when the start point is a remote-tracking ref, but NOT when it's
+  // a local branch — this is a behavior change only for a remote-tracking
+  // baseRef). A tracked-but-differently-named branch then makes a bare
+  // `git push` from the worktree hard-fail ("The upstream branch of your
+  // current branch does not match the name of your current branch")
+  // instead of the ordinary, agent-handleable "use git push
+  // --set-upstream" prompt a plain new branch gets. Now that the base-ref
+  // pickers default to `origin/<default>` rather than the current local
+  // branch, this is load-bearing, not just hardening.
   const result = await runGit(projectRoot, [
     "worktree",
     "add",
+    "--no-track",
     "-b",
     branch,
     worktreePath,

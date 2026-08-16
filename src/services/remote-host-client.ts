@@ -556,6 +556,12 @@ export class RemoteHostClient {
     branches: GitBranchInfo[];
     worktrees: GitWorktreeInfo[];
     remoteBranches: string[];
+    // Issue #271 follow-up — absent on an older agent build that predates
+    // this field (same degradation convention as the rest of this file's
+    // optional response fields); `null` when the agent resolved it and
+    // found no usable default. Both cases mean "the caller should fall
+    // back to the current branch."
+    defaultBranch?: string | null;
   } | null> {
     return this.request(
       `/internal/git-branches?cwd=${encodeURIComponent(cwd)}${detail ? "&detail=1" : ""}`,

@@ -223,7 +223,7 @@ export async function listRemoteBranches(cwd: string): Promise<string[] | null> 
  * `listBranches`' on-panel-open caller. Assumes `cwd` has already been
  * validated (`isSafeAbsolutePath` + `.git` exists) by the caller.
  */
-async function resolveDefaultBaseRefNoFetch(cwd: string): Promise<string> {
+export async function resolveDefaultBaseRefNoFetch(cwd: string): Promise<string> {
   const symbolic = await runGit(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   const remotePrefix = "refs/remotes/";
   if (symbolic) {
@@ -254,6 +254,26 @@ export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
   await runGit(cwd, ["fetch", "origin", "--quiet"]);
 
   return resolveDefaultBaseRefNoFetch(cwd);
+}
+
+/**
+ * The `/api/projects/:id/git-branches` route's variant for the promote and
+ * launcher base-ref pickers (issue #271 follow-up): same no-fetch chain as
+ * `resolveDefaultBaseRefNoFetch` (this route is on the sidebar's 60s
+ * background poll, so a `git fetch` per call is wrong here too — see that
+ * function's own doc comment), but returns `null` instead of the literal
+ * `"HEAD"` fallback. `"HEAD"` is a fine worktree-creation argument (git
+ * always accepts it) but a bad UI default: it isn't a real ref a human would
+ * recognize, and surfacing it would prepend an unfamiliar "HEAD" entry to
+ * the base-ref dropdown and preselect it. `null` lets callers fall back to
+ * the current branch instead, exactly like a repo with no `origin` at all
+ * (there's no meaningful way to distinguish "no remote" from "remote
+ * present but nothing resolved" here, and callers don't need to).
+ */
+export async function resolveDefaultBaseRefForPicker(cwd: string): Promise<string | null> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+  const resolved = await resolveDefaultBaseRefNoFetch(cwd);
+  return resolved === "HEAD" ? null : resolved;
 }
 
 /**

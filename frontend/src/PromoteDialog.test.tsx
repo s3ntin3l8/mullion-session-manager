@@ -103,6 +103,7 @@ describe("PromoteDialog (issue #271)", () => {
             ],
             worktrees: [],
             remoteBranches: ["origin/main"],
+            defaultBranch: "origin/main",
           }),
         ),
       ),
@@ -113,13 +114,39 @@ describe("PromoteDialog (issue #271)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("human-initiated: shows Cancel, no pending-agent copy, and defaults the base ref to the current branch", async () => {
+  it("human-initiated: shows Cancel, no pending-agent copy, and defaults the base ref to the repo's default branch", async () => {
     render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={vi.fn()} />);
 
     expect(
       await screen.findByText("Move this session's work into a fresh, isolated worktree."),
     ).toBeInTheDocument();
     expect(screen.getByText("Cancel")).toBeInTheDocument();
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(select).toHaveDisplayValue("origin/main (default)");
+  });
+
+  // Issue #271 follow-up — a repo with no resolvable default (older
+  // remote-host agent, or no remote configured at all) falls back to the
+  // current branch exactly like before this change.
+  it("falls back to the current branch when the repo has no resolvable default branch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            branches: [
+              { name: "main", isCurrent: true },
+              { name: "feature/x", isCurrent: false },
+            ],
+            worktrees: [],
+            remoteBranches: [],
+            defaultBranch: null,
+          }),
+        ),
+      ),
+    );
+    render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={vi.fn()} />);
+
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
     expect(select).toHaveDisplayValue("main (current)");
   });
@@ -271,7 +298,7 @@ describe("PromoteDialog (issue #271)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("agent-triggered (pending): shows Decline copy, pre-fills the seed, and prefers the current branch over the agent's suggestion once branches load", async () => {
+  it("agent-triggered (pending): shows Decline copy, pre-fills the seed, and prefers the repo's default branch over the agent's suggestion once branches load", async () => {
     render(
       <PromoteDialog
         session={makeSession({
@@ -289,13 +316,15 @@ describe("PromoteDialog (issue #271)", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Decline")).toBeInTheDocument();
     expect(screen.getByDisplayValue("start work on the bug fix")).toBeInTheDocument();
-    // Production incident this locks in: the suggested base ref used to win
-    // even after branches loaded with a different current branch, silently
-    // cutting the worktree from the wrong commit. Now the current branch
-    // wins once it's known, and the suggestion surfaces as a distinct,
-    // user-applied hint instead.
+    // Production incident this locks in (PR #680): the suggested base ref
+    // used to win even after branches loaded with a different current
+    // branch, silently cutting the worktree from the wrong commit. That
+    // stays fixed — the repo's resolved default now wins once it's known
+    // (issue #271 follow-up, layered on top of #680's fix, not a reversal
+    // of it), and the suggestion surfaces as a distinct, user-applied hint
+    // instead.
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
-    expect(select).toHaveDisplayValue("main (current)");
+    expect(select).toHaveDisplayValue("origin/main (default)");
     expect(screen.getByText("feature/x", { selector: "code" })).toBeInTheDocument();
     expect(screen.getByText("use it")).toBeInTheDocument();
   });
@@ -314,7 +343,7 @@ describe("PromoteDialog (issue #271)", () => {
     );
 
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
-    expect(select).toHaveDisplayValue("main (current)");
+    expect(select).toHaveDisplayValue("origin/main (default)");
 
     await user.click(screen.getByText("use it"));
 

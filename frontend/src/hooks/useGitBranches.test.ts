@@ -13,6 +13,7 @@ const BRANCHES_RESULT: GitBranchesResult = {
   ],
   worktrees: [],
   remoteBranches: ["origin/main", "origin/feature/x"],
+  defaultBranch: "origin/main",
 };
 
 afterEach(() => {
@@ -38,7 +39,24 @@ describe("useGitBranches", () => {
       ]),
     );
     expect(result.current.currentBranch).toBe("main");
+    expect(result.current.defaultBranch).toBe("origin/main");
     expect(result.current.error).toBeNull();
+  });
+
+  // Issue #271 follow-up — an older remote-host agent or a repo with no
+  // resolvable default omits/nulls the field; the hook must degrade to
+  // `null` rather than throw or leave a stale value.
+  it("defaults defaultBranch to null when the response omits it", async () => {
+    const { fetchMock } = mockFetch({
+      "GET /api/projects/:id/git-branches": () =>
+        jsonResponse(200, { ...BRANCHES_RESULT, defaultBranch: undefined }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useGitBranches(1));
+
+    await waitFor(() => expect(result.current.branches.length).toBeGreaterThan(0));
+    expect(result.current.defaultBranch).toBeNull();
   });
 
   it("does not fetch at all when enabled: false, and leaves branches empty", async () => {
@@ -97,6 +115,7 @@ describe("useGitBranches", () => {
     expect(onLoaded).toHaveBeenCalledWith({
       branches: ["main", "feature/x", "origin/main", "origin/feature/x"],
       currentBranch: "main",
+      defaultBranch: "origin/main",
     });
   });
 

@@ -104,7 +104,10 @@ describe("CommandPalette -> worktree isolation toggle", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
-  it("fetches branches and shows a base-ref picker once switched on", async () => {
+  // Issue #271 follow-up — the repo's resolved default branch wins over the
+  // current branch, matching PromoteDialog's own default (both share
+  // useGitBranches).
+  it("fetches branches and defaults the base-ref picker to the repo's default branch", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({
@@ -117,6 +120,55 @@ describe("CommandPalette -> worktree isolation toggle", () => {
               ],
               worktrees: [],
               remoteBranches: ["origin/main"],
+              defaultBranch: "origin/main",
+            }),
+          ),
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByLabelText("Isolate in a new worktree"));
+    const select = await screen.findByRole("combobox");
+    expect(select).toHaveDisplayValue("origin/main");
+    expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+  });
+
+  // Falls back to the current branch when there's no resolvable default —
+  // no remote configured, or an older remote-host agent that predates the
+  // `defaultBranch` field (degrades to `undefined`, same as `null` here).
+  it("falls back to the current branch when the repo has no resolvable default branch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        branches: () =>
+          Promise.resolve(
+            jsonResponse(200, {
+              branches: [
+                { name: "main", isCurrent: true },
+                { name: "feature/x", isCurrent: false },
+              ],
+              worktrees: [],
+              remoteBranches: [],
             }),
           ),
       }),
@@ -146,7 +198,6 @@ describe("CommandPalette -> worktree isolation toggle", () => {
     const select = await screen.findByRole("combobox");
     expect(select).toHaveDisplayValue("main");
     expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "origin/main" })).toBeInTheDocument();
   });
 
   it("passes a worktree intent to session creation when the toggle is on", async () => {

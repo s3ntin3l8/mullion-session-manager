@@ -28,6 +28,12 @@ export interface UseGitBranchesResult {
   /** The local branch git currently has checked out, or `null` (loading,
    * disabled, not applicable, or genuinely detached/unknown). */
   currentBranch: string | null;
+  /** The repo's resolved default branch (e.g. "origin/main"), or `null`
+   * (loading, disabled, not applicable, no remote configured, or the
+   * fallback chain found nothing usable) — issue #271 follow-up, preferred
+   * over `currentBranch` by callers that want promote's "start fresh"
+   * default rather than "wherever you happen to be standing." */
+  defaultBranch: string | null;
   /** Set on a thrown/rejected fetch; `null` otherwise. Neither call site
    * needs to distinguish 204 from "still loading" from this hook's return
    * shape alone — both already treat an empty `branches` array as "nothing
@@ -41,13 +47,17 @@ export interface UseGitBranchesOptions {
    * Defaults to `true`. */
   enabled?: boolean;
   /** Called once per successful (non-204) load, with the same computed
-   * `branches`/`currentBranch` this hook itself now holds — for a caller
-   * that seeds its own base-ref selection off the result, same as both
-   * pre-extraction call sites' `setBaseRef((prev) => prev || current ||
-   * local[0] || "")` line. Takes the freshly computed values directly
-   * (not this hook's own possibly-stale return value) to avoid a stale
-   * closure. */
-  onLoaded?: (result: { branches: string[]; currentBranch: string | null }) => void;
+   * `branches`/`currentBranch`/`defaultBranch` this hook itself now holds —
+   * for a caller that seeds its own base-ref selection off the result, same
+   * as both pre-extraction call sites' `setBaseRef((prev) => prev ||
+   * current || local[0] || "")` line. Takes the freshly computed values
+   * directly (not this hook's own possibly-stale return value) to avoid a
+   * stale closure. */
+  onLoaded?: (result: {
+    branches: string[];
+    currentBranch: string | null;
+    defaultBranch: string | null;
+  }) => void;
 }
 
 export function useGitBranches(
@@ -58,6 +68,7 @@ export function useGitBranches(
 
   const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useAsyncData(
@@ -73,9 +84,11 @@ export function useGitBranches(
       const local = result.branches.map((b) => b.name);
       const combined = [...local, ...result.remoteBranches];
       const current = result.branches.find((b) => b.isCurrent)?.name ?? null;
+      const defaultRef = result.defaultBranch ?? null;
       setBranches(combined);
       setCurrentBranch(current);
-      onLoaded?.({ branches: combined, currentBranch: current });
+      setDefaultBranch(defaultRef);
+      onLoaded?.({ branches: combined, currentBranch: current, defaultBranch: defaultRef });
     },
     (err: unknown) => {
       console.debug("[useGitBranches] getProjectGitBranches failed", err);
@@ -85,5 +98,5 @@ export function useGitBranches(
     { enabled: enabled && projectId !== null },
   );
 
-  return { branches, currentBranch, error };
+  return { branches, currentBranch, defaultBranch, error };
 }

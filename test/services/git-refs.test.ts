@@ -8,6 +8,7 @@ import {
   listRemoteBranches,
   listWorktrees,
   resolveDefaultBaseRef,
+  resolveDefaultBaseRefForPicker,
   resolveCommitSha,
 } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -297,6 +298,50 @@ describe("resolveDefaultBaseRef (issue #216)", () => {
     git(tmpDir, ["push", "origin", "main:master"]);
 
     expect(await resolveDefaultBaseRef(tmpDir)).toBe("origin/master");
+  });
+});
+
+describe("resolveDefaultBaseRefForPicker (issue #271 follow-up)", () => {
+  // The base-ref pickers' variant: same no-fetch chain as
+  // resolveDefaultBaseRef, but "HEAD" (a fine worktree-creation arg, a bad
+  // UI default) is normalized to `null` instead of leaking through.
+  let tmpDir: string;
+  let remoteDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-default-base-ref-picker-test-"));
+    remoteDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "git-refs-default-base-ref-picker-origin-test-"),
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("returns null for a non-git-repo directory", async () => {
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBeNull();
+  });
+
+  it("returns null (not the literal 'HEAD') for a repo with no origin remote configured", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBeNull();
+  });
+
+  it("resolves origin/main when origin/HEAD's symbolic ref is set", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    git(tmpDir, ["remote", "set-head", "origin", "main"]);
+
+    expect(await resolveDefaultBaseRefForPicker(tmpDir)).toBe("origin/main");
   });
 });
 

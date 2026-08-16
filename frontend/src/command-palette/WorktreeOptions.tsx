@@ -14,9 +14,16 @@ import { Dropdown } from "../ui/primitives.js";
 // `onBaseRefChange` takes the raw `Dispatch<SetStateAction<string>>` (not a
 // plain `(ref: string) => void`) so this component's `useGitBranches` `onLoaded`
 // callback can keep using the exact same functional update
-// (`prev => prev || currentBranch || branches[0] || ""`) the pre-extraction
-// effect had — reading the parent's latest `baseRef` via `prev` rather than a
-// possibly-stale value captured in this component's own closure.
+// (`prev => prev || defaultBranch || currentBranch || branches[0] || ""`) the
+// pre-extraction effect had — reading the parent's latest `baseRef` via `prev`
+// rather than a possibly-stale value captured in this component's own
+// closure. `prev ||` here is NOT the #680 production bug PromoteDialog.tsx's
+// own header comment describes: this component has no competing
+// auto-populated model suggestion racing the branches load, so `prev` really
+// is "the user already picked something," not a stale suggestion silently
+// pinned in place. Default preference order matches PromoteDialog's (issue
+// #271 follow-up): the repo's default branch first, current branch as
+// fallback.
 export interface WorktreeOptionsProps {
   projectId: number;
   enabled: boolean;
@@ -34,8 +41,8 @@ export function WorktreeOptions({
 }: WorktreeOptionsProps) {
   const { branches, error } = useGitBranches(projectId, {
     enabled,
-    onLoaded: ({ branches, currentBranch }) => {
-      onBaseRefChange((prev) => prev || currentBranch || branches[0] || "");
+    onLoaded: ({ branches, currentBranch, defaultBranch }) => {
+      onBaseRefChange((prev) => prev || defaultBranch || currentBranch || branches[0] || "");
     },
   });
 
