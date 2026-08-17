@@ -307,6 +307,84 @@ deliberately narrow:
   still read as "never checked" and get a second GitHub call in the same
   sweep.
 
+### Task hierarchy (sub-issues) (`#701`)
+
+Projects that organize their roadmap with GitHub sub-issues (a parent
+tracking issue with several children) get that structure surfaced on the
+board: a child card names its parent, the toolbar can filter to one parent
+("phase"), and the drawer lists both directions.
+
+**Parentage costs zero extra GitHub calls.** `parent_issue_url` and
+`sub_issues_summary` ride the exact same `listLabeledIssues` response
+`dependencyCount` already reads (`github.ts`) — written on every ingest,
+same cadence, same call. This corrects `#701`'s own original scoping,
+which assumed no such field existed on the plain issues-list response and
+planned a `GET .../issues/{n}/sub_issues` call per parent to derive it; that
+call is never made.
+
+Five columns on `tasks`, all nullable — `parentIssueNumber` /
+`parentIssueRepo` (the parent's own `"owner/repo"`, which can differ from
+the child's project repo: cross-repo sub-issues are first-class in GitHub's
+model) / `parentIssueTitle` / `subIssueTotal` / `subIssueCompleted`. Unlike
+`dependencyCount`, nullability here carries no fail-closed meaning — this
+is **display-only** and never gates a claim decision, so "not yet observed"
+and "known to have no parent" don't need to be distinguishable the way they
+do for dependencies.
+
+`parentIssueNumber`/`parentIssueRepo`/`subIssueTotal`/`subIssueCompleted`
+follow the same three-state write lockstep `dependencyCount` established in
+`upsertIssueTask`: `undefined` (a webhook-built `TaskIssue`, which has no
+summary to read) leaves a stored value alone; a poll-sourced value —
+including an explicit `null` parent — overwrites it. The `null` case matters
+here in a way it doesn't for `dependencyCount`: a parent can be removed, and
+a poll-sourced `null` must actively clear a stale one rather than merely
+declining to update it.
+
+**The title is the one piece that isn't free**, and gets a deliberately
+different shape from the dependency-badge display pass above. Resolving it
+is `fillParentIssueTitles` (`task-watcher.ts`), a **one-shot cache-fill, not
+a TTL-guarded refresh**: an issue's title doesn't go stale in a way that
+matters to a chip, so there's no TTL and no periodic re-check. The
+candidate query is simply `parentIssueTitle IS NULL`, deduped to one
+GitHub call per **distinct parent** (not per child — the reference install's
+32 children of 10 parents is 10 calls, not 32), converges to zero rows once
+caught up, and then costs one cheap `SELECT` per sweep forever, doing
+nothing further. `upsertIssueTask` is what re-arms it, by nulling a stored
+title only when the parent identity itself changes (a re-parenting). A
+parent that 404s (deleted, private) is retried up to
+`MAX_PARENT_TITLE_ATTEMPTS` (3) sweeps before this pass gives up on it for
+the life of the process — otherwise one permanently-unreachable parent would
+burn a cap slot every sweep forever with no TTL to rate-limit it.
+
+**The `sub_issues` webhook is deliberately not subscribed.** For
+dependencies, the `issue_dependencies` webhook was the cheap path to
+correctness because a blocker refresh was an extra, TTL-gated API call.
+Parentage already re-syncs on every 60s poll at zero marginal cost, so a
+`sub_issues` subscription would only buy latency: `upsertIssueTask`'s
+`/ws/tasks` push (`kind: "ingested"`) fires only on a task's first sighting,
+not a re-sighting, so a re-parenting written by a later poll produces no
+live broadcast at all — it surfaces whenever the frontend's own periodic
+`refreshTasks()` next runs, not instantly. (The `kind: "hierarchy"` event is
+separate and narrower: it's `fillParentIssueTitles` announcing a newly
+_filled title_, not a changed parent identity.) Subscribing to the webhook
+would also force `WEBHOOK_EVENTS_VERSION` (`github-webhook.ts`) up, which
+re-registers the hook on every connected project — accepted deferred cost,
+filed as a follow-up rather than bundled in.
+
+Board surfaces: `TaskCard.tsx` renders a `↳ <parent title>` meta chip
+(falling back to `#N` until the title pass fills it) and an `N/M` sub-issue
+progress chip — the latter renders on zero cards on an install where no
+parent issue itself carries the task label, which is the common case, not a
+bug. `UnifiedBoard.tsx`'s toolbar gets a phase `<select>` (not chips, like
+the project filter — a full-title option list runs long) that composes with
+the project/blocked-only filters through the same `absoluteDropIndex`
+translation that keeps `boardOrder` correct under any combination of them.
+`TaskDetail.tsx`'s drawer gets a "Hierarchy" section listing the parent link
+and any sibling tasks that are themselves known (labeled) Task Master tasks
+— a child issue without the task label still counts toward `subIssueTotal`
+but isn't individually listed, since nothing on this side of the API knows
+it exists.
+
 ## The task board
 
 The task board and the session board (originally two separate surfaces —
@@ -816,6 +894,14 @@ extensive design comments.
   GitHub sync above) — merging the promoted PR does not sync anything back;
   the task reaches `done` on approve, not on merge.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
+- **A re-parenting (or de-parenting) between polls produces no live push
+  (`#701`).** Sub-issue hierarchy has no push-based path the way dependency
+  edges do — `sub_issues` is deliberately not a subscribed webhook event
+  (see Task hierarchy above), and `upsertIssueTask`'s own `/ws/tasks`
+  broadcast only fires on a task's first sighting, not a re-sighting with a
+  real column change. A poll writes the new parent correctly, but a board a
+  user is already looking at only picks it up on the frontend's own next
+  periodic refetch, not instantly.
 - **A task branch in a resumable state refuses manual deletion from the
   GitPanel.** [#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)'s
   branch-delete route refuses (`reason: "task-branch"`) a `mullion/task-<N>`

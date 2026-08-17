@@ -328,6 +328,76 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText("#42")).toBeInTheDocument();
   });
 
+  // #701 — sub-issue hierarchy chips.
+  describe("parent/sub-issue chips (#701)", () => {
+    it("shows the parent's title when known, linking to its GitHub issue", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          parentIssueNumber: 30,
+          parentIssueRepo: "s3ntin3l8/branchdam",
+          parentIssueTitle: "Phase 5 — Tier-1 project introspection",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const link = screen.getByRole("link", {
+        name: /Phase 5 — Tier-1 project introspection/,
+      });
+      expect(link).toHaveAttribute("href", "https://github.com/s3ntin3l8/branchdam/issues/30");
+    });
+
+    it("falls back to a bare #N when the parent's title hasn't been filled yet", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          parentIssueNumber: 30,
+          parentIssueRepo: "s3ntin3l8/branchdam",
+          parentIssueTitle: null,
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("link", { name: /#30/ })).toBeInTheDocument();
+    });
+
+    it("shows no parent chip when parentIssueNumber is null", () => {
+      tasks = [makeTask({ id: 1, parentIssueNumber: null })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByRole("link", { name: /#30/ })).toBeNull();
+    });
+
+    it("the parent link stopPropagations, not opening the drawer on click", async () => {
+      const user = userEvent.setup();
+      tasks = [
+        makeTask({
+          id: 1,
+          parentIssueNumber: 30,
+          parentIssueRepo: "s3ntin3l8/branchdam",
+          parentIssueTitle: "Phase 5",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const link = screen.getByRole("link", { name: /Phase 5/ });
+      await user.click(link);
+      expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+    });
+
+    it("shows a sub-issue N/M chip when subIssueTotal is positive", () => {
+      tasks = [makeTask({ id: 1, subIssueTotal: 4, subIssueCompleted: 1 })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByText("1/4")).toBeInTheDocument();
+    });
+
+    it("shows no sub-issue chip when subIssueTotal is null or zero", () => {
+      tasks = [
+        makeTask({ id: 1, subIssueTotal: null, subIssueCompleted: null }),
+        makeTask({ id: 2, subIssueTotal: 0, subIssueCompleted: 0, title: "second" }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByText("0/0")).toBeNull();
+      expect(screen.queryByText(/^\d+\/\d+$/)).toBeNull();
+    });
+  });
+
   it("shows time in status, sourced from the timestamp matching the task's own column", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-03T00:00:00.000Z"));

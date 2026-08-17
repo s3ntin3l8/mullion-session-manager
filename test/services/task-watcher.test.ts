@@ -76,6 +76,11 @@ interface InsertedTaskRow {
   htmlUrl: string;
   status: string;
   dependencyCount?: number | null;
+  // #701 — see upsertIssueTask's insert values.
+  parentIssueNumber?: number | null;
+  parentIssueRepo?: string | null;
+  subIssueTotal?: number | null;
+  subIssueCompleted?: number | null;
 }
 
 interface TrackedTaskRow {
@@ -99,6 +104,17 @@ function mockApp(
   // Empty by default so every pre-existing test here (none of which know
   // this pass exists) sees zero candidates and makes zero extra calls.
   blockerCandidates: { id: number; projectId?: number; issueNumber?: number | null }[] = [],
+  // #701 — fillParentIssueTitles' own candidate query. Empty by default,
+  // same reasoning as blockerCandidates above. Told apart from it by
+  // projection shape (see the select() routing below) even though both are
+  // `select({...}).where(...).orderBy(...).all()` chains with no
+  // `blockedBy` key.
+  parentTitleCandidates: {
+    id: number;
+    projectId?: number;
+    parentIssueNumber?: number | null;
+    parentIssueRepo?: string | null;
+  }[] = [],
 ): FastifyInstance {
   let nextInsertedId = 1;
   return {
@@ -124,8 +140,13 @@ function mockApp(
       // SECOND `select({...}).where(...).orderBy(...).all()` chain, told
       // apart from autoClaimReadyTasks' by projection shape: its projection
       // includes `blockedBy` (readyTasks), this one doesn't (blockerCandidates).
+      //
+      // #701 — fillParentIssueTitles' own query is a THIRD such chain,
+      // told apart from blockerCandidates' by projection shape too: its
+      // projection includes `parentIssueNumber`, blockerCandidates' doesn't.
       select: (projection?: Record<string, unknown>) => {
         const isReadyTasksQuery = projection !== undefined && "blockedBy" in projection;
+        const isParentTitleQuery = projection !== undefined && "parentIssueNumber" in projection;
         return {
           from: () => ({
             all: () => rows,
@@ -142,12 +163,19 @@ function mockApp(
                         blockedByCheckedAt: null,
                         ...t,
                       }))
-                    : blockerCandidates.map((t) => ({
-                        projectId: 1,
-                        issueNumber: null,
-                        dependencyCount: null,
-                        ...t,
-                      })),
+                    : isParentTitleQuery
+                      ? parentTitleCandidates.map((t) => ({
+                          projectId: 1,
+                          parentIssueNumber: null,
+                          parentIssueRepo: null,
+                          ...t,
+                        }))
+                      : blockerCandidates.map((t) => ({
+                          projectId: 1,
+                          issueNumber: null,
+                          dependencyCount: null,
+                          ...t,
+                        })),
               }),
               // upsertIssueTask's existed-check — this mock always answers
               // "doesn't exist yet" (undefined), so every ingest in these
@@ -333,6 +361,12 @@ describe("startTaskWatcher", () => {
         // still writes the column explicitly as null (not omitted), see
         // the dedicated test below for the "present" case.
         dependencyCount: null,
+        // #701 — same "absent from the mocked TaskIssue, still written
+        // explicitly as null" reasoning as dependencyCount above.
+        parentIssueNumber: null,
+        parentIssueRepo: null,
+        subIssueTotal: null,
+        subIssueCompleted: null,
       },
     ]);
     cleanup();

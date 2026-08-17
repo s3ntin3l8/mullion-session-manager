@@ -206,6 +206,26 @@
 .tasks-panel-blocked-toggle.active {
   color: var(--y);
 }
+/* #701 — parent/phase filter. A <select>, not a chip group (see the
+   filter's own doc comment in UnifiedBoard.tsx) — same field look as the
+   "New task" form's .tasks-panel-new-project/.tasks-panel-new-title
+   below, so it reads as one form-control language rather than introducing
+   a third. */
+.tasks-panel-parent-filter-label {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.tasks-panel-parent-filter {
+  font-size: 11.5px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  max-width: 260px;
+}
 .tasks-panel-new-btn {
   display: flex;
   align-items: center;
@@ -417,6 +437,32 @@
   text-decoration: underline;
 }
 .task-card-age {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+/* #701 — sub-issue hierarchy. Neutral (--dim/--fg), not --y: unlike the
+   blocked language below, parentage isn't a warning state. Truncated with
+   a max-width since a parent's title (unlike an issue number) can run
+   long — "Phase 5 — Tier-1 project introspection (server-side)" would
+   otherwise wrap the meta row onto its own line. */
+.task-card-parent {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--dim);
+  text-decoration: none;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-parent:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.task-card-subissues {
   font-size: 10px;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
@@ -675,6 +721,16 @@
   letter-spacing: 0.07em;
   font-weight: 700;
   color: var(--muted);
+}
+/* #701 — the Hierarchy section's children list. */
+.task-detail-children {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+  font-size: 11px;
 }
 .task-detail-review-section {
   background: color-mix(in srgb, var(--y) 6%, transparent);

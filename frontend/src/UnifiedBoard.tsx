@@ -35,6 +35,8 @@ import {
   writeJSON,
   readBool,
   writeBool,
+  readString,
+  writeString,
 } from "./lib/persistedState.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { TasksToolbar } from "./unified-board/TasksToolbar.js";
@@ -50,6 +52,12 @@ const MIN_DRAWER_WIDTH = 300;
 // sliver of the next column, so dragging the drawer wide never collapses
 // the board down to zero visible columns.
 const MIN_COLUMNS_WIDTH = 240;
+
+// #701 — sentinel for the parent/phase filter's "(no parent)" option. Never
+// a valid "repo#number" key (those always contain "#" preceded by a repo
+// slug, never this exact string), so it safely shares the same string
+// state as a real selection without a separate boolean.
+const PARENT_FILTER_NONE = "__none__";
 
 function clampDrawerWidth(n: number, maxW: number): number {
   return Math.min(Math.max(n, MIN_DRAWER_WIDTH), Math.max(MIN_DRAWER_WIDTH, maxW));
@@ -190,14 +198,78 @@ export function UnifiedBoard({
     setPrevHasBlockedTask(hasBlockedTask);
     if (blockedOnly && !hasBlockedTask) setBlockedOnly(false);
   }
+  // #701 — parent/phase filter. Empty string = "All" (the default); a
+  // reserved sentinel (not a real "repo#number" key, which always contains
+  // "#") stands in for "(no parent)" so it can share the same string state
+  // as a real selection. A <select>, not chips like the project filter:
+  // the reference install alone has 10 distinct parents, each a full issue
+  // title — chips at that count would wrap the filter bar across several
+  // lines the way the project filter's own chips are documented not to.
+  // Composes with the project/blocked-only filters via the same
+  // absoluteDropIndex path — see selectedProjectIds' own comment above for
+  // why that's what makes stacking filters safe for boardOrder.
+  const parentOptions = useMemo(() => {
+    const byKey = new Map<string, { key: string; label: string; count: number }>();
+    for (const t of tasks) {
+      if (t.parentIssueNumber === null || t.parentIssueRepo === null) continue;
+      const key = `${t.parentIssueRepo}#${t.parentIssueNumber}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.count += 1;
+        // A late-arriving title (task-watcher.ts's fillParentIssueTitles
+        // lands after the row itself is ingested) upgrades an
+        // already-seen `#N` placeholder option rather than needing a
+        // fresh option to appear once it does.
+        if (existing.label === `#${t.parentIssueNumber}` && t.parentIssueTitle) {
+          existing.label = t.parentIssueTitle;
+        }
+      } else {
+        byKey.set(key, { key, label: t.parentIssueTitle ?? `#${t.parentIssueNumber}`, count: 1 });
+      }
+    }
+    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [tasks]);
+  const noParentCount = useMemo(
+    () => tasks.filter((t) => t.parentIssueNumber === null).length,
+    [tasks],
+  );
+  const [selectedParentKey, setSelectedParentKey] = useState<string>(() =>
+    readString(STORAGE_KEYS.taskParentFilter, ""),
+  );
+  useEffect(() => {
+    writeString(STORAGE_KEYS.taskParentFilter, selectedParentKey);
+  }, [selectedParentKey]);
+  // Same render-time-adjustment pattern as blockedOnly's own reset above
+  // (see its comment for the full "why not a useEffect" reasoning) — a
+  // persisted selection for a parent that's since vanished from `tasks`
+  // (its last child was re-parented, deleted, or closed) must not leave the
+  // filter silently stuck showing zero results with no visible way back.
+  const selectedParentValid =
+    selectedParentKey === "" ||
+    selectedParentKey === PARENT_FILTER_NONE ||
+    parentOptions.some((o) => o.key === selectedParentKey);
+  const [prevSelectedParentValid, setPrevSelectedParentValid] = useState(selectedParentValid);
+  if (selectedParentValid !== prevSelectedParentValid) {
+    setPrevSelectedParentValid(selectedParentValid);
+    if (!selectedParentValid) setSelectedParentKey("");
+  }
   const visibleTasks = useMemo(() => {
     let result =
       activeProjectIds.length === 0
         ? tasks
         : tasks.filter((t) => activeProjectIds.includes(t.projectId));
     if (blockedOnly && hasBlockedTask) result = result.filter((t) => t.blockedState === "blocked");
+    if (selectedParentKey === PARENT_FILTER_NONE) {
+      result = result.filter((t) => t.parentIssueNumber === null);
+    } else if (selectedParentKey !== "") {
+      result = result.filter(
+        (t) =>
+          t.parentIssueNumber !== null &&
+          `${t.parentIssueRepo}#${t.parentIssueNumber}` === selectedParentKey,
+      );
+    }
     return result;
-  }, [tasks, activeProjectIds, blockedOnly, hasBlockedTask]);
+  }, [tasks, activeProjectIds, blockedOnly, hasBlockedTask, selectedParentKey]);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -490,6 +562,44 @@ export function UnifiedBoard({
               )}
             </div>
           )}
+          {/* #701 — only worth showing once at least one task actually has
+              a parent, same "only worth showing once it'd narrow anything"
+              posture as the project filter above. */}
+          {parentOptions.length > 0 && (
+            <div className="tasks-panel-filter-bar">
+              <label
+                className="tasks-panel-parent-filter-label"
+                htmlFor="tasks-panel-parent-filter"
+              >
+                Phase
+              </label>
+              <select
+                id="tasks-panel-parent-filter"
+                className="tasks-panel-parent-filter"
+                value={selectedParentKey}
+                onChange={(e) => setSelectedParentKey(e.target.value)}
+              >
+                <option value="">All</option>
+                {parentOptions.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label} ({o.count})
+                  </option>
+                ))}
+                <option value={PARENT_FILTER_NONE}>(no parent) ({noParentCount})</option>
+              </select>
+              {selectedParentKey !== "" && (
+                <button
+                  type="button"
+                  className="tasks-panel-filter-clear"
+                  title="Show every phase"
+                  aria-label="Show every phase"
+                  onClick={() => setSelectedParentKey("")}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
           {dragError && (
             <div className="task-detail-error tasks-panel-drag-error" role="status">
               {dragError}
@@ -529,7 +639,11 @@ export function UnifiedBoard({
                   ? "No blocked tasks in the selected projects."
                   : blockedOnly
                     ? "No blocked tasks."
-                    : "No tasks in the selected projects."}
+                    : selectedParentKey !== "" && activeProjectIds.length > 0
+                      ? "No tasks match the selected phase in the selected projects."
+                      : selectedParentKey !== ""
+                        ? "No tasks match the selected phase."
+                        : "No tasks in the selected projects."}
               </div>
               {blockedOnly && (
                 <button
@@ -547,6 +661,15 @@ export function UnifiedBoard({
                   onClick={clearProjectFilter}
                 >
                   Clear the project filter
+                </button>
+              )}
+              {selectedParentKey !== "" && (
+                <button
+                  type="button"
+                  className="tasks-panel-empty-hint-clear"
+                  onClick={() => setSelectedParentKey("")}
+                >
+                  Clear the phase filter
                 </button>
               )}
             </EmptyStateNote>

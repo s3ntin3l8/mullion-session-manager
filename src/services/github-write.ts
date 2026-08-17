@@ -210,6 +210,32 @@ export async function getIssueState(
   return { state: result.state, labels };
 }
 
+/** #701 — fetches a single issue's title, used by task-watcher.ts's
+ * fillParentIssueTitles to lazily resolve a child card's `↳ <parent
+ * title>` chip (the title isn't on the list response the way
+ * `parent_issue_url` itself is, so this is the one extra call per DISTINCT
+ * parent). A separate method rather than widening IssueStateResult: that
+ * type is consumed by close-sync and shouldn't grow a field nothing there
+ * reads. githubRequest's own 404-on-GET split means a deleted/private
+ * parent surfaces as a plain GitHubApiError, not a false
+ * GitHubWriteScopeError — the caller treats that as a bounded retry
+ * candidate, not a hard failure. */
+export async function getIssueTitle(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<string> {
+  const result = await githubRequest<{ title: string }>(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/issues/${issueNumber}`,
+  );
+  return result.title;
+}
+
 // #667 — native GitHub issue dependencies
 // (docs.github.com/en/rest/issues/issue-dependencies). Both endpoints return
 // full issue objects (state included, cross-repo blockers included via each

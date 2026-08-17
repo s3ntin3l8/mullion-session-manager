@@ -131,6 +131,13 @@ const TASK_ROW_COLUMNS = {
   githubSyncError: tasks.githubSyncError,
   dependencyCount: tasks.dependencyCount,
   blockedBy: tasks.blockedBy,
+  // #701 — already in their final display shape (unlike blockedBy), no
+  // withBlockedState-style transform needed.
+  parentIssueNumber: tasks.parentIssueNumber,
+  parentIssueRepo: tasks.parentIssueRepo,
+  parentIssueTitle: tasks.parentIssueTitle,
+  subIssueTotal: tasks.subIssueTotal,
+  subIssueCompleted: tasks.subIssueCompleted,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
   claimedAt: tasks.claimedAt,

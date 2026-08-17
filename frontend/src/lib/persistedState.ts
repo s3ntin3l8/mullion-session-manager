@@ -44,6 +44,8 @@ export const STORAGE_KEYS = {
   taskDrawerWidth: "crs.taskDrawerWidth",
   taskProjectFilter: "crs.taskProjectFilter",
   taskBlockedOnlyFilter: "crs.taskBlockedOnlyFilter",
+  // #701
+  taskParentFilter: "crs.taskParentFilter",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

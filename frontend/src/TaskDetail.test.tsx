@@ -75,6 +75,11 @@ function makeTask(overrides: Partial<Task>): Task {
     dependencyCount: null,
     blockedState: "clear",
     blockers: [],
+    parentIssueNumber: null,
+    parentIssueRepo: null,
+    parentIssueTitle: null,
+    subIssueTotal: null,
+    subIssueCompleted: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     claimedAt: null,
@@ -363,6 +368,109 @@ describe("TaskDetail", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText("Checking dependencies…")).toBeNull();
     expect(screen.queryByText(/^Blocked by/)).toBeNull();
+  });
+
+  // #701 — sub-issue hierarchy section.
+  describe("Hierarchy section (#701)", () => {
+    it("renders no Hierarchy section for a task with neither a parent nor children", () => {
+      tasks = [makeTask({ id: 1, parentIssueNumber: null, subIssueTotal: null })];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(
+        screen.queryByText("Hierarchy", { selector: ".task-detail-section-title" }),
+      ).toBeNull();
+    });
+
+    it("links to the parent's title when known", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          parentIssueNumber: 30,
+          parentIssueRepo: "s3ntin3l8/branchdam",
+          parentIssueTitle: "Phase 5 — Tier-1 project introspection",
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      const link = screen.getByRole("link", { name: /Phase 5 — Tier-1 project introspection/ });
+      expect(link).toHaveAttribute("href", "https://github.com/s3ntin3l8/branchdam/issues/30");
+    });
+
+    it("falls back to a bare #N when the parent's title hasn't been filled yet", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          parentIssueNumber: 30,
+          parentIssueRepo: "s3ntin3l8/branchdam",
+          parentIssueTitle: null,
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.getByRole("link", { name: /#30/ })).toBeInTheDocument();
+    });
+
+    it("shows sub-issue completion progress", () => {
+      tasks = [makeTask({ id: 1, subIssueTotal: 4, subIssueCompleted: 1 })];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.getByText("1 of 4 sub-issues complete")).toBeInTheDocument();
+    });
+
+    it("lists sibling tasks that are themselves known Task Master tasks", () => {
+      tasks = [
+        makeTask({ id: 1, issueNumber: 30, projectId: 1, subIssueTotal: 2, subIssueCompleted: 0 }),
+        makeTask({
+          id: 2,
+          issueNumber: 44,
+          projectId: 1,
+          parentIssueNumber: 30,
+          title: "Child A",
+          htmlUrl: "https://github.com/o/r/issues/44",
+        }),
+        makeTask({
+          id: 3,
+          issueNumber: 45,
+          projectId: 1,
+          parentIssueNumber: 30,
+          title: "Child B",
+          htmlUrl: null,
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      const childLink = screen.getByRole("link", { name: /Child A/ });
+      expect(childLink).toHaveAttribute("href", "https://github.com/o/r/issues/44");
+      expect(screen.getByText(/Child B/)).toBeInTheDocument();
+    });
+
+    it("does not list an unrelated task in a different project as a child", () => {
+      tasks = [
+        makeTask({ id: 1, issueNumber: 30, projectId: 1 }),
+        makeTask({
+          id: 2,
+          issueNumber: 30,
+          projectId: 2,
+          parentIssueNumber: 30,
+          title: "Other project's task",
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.queryByText(/Other project's task/)).toBeNull();
+    });
+
+    it("does not treat every other parentless local task as a child of a local task", () => {
+      // issueNumber: null on the "parent" — the guard this pins.
+      tasks = [
+        makeTask({ id: 1, issueNumber: null, projectId: 1, title: "Local task" }),
+        makeTask({
+          id: 2,
+          issueNumber: null,
+          projectId: 1,
+          parentIssueNumber: null,
+          title: "Unrelated local task",
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(
+        screen.queryByText("Hierarchy", { selector: ".task-detail-section-title" }),
+      ).toBeNull();
+    });
   });
 
   it("shows the review section only when reviewSessionId is set", () => {

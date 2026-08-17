@@ -113,4 +113,10 @@ export type TaskEvent =
   // refreshTaskBlockers, called from the auto-claim sweep or a webhook
   // push). Same "doorbell, not a data channel" shape as the other two kinds
   // — the frontend reacts with a debounced refetch, not payload patching.
-  | { taskId: number; projectId: number; kind: "blockers"; ts: number };
+  | { taskId: number; projectId: number; kind: "blockers"; ts: number }
+  // #701 — a task's parent-issue title was just filled in by
+  // task-watcher.ts's fillParentIssueTitles (a one-shot cache-fill, not a
+  // recurring refresh — see that function's own doc comment). Without this,
+  // a filled title is invisible to a user already looking at the board
+  // until some unrelated event happens to trigger a refetch.
+  | { taskId: number; projectId: number; kind: "hierarchy"; ts: number };

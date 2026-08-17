@@ -487,6 +487,36 @@ export const tasks = sqliteTable(
     // blockers on every sweep once webhooks or a recent check already
     // settled them).
     blockedByCheckedAt: integer("blocked_by_checked_at", { mode: "timestamp" }),
+    // #701 — GitHub sub-issue hierarchy. parentIssueNumber/parentIssueRepo
+    // ride the same listLabeledIssues response dependencyCount does (GitHub's
+    // `parent_issue_url`, present on the plain issues-list response — no
+    // extra call, verified live during planning against branchdam). Null
+    // means "no parent OR never observed" — the two are indistinguishable
+    // and deliberately so: unlike dependencyCount, nothing gates a claim
+    // decision on this, it's a display concern only, so there's no
+    // fail-closed reasoning to preserve.
+    parentIssueNumber: integer("parent_issue_number"),
+    // "owner/repo" of the PARENT, not necessarily this task's own project
+    // repo — GitHub allows a cross-repo parent, and the title-fill pass
+    // (task-watcher.ts's fillParentIssueTitles) needs the parent's own repo
+    // to fetch against, not the child's.
+    parentIssueRepo: text("parent_issue_repo"),
+    // Denormalised onto every child row sharing a parent (e.g. 4 siblings
+    // duplicate one phase title) rather than a separate cache table —
+    // matches this repo's "just store what GitHub gave us" posture, and
+    // staleness here is purely cosmetic. NOT part of the free ride: title
+    // isn't on the list response, so this is filled lazily by
+    // fillParentIssueTitles, one GitHub call per distinct parent, and
+    // invalidated by upsertIssueTask only when the parent identity itself
+    // changes (see that function's own comment).
+    parentIssueTitle: text("parent_issue_title"),
+    // GitHub's `sub_issues_summary` — also free on the same response. Only
+    // meaningful when this task is ITSELF someone's parent, which requires
+    // the parent to also carry the task label; on the reference install
+    // none currently do, so this renders on zero cards today (documented,
+    // not a bug).
+    subIssueTotal: integer("sub_issue_total"),
+    subIssueCompleted: integer("sub_issue_completed"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
