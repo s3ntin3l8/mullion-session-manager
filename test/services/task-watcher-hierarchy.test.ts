@@ -145,10 +145,23 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     return row;
   }
 
+  // Calibrated for exactly ONE project in the sweep. startTaskWatcher's
+  // real (unmocked) sweepTimer doesn't fire at a flat 10s — it fires at
+  // `(rows.length - 1) * STARTUP_STAGGER_MS + margin`, where the staggered
+  // per-project initial-fetch dance pushes it later for every additional
+  // project (STARTUP_STAGGER_MS = 2s, margin = max(pollIntervalMs*2, 10s)
+  // = 10s for this file's env). With 1 project that's exactly 10s; with
+  // more, use runOneSweepWithProjectCount below instead, or this silently
+  // asserts against a sweep that hasn't actually run yet.
   async function runOneSweep() {
+    await runOneSweepWithProjectCount(1);
+  }
+
+  async function runOneSweepWithProjectCount(projectCount: number) {
     vi.useFakeTimers();
     cleanup = startTaskWatcher(app);
-    await vi.advanceTimersByTimeAsync(10_000);
+    const staggerMs = (projectCount - 1) * 2_000;
+    await vi.advanceTimersByTimeAsync(staggerMs + 10_000);
   }
 
   it("fetches once per distinct parent and fills every sibling's title", async () => {
@@ -211,6 +224,134 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     expect(mockBroadcastTaskEvent).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: t2, projectId, kind: "hierarchy" }),
     );
+  });
+
+  // Independent review, PR #702 — the token used to fetch a shared parent
+  // used to be hard-coded to `group.rows[0]`'s own project. Since a group
+  // can span more than one Mullion project, a group whose lowest-id row
+  // happened to belong to a project with no working token would silently
+  // starve forever even when a sibling project in the same group had one.
+  it("falls back to a sibling project's token when the first-grouped row's own project has none", async () => {
+    const workingProjectId = await createProject();
+    const brokenCwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-watcher-hierarchy-notoken-"));
+    const brokenRes = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: `p-${crypto.randomBytes(4).toString("hex")}`,
+        cwd: brokenCwd,
+      },
+    });
+    const brokenProjectId = brokenRes.json().id as number;
+
+    // Simulates "not a GitHub repo" / "host unreachable" — the real
+    // condition that leaves a project absent from githubContext. Matched
+    // by substring, not exact equality — routes/projects.ts path.resolve()s
+    // a project's cwd on create, and this only needs to identify which of
+    // the two temp dirs a call is about, not assert the resolution is a
+    // no-op.
+    mockResolveRepoRef.mockImplementation(async (_app: unknown, params: { cwd: string }) => {
+      if (params.cwd.includes("task-watcher-hierarchy-notoken-")) return null;
+      return { owner: "test-owner", repo: "test-repo" };
+    });
+    mockGetIssueTitle.mockResolvedValue("Shared parent");
+
+    // The broken-project task is inserted FIRST, so it gets the lower id
+    // and sorts first in the candidate query's `.orderBy(tasks.id)` —
+    // exactly the ordering the fix must not blindly trust as the group's
+    // token source.
+    const brokenTaskId = insertChildTask(brokenProjectId, { parentIssueNumber: 50 });
+    const workingTaskId = insertChildTask(workingProjectId, { parentIssueNumber: 50 });
+
+    // Two projects registered — see runOneSweepWithProjectCount's own
+    // comment for why the flat runOneSweep() helper isn't calibrated for
+    // this and would assert before the real sweep has actually run.
+    await runOneSweepWithProjectCount(2);
+
+    expect(mockGetIssueTitle).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo", 50);
+    expect(getTask(brokenTaskId).parentIssueTitle).toBe("Shared parent");
+    expect(getTask(workingTaskId).parentIssueTitle).toBe("Shared parent");
+  });
+
+  // Hermes review, PR #702 — the give-up key is shared across every
+  // project in a group, so if one project's token happens to be
+  // under-scoped for this specific parent (403/404) while a sibling
+  // project's own token can see it fine, the group must try that other
+  // token too before counting the parent as failed — not stop at the
+  // first token it happened to find.
+  it("tries every distinct project token in the group before counting a failure", async () => {
+    const projectAId = await createProject();
+    const bCwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-watcher-hierarchy-projectb-"));
+    const bRes = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: `p-${crypto.randomBytes(4).toString("hex")}`, cwd: bCwd },
+    });
+    const projectBId = bRes.json().id as number;
+
+    mockResolveRepoRef.mockImplementation(async (_app: unknown, params: { cwd: string }) => {
+      if (params.cwd.includes("task-watcher-hierarchy-projectb-")) {
+        return { owner: "project-b", repo: "repo-b" };
+      }
+      return { owner: "project-a", repo: "repo-a" };
+    });
+    mockResolveGitHubToken.mockImplementation(async (_app: unknown, repoRef: { owner: string }) =>
+      repoRef.owner === "project-a" ? "token-a" : "token-b",
+    );
+    // token-a (project A's own token) can't see the shared parent;
+    // token-b (project B's) can — a realistic under-scoped-token scenario.
+    mockGetIssueTitle.mockImplementation(async (token: string) => {
+      if (token === "token-a") throw new Error("token-a lacks access to this parent");
+      return "Shared parent";
+    });
+
+    // projectA's task is inserted FIRST, so token-a is the first candidate
+    // tried — exactly the ordering that must NOT stop the group at one
+    // failure.
+    const taskAId = insertChildTask(projectAId, { parentIssueNumber: 70 });
+    const taskBId = insertChildTask(projectBId, { parentIssueNumber: 70 });
+
+    await runOneSweepWithProjectCount(2);
+
+    expect(mockGetIssueTitle).toHaveBeenCalledTimes(2);
+    expect(mockGetIssueTitle).toHaveBeenCalledWith("token-a", "test-owner", "test-repo", 70);
+    expect(mockGetIssueTitle).toHaveBeenCalledWith("token-b", "test-owner", "test-repo", 70);
+    expect(getTask(taskAId).parentIssueTitle).toBe("Shared parent");
+    expect(getTask(taskBId).parentIssueTitle).toBe("Shared parent");
+  });
+
+  it("resets the attempt counter after a successful fetch, not counting a prior failure against a later streak", async () => {
+    const projectId = await createProject();
+    const taskId = insertChildTask(projectId, { parentIssueNumber: 62 });
+
+    let shouldFail = true;
+    mockGetIssueTitle.mockImplementation(async () => {
+      if (shouldFail) throw new Error("transient");
+      return "Filled";
+    });
+
+    await runOneSweep(); // sweep 1: fails once — attempts=1
+    expect(getTask(taskId).parentIssueTitle).toBeNull();
+
+    shouldFail = false;
+    await vi.advanceTimersByTimeAsync(1_000); // sweep 2: succeeds — attempts reset
+    expect(getTask(taskId).parentIssueTitle).toBe("Filled");
+
+    // Simulate a later re-arm (a real re-parenting nulls the title via
+    // upsertIssueTask's own CASE WHEN — see task-watcher-ingest.test.ts)
+    // and start failing again.
+    app.db.update(tasks).set({ parentIssueTitle: null }).where(eq(tasks.id, taskId)).run();
+    shouldFail = true;
+    mockGetIssueTitle.mockClear();
+
+    await vi.advanceTimersByTimeAsync(1_000); // sweep 3: fail #1 of the new streak
+    await vi.advanceTimersByTimeAsync(1_000); // sweep 4: fail #2
+    expect(mockGetIssueTitle).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000); // sweep 5: fail #3 — gives up
+    expect(mockGetIssueTitle).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_000); // sweep 6: must NOT attempt a 4th time
+    expect(mockGetIssueTitle).toHaveBeenCalledTimes(3);
   });
 
   it("has no parent-title candidates and makes no call when parentIssueNumber is null", async () => {

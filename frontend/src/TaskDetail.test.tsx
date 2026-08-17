@@ -415,12 +415,20 @@ describe("TaskDetail", () => {
 
     it("lists sibling tasks that are themselves known Task Master tasks", () => {
       tasks = [
-        makeTask({ id: 1, issueNumber: 30, projectId: 1, subIssueTotal: 2, subIssueCompleted: 0 }),
+        makeTask({
+          id: 1,
+          issueNumber: 30,
+          projectId: 1,
+          htmlUrl: "https://github.com/o/r/issues/30",
+          subIssueTotal: 2,
+          subIssueCompleted: 0,
+        }),
         makeTask({
           id: 2,
           issueNumber: 44,
           projectId: 1,
           parentIssueNumber: 30,
+          parentIssueRepo: "o/r",
           title: "Child A",
           htmlUrl: "https://github.com/o/r/issues/44",
         }),
@@ -429,6 +437,7 @@ describe("TaskDetail", () => {
           issueNumber: 45,
           projectId: 1,
           parentIssueNumber: 30,
+          parentIssueRepo: "o/r",
           title: "Child B",
           htmlUrl: null,
         }),
@@ -441,17 +450,48 @@ describe("TaskDetail", () => {
 
     it("does not list an unrelated task in a different project as a child", () => {
       tasks = [
-        makeTask({ id: 1, issueNumber: 30, projectId: 1 }),
+        makeTask({
+          id: 1,
+          issueNumber: 30,
+          projectId: 1,
+          htmlUrl: "https://github.com/o/r/issues/30",
+        }),
         makeTask({
           id: 2,
           issueNumber: 30,
           projectId: 2,
           parentIssueNumber: 30,
+          parentIssueRepo: "o/r",
           title: "Other project's task",
         }),
       ];
       render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
       expect(screen.queryByText(/Other project's task/)).toBeNull();
+    });
+
+    // Hermes review, PR #702 — issue numbers are per-repo, and cross-repo
+    // parents are first-class in this feature: a same-project, same-number
+    // sibling whose PARENT is actually in a different repo must not be
+    // mistaken for a child just because the numbers coincide.
+    it("does not list a same-project, same-number sibling whose parent is actually a different repo", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          issueNumber: 30,
+          projectId: 1,
+          htmlUrl: "https://github.com/acme/foo/issues/30",
+        }),
+        makeTask({
+          id: 2,
+          issueNumber: 99,
+          projectId: 1,
+          parentIssueNumber: 30,
+          parentIssueRepo: "other/repo",
+          title: "Coincidental #30 in a different repo",
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.queryByText(/Coincidental #30/)).toBeNull();
     });
 
     it("does not treat every other parentless local task as a child of a local task", () => {

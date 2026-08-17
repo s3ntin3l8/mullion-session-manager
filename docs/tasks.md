@@ -354,7 +354,18 @@ title only when the parent identity itself changes (a re-parenting). A
 parent that 404s (deleted, private) is retried up to
 `MAX_PARENT_TITLE_ATTEMPTS` (3) sweeps before this pass gives up on it for
 the life of the process — otherwise one permanently-unreachable parent would
-burn a cap slot every sweep forever with no TTL to rate-limit it.
+burn a cap slot every sweep forever with no TTL to rate-limit it. Trying
+every distinct project token a shared parent's children resolve to (not
+just the first one found) before counting that as a failure keeps one
+under-scoped project's token from starving a sibling project's otherwise-
+resolvable children on the same parent.
+
+The candidate query excludes `done`/`failed` tasks, which means a child
+that reaches either status before this pass ever reaches it keeps a bare
+`#N` chip forever — no re-arm on reopen. Accepted: a terminal task's board
+relevance is already winding down, and re-checking it forever would cost a
+permanent trickle of calls for a cosmetic detail on a task nobody is
+actively looking at.
 
 **The `sub_issues` webhook is deliberately not subscribed.** For
 dependencies, the `issue_dependencies` webhook was the cheap path to

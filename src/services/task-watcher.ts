@@ -95,9 +95,15 @@ const MAX_PARENT_TITLE_FETCHES_PER_SWEEP = 20;
 // "parent was private, now isn't" case.
 const MAX_PARENT_TITLE_ATTEMPTS = 3;
 
-// Approximate-LRU cap on the attempt-counter Map itself, same posture as
-// github.ts's MAX_CACHE_ENTRIES — nothing bounds how many distinct
-// permanently-unreachable parents could accumulate keys otherwise.
+// Cap on the attempt-counter Map itself — nothing otherwise bounds how many
+// distinct permanently-unreachable parents could accumulate keys. NOT an
+// LRU (a `Map.set` on an existing key doesn't reorder JS iteration order):
+// eviction below prefers a key that's already given up
+// (attempts >= MAX_PARENT_TITLE_ATTEMPTS) over the oldest-inserted one, so
+// pressure doesn't preferentially reset exactly the entries this cap and
+// the give-up counter exist to keep quiet — a true LRU/FIFO eviction would
+// tend to evict whichever parent has been failing longest, which is
+// disproportionately likely to be one already at its give-up limit.
 const MAX_PARENT_TITLE_ATTEMPT_ENTRIES = 500;
 
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
@@ -746,6 +752,15 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       .from(tasks)
       .where(
         and(
+          // Hermes review — deliberate, but worth spelling out since it's
+          // a real (if narrow) gap: a child that reaches done/failed
+          // before this pass ever reaches it keeps a bare `#N` chip
+          // forever, since it drops out of candidacy the moment it goes
+          // terminal and there's no re-arm on reopen. Accepted rather than
+          // widening this to every status: a terminal task's own board
+          // relevance is already winding down, and re-checking it forever
+          // would cost a permanent trickle of GitHub calls for a cosmetic
+          // detail on a task nobody is actively looking at anymore.
           notInArray(tasks.status, ["done", "failed"]),
           isNotNull(tasks.parentIssueNumber),
           isNotNull(tasks.parentIssueRepo),
@@ -795,23 +810,56 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // The CHILD's project token is used to fetch the PARENT, which can be
       // in a different repo — cross-repo sub-issues are first-class in
       // GitHub's model, same posture task-dependencies.ts's blocker fetch
-      // already takes for cross-repo blockers.
-      const ctx = githubContext.get(group.rows[0].projectId);
-      if (!ctx) continue;
+      // already takes for cross-repo blockers. `group.rows` can legitimately
+      // span more than one Mullion project (two projects registered against
+      // the same repo, or a genuine cross-repo shared parent) — deduped by
+      // token (not just the first project found), and every distinct token
+      // is tried in turn below before counting a failure. Hermes review:
+      // the give-up key is shared across every project in the group, so
+      // stopping at the first-found token would let one under-scoped
+      // project's token (403/404 on this parent) starve the whole group —
+      // including sibling projects whose OWN token could see it fine —
+      // into eventually giving up.
+      const distinctCtxs = [
+        ...new Map(
+          group.rows
+            .map((r) => githubContext.get(r.projectId))
+            .filter((c): c is { owner: string; repo: string; token: string } => c !== undefined)
+            .map((c) => [c.token, c] as const),
+        ).values(),
+      ];
+      if (distinctCtxs.length === 0) continue;
 
       const separatorIndex = group.parentIssueRepo.indexOf("/");
       if (separatorIndex === -1) continue; // malformed — shouldn't happen, defensive only
       const parentOwner = group.parentIssueRepo.slice(0, separatorIndex);
       const parentRepo = group.parentIssueRepo.slice(separatorIndex + 1);
 
-      fetches++;
-      try {
-        const title = await getIssueTitle(
-          ctx.token,
-          parentOwner,
-          parentRepo,
-          group.parentIssueNumber,
-        );
+      let title: string | undefined;
+      let lastErr: unknown;
+      // Distinguishes "every distinct token in this group genuinely
+      // failed" (count it against the give-up budget) from "ran out of
+      // this sweep's own cap partway through the retry sequence" (defer,
+      // don't count) — the latter must not silently masquerade as the
+      // former, or a group with several tokens could exhaust its give-up
+      // budget purely on cap pressure rather than real failures.
+      let exhaustedAllTokens = true;
+      for (const ctx of distinctCtxs) {
+        if (fetches >= MAX_PARENT_TITLE_FETCHES_PER_SWEEP) {
+          cappedOut = true;
+          exhaustedAllTokens = false;
+          break;
+        }
+        fetches++;
+        try {
+          title = await getIssueTitle(ctx.token, parentOwner, parentRepo, group.parentIssueNumber);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      if (title !== undefined) {
         app.db
           .update(tasks)
           .set({ parentIssueTitle: title })
@@ -836,24 +884,35 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
             ts: Date.now(),
           });
         }
-      } catch (err) {
+      } else if (exhaustedAllTokens) {
         const attempts = (parentTitleFetchAttempts.get(key) ?? 0) + 1;
         if (
           !parentTitleFetchAttempts.has(key) &&
           parentTitleFetchAttempts.size >= MAX_PARENT_TITLE_ATTEMPT_ENTRIES
         ) {
-          const oldestKey = parentTitleFetchAttempts.keys().next().value;
-          if (oldestKey !== undefined) parentTitleFetchAttempts.delete(oldestKey);
+          // Evict a key that's already given up before falling back to the
+          // oldest-inserted one — see MAX_PARENT_TITLE_ATTEMPT_ENTRIES' own
+          // comment for why plain insertion-order eviction is the wrong
+          // default here.
+          let victim: string | undefined;
+          for (const [k, v] of parentTitleFetchAttempts) {
+            if (v >= MAX_PARENT_TITLE_ATTEMPTS) {
+              victim = k;
+              break;
+            }
+          }
+          victim ??= parentTitleFetchAttempts.keys().next().value;
+          if (victim !== undefined) parentTitleFetchAttempts.delete(victim);
         }
         parentTitleFetchAttempts.set(key, attempts);
         if (attempts >= MAX_PARENT_TITLE_ATTEMPTS) {
           app.log.warn(
-            { err, parent: key, attempts },
+            { err: lastErr, parent: key, attempts },
             "[task-watcher] giving up on this parent's title after repeated failures — will retry on restart",
           );
         } else {
           app.log.debug(
-            { err, parent: key, attempts },
+            { err: lastErr, parent: key, attempts },
             "[task-watcher] parent title fetch failed, will retry next sweep",
           );
         }

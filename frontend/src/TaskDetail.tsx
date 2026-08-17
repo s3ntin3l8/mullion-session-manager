@@ -88,19 +88,29 @@ export function TaskDetail({
       ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
       : undefined;
   // #701 — sibling tasks that are themselves Task Master tasks (i.e. also
-  // carry the task label) and list this task as their parent. Scoped to
-  // the same project — a task's parentIssueRepo can technically differ
-  // (cross-repo sub-issues), but a CHILD listing here always belongs to
-  // this project's own repo by construction (task-watcher.ts only ever
-  // ingests from one project's repo), so projectId is a correct and
-  // simpler join key than re-deriving this task's own repo slug. Guarded
-  // on issueNumber !== null: a local task's issueNumber is null, and
-  // `t.parentIssueNumber === null` would otherwise match every OTHER
-  // parentless local task as a false "child".
+  // carry the task label) and list this task as their parent. Hermes
+  // review — issue numbers are per-repo, and cross-repo parents are
+  // first-class in this feature, so matching on `parentIssueNumber` alone
+  // (even scoped to this project) isn't sufficient: another task in the
+  // SAME project could point to `other/repo#30` as its parent while this
+  // task merely happens to BE this project's own `#30` — a same-number,
+  // different-repo coincidence, not an actual parent/child relationship.
+  // `t.parentIssueRepo` is compared against this task's own repo slug,
+  // parsed from `task.htmlUrl` (a task has no dedicated repo field of its
+  // own). Guarded on issueNumber !== null and a parsed repo slug existing:
+  // a local task's issueNumber is null, and `t.parentIssueNumber === null`
+  // would otherwise match every OTHER parentless local task as a false
+  // "child".
+  const thisTaskRepoSlug = task.htmlUrl?.match(
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/\d+$/,
+  )?.[1];
   const childTasks =
-    task.issueNumber !== null
+    task.issueNumber !== null && thisTaskRepoSlug !== undefined
       ? allTasks.filter(
-          (t) => t.projectId === task.projectId && t.parentIssueNumber === task.issueNumber,
+          (t) =>
+            t.projectId === task.projectId &&
+            t.parentIssueNumber === task.issueNumber &&
+            t.parentIssueRepo === thisTaskRepoSlug,
         )
       : [];
 
