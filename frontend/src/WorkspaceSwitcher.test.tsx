@@ -257,6 +257,21 @@ describe("WorkspaceSwitcher", () => {
       expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
     });
 
+    // Issue: selecting a workspace from Tasks used to leave viewMode at
+    // "kanban" — the workspace really did switch, just invisibly behind the
+    // Tasks board's own overlay.
+    it("selecting a workspace while in Tasks (viewMode: kanban) switches back to list view", async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({ activeWorkspaceId: null, viewMode: "kanban" });
+      const { container } = render(<WorkspaceSwitcher />);
+      const row = container.querySelector(".workspace-item") as HTMLElement;
+
+      await user.click(row);
+
+      expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
+      expect(useDashboardStore.getState().viewMode).toBe("list");
+    });
+
     it("does not double-fire selection when the row's own kebab menu is clicked", async () => {
       const user = userEvent.setup();
       useDashboardStore.setState({ activeWorkspaceId: null });

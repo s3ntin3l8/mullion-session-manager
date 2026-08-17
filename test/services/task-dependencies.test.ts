@@ -342,6 +342,124 @@ describe("refreshTaskBlockers", () => {
 
     expect(getTask(task.id).blockedByCheckedAt).not.toBeNull();
   });
+
+  // task-watcher.ts's display-refresh pass (resolveStaleTaskBlockers) reads
+  // this return value to decide backoff; the claim path and both
+  // webhooks.ts callers discard it, so these three cases just pin the
+  // contract without touching any existing caller's behavior.
+  it('returns "ok" on a clean resolve', async () => {
+    const { task } = await createProjectAndTask({ dependencyCount: 1 });
+    mockListBlockedByIssues.mockResolvedValue([
+      { owner: "o", repo: "r", number: 1, title: "open", htmlUrl: "https://x/1", state: "open" },
+    ]);
+
+    const outcome = await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 1,
+      token: "tok",
+    });
+
+    expect(outcome).toBe("ok");
+  });
+
+  it('returns "shortfall" when fewer blockers are visible than dependencyCount reports', async () => {
+    const { task } = await createProjectAndTask({ dependencyCount: 2 });
+    mockListBlockedByIssues.mockResolvedValue([
+      { owner: "o", repo: "r", number: 1, title: "visible", htmlUrl: "https://x/1", state: "open" },
+    ]);
+
+    const outcome = await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 2,
+      token: "tok",
+    });
+
+    expect(outcome).toBe("shortfall");
+  });
+
+  it('returns "error" when the GitHub call throws', async () => {
+    const { task } = await createProjectAndTask({ dependencyCount: 1 });
+    mockListBlockedByIssues.mockRejectedValue(new Error("boom"));
+
+    const outcome = await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 1,
+      token: "tok",
+    });
+
+    expect(outcome).toBe("error");
+  });
+
+  // stampOnFailure — the display-refresh pass's own opt-in (task-watcher.ts's
+  // resolveStaleTaskBlockers). It is scoped to a HARD error only; a
+  // shortfall stays unstamped no matter which caller asks, because
+  // blockedByCheckedAt is the same TTL column the claim path's own 5-minute
+  // recheck reads. Stamping it here would leak a 30-minute-stale freshness
+  // window into a 5-minute-TTL claim decision the very next time
+  // autoClaimReadyTasks looks at this row (see task-dependencies.ts's own
+  // doc comment on this param, and docs/tasks.md's "Backoff on a hard error
+  // only").
+  it("stampOnFailure: true does NOT stamp blockedByCheckedAt on a shortfall — the claim path's own TTL reads the same column", async () => {
+    const { task } = await createProjectAndTask({
+      dependencyCount: 2,
+      blockedBy: null,
+      blockedByCheckedAt: null,
+    });
+    mockListBlockedByIssues.mockResolvedValue([
+      { owner: "o", repo: "r", number: 1, title: "visible", htmlUrl: "https://x/1", state: "open" },
+    ]);
+
+    const outcome = await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 2,
+      token: "tok",
+      stampOnFailure: true,
+    });
+
+    expect(outcome).toBe("shortfall");
+    expect(getTask(task.id).blockedByCheckedAt).toBeNull();
+  });
+
+  it("stampOnFailure: true stamps just blockedByCheckedAt on a hard error, leaving blockedBy untouched", async () => {
+    const { task } = await createProjectAndTask({
+      dependencyCount: 1,
+      blockedBy: "[]",
+      blockedByCheckedAt: null,
+    });
+    mockListBlockedByIssues.mockRejectedValue(new Error("boom"));
+
+    const outcome = await refreshTaskBlockers(app, {
+      taskId: task.id,
+      projectId: task.projectId,
+      owner: "o",
+      repo: "r",
+      issueNumber: 10,
+      dependencyCount: 1,
+      token: "tok",
+      stampOnFailure: true,
+    });
+
+    expect(outcome).toBe("error");
+    const row = getTask(task.id);
+    expect(row.blockedByCheckedAt).not.toBeNull();
+    expect(row.blockedBy).toBe("[]"); // untouched — only the TTL stamp changes on error
+  });
 });
 
 describe("parseBlockedBy shape validation (Hermes review, PR #669)", () => {

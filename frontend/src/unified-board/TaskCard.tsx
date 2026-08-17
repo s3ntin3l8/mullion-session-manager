@@ -170,7 +170,7 @@ export function TaskCard({
 
   return (
     <div
-      className={`task-card${severityClass ? ` ${severityClass}` : ""}${dropTarget ? " kanban-card-drop-target" : ""}`}
+      className={`task-card${severityClass ? ` ${severityClass}` : ""}${task.blockedState === "blocked" ? " task-card-is-blocked" : ""}${dropTarget ? " kanban-card-drop-target" : ""}`}
       draggable
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -249,40 +249,28 @@ export function TaskCard({
           </span>
         )}
         {statusAgeLabel && <span className="task-card-age">{statusAgeLabel}</span>}
-        {/* #667 — without this, a task blocked on an open GitHub
-            dependency is indistinguishable from any other card sitting in
-            Ready, which is exactly the problem: it's the one card that
-            will never move on its own until a human notices. Same
+        {/* #667 — the `unresolved` case only: a never-yet-checked task and
+            a verified-clear one shouldn't look identical while genuinely
+            different, so this stays a small inline chip in the meta row,
+            muted via a CSS modifier — it's a "wait and see" state, not
+            actionable. `clear` renders nothing here or below: a
+            zero-dependency task's card stays byte-identical to before
+            #667. The `blocked` case is promoted to its own full-width
+            strip below (issue: dependency badges stuck on "Checking
+            dependencies…" + blocked tasks being easy to miss) — a task
+            that will never move on its own until a human notices deserves
+            more than a chip lost in a crowded meta row. Same
             role="img"/aria-label/aria-hidden treatment as the sync-error
             badge below, which already carries the resolution of two
-            review rounds on that exact pattern. `unresolved` renders the
-            same icon, muted via a CSS modifier, rather than nothing — a
-            never-yet-checked task and a verified-clear one shouldn't look
-            identical while genuinely different. `clear` renders nothing:
-            a zero-dependency task's card stays byte-identical to before
-            #667. */}
-        {task.blockedState !== "clear" && (
+            review rounds on that exact pattern. */}
+        {task.blockedState === "unresolved" && (
           <span
-            className={`task-card-blocked${task.blockedState === "unresolved" ? " task-card-blocked-unresolved" : ""}`}
+            className="task-card-blocked task-card-blocked-unresolved"
             role="img"
-            title={
-              task.blockedState === "unresolved"
-                ? "Checking dependencies…"
-                : `Blocked by ${task.blockers.map(blockerLabel).join(", ")}`
-            }
-            aria-label={
-              task.blockedState === "unresolved"
-                ? "Dependency state not yet checked"
-                : `Blocked by ${task.blockers.map(blockerLabel).join(", ")}`
-            }
+            title="Checking dependencies…"
+            aria-label="Dependency state not yet checked"
           >
             <BlockedIcon size={11} aria-hidden="true" />
-            {task.blockedState === "blocked" && task.blockers.length > 0 && (
-              <>
-                {blockerLabel(task.blockers[0])}
-                {task.blockers.length > 1 && ` +${task.blockers.length - 1}`}
-              </>
-            )}
           </span>
         )}
         {/* D4 — #485's own drawer-only sync-error banner (TaskDetail.tsx)
@@ -309,6 +297,26 @@ export function TaskCard({
           </span>
         )}
       </div>
+      {/* Promoted `blocked` strip — see the meta row's own comment above for
+          why `unresolved` stays an inline chip and `blocked` gets this
+          full-width treatment instead. Same role="img"/aria-label/
+          aria-hidden pattern as every other status badge on this card. */}
+      {task.blockedState === "blocked" && (
+        <div
+          className="task-card-blocked-strip"
+          role="img"
+          title={`Blocked by ${task.blockers.map(blockerLabel).join(", ")}`}
+          aria-label={`Blocked by ${task.blockers.map(blockerLabel).join(", ")}`}
+        >
+          <BlockedIcon size={11} aria-hidden="true" />
+          {task.blockers.length > 0 && (
+            <span>
+              Blocked by {blockerLabel(task.blockers[0])}
+              {task.blockers.length > 1 && ` +${task.blockers.length - 1}`}
+            </span>
+          )}
+        </div>
+      )}
       {/* D5 — a Failed column of several identical-looking cards conveys
           nothing on its own; the reason is the one thing worth a glance. */}
       {task.status === "failed" && task.failureReason && (

@@ -176,4 +176,42 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(refreshTasks).toHaveBeenCalled();
   });
+
+  it("issue: shows a blocked-count chip on a column with a blocked task", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", blockedState: "clear" }),
+      makeTask({
+        id: 2,
+        status: "ready",
+        blockedState: "blocked",
+        blockers: [{ owner: "acme", repo: "widgets", number: 12, title: "x", htmlUrl: null }],
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    const chip = readyColumn.querySelector(".kanban-column-blocked-count");
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveTextContent("1");
+
+    const backlogColumn = screen
+      .getByText("Backlog", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    expect(backlogColumn.querySelector(".kanban-column-blocked-count")).toBeNull();
+  });
+
+  it("shows no blocked-count chip on a column with only unresolved/clear tasks", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", blockedState: "clear" }),
+      makeTask({ id: 2, status: "ready", blockedState: "unresolved", blockers: [] }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    expect(readyColumn.querySelector(".kanban-column-blocked-count")).toBeNull();
+  });
 });

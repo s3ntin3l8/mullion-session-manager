@@ -219,6 +219,80 @@ push-based path: when a labeled issue with dependents closes (webhook
 re-checked immediately rather than waiting for a poll tick — see GitHub
 sync below and `docs/github-integration.md`'s webhook event list.
 
+**Display refresh is a separate, decoupled pass.** Everything above is
+`autoClaimReadyTasks`'s own lazy check — it exists to gate a _claim
+decision_ and is intentionally narrow: gated on `taskMaster.autoClaimPaused`,
+scoped to `ready` tasks only, on a tight 5-minute TTL. Before this pass
+existed, it was also the _only_ poll-path caller of `refreshTaskBlockers`,
+which meant a paused install, or one whose GitHub-linked tasks hadn't been
+dragged to `ready` yet, left every one of them at `dependencyGate() ===
+"unresolved"` forever — the board's "Checking dependencies…" badge never
+converged, because nothing was ever calling `refreshTaskBlockers` for those
+rows. `resolveStaleTaskBlockers` (`task-watcher.ts`, called from `pollOnce`
+right after `autoClaimReadyTasks`, reusing the same `githubContext`) fixes
+this: it resolves blockers for the board's _badge_, independent of whether
+anything is eligible to claim. It runs regardless of `autoClaimPaused`
+(resolving a blocker for display is not autonomous behavior, unlike
+claiming) but still respects `taskMaster.enabled` — when Task Master is
+disabled, ingest itself never runs, so `dependencyCount` and every other
+GitHub-derived field on every task is already frozen, and refreshing just
+`blockedBy` against that frozen `dependencyCount` would leave a row in a
+mixed-freshness state.
+
+It differs from the claim-gate check in every dimension that check is
+deliberately narrow:
+
+- **Scope**: any status short of `done`/`failed`, not just `ready` — a
+  manually-claimed task never goes through `dependencyGate` at all (claiming
+  bypasses the gate), so it can sit in `claimed`/`in_progress`/`reviewing`
+  with a never-resolved dependency state and the board has no other path to
+  ever check it.
+- **TTL**: a separate, longer `BLOCKER_DISPLAY_TTL_MS` (30 minutes vs. the
+  claim gate's 5) — a badge can tolerate more staleness than a claim
+  decision, and a blocker that closes is already pushed near-real-time by
+  the webhook path above regardless of this TTL. The two _constants_ are
+  independent; the `blockedByCheckedAt` column they're both compared
+  against is not (see "Backoff on a hard error only" below for why that
+  matters).
+- **Budget**: its own `MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP` (10),
+  independent of `MAX_DEPENDENCY_CHECKS_PER_SWEEP` and not shared with it —
+  same reasoning as the read-back sweep's own two independent caps: sharing
+  one budget would let either kind of churn starve the other out of a
+  sweep entirely.
+- **Candidate filtering happens in the query, not the loop**: rows
+  `dependencyGate` already resolves to `clear` for free (`dependencyCount
+=== 0`, short-circuiting before `blockedBy` is ever read) are excluded by
+  the `WHERE` clause, not skipped inside the loop — otherwise they'd still
+  occupy queue positions ahead of the cap, and since they also have
+  `blockedByCheckedAt IS NULL` they'd sort to the front, crowding out rows
+  that actually need a call on a large board.
+- **Backoff on a hard error only.** `refreshTaskBlockers`'s claim-path
+  behavior — never stamping `blockedByCheckedAt` on a shortfall, so the very
+  next sweep retries with a fresher count (see above) — stays in force for
+  this pass too, deliberately, even though it means a persistently
+  shortfalling row is re-checked every tick. `blockedByCheckedAt` is a
+  single column shared with the claim path's own 5-minute TTL; stamping it
+  on a shortfall from here would silently extend that path's freshness
+  window to this pass's 30 minutes as well, which very nearly shipped and
+  was caught only by tracing what the claim path would read on the next
+  sweep after this pass ran. What this pass **does** opt in to,
+  via `refreshTaskBlockers`'s `stampOnFailure` flag, is stamping on a hard
+  error only (network, 404, 403, an under-scoped token) — an exception has
+  no "maybe GitHub just hasn't caught up yet" reading, so there's no
+  freshness ambiguity to protect there. A persistently shortfalling row is
+  instead bounded the same way the claim path already bounds it: by this
+  pass's own per-sweep cap. The claim path and both webhook callers omit
+  `stampOnFailure` entirely and keep their documented immediate-retry
+  behavior on any failure.
+- **No same-tick double-refresh with the claim path.** `pollOnce` runs this
+  pass right after `autoClaimReadyTasks` in the same tick, and passes it the
+  set of task ids the claim path itself already called `refreshTaskBlockers`
+  on this sweep. This pass skips those ids outright rather than relying on
+  the SQL-level TTL filter to catch them — a shortfall is never stamped (see
+  above), so without this a row the claim path just shortfall-checked would
+  still read as "never checked" and get a second GitHub call in the same
+  sweep.
+
 ## The task board
 
 The task board and the session board (originally two separate surfaces —

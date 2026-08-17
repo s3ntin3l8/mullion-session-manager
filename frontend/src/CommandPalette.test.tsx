@@ -1088,13 +1088,17 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     await screen.findByText("matchme elsewhere");
   });
 
-  it("surfaces a matching workspace and switches to it on click", async () => {
+  it("surfaces a matching workspace and switches to it on click, resetting viewMode out of Tasks", async () => {
     const workspace = makeWorkspace({ id: 9, name: "Release train" });
     useDashboardStore.setState({
       projects: [PROJECT],
       sessions: [],
       workspaces: [workspace],
       activeWorkspaceId: null,
+      // Issue: selecting a workspace from the palette while Tasks was open
+      // used to leave this at "kanban" — the workspace really did switch,
+      // just invisibly behind the Tasks board's own overlay.
+      viewMode: "kanban",
     });
     vi.stubGlobal("fetch", mockFetch());
     const onClose = vi.fn();
@@ -1126,6 +1130,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     await user.click(screen.getByText("Release train"));
 
     expect(useDashboardStore.getState().activeWorkspaceId).toBe(9);
+    expect(useDashboardStore.getState().viewMode).toBe("list");
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -1240,6 +1245,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       sessions: [session],
       workspaces: [workspace],
       activeWorkspaceId: null,
+      viewMode: "kanban",
     });
     const onCreateSession = vi.fn();
     vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
@@ -1273,6 +1279,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     await user.keyboard("{ArrowDown}{Enter}");
 
     expect(useDashboardStore.getState().activeWorkspaceId).toBe(3);
+    expect(useDashboardStore.getState().viewMode).toBe("list");
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(onCreateSession).not.toHaveBeenCalled();
   });

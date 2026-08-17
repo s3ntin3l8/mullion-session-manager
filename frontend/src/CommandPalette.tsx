@@ -382,7 +382,7 @@ export function CommandPalette({
                   onOpenSession(picked.session);
                   closeAfterAction();
                 } else if (picked.type === "workspace") {
-                  useDashboardStore.getState().setActiveWorkspaceId(picked.workspace.id);
+                  useDashboardStore.getState().showWorkspace(picked.workspace.id);
                   closeAfterAction();
                 } else {
                   launch(picked.launcher);
@@ -802,7 +802,7 @@ export function CommandPalette({
                       className={`cmd-row${absoluteIndex === activeIndex ? " selected" : ""}`}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
-                        useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
+                        useDashboardStore.getState().showWorkspace(workspace.id);
                         closeAfterAction();
                       }}
                     >

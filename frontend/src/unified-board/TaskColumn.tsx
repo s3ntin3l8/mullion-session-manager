@@ -4,6 +4,7 @@ import type { Project, Session, Task } from "../api/index.js";
 import type { Theme } from "../store/index.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskCard } from "./TaskCard.js";
+import { BlockedIcon } from "../ui/icons.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — one status column of the
@@ -45,11 +46,27 @@ export function TaskColumn({
   const acceptsDrag = (e: DragEvent<HTMLDivElement>) =>
     acceptsDrop && e.dataTransfer.types.includes(TASK_DRAG_MIME);
 
+  // Issue: a blocked task's own on-card badge is easy to miss while
+  // scrolling past it — a column-level count makes "how many of these can I
+  // actually work on" answerable at a glance, without opening each card.
+  const blockedCount = tasks.filter((t) => t.blockedState === "blocked").length;
+
   return (
     <div className={`kanban-column${tasks.length === 0 ? " kanban-column-is-empty" : ""}`}>
       <div className="kanban-column-header">
         <span className="kanban-column-title">{title}</span>
         <span className="kanban-column-count">{tasks.length}</span>
+        {blockedCount > 0 && (
+          <span
+            className="kanban-column-blocked-count"
+            role="img"
+            title={`${blockedCount} blocked`}
+            aria-label={`${blockedCount} blocked`}
+          >
+            <BlockedIcon size={10} aria-hidden="true" />
+            {blockedCount}
+          </span>
+        )}
       </div>
       <div
         className={`kanban-column-body${dropTarget ? " kanban-card-drop-target" : ""}`}

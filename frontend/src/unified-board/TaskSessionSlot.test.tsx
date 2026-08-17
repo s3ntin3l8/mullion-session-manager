@@ -184,7 +184,11 @@ describe("UnifiedBoard nested task session strip", () => {
     expect(strip?.textContent).toContain("ended");
   });
 
-  it("clicking the strip switches to list view and opens the session, not the drawer", async () => {
+  it("clicking the strip opens the session (via the board's own onOpenSession prop, unwrapped), not the drawer", async () => {
+    // Issue: the setViewMode-before-onOpenSession ordering this used to
+    // assert has moved to usePanelOpener.ts's own leaveTaskView — see that
+    // hook's own tests. UnifiedBoard just forwards whatever onOpenSession
+    // it's given straight through to this strip now.
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude" })];
     tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
     const onOpenSession = vi.fn();
@@ -194,14 +198,8 @@ describe("UnifiedBoard nested task session strip", () => {
     const strip = document.querySelector(".task-card-session-strip")!;
     await user.click(strip);
 
-    expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
-    // Order matters, not just that both were called: the board is a
-    // z-index-100 overlay, so a session opened before the view switches
-    // away from "kanban" would render its terminal invisibly behind it.
-    expect(setViewMode.mock.invocationCallOrder[0]).toBeLessThan(
-      onOpenSession.mock.invocationCallOrder[0],
-    );
+    expect(setViewMode).not.toHaveBeenCalled();
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 

@@ -344,7 +344,14 @@ export function Sidebar({
       <button
         className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
         aria-pressed={viewMode === "kanban"}
-        onClick={onOpenTasks}
+        // Issue: this already claimed to be a toggle via aria-pressed, but
+        // onOpenTasks only ever set viewMode to "kanban" — clicking it a
+        // second time while already in Tasks did nothing, leaving the
+        // Toolbar's "Back" chevron as the only way out. Honoring what the
+        // a11y attribute already advertised.
+        onClick={() =>
+          viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
+        }
       >
         <LayersIcon size={14} />
         <span className="sidebar-tasks-entry-label">Tasks</span>

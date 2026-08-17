@@ -304,6 +304,93 @@ describe("usePanelOpener — onOpenTasks", () => {
     expect(setViewMode).toHaveBeenCalledWith("kanban");
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
+
+  it("is the one opener that does NOT reset viewMode to list", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenTasks();
+    expect(setViewMode).not.toHaveBeenCalledWith("list");
+  });
+});
+
+// Issue: selecting a workspace, a sidebar session row, or any panel-opening
+// action while the Tasks board was up used to leave viewMode at "kanban" —
+// the panel really did open/focus, just invisibly behind the board's own
+// z-index-100 overlay (App.tsx only renders it while viewMode === "kanban").
+// UnifiedBoard.tsx's own former `openSession` wrapper enforced a
+// setViewMode("list")-then-open ordering for exactly one call path (its
+// drawer/strip/lane); every other entry point in the app (Sidebar,
+// CommandPalette, useSessionDeepLink) called the RAW onOpenSession or one of
+// the other eleven openers below, with no such reset. leaveTaskView, called
+// first inside every opener except onOpenTasks (the opposite transition),
+// closes all of them the same way at once instead of one at a time.
+describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () => {
+  it("onOpenSession resets viewMode to list before opening", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenSession(SESSION);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it("onOpenSession does NOT reset viewMode when dockviewApi is null (a true no-op)", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenSession(SESSION);
+    expect(setViewMode).not.toHaveBeenCalled();
+  });
+
+  it("onOpenSessionAsFloat resets viewMode to list before opening", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenSessionAsFloat(SESSION);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it("onOpenTimeline resets viewMode to list before opening", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenTimeline(SESSION);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it.each([
+    "onOpenGitHub",
+    "onOpenGit",
+    "onOpenAgentRules",
+    "onOpenDockConfig",
+    "onOpenSkills",
+    "onOpenBrowser",
+  ] as const)("%s resets viewMode to list before opening", (fnName) => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    (result.current[fnName] as (projectId: number) => void)(1);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it.each([
+    "onOpenGitHub",
+    "onOpenGit",
+    "onOpenAgentRules",
+    "onOpenDockConfig",
+    "onOpenSkills",
+    "onOpenBrowser",
+  ] as const)("%s does NOT reset viewMode when dockviewApi is null (a true no-op)", (fnName) => {
+    const { result } = setup({ dockviewApi: null });
+    (result.current[fnName] as (projectId: number) => void)(1);
+    expect(setViewMode).not.toHaveBeenCalled();
+  });
+
+  it("onOpenBrowserUrl resets viewMode to list before opening", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenBrowserUrl(1, "https://example.com", "Example");
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it("onOpenBlankBrowser resets viewMode to list before opening", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenBlankBrowser();
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
 });
 
 describe("usePanelOpener — onOpenBrowserUrl", () => {

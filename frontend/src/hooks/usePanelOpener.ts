@@ -176,9 +176,26 @@ export function usePanelOpener({
   activeWorkspaceId,
   setSidebarOpen,
 }: UsePanelOpenerParams): UsePanelOpenerResult {
+  // Issue: opening any dockview panel while the Tasks board (UnifiedBoard,
+  // a z-index 100 overlay on top of the dockview grid — see App.tsx's own
+  // `viewMode === "kanban"` render site) is up used to activate/focus the
+  // panel behind that overlay, invisibly — the panel really did open, there
+  // was just no way to see it short of the Toolbar's "Back" chevron. Every
+  // opener below calls this first (after its own `!dockviewApi` guard, so a
+  // no-op call — nothing to open — doesn't still kick the user out of
+  // Tasks). `onOpenTasks` is the one deliberate exception: it's the
+  // opposite transition, into Tasks. UnifiedBoard.tsx's own former
+  // `openSession` wrapper enforced exactly this one-off, for exactly this
+  // reason, for the single call path that went through it — this closes
+  // every other path the same way instead of leaving them all still broken.
+  const leaveTaskView = useCallback(() => {
+    useDashboardStore.getState().setViewMode("list");
+  }, []);
+
   const onOpenSession = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
@@ -195,79 +212,87 @@ export function usePanelOpener({
       }
       setSidebarOpen(false);
     },
-    [dockviewApi, isMobile, projects, workspaces, activeWorkspaceId, setSidebarOpen],
+    [dockviewApi, isMobile, projects, workspaces, activeWorkspaceId, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenSessionAsFloat = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openSessionPanel(dockviewApi, session, isMobile, projects);
       setSidebarOpen(false);
     },
-    [dockviewApi, isMobile, projects, setSidebarOpen],
+    [dockviewApi, isMobile, projects, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenTimeline = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openTimelinePanel(dockviewApi, session);
       setSidebarOpen(false);
     },
-    [dockviewApi, setSidebarOpen],
+    [dockviewApi, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenGitHub = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, GITHUB_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen],
+    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenGit = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, GIT_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen],
+    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenAgentRules = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, AGENT_RULES_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen],
+    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenDockConfig = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, DOCK_CONFIG_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen],
+    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenSkills = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, SKILLS_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen],
+    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenBrowser = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, BROWSER_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen],
+    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenTasks = useCallback(() => {
@@ -278,6 +303,7 @@ export function usePanelOpener({
   const onOpenBrowserUrl = useCallback(
     (projectId: number, url: string, label: string) => {
       if (!dockviewApi) return;
+      leaveTaskView();
       const panel = dockviewApi.addPanel({
         id: `browser-url-${projectId}-${randomPanelId()}`,
         component: "browser",
@@ -287,11 +313,12 @@ export function usePanelOpener({
       if (isMobile) dockviewApi.maximizeGroup(panel);
       setSidebarOpen(false);
     },
-    [dockviewApi, isMobile, setSidebarOpen],
+    [dockviewApi, isMobile, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenBlankBrowser = useCallback(() => {
     if (!dockviewApi) return;
+    leaveTaskView();
     const panel = dockviewApi.addPanel({
       id: `browser-ext-${randomPanelId()}`,
       component: "browser",
@@ -300,7 +327,7 @@ export function usePanelOpener({
     });
     if (isMobile) dockviewApi.maximizeGroup(panel);
     setSidebarOpen(false);
-  }, [dockviewApi, isMobile, setSidebarOpen]);
+  }, [dockviewApi, isMobile, setSidebarOpen, leaveTaskView]);
 
   return {
     onOpenSession,

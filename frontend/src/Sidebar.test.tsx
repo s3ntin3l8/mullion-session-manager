@@ -35,6 +35,7 @@ const renameSession = vi.fn().mockResolvedValue(undefined);
 const subscribeToGitHubProject = vi.fn();
 const unsubscribeFromGitHubProject = vi.fn();
 const setHierarchicalView = vi.fn();
+const setViewMode = vi.fn();
 
 function storeState() {
   return {
@@ -48,6 +49,7 @@ function storeState() {
     hierarchicalView: false,
     setHierarchicalView,
     viewMode,
+    setViewMode,
     theme: "dark",
     events: {},
     gitStatuses: {},
@@ -175,6 +177,7 @@ beforeEach(() => {
   hosts = [];
   hideEndedSessions = false;
   viewMode = "list";
+  setViewMode.mockClear();
   localStorage.clear();
 });
 
@@ -250,6 +253,34 @@ describe("Sidebar Tasks entry — Tasks-as-a-destination", () => {
     const entry = screen.getByRole("button", { name: /Tasks/ });
     expect(entry).toHaveClass("active");
     expect(entry).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // Issue: this entry already advertised itself as a toggle via
+  // aria-pressed, but the click handler only ever called onOpenTasks
+  // (always -> "kanban"), so clicking it a second time while already in
+  // Tasks did nothing — the Toolbar's "Back" chevron was the only way out.
+  it("clicking it while already in Tasks switches back to list view instead of calling onOpenTasks again", async () => {
+    viewMode = "kanban";
+    const onOpenTasks = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenTasks });
+
+    await user.click(screen.getByRole("button", { name: /Tasks/ }));
+
+    expect(setViewMode).toHaveBeenCalledWith("list");
+    expect(onOpenTasks).not.toHaveBeenCalled();
+  });
+
+  it("clicking it while NOT in Tasks still calls onOpenTasks, not setViewMode directly", async () => {
+    viewMode = "list";
+    const onOpenTasks = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenTasks });
+
+    await user.click(screen.getByRole("button", { name: /Tasks/ }));
+
+    expect(onOpenTasks).toHaveBeenCalled();
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 });
 
