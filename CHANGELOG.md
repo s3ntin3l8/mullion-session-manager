@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.32](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.31...v0.2.32) (2026-08-17)
+
+
+### Features
+
+* display task hierarchy (sub-issues) on the Tasks board ([#702](https://github.com/s3ntin3l8/mullion-session-manager/issues/702)) ([65c0b3d](https://github.com/s3ntin3l8/mullion-session-manager/commit/65c0b3dba33b76dbdf9aa62e9dc033558f01d5c6))
+
+
+### Bug Fixes
+
+* resolve stuck dependency badges, highlight blockers, fix Tasks nav trap ([#699](https://github.com/s3ntin3l8/mullion-session-manager/issues/699)) ([c8dc97d](https://github.com/s3ntin3l8/mullion-session-manager/commit/c8dc97d8556b28127dfb6daa25129f1620a23a9c))
+
 ## [0.2.31](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.30...v0.2.31) (2026-08-16)
 
 
