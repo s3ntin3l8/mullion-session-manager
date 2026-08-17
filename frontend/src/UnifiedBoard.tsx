@@ -152,11 +152,15 @@ export function UnifiedBoard({
   const [blockedOnly, setBlockedOnly] = useState(() =>
     readBool(STORAGE_KEYS.taskBlockedOnlyFilter, false),
   );
-  const toggleBlockedOnly = () => {
-    const next = !blockedOnly;
-    setBlockedOnly(next);
-    writeBool(STORAGE_KEYS.taskBlockedOnlyFilter, next);
-  };
+  // Keeps localStorage in sync with `blockedOnly` on every change, including
+  // the render-time reset below — a plain "sync state to an external
+  // system" effect, not a setState-in-effect (nothing here calls
+  // setBlockedOnly), so toggleBlockedOnly and the reset below don't need
+  // their own separate writeBool calls.
+  useEffect(() => {
+    writeBool(STORAGE_KEYS.taskBlockedOnlyFilter, blockedOnly);
+  }, [blockedOnly]);
+  const toggleBlockedOnly = () => setBlockedOnly((prev) => !prev);
   const hasBlockedTask = useMemo(() => tasks.some((t) => t.blockedState === "blocked"), [tasks]);
   // Gated on hasBlockedTask, not just the persisted `blockedOnly` flag —
   // otherwise a user who toggled this on, then had every blocked task
@@ -166,6 +170,26 @@ export function UnifiedBoard({
   // have no on-screen affordance left to turn it off. Same "no way back"
   // trap category as the view-mode navigation issue this same change fixes
   // elsewhere — worth avoiding here too.
+  //
+  // Hermes review, PR #699 — the gate above silently overrode the *live*
+  // filter but left the *persisted* flag (and the in-memory `blockedOnly`
+  // state) at true, so it would silently re-engage the next time any task
+  // became blocked (even weeks later, after a reload). Reset `blockedOnly`
+  // itself — not just an effect's local read of it — whenever the gate is
+  // the thing actually suppressing the filter, so re-engaging it is always
+  // an explicit click again. Adjusted during render rather than in a
+  // useEffect (React's documented pattern for resetting state when a
+  // derived value changes — see "Adjusting some state when a prop
+  // changes" in react.dev's "You Might Not Need an Effect"): a
+  // useEffect-driven reset would paint one extra frame with the stale
+  // "still active" toggle before correcting itself, and would need to
+  // duplicate the persistence effect above's job instead of composing
+  // with it.
+  const [prevHasBlockedTask, setPrevHasBlockedTask] = useState(hasBlockedTask);
+  if (hasBlockedTask !== prevHasBlockedTask) {
+    setPrevHasBlockedTask(hasBlockedTask);
+    if (blockedOnly && !hasBlockedTask) setBlockedOnly(false);
+  }
   const visibleTasks = useMemo(() => {
     let result =
       activeProjectIds.length === 0

@@ -284,6 +284,20 @@ deliberately narrow:
   pass's own per-sweep cap. The claim path and both webhook callers omit
   `stampOnFailure` entirely and keep their documented immediate-retry
   behavior on any failure.
+
+  The hard-error stamp shares that same column too, so the leak isn't
+  fully eliminated, only bounded and pushed to a case where it's provably
+  safe: if this pass hits a _transient_ hard error (a network blip) on a
+  row the claim path also cares about, the claim path's own lazy check
+  will read that stamp as "freshly checked" and suppress its own recheck
+  for up to its 5-minute TTL, where before this pass existed it would have
+  retried on the very next sweep. Deliberately accepted rather than
+  introducing a second TTL column just for this pass — a claim decision
+  merely gets delayed by at most 5 minutes, it is never made on data that
+  reads as more resolved than it is (a hard error never touches
+  `blockedBy`/`dependencyCount`, only the TTL stamp), so the fail-closed
+  property holds throughout.
+
 - **No same-tick double-refresh with the claim path.** `pollOnce` runs this
   pass right after `autoClaimReadyTasks` in the same tick, and passes it the
   set of task ids the claim path itself already called `refreshTaskBlockers`

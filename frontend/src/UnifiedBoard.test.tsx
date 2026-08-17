@@ -517,6 +517,66 @@ describe("UnifiedBoard blocked-only filter", () => {
     expect(screen.getByText("unresolved task")).toBeInTheDocument();
   });
 
+  // Hermes review, PR #699 — the hasBlockedTask gate above disables the
+  // *live* filter once every blocked task resolves, but was leaving the
+  // *persisted* flag at true, so the filter would silently re-engage the
+  // next time any task became blocked (even after a reload, weeks later).
+  it("clears the persisted flag (not just the live filter) once the last blocked task resolves", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "blocked task",
+        blockedState: "blocked",
+        blockers: [{ owner: "acme", repo: "widgets", number: 12, title: "x", htmlUrl: null }],
+      }),
+    ];
+    const user = userEvent.setup();
+    const { rerender } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Blocked only/ }));
+    expect(localStorage.getItem("crs.taskBlockedOnlyFilter")).toBe("1");
+
+    // The blocked task resolves — no task on the board is blocked anymore.
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "resolved task",
+        blockedState: "clear",
+      }),
+    ];
+    await act(async () => {
+      rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    });
+
+    expect(screen.queryByRole("button", { name: /Blocked only/ })).toBeNull();
+    expect(localStorage.getItem("crs.taskBlockedOnlyFilter")).toBe("0");
+
+    // A task becomes blocked again later — re-engaging the filter must now
+    // be an explicit click, not an automatic resurrection of the old flag.
+    tasks = [
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        title: "newly blocked task",
+        blockedState: "blocked",
+        blockers: [{ owner: "acme", repo: "widgets", number: 13, title: "y", htmlUrl: null }],
+      }),
+    ];
+    await act(async () => {
+      rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    });
+    expect(screen.getByRole("button", { name: /Blocked only/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByText("newly blocked task")).toBeInTheDocument();
+  });
+
   it("reorders identically whether dragged with the blocked-only filter active or not — boardOrder must stay correct", async () => {
     // Mirrors the project-filter reorder test above: a hidden (non-blocked)
     // task interleaved in boardOrder between two blocked ones must still be
