@@ -379,7 +379,7 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByLabelText("GitHub sync error: 401 Unauthorized")).toBeInTheDocument();
   });
 
-  it("#667 — shows a blocked glyph with an accessible name for a blocked task", () => {
+  it("issue: shows a blocked glyph with an accessible name for a blocked task, promoted to a full-width strip", () => {
     tasks = [
       makeTask({
         id: 1,
@@ -398,10 +398,17 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByTitle("Blocked by #12")).toBeInTheDocument();
     expect(screen.getByLabelText("Blocked by #12")).toBeInTheDocument();
-    expect(screen.getByText("#12")).toBeInTheDocument();
+    expect(screen.getByText("Blocked by #12")).toBeInTheDocument();
+    // Promoted out of the meta row — its own full-width strip, not the
+    // small inline chip the `unresolved` state still uses.
+    expect(document.querySelector(".task-card-blocked-strip")).toBeInTheDocument();
+    expect(document.querySelector(".task-card-blocked")).toBeNull();
+    // The card itself gets the accent-border/dimmed treatment, visible at
+    // column-scan distance without opening the card.
+    expect(document.querySelector(".task-card-is-blocked")).toBeInTheDocument();
   });
 
-  it("#667 — shows a +N suffix for multiple blockers", () => {
+  it("issue: shows a +N suffix for multiple blockers", () => {
     tasks = [
       makeTask({
         id: 1,
@@ -413,7 +420,9 @@ describe("UnifiedBoard task columns", () => {
       }),
     ];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(screen.getByRole("img", { name: /^Blocked by #12, #13/ })).toHaveTextContent("#12 +1");
+    expect(screen.getByRole("img", { name: /^Blocked by #12, #13/ })).toHaveTextContent(
+      "Blocked by #12 +1",
+    );
   });
 
   it("#667 — shows a muted 'checking' state for an unresolved dependency check", () => {
@@ -421,6 +430,11 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByTitle("Checking dependencies…")).toBeInTheDocument();
     expect(screen.getByLabelText("Dependency state not yet checked")).toBeInTheDocument();
+    // `unresolved` stays the small inline chip — not promoted to the
+    // full-width strip or the card-level accent border, which are reserved
+    // for a verified `blocked` state.
+    expect(document.querySelector(".task-card-blocked-strip")).toBeNull();
+    expect(document.querySelector(".task-card-is-blocked")).toBeNull();
   });
 
   it("#667 — shows nothing for a clear (the common, zero-dependency) task", () => {
@@ -428,6 +442,8 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.queryByTitle("Checking dependencies…")).toBeNull();
     expect(screen.queryByText(/^Blocked by/)).toBeNull();
+    expect(document.querySelector(".task-card-blocked-strip")).toBeNull();
+    expect(document.querySelector(".task-card-is-blocked")).toBeNull();
   });
 
   it("shows the failure reason on a failed card", () => {

@@ -19,7 +19,13 @@ import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { TaskDetail } from "./TaskDetail.js";
 import type { Session, TaskStatus } from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import { ChevronDownIcon, ChevronRightIcon, CloseIcon, LayersIcon } from "./ui/icons.js";
+import {
+  BlockedIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  LayersIcon,
+} from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import {
   STORAGE_KEYS,
@@ -27,6 +33,8 @@ import {
   writeNumber,
   readJSON,
   writeJSON,
+  readBool,
+  writeBool,
 } from "./lib/persistedState.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { TasksToolbar } from "./unified-board/TasksToolbar.js";
@@ -136,13 +144,60 @@ export function UnifiedBoard({
     setSelectedProjectIds([]);
     writeJSON(STORAGE_KEYS.taskProjectFilter, []);
   };
-  const visibleTasks = useMemo(
-    () =>
+  // Issue: a blocked task's badge is easy to miss scrolling past a large
+  // board — same "client-only render filter" posture as the project filter
+  // above, and it composes with it via the same absoluteDropIndex path
+  // (UnifiedBoard's own drop handler below), which is what makes stacking a
+  // second filter on top of the first safe for boardOrder.
+  const [blockedOnly, setBlockedOnly] = useState(() =>
+    readBool(STORAGE_KEYS.taskBlockedOnlyFilter, false),
+  );
+  // Keeps localStorage in sync with `blockedOnly` on every change, including
+  // the render-time reset below — a plain "sync state to an external
+  // system" effect, not a setState-in-effect (nothing here calls
+  // setBlockedOnly), so toggleBlockedOnly and the reset below don't need
+  // their own separate writeBool calls.
+  useEffect(() => {
+    writeBool(STORAGE_KEYS.taskBlockedOnlyFilter, blockedOnly);
+  }, [blockedOnly]);
+  const toggleBlockedOnly = () => setBlockedOnly((prev) => !prev);
+  const hasBlockedTask = useMemo(() => tasks.some((t) => t.blockedState === "blocked"), [tasks]);
+  // Gated on hasBlockedTask, not just the persisted `blockedOnly` flag —
+  // otherwise a user who toggled this on, then had every blocked task
+  // resolve/close, would be stuck looking at an empty board with no visible
+  // way back: the toggle button itself is only rendered while hasBlockedTask
+  // is true (see below), so a filter that stayed active regardless would
+  // have no on-screen affordance left to turn it off. Same "no way back"
+  // trap category as the view-mode navigation issue this same change fixes
+  // elsewhere — worth avoiding here too.
+  //
+  // Hermes review, PR #699 — the gate above silently overrode the *live*
+  // filter but left the *persisted* flag (and the in-memory `blockedOnly`
+  // state) at true, so it would silently re-engage the next time any task
+  // became blocked (even weeks later, after a reload). Reset `blockedOnly`
+  // itself — not just an effect's local read of it — whenever the gate is
+  // the thing actually suppressing the filter, so re-engaging it is always
+  // an explicit click again. Adjusted during render rather than in a
+  // useEffect (React's documented pattern for resetting state when a
+  // derived value changes — see "Adjusting some state when a prop
+  // changes" in react.dev's "You Might Not Need an Effect"): a
+  // useEffect-driven reset would paint one extra frame with the stale
+  // "still active" toggle before correcting itself, and would need to
+  // duplicate the persistence effect above's job instead of composing
+  // with it.
+  const [prevHasBlockedTask, setPrevHasBlockedTask] = useState(hasBlockedTask);
+  if (hasBlockedTask !== prevHasBlockedTask) {
+    setPrevHasBlockedTask(hasBlockedTask);
+    if (blockedOnly && !hasBlockedTask) setBlockedOnly(false);
+  }
+  const visibleTasks = useMemo(() => {
+    let result =
       activeProjectIds.length === 0
         ? tasks
-        : tasks.filter((t) => activeProjectIds.includes(t.projectId)),
-    [tasks, activeProjectIds],
-  );
+        : tasks.filter((t) => activeProjectIds.includes(t.projectId));
+    if (blockedOnly && hasBlockedTask) result = result.filter((t) => t.blockedState === "blocked");
+    return result;
+  }, [tasks, activeProjectIds, blockedOnly, hasBlockedTask]);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -164,21 +219,15 @@ export function UnifiedBoard({
     [laneColumns, projectsById],
   );
 
-  // The task board's own overlay sits above the dockview grid (z-index 100
-  // — see .kanban-board-overlay's comment in styles.css), so opening or
-  // switching to a session's terminal panel from anywhere inside this board
-  // (a card's nested session strip, the lane, or — once wired — the detail
-  // drawer's Claim/Retry/"Open session") must switch back to list view
-  // first, or the newly (re)activated panel would render invisibly behind
-  // the overlay.
-  const openSession = useCallback(
-    (session: Session) => {
-      useDashboardStore.getState().setViewMode("list");
-      onOpenSession(session);
-    },
-    [onOpenSession],
-  );
-
+  // Issue: this wrapper used to be the ONLY path in the whole frontend that
+  // reset viewMode before opening a session's panel — every other entry
+  // point (sidebar rows, the command palette, deep links) left it at
+  // "kanban", so the panel opened invisibly behind this board's own z-index
+  // 100 overlay (.kanban-board-overlay, styles.css). That invariant now
+  // lives in usePanelOpener.ts's own leaveTaskView, called first inside
+  // EVERY opener it returns (onOpenSession included), which is what makes
+  // this wrapper redundant — `onOpenSession` itself does what this used to
+  // do, for every call site, not just the ones that went through here.
   const [creating, setCreating] = useState(false);
   // Same fire-and-forget-with-resync posture PR #477 established in
   // TasksPanel.tsx — surfaced here verbatim rather than reimplemented.
@@ -268,9 +317,10 @@ export function UnifiedBoard({
     drawerCloseButtonRef.current?.focus();
     return () => {
       // This cleanup also runs on UnifiedBoard's own unmount, not just a
-      // normal drawer close — openSession (the only path Claim/Retry/"Open
-      // session" inside the drawer itself use) calls setViewMode("list")
-      // BEFORE onOpenSession, and that view switch unmounts the whole board
+      // normal drawer close — onOpenSession (usePanelOpener.ts's own
+      // leaveTaskView, called first inside every one of its openers,
+      // including this one) resets viewMode to "list" before actually
+      // opening the panel, and that view switch unmounts the whole board
       // (App.tsx only renders it while viewMode === "kanban"). By the time
       // this cleanup runs in that case, lastFocusedRef's card has already
       // been detached along with the rest of the tree, so .focus() on it is
@@ -392,6 +442,23 @@ export function UnifiedBoard({
             }
             onCreated={() => setCreating(false)}
           />
+          {/* Issue: a blocked task's card badge is easy to scroll past on a
+              large board. Only worth showing once something is actually
+              blocked — an always-visible toggle that's always a no-op would
+              just be noise. */}
+          {hasBlockedTask && (
+            <div className="tasks-panel-filter-bar">
+              <button
+                type="button"
+                className={`sidebar-filter-chip tasks-panel-blocked-toggle${blockedOnly ? " active" : ""}`}
+                aria-pressed={blockedOnly}
+                onClick={toggleBlockedOnly}
+              >
+                <BlockedIcon size={11} aria-hidden="true" />
+                Blocked only
+              </button>
+            </div>
+          )}
           {/* Client-only render filter (see selectedProjectIds's own
               comment above) — only worth showing once there's more than
               one project to narrow down. */}
@@ -446,21 +513,42 @@ export function UnifiedBoard({
             </EmptyStateNote>
           )}
           {/* Distinct from the "No tasks yet." case above — there ARE
-              tasks, the active project filter just hides all of them. Same
-              "above the columns, not instead of them" posture: the seven
-              empty columns still show, so the board's shape stays legible
-              and Clear is one click away without leaving the board. */}
+              tasks, an active filter just hides all of them. Same "above
+              the columns, not instead of them" posture: the seven empty
+              columns still show, so the board's shape stays legible and
+              clearing whichever filter is responsible is one click away
+              without leaving the board. Message and clear action are
+              filter-aware rather than always blaming the project filter —
+              a Blocked-only filter with zero blocked tasks isn't fixed by
+              "Clear the project filter". */}
           {tasksLoaded && tasks.length > 0 && visibleTasks.length === 0 && (
             <EmptyStateNote>
               <LayersIcon size={20} />
-              <div>No tasks in the selected projects.</div>
-              <button
-                type="button"
-                className="tasks-panel-empty-hint-clear"
-                onClick={clearProjectFilter}
-              >
-                Clear the project filter
-              </button>
+              <div>
+                {blockedOnly && activeProjectIds.length > 0
+                  ? "No blocked tasks in the selected projects."
+                  : blockedOnly
+                    ? "No blocked tasks."
+                    : "No tasks in the selected projects."}
+              </div>
+              {blockedOnly && (
+                <button
+                  type="button"
+                  className="tasks-panel-empty-hint-clear"
+                  onClick={toggleBlockedOnly}
+                >
+                  Show every task
+                </button>
+              )}
+              {activeProjectIds.length > 0 && (
+                <button
+                  type="button"
+                  className="tasks-panel-empty-hint-clear"
+                  onClick={clearProjectFilter}
+                >
+                  Clear the project filter
+                </button>
+              )}
             </EmptyStateNote>
           )}
           <div className="kanban-board tasks-board kanban-unified-columns">
@@ -481,7 +569,7 @@ export function UnifiedBoard({
                   taskMasterEnabled={taskMasterEnabled}
                   acceptsDrop={acceptsDrop}
                   onOpen={(task) => openDetail(task.id)}
-                  onOpenSession={openSession}
+                  onOpenSession={onOpenSession}
                   onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
                   onDragBegin={setDraggingId}
                   onDragFinish={() => setDraggingId(null)}
@@ -531,7 +619,7 @@ export function UnifiedBoard({
                   <CloseIcon size={18} />
                 </button>
               </div>
-              <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={openSession} />
+              <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={onOpenSession} />
             </aside>
           </>
         )}
@@ -586,7 +674,7 @@ export function UnifiedBoard({
                           session={session}
                           project={project}
                           acceptsDrop={acceptsDrop}
-                          onOpen={() => openSession(session)}
+                          onOpen={() => onOpenSession(session)}
                           // P9 — not `void`-discarded: SessionRow (nested
                           // inside LaneCard) now catches a rejection here
                           // and surfaces it inline, same fix as Sidebar.tsx's

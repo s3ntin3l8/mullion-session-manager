@@ -111,6 +111,8 @@ export function dependencyGate(row: DependencyGateRow): DependencyGate {
  * self-consistent removes the ordering dependency entirely rather than
  * relying on every future caller to get it right.
  */
+export type BlockerRefreshOutcome = "ok" | "shortfall" | "error";
+
 export async function refreshTaskBlockers(
   app: FastifyInstance,
   params: {
@@ -121,8 +123,29 @@ export async function refreshTaskBlockers(
     issueNumber: number;
     dependencyCount: number | null;
     token: string;
+    // Display-refresh pass only (task-watcher.ts's resolveStaleTaskBlockers)
+    // — the claim path and both webhooks.ts callers omit this and keep the
+    // documented behavior below (retry on the very next sweep/delivery).
+    // Scoped to the HARD-ERROR outcome only (see the catch block below) — it
+    // does NOT extend to a shortfall. A shortfall's whole point is that it
+    // might be a transient GitHub-side eventual-consistency lag (see the
+    // comment on `shortfall` above), and `blockedByCheckedAt` is the one TTL
+    // column both this pass and the claim path's own lazy check
+    // (BLOCKER_RECHECK_TTL_MS, 5 min) read. Reviewed and confirmed live:
+    // stamping it here on a shortfall would leak into the claim path too —
+    // a task the claim path itself just shortfall-checked this same sweep
+    // would read as "freshly checked" on the *next* sweep and skip its own
+    // 5-minute-TTL re-check, silently stretching a claim decision's
+    // freshness window to this pass's 30-minute one. A permanently-visible-
+    // as-shortfall row is instead bounded the same way the claim path
+    // already bounds it today: by this pass's own per-sweep cap
+    // (MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP), not by stamping. A hard
+    // error (network, 404, 403, an under-scoped token) has no such
+    // freshness ambiguity — there's no "maybe GitHub just hasn't caught up
+    // yet" reading of an exception — so it's safe to stamp and back off.
+    stampOnFailure?: boolean;
   },
-): Promise<void> {
+): Promise<BlockerRefreshOutcome> {
   try {
     const results = await listBlockedByIssues(
       params.token,
@@ -181,15 +204,19 @@ export async function refreshTaskBlockers(
     }
 
     // Hermes review, PR #669 — `blockedByCheckedAt` is deliberately NOT
-    // stamped on a shortfall. It's the TTL task-watcher.ts's autoClaimReadyTasks
-    // uses to skip a re-check for up to 5 minutes; stamping it on a result
-    // that might just be the caller-supplied `expected` being transiently
-    // stale (per the comment above — a real, observed GitHub-side
-    // eventual-consistency lag, not only a hypothetical) would lock in a
-    // possibly-wrong "blocked" verdict for that whole window instead of
-    // letting the very next sweep retry with (hopefully) a fresher count.
-    // A clean result (no shortfall) has no such doubt and gets the normal
-    // TTL.
+    // stamped on a shortfall, by ANY caller, including the display-refresh
+    // pass (`stampOnFailure` deliberately does not reach this branch — see
+    // that param's own doc comment for why: this column is shared with the
+    // claim path's own 5-minute TTL, and stamping it here would silently
+    // extend that path's freshness window too). It's the TTL
+    // task-watcher.ts's autoClaimReadyTasks uses to skip a re-check for up
+    // to 5 minutes; stamping it on a result that might just be the
+    // caller-supplied `expected` being transiently stale (per the comment
+    // above — a real, observed GitHub-side eventual-consistency lag, not
+    // only a hypothetical) would lock in a possibly-wrong "blocked" verdict
+    // for that whole window instead of letting the very next sweep retry
+    // with (hopefully) a fresher count. A clean result (no shortfall) has no
+    // such doubt and gets the normal TTL.
     app.db
       .update(tasks)
       .set({
@@ -199,7 +226,7 @@ export async function refreshTaskBlockers(
         // doc comment for why (the blocked_by_added-on-a-zero-count case).
         dependencyCount: blockers.length,
         blockedBy: JSON.stringify(blockers),
-        ...(shortfall ? {} : { blockedByCheckedAt: new Date() }),
+        ...(!shortfall ? { blockedByCheckedAt: new Date() } : {}),
       })
       .where(eq(tasks.id, params.taskId))
       .run();
@@ -210,10 +237,36 @@ export async function refreshTaskBlockers(
       kind: "blockers",
       ts: Date.now(),
     });
+    return shortfall ? "shortfall" : "ok";
   } catch (err) {
     app.log.warn(
       { err, taskId: params.taskId, owner: params.owner, repo: params.repo },
       "[task-dependencies] failed to resolve blockers — leaving prior state (fail closed)",
     );
+    // Display-refresh pass only (see stampOnFailure's own doc comment) — a
+    // hard error (network, 404, 403, an under-scoped token) stamps just the
+    // TTL column, not blockedBy/dependencyCount, so the board keeps
+    // whatever it last knew while this row backs off from being re-fetched
+    // every tick. The claim path and both webhooks.ts callers never pass
+    // this, so their existing "retry on the very next attempt" behavior on
+    // error is unchanged. Guarded in its own try/catch — this function's own
+    // doc/callers rely on it never throwing (resolveStaleTaskBlockers does
+    // not wrap this call), so a DB error here must not escape and abort the
+    // rest of the sweep.
+    if (params.stampOnFailure) {
+      try {
+        app.db
+          .update(tasks)
+          .set({ blockedByCheckedAt: new Date() })
+          .where(eq(tasks.id, params.taskId))
+          .run();
+      } catch (stampErr) {
+        app.log.warn(
+          { err: stampErr, taskId: params.taskId },
+          "[task-dependencies] failed to stamp blockedByCheckedAt after a hard error",
+        );
+      }
+    }
+    return "error";
   }
 }

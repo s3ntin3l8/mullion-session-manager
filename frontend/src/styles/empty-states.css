@@ -198,6 +198,14 @@
 .tasks-panel-filter-clear:hover {
   text-decoration: underline;
 }
+.tasks-panel-blocked-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tasks-panel-blocked-toggle.active {
+  color: var(--y);
+}
 .tasks-panel-new-btn {
   display: flex;
   align-items: center;
@@ -427,6 +435,28 @@
 }
 .task-card-blocked-unresolved {
   color: var(--dim);
+}
+/* Issue: a genuinely `blocked` task (an open GitHub dependency, not just an
+   unresolved check) was only a small chip in a crowded meta row — the same
+   accent-border + tinted-background treatment .task-card.status-attention
+   above already uses for a worker needing attention, reused here for the
+   same "visible at column-scan distance" reason. Title/meta opacity is
+   reduced rather than the whole card, so the strip below (which carries the
+   actual "why") stays at full contrast. */
+.task-card-is-blocked {
+  box-shadow: inset 2px 0 0 var(--y);
+  background: color-mix(in srgb, var(--y) 8%, var(--sidebar));
+}
+.task-card-is-blocked .task-card-title,
+.task-card-is-blocked .task-card-meta {
+  opacity: 0.75;
+}
+.task-card-blocked-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--y);
 }
 .task-card-hint {
   font-size: 10px;
@@ -774,6 +804,18 @@
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   background: var(--track);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.kanban-column-blocked-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--y);
+  font-family: "Geist Mono", monospace;
+  background: color-mix(in srgb, var(--y) 14%, transparent);
   border-radius: 999px;
   padding: 1px 8px;
   flex-shrink: 0;

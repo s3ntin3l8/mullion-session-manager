@@ -328,7 +328,11 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     expect(setKanbanColumnOrder).not.toHaveBeenCalled();
   });
 
-  it("switches to list view and opens the session on a lane card click", async () => {
+  it("calls the board's own onOpenSession prop on a lane card click, unwrapped", async () => {
+    // Issue: the setViewMode-before-onOpenSession invariant this used to
+    // assert has moved to usePanelOpener.ts's own leaveTaskView — see that
+    // hook's own tests. UnifiedBoard just forwards whatever onOpenSession
+    // it's given straight through to LaneCard now.
     sessions = [makeSession({ id: 1, projectId: 1, command: "click-me" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -336,10 +340,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
 
     await user.click(screen.getByText("click-me"));
 
-    expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
-    expect(setViewMode.mock.invocationCallOrder[0]).toBeLessThan(
-      onOpenSession.mock.invocationCallOrder[0],
-    );
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 });

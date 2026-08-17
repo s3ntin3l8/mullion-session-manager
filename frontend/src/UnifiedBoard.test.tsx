@@ -448,6 +448,188 @@ describe("UnifiedBoard project filter", () => {
   });
 });
 
+describe("UnifiedBoard blocked-only filter", () => {
+  it("shows no toggle when nothing on the board is blocked", () => {
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready", blockedState: "clear" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Blocked only/ })).toBeNull();
+  });
+
+  it("narrows the board to only blocked tasks and back, and persists the toggle", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "clear task",
+        blockedState: "clear",
+      }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        title: "blocked task",
+        blockedState: "blocked",
+        blockers: [{ owner: "acme", repo: "widgets", number: 12, title: "x", htmlUrl: null }],
+      }),
+    ];
+    const user = userEvent.setup();
+    const first = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("clear task")).toBeInTheDocument();
+    expect(screen.getByText("blocked task")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Blocked only/ }));
+    expect(screen.queryByText("clear task")).toBeNull();
+    expect(screen.getByText("blocked task")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Blocked only/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(localStorage.getItem("crs.taskBlockedOnlyFilter")).toBe("1");
+
+    first.unmount();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText("clear task")).toBeNull();
+    expect(screen.getByText("blocked task")).toBeInTheDocument();
+  });
+
+  it("shows a distinct empty state when the blocked-only filter hides every task", async () => {
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready", blockedState: "unresolved" })];
+    // Seed the toggle on directly — this task is `unresolved`, not
+    // `blocked`, so the filter should hide it regardless of how the toggle
+    // itself gets flipped.
+    localStorage.setItem("crs.taskBlockedOnlyFilter", "1");
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "unresolved task",
+        blockedState: "unresolved",
+        blockers: [],
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    // No blocked task exists, so the toggle itself doesn't render even
+    // though the persisted flag is true — nothing to filter on.
+    expect(screen.queryByRole("button", { name: /Blocked only/ })).toBeNull();
+    expect(screen.getByText("unresolved task")).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #699 — the hasBlockedTask gate above disables the
+  // *live* filter once every blocked task resolves, but was leaving the
+  // *persisted* flag at true, so the filter would silently re-engage the
+  // next time any task became blocked (even after a reload, weeks later).
+  it("clears the persisted flag (not just the live filter) once the last blocked task resolves", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "blocked task",
+        blockedState: "blocked",
+        blockers: [{ owner: "acme", repo: "widgets", number: 12, title: "x", htmlUrl: null }],
+      }),
+    ];
+    const user = userEvent.setup();
+    const { rerender } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Blocked only/ }));
+    expect(localStorage.getItem("crs.taskBlockedOnlyFilter")).toBe("1");
+
+    // The blocked task resolves — no task on the board is blocked anymore.
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "resolved task",
+        blockedState: "clear",
+      }),
+    ];
+    await act(async () => {
+      rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    });
+
+    expect(screen.queryByRole("button", { name: /Blocked only/ })).toBeNull();
+    expect(localStorage.getItem("crs.taskBlockedOnlyFilter")).toBe("0");
+
+    // A task becomes blocked again later — re-engaging the filter must now
+    // be an explicit click, not an automatic resurrection of the old flag.
+    tasks = [
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        title: "newly blocked task",
+        blockedState: "blocked",
+        blockers: [{ owner: "acme", repo: "widgets", number: 13, title: "y", htmlUrl: null }],
+      }),
+    ];
+    await act(async () => {
+      rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    });
+    expect(screen.getByRole("button", { name: /Blocked only/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByText("newly blocked task")).toBeInTheDocument();
+  });
+
+  it("reorders identically whether dragged with the blocked-only filter active or not — boardOrder must stay correct", async () => {
+    // Mirrors the project-filter reorder test above: a hidden (non-blocked)
+    // task interleaved in boardOrder between two blocked ones must still be
+    // accounted for by absoluteDropIndex when computing the reshuffle.
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        boardOrder: 0,
+        title: "first",
+        blockedState: "blocked",
+        blockers: [{ owner: "a", repo: "b", number: 1, title: "x", htmlUrl: null }],
+      }),
+      makeTask({
+        id: 3,
+        projectId: 1,
+        status: "ready",
+        boardOrder: 1,
+        title: "hidden",
+        blockedState: "clear",
+      }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        boardOrder: 2,
+        title: "second",
+        blockedState: "blocked",
+        blockers: [{ owner: "a", repo: "b", number: 1, title: "x", htmlUrl: null }],
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /Blocked only/ }));
+
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    const cards = readyColumn.querySelectorAll(".task-card");
+    expect(cards).toHaveLength(2); // "hidden" is filtered out of the render
+
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
+
+    expect(updateTask).toHaveBeenCalledWith(3, { boardOrder: 0 });
+    expect(updateTask).toHaveBeenCalledWith(2, { boardOrder: 1 });
+    expect(updateTask).toHaveBeenCalledWith(1, { boardOrder: 2 });
+    expect(updateTask).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("UnifiedBoard detail drawer", () => {
   it("opens the drawer with the right taskId when a card body is clicked, and closes it", async () => {
     tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
@@ -464,7 +646,15 @@ describe("UnifiedBoard detail drawer", () => {
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 
-  it("passes the board's wrapped openSession (not the raw prop) to TaskDetail", async () => {
+  it("passes the board's own onOpenSession prop straight through to TaskDetail, unwrapped", async () => {
+    // Issue: this used to assert a local setViewMode-then-onOpenSession
+    // wrapper UnifiedBoard built itself. That invariant has moved to
+    // usePanelOpener.ts's own leaveTaskView (called first inside every
+    // opener it returns, including onOpenSession) — see that hook's own
+    // tests for the "resets viewMode before opening" ordering. This board
+    // no longer knows or cares about viewMode at all; it just forwards
+    // whatever onOpenSession it was given, verbatim, to the drawer, a
+    // card's nested session strip, and the ad-hoc lane.
     tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -473,16 +663,8 @@ describe("UnifiedBoard detail drawer", () => {
     await user.click(screen.getByText("Open me"));
     await user.click(screen.getByText("stub open session"));
 
-    // If the drawer ever received the raw onOpenSession prop directly
-    // instead of the board's setViewMode-then-onOpenSession wrapper,
-    // setViewMode would not be called here — Claim/Retry from the drawer
-    // would then open a terminal panel invisible behind the board's own
-    // z-index-100 overlay.
-    expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
-    expect(setViewMode.mock.invocationCallOrder[0]).toBeLessThan(
-      onOpenSession.mock.invocationCallOrder[0],
-    );
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 
   // Independent review — this cleanup also runs on UnifiedBoard's own

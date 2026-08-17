@@ -135,6 +135,27 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       }
     },
 
+    // Issue: selecting a workspace from Tasks (WorkspaceSwitcher.tsx, the
+    // command palette) used to leave `viewMode` at "kanban" — the workspace
+    // really did switch (setActiveWorkspaceId did its job), it just did so
+    // invisibly behind the Tasks board's z-index 100 overlay (see App.tsx's
+    // own `viewMode === "kanban"` render site), with no on-screen sign
+    // anything happened. This is the user-initiated "go look at a
+    // workspace" action; setActiveWorkspaceId alone stays the low-level
+    // primitive.
+    //
+    // Deliberately NOT folded into setActiveWorkspaceId itself: two of that
+    // setter's own call sites (App.tsx's first-run workspace bootstrap and
+    // its stale-activeWorkspaceId recovery-on-load) are boot/repair paths,
+    // not user navigation — overloading the low-level setter would silently
+    // kick a user out of a persisted Tasks view on reload whenever a
+    // workspace had been deleted out from under them. Keeping this as a
+    // separate action is what leaves those two paths untouched.
+    showWorkspace: (id) => {
+      get().setActiveWorkspaceId(id);
+      get().setViewMode("list");
+    },
+
     hydrateSettings: async () => {
       const settings = await api.getSettings();
       applySettings(settings);

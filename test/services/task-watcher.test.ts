@@ -95,6 +95,10 @@ function mockApp(
   // every pre-#667 test here keeps its original "capacity is never the
   // limiting factor, only claimTask's own mocked outcome is" behavior.
   inFlightRows: { id: number }[] = [],
+  // Display-refresh pass — resolveStaleTaskBlockers' own candidate query.
+  // Empty by default so every pre-existing test here (none of which know
+  // this pass exists) sees zero candidates and makes zero extra calls.
+  blockerCandidates: { id: number; projectId?: number; issueNumber?: number | null }[] = [],
 ): FastifyInstance {
   let nextInsertedId = 1;
   return {
@@ -115,31 +119,46 @@ function mockApp(
       // columns defaulted to `issueNumber: null` (dependencyGate's "local
       // task, always clear" case) so a pre-#667 test's `{id}`-only row keeps
       // claiming exactly as before.
-      select: (projection?: unknown) => ({
-        from: () => ({
-          all: () => rows,
-          where: () => ({
-            all: () => (projection === undefined ? trackedNonTerminal : inFlightRows),
-            orderBy: () => ({
-              all: () =>
-                readyTasks.map((t) => ({
-                  projectId: 1,
-                  issueNumber: null,
-                  dependencyCount: null,
-                  blockedBy: null,
-                  blockedByCheckedAt: null,
-                  ...t,
-                })),
+      //
+      // Display-refresh pass — resolveStaleTaskBlockers' own query is a
+      // SECOND `select({...}).where(...).orderBy(...).all()` chain, told
+      // apart from autoClaimReadyTasks' by projection shape: its projection
+      // includes `blockedBy` (readyTasks), this one doesn't (blockerCandidates).
+      select: (projection?: Record<string, unknown>) => {
+        const isReadyTasksQuery = projection !== undefined && "blockedBy" in projection;
+        return {
+          from: () => ({
+            all: () => rows,
+            where: () => ({
+              all: () => (projection === undefined ? trackedNonTerminal : inFlightRows),
+              orderBy: () => ({
+                all: () =>
+                  isReadyTasksQuery
+                    ? readyTasks.map((t) => ({
+                        projectId: 1,
+                        issueNumber: null,
+                        dependencyCount: null,
+                        blockedBy: null,
+                        blockedByCheckedAt: null,
+                        ...t,
+                      }))
+                    : blockerCandidates.map((t) => ({
+                        projectId: 1,
+                        issueNumber: null,
+                        dependencyCount: null,
+                        ...t,
+                      })),
+              }),
+              // upsertIssueTask's existed-check — this mock always answers
+              // "doesn't exist yet" (undefined), so every ingest in these
+              // tests takes the fresh-insert path and gets a real
+              // broadcastTaskEvent call (harmless no-op with zero WS
+              // subscribers registered in this process).
+              get: () => undefined,
             }),
-            // upsertIssueTask's existed-check — this mock always answers
-            // "doesn't exist yet" (undefined), so every ingest in these
-            // tests takes the fresh-insert path and gets a real
-            // broadcastTaskEvent call (harmless no-op with zero WS
-            // subscribers registered in this process).
-            get: () => undefined,
           }),
-        }),
-      }),
+        };
+      },
       insert: () => ({
         values: (v: InsertedTaskRow) => {
           inserted.push(v);

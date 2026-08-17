@@ -31,3 +31,32 @@ describe("store.setViewMode", () => {
     expect(localStorage.getItem("crs.viewMode")).toBe("list");
   });
 });
+
+// Issue: selecting a workspace while Tasks (viewMode === "kanban") was
+// active used to leave viewMode untouched — the workspace really did
+// switch, just invisibly behind the Tasks board's own z-index-100 overlay.
+describe("store.showWorkspace", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useDashboardStore.setState({ viewMode: "kanban", activeWorkspaceId: null });
+  });
+
+  it("sets the active workspace AND resets viewMode to list", () => {
+    useDashboardStore.getState().showWorkspace(7);
+    expect(useDashboardStore.getState().activeWorkspaceId).toBe(7);
+    expect(useDashboardStore.getState().viewMode).toBe("list");
+    expect(localStorage.getItem("crs.viewMode")).toBe("list");
+  });
+
+  it("setActiveWorkspaceId alone does NOT touch viewMode — the boot/repair paths in App.tsx rely on this", () => {
+    // Guards the deliberate split documented on showWorkspace's own doc
+    // comment (store/slices/ui.ts): App.tsx's first-run bootstrap and its
+    // stale-activeWorkspaceId recovery-on-load both call
+    // setActiveWorkspaceId directly, not showWorkspace — folding the reset
+    // into the low-level setter would silently kick a user out of a
+    // persisted Tasks view on reload whenever a workspace had been deleted.
+    useDashboardStore.getState().setActiveWorkspaceId(7);
+    expect(useDashboardStore.getState().activeWorkspaceId).toBe(7);
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+  });
+});

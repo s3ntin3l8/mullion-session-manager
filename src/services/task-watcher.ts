@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./host-git.js";
@@ -45,6 +45,35 @@ const MAX_READBACK_CHECKS_PER_SWEEP = 20;
 // for the pathological "first N candidates are all blocked" ordering.
 const BLOCKER_RECHECK_TTL_MS = 5 * 60 * 1000;
 const MAX_DEPENDENCY_CHECKS_PER_SWEEP = 20;
+
+// Display-refresh pass (issue: dependency badges stuck on "Checking
+// dependencies…") — resolveStaleTaskBlockers below. refreshTaskBlockers's
+// ONLY poll-path caller used to be autoClaimReadyTasks, which is gated on
+// `autoClaimPaused` and only ever looks at `ready` tasks — so a paused
+// install, or one whose GitHub-linked tasks are all still `backlog`, left
+// every one of them at `dependencyGate() === "unresolved"` forever, with
+// nothing ever calling refreshTaskBlockers to move them off it. This pass
+// is the fix: it runs unconditionally (still behind pollOnce's own
+// `taskMaster.enabled` gate — see pollOnce's own comment on why NOT
+// bypassing that one too is deliberate) so blocker state is a read-only
+// display concern, not gated behind autonomous-behavior toggles the way
+// claiming itself is.
+//
+// A SECOND, LONGER TTL than BLOCKER_RECHECK_TTL_MS on purpose — that one
+// guards a claim *decision* and wants to stay tight; this one only guards a
+// *badge*, and a blocker that closes is already pushed near-real-time by
+// webhooks.ts's own blocker-close handler regardless of this TTL.
+const BLOCKER_DISPLAY_TTL_MS = 30 * 60 * 1000;
+
+// Independent of MAX_DEPENDENCY_CHECKS_PER_SWEEP, not shared with it — same
+// reasoning as MAX_READBACK_CHECKS_PER_SWEEP's own independence from its
+// sibling budget: sharing one budget would let either kind of churn starve
+// the other out of a sweep entirely. Like MAX_DEPENDENCY_CHECKS_PER_SWEEP
+// (and unlike MAX_READBACK_CHECKS_PER_SWEEP, which is per-project), this is
+// a single global cap for the whole tick — this pass, like
+// autoClaimReadyTasks, runs once per tick over a query that isn't
+// project-scoped.
+const MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP = 10;
 
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
 // auto-claim eligibility with a `Manual: true` line, mirroring the
@@ -390,10 +419,21 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // (see task-config.ts). Read fresh every sweep, not cached.
   async function autoClaimReadyTasks(
     githubContext: Map<number, { owner: string; repo: string; token: string }>,
-  ): Promise<void> {
+  ): Promise<Set<number>> {
+    // Task ids this pass itself called refreshTaskBlockers on this tick,
+    // regardless of outcome — handed back to resolveStaleTaskBlockers so it
+    // doesn't immediately re-check (and double the GitHub call for) a row
+    // this pass just checked. Needed specifically for the shortfall case:
+    // a shortfall is deliberately never stamped to blockedByCheckedAt by
+    // either pass (see refreshTaskBlockers' own doc comment), so without
+    // this set the SQL-level TTL filter alone wouldn't catch it — the row
+    // would still read as "never checked" and get re-fetched a second time
+    // in the very same sweep.
+    const refreshedThisSweep = new Set<number>();
+
     if (getStoredSettings(app.db).taskMaster.autoClaimPaused) {
       app.log.debug("[task-watcher] auto-claim is paused, skipping");
-      return;
+      return refreshedThisSweep;
     }
 
     const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
@@ -408,7 +448,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         { inFlight, maxConcurrent },
         "[task-watcher] at capacity, skipping auto-claim sweep entirely",
       );
-      return;
+      return refreshedThisSweep;
     }
 
     const ready = app.db
@@ -448,6 +488,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
             cappedOut = true;
           } else {
             dependencyChecksThisSweep++;
+            refreshedThisSweep.add(row.id);
             await refreshTaskBlockers(app, {
               taskId: row.id,
               projectId: row.projectId,
@@ -512,6 +553,101 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         "[task-watcher] more ready tasks needed a dependency check than this sweep's cap allows — remainder deferred to a later sweep",
       );
     }
+
+    return refreshedThisSweep;
+  }
+
+  // Decoupled from auto-claim (see MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP's
+  // own comment for why) — resolves blockers for the sake of the board's
+  // badge, independent of autoClaimReadyTasks' own claim-gate check. Any
+  // status a task can sit in pre-`done`/`failed` is a candidate, not just
+  // `ready`: a manually-claimed task never goes through dependencyGate at
+  // all (claiming bypasses the gate — see docs/tasks.md), so it can be
+  // sitting in `claimed`/`in_progress`/`reviewing` with a never-resolved
+  // dependency state and the board has no other path to ever check it.
+  async function resolveStaleTaskBlockers(
+    githubContext: Map<number, { owner: string; repo: string; token: string }>,
+    // Ids autoClaimReadyTasks already called refreshTaskBlockers on this
+    // same tick — see that Set's own doc comment. Skipped here even though
+    // some of them (a shortfall) won't show up as fresh in the SQL TTL
+    // filter, to avoid a second GitHub call for the same task in the same
+    // sweep.
+    alreadyRefreshedThisSweep: Set<number>,
+  ): Promise<void> {
+    const cutoff = new Date(Date.now() - BLOCKER_DISPLAY_TTL_MS);
+
+    const candidates = app.db
+      .select({
+        id: tasks.id,
+        projectId: tasks.projectId,
+        issueNumber: tasks.issueNumber,
+        dependencyCount: tasks.dependencyCount,
+      })
+      .from(tasks)
+      .where(
+        and(
+          notInArray(tasks.status, ["done", "failed"]),
+          isNotNull(tasks.issueNumber),
+          // Only rows a check could actually change — dependencyGate
+          // short-circuits `dependencyCount === 0` to "clear" without ever
+          // reading blockedBy (task-dependencies.ts), so those rows cost
+          // nothing and must not be selected here at all: if they were only
+          // skipped inside the loop below instead, they'd still occupy
+          // queue positions ahead of the per-sweep cap, and since they also
+          // have blockedByCheckedAt IS NULL they'd sort to the very front —
+          // crowding out rows that genuinely need a call on a large board.
+          or(isNull(tasks.dependencyCount), gt(tasks.dependencyCount, 0)),
+          or(isNull(tasks.blockedByCheckedAt), lt(tasks.blockedByCheckedAt, cutoff)),
+        ),
+      )
+      // Never-checked rows first (NULL sorts first via IS NOT NULL ASC),
+      // then oldest-checked — so a fresh/paused install's backlog of
+      // never-resolved tasks converges within a couple of sweeps instead of
+      // thrashing against already-resolved-but-stale rows.
+      .orderBy(sql`${tasks.blockedByCheckedAt} IS NOT NULL`, tasks.blockedByCheckedAt, tasks.id)
+      .all();
+
+    let checks = 0;
+    let cappedOut = false;
+
+    for (const row of candidates) {
+      if (alreadyRefreshedThisSweep.has(row.id)) continue;
+      if (checks >= MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP) {
+        cappedOut = true;
+        continue;
+      }
+      const ctx = githubContext.get(row.projectId);
+      if (!ctx) {
+        // No repoRef/token resolved for this project this tick (ingest
+        // couldn't reach it, or it has no token configured) — nothing to
+        // check against; try again next sweep, same posture as ingest's own
+        // per-project skip.
+        continue;
+      }
+
+      checks++;
+      await refreshTaskBlockers(app, {
+        taskId: row.id,
+        projectId: row.projectId,
+        owner: ctx.owner,
+        repo: ctx.repo,
+        issueNumber: row.issueNumber!,
+        dependencyCount: row.dependencyCount,
+        token: ctx.token,
+        // See refreshTaskBlockers' own doc comment on this param — a
+        // display-only refresh must not let a permanently-failing or
+        // permanently-shortfalling row hammer this pass on every tick
+        // forever at the expense of every other candidate.
+        stampOnFailure: true,
+      });
+    }
+
+    if (cappedOut) {
+      app.log.debug(
+        { checked: MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP },
+        "[task-watcher] more tasks needed a display dependency refresh than this sweep's cap allows — remainder deferred to a later sweep",
+      );
+    }
   }
 
   async function pollOnce(): Promise<void> {
@@ -546,7 +682,16 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // roadmap's local-board-works-regardless-of-GitHub decision means
       // auto-claim shouldn't silently stop working just because ingest
       // has nothing to do this sweep.
-      await autoClaimReadyTasks(githubContext);
+      const refreshedByClaimPath = await autoClaimReadyTasks(githubContext);
+      // Deliberately decoupled from autoClaimReadyTasks — see
+      // resolveStaleTaskBlockers' own doc comment and
+      // MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP's for why this runs
+      // regardless of autoClaimPaused (unlike autoClaimReadyTasks itself)
+      // while still sharing this sweep's own taskMaster.enabled gate above
+      // and reusing the githubContext already resolved by the ingest loop.
+      // refreshedByClaimPath is passed through so a row the claim path just
+      // checked this same tick isn't immediately checked again here.
+      await resolveStaleTaskBlockers(githubContext, refreshedByClaimPath);
     } catch (err) {
       app.log.error({ err }, "[task-watcher] poll cycle failed");
     } finally {

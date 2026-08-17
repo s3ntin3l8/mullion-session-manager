@@ -223,7 +223,7 @@ export function WorkspaceSwitcher() {
           sessions={sessions}
           sessionIdsByWorkspace={sessionIdsByWorkspace}
           activeWorkspaceId={displayActiveWorkspaceId}
-          onSelect={(id) => useDashboardStore.getState().setActiveWorkspaceId(id)}
+          onSelect={(id) => useDashboardStore.getState().showWorkspace(id)}
           onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
           onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
           onToggleCollapsed={() =>
@@ -260,7 +260,7 @@ export function WorkspaceSwitcher() {
         activeWorkspaceId={displayActiveWorkspaceId}
         sessions={sessions}
         sessionIdsByWorkspace={sessionIdsByWorkspace}
-        onSelect={(id) => useDashboardStore.getState().setActiveWorkspaceId(id)}
+        onSelect={(id) => useDashboardStore.getState().showWorkspace(id)}
         onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
         onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
       />
@@ -270,7 +270,7 @@ export function WorkspaceSwitcher() {
           <NewWorkspaceForm
             onCreated={(workspace) => {
               setShowNewWorkspace(false);
-              useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
+              useDashboardStore.getState().showWorkspace(workspace.id);
             }}
             onCancel={() => setShowNewWorkspace(false)}
             createWorkspace={(name) => useDashboardStore.getState().createWorkspace(name)}

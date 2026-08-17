@@ -454,6 +454,14 @@ export interface UiSlice {
   // workspaces slice's server-backed CRUD.
   activeWorkspaceId: number | null;
   setActiveWorkspaceId: (id: number | null) => void;
+  // The user-navigation entry point (sidebar/command-palette workspace
+  // selection) — sets activeWorkspaceId AND resets viewMode to "list", so
+  // switching workspaces from inside Tasks is actually visible instead of
+  // happening behind the Tasks overlay. setActiveWorkspaceId itself stays
+  // viewMode-agnostic on purpose — see its own call sites in App.tsx (boot/
+  // repair paths, not user navigation) and this action's own doc comment in
+  // store/slices/ui.ts.
+  showWorkspace: (id: number) => void;
   // U4 — same "bump a counter, let subscribers refetch" shape as
   // prsRefreshTrigger (GithubSlice), just component- rather than WS-triggered:
   // DockConfigPanel calls bumpDockConfigRefreshTrigger() after a successful
