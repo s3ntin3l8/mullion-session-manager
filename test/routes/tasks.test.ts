@@ -165,6 +165,58 @@ describe("tasks route", () => {
     await app.close();
   });
 
+  // #701 — sub-issue hierarchy columns, on both GET /api/tasks and
+  // GET /api/tasks/:id (TASK_ROW_COLUMNS is shared between the two, but
+  // this pins both endpoints so a future column added to only one of them
+  // is caught here rather than at the frontend).
+  it("exposes the sub-issue hierarchy columns on GET /api/tasks and GET /api/tasks/:id", async () => {
+    const app = await buildApp();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "demo-hierarchy", cwd: "/tmp/demo-hierarchy" },
+    });
+    const projectId = project.json().id;
+
+    const [row] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 44,
+        title: "A child issue",
+        status: "backlog",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5 — Tier-1 project introspection",
+        subIssueTotal: 4,
+        subIssueCompleted: 1,
+      })
+      .returning({ id: tasks.id })
+      .all();
+
+    const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
+    const listed = (listRes.json() as { id: number }[]).find((t) => t.id === row.id);
+    expect(listed).toMatchObject({
+      parentIssueNumber: 30,
+      parentIssueRepo: "s3ntin3l8/branchdam",
+      parentIssueTitle: "Phase 5 — Tier-1 project introspection",
+      subIssueTotal: 4,
+      subIssueCompleted: 1,
+    });
+
+    const singleRes = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+    expect(singleRes.json()).toMatchObject({
+      parentIssueNumber: 30,
+      parentIssueRepo: "s3ntin3l8/branchdam",
+      parentIssueTitle: "Phase 5 — Tier-1 project introspection",
+      subIssueTotal: 4,
+      subIssueCompleted: 1,
+    });
+
+    await app.close();
+  });
+
   it("lists a locally-created task with a null issue link", async () => {
     const app = await buildApp();
 

@@ -148,4 +148,174 @@ describe("upsertIssueTask (#490a)", () => {
       .all();
     expect(row.status).toBe("claimed");
   });
+
+  // #701 — the CASE WHEN title-invalidation logic in upsertIssueTask relies
+  // on SQLite's ON CONFLICT DO UPDATE scoping rule (a bare/table-qualified
+  // column reference in the SET/WHERE clause reads the row's CURRENT,
+  // pre-update value). That's a real-DB semantic, not something a mocked
+  // app.db could exercise faithfully — hence this file, not a unit test.
+  describe("sub-issue hierarchy (#701)", () => {
+    function rowFor(issueNumber: number) {
+      return app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issueNumber)))
+        .get()!;
+    }
+
+    it("writes parentIssueNumber/parentIssueRepo on first sighting, title stays null", () => {
+      upsertIssueTask(app, projectId, {
+        number: 910,
+        title: "Child",
+        body: null,
+        htmlUrl: "https://x/910",
+        parent: { repo: "owner/repo", number: 21 },
+      });
+      const row = rowFor(910);
+      expect(row.parentIssueNumber).toBe(21);
+      expect(row.parentIssueRepo).toBe("owner/repo");
+      expect(row.parentIssueTitle).toBeNull();
+    });
+
+    it("a poll-sourced null parent clears a previously-stored one", () => {
+      upsertIssueTask(app, projectId, {
+        number: 911,
+        title: "Was a child",
+        body: null,
+        htmlUrl: "https://x/911",
+        parent: { repo: "owner/repo", number: 22 },
+      });
+      upsertIssueTask(app, projectId, {
+        number: 911,
+        title: "Was a child",
+        body: null,
+        htmlUrl: "https://x/911",
+        parent: null,
+      });
+      const row = rowFor(911);
+      expect(row.parentIssueNumber).toBeNull();
+      expect(row.parentIssueRepo).toBeNull();
+    });
+
+    it("a webhook-sourced re-sighting (parent field omitted) preserves a stored parent", () => {
+      upsertIssueTask(app, projectId, {
+        number: 912,
+        title: "Child",
+        body: null,
+        htmlUrl: "https://x/912",
+        parent: { repo: "owner/repo", number: 23 },
+      });
+      // Simulates routes/webhooks.ts's ingest path, which has no
+      // parent_issue_url to read and never sets the field at all.
+      upsertIssueTask(app, projectId, {
+        number: 912,
+        title: "Child (retitled)",
+        body: null,
+        htmlUrl: "https://x/912",
+      });
+      const row = rowFor(912);
+      expect(row.parentIssueNumber).toBe(23);
+      expect(row.parentIssueRepo).toBe("owner/repo");
+      expect(row.title).toBe("Child (retitled)");
+    });
+
+    it("a changed parent nulls a previously-filled title", () => {
+      upsertIssueTask(app, projectId, {
+        number: 913,
+        title: "Child",
+        body: null,
+        htmlUrl: "https://x/913",
+        parent: { repo: "owner/repo", number: 24 },
+      });
+      app.db
+        .update(tasks)
+        .set({ parentIssueTitle: "Phase 4 — old title" })
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, 913)))
+        .run();
+      expect(rowFor(913).parentIssueTitle).toBe("Phase 4 — old title");
+
+      upsertIssueTask(app, projectId, {
+        number: 913,
+        title: "Child",
+        body: null,
+        htmlUrl: "https://x/913",
+        parent: { repo: "owner/repo", number: 25 }, // re-parented
+      });
+
+      const row = rowFor(913);
+      expect(row.parentIssueNumber).toBe(25);
+      expect(row.parentIssueTitle).toBeNull();
+    });
+
+    it("an unchanged parent preserves a previously-filled title", () => {
+      upsertIssueTask(app, projectId, {
+        number: 914,
+        title: "Child",
+        body: null,
+        htmlUrl: "https://x/914",
+        parent: { repo: "owner/repo", number: 26 },
+      });
+      app.db
+        .update(tasks)
+        .set({ parentIssueTitle: "Phase 6 — title" })
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, 914)))
+        .run();
+
+      // Re-sighted with the SAME parent, but a real column (title) also
+      // changes — must still go through the onConflictDoUpdate branch
+      // without touching parentIssueTitle.
+      upsertIssueTask(app, projectId, {
+        number: 914,
+        title: "Child (edited)",
+        body: null,
+        htmlUrl: "https://x/914",
+        parent: { repo: "owner/repo", number: 26 },
+      });
+
+      const row = rowFor(914);
+      expect(row.parentIssueNumber).toBe(26);
+      expect(row.parentIssueTitle).toBe("Phase 6 — title");
+      expect(row.title).toBe("Child (edited)");
+    });
+
+    it("writes subIssueTotal/subIssueCompleted and updates them on re-sighting", () => {
+      upsertIssueTask(app, projectId, {
+        number: 915,
+        title: "Parent-shaped task",
+        body: null,
+        htmlUrl: "https://x/915",
+        subIssues: { total: 3, completed: 1 },
+      });
+      expect(rowFor(915).subIssueTotal).toBe(3);
+      expect(rowFor(915).subIssueCompleted).toBe(1);
+
+      upsertIssueTask(app, projectId, {
+        number: 915,
+        title: "Parent-shaped task",
+        body: null,
+        htmlUrl: "https://x/915",
+        subIssues: { total: 3, completed: 2 },
+      });
+      expect(rowFor(915).subIssueCompleted).toBe(2);
+    });
+
+    it("a webhook-sourced re-sighting (subIssues omitted) preserves stored sub-issue counts", () => {
+      upsertIssueTask(app, projectId, {
+        number: 916,
+        title: "Parent-shaped task",
+        body: null,
+        htmlUrl: "https://x/916",
+        subIssues: { total: 4, completed: 0 },
+      });
+      upsertIssueTask(app, projectId, {
+        number: 916,
+        title: "Parent-shaped task (retitled)",
+        body: null,
+        htmlUrl: "https://x/916",
+      });
+      const row = rowFor(916);
+      expect(row.subIssueTotal).toBe(4);
+      expect(row.subIssueCompleted).toBe(0);
+    });
+  });
 });

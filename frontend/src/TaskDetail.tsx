@@ -52,6 +52,12 @@ export function TaskDetail({
   onOpenSession: (session: Session) => void;
 }) {
   const task = useDashboardStore((s) => s.tasks.find((t) => t.id === params.taskId));
+  // #701 — the full list, only for deriving this task's own children below
+  // (no separate API call: sub-issue membership among already-ingested
+  // tasks is derivable client-side for free). Selected unconditionally,
+  // same posture as prsByProject below — `task` may still be undefined
+  // here, before the not-found guard.
+  const allTasks = useDashboardStore((s) => s.tasks);
   const sessions = useDashboardStore((s) => s.sessions);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
   // Selected unconditionally (task may still be undefined here, before the
@@ -81,6 +87,32 @@ export function TaskDetail({
     task.branchName && prsStatus?.prs
       ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
       : undefined;
+  // #701 — sibling tasks that are themselves Task Master tasks (i.e. also
+  // carry the task label) and list this task as their parent. Hermes
+  // review — issue numbers are per-repo, and cross-repo parents are
+  // first-class in this feature, so matching on `parentIssueNumber` alone
+  // (even scoped to this project) isn't sufficient: another task in the
+  // SAME project could point to `other/repo#30` as its parent while this
+  // task merely happens to BE this project's own `#30` — a same-number,
+  // different-repo coincidence, not an actual parent/child relationship.
+  // `t.parentIssueRepo` is compared against this task's own repo slug,
+  // parsed from `task.htmlUrl` (a task has no dedicated repo field of its
+  // own). Guarded on issueNumber !== null and a parsed repo slug existing:
+  // a local task's issueNumber is null, and `t.parentIssueNumber === null`
+  // would otherwise match every OTHER parentless local task as a false
+  // "child".
+  const thisTaskRepoSlug = task.htmlUrl?.match(
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/\d+$/,
+  )?.[1];
+  const childTasks =
+    task.issueNumber !== null && thisTaskRepoSlug !== undefined
+      ? allTasks.filter(
+          (t) =>
+            t.projectId === task.projectId &&
+            t.parentIssueNumber === task.issueNumber &&
+            t.parentIssueRepo === thisTaskRepoSlug,
+        )
+      : [];
 
   return (
     <div className="task-detail cmux-scroll">
@@ -211,6 +243,57 @@ export function TaskDetail({
                 </span>
               ))}
             </span>
+          )}
+        </div>
+      )}
+
+      {/* #701 — sub-issue hierarchy. Up: the parent this task belongs to,
+          if any. Down: sub-issue progress plus whichever children are
+          themselves known Task Master tasks — a child issue without the
+          task label still counts toward subIssueTotal (GitHub's own
+          count) but isn't individually listed here, since nothing on this
+          side of the API knows it exists. Renders nothing at all when
+          neither applies, same "no state, no chrome" posture as the
+          blocked block above. */}
+      {(task.parentIssueNumber !== null ||
+        (task.subIssueTotal !== null && task.subIssueTotal > 0)) && (
+        <div className="task-detail-section">
+          <div className="task-detail-section-title">Hierarchy</div>
+          {task.parentIssueNumber !== null && (
+            <a
+              className="task-detail-meta-row task-detail-link"
+              href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <GitHubIcon size={12} /> Parent:{" "}
+              {task.parentIssueTitle ?? `#${task.parentIssueNumber}`}
+            </a>
+          )}
+          {task.subIssueTotal !== null && task.subIssueTotal > 0 && (
+            <div className="task-detail-meta-row">
+              {task.subIssueCompleted ?? 0} of {task.subIssueTotal} sub-issues complete
+            </div>
+          )}
+          {childTasks.length > 0 && (
+            <ul className="task-detail-children">
+              {childTasks.map((c) => (
+                <li key={c.id}>
+                  {c.htmlUrl ? (
+                    <a
+                      className="task-detail-link"
+                      href={c.htmlUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{c.issueNumber} {c.title}
+                    </a>
+                  ) : (
+                    <span>{c.title}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

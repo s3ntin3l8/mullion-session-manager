@@ -218,6 +218,40 @@ export function TaskCard({
               <GitHubIcon size={11} />#{task.issueNumber}
             </span>
           ))}
+        {/* #701 — sub-issue hierarchy. Ambient context, not a blocker, so
+            this stays an inline meta chip rather than the promoted
+            full-width treatment `blocked` gets below. Falls back to a bare
+            `#N` until fillParentIssueTitles (task-watcher.ts) lazily fills
+            the title — that's not free the way parent_issue_url itself is,
+            so a brief `#N` is expected, not a bug. stopPropagation on click
+            for the same reason the issue/PR links above do: the card root
+            is itself a role="button" with its own onOpen handler, and a
+            drag-then-click still lands a trailing click here. */}
+        {task.parentIssueNumber !== null && (
+          <a
+            className="task-card-parent"
+            href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
+            target="_blank"
+            rel="noreferrer"
+            title={task.parentIssueTitle ?? `Parent issue #${task.parentIssueNumber}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (suppressClickRef.current) e.preventDefault();
+            }}
+          >
+            ↳ {task.parentIssueTitle ?? `#${task.parentIssueNumber}`}
+          </a>
+        )}
+        {/* Only meaningful when this task is ITSELF someone's parent, which
+            requires the parent to also carry the task label — on the
+            reference install (branchdam) none currently do, so this
+            renders on zero cards there today. Documented so a future
+            reader doesn't mistake that for a bug. */}
+        {task.subIssueTotal !== null && task.subIssueTotal > 0 && (
+          <span className="task-card-subissues" title="Sub-issues completed">
+            {task.subIssueCompleted ?? 0}/{task.subIssueTotal}
+          </span>
+        )}
         {matchedPr && (
           <a
             className="task-card-pr"

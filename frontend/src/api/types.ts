@@ -873,6 +873,18 @@ export interface Task {
   dependencyCount: number | null;
   blockedState: "clear" | "blocked" | "unresolved";
   blockers: TaskBlocker[];
+  // #701 — GitHub sub-issue hierarchy, display-only (never gates claiming,
+  // unlike dependencyCount above). parentIssueNumber/parentIssueRepo ride
+  // the same ingest response dependencyCount does; parentIssueTitle is
+  // filled lazily (task-watcher.ts's fillParentIssueTitles) and may briefly
+  // lag the number/repo — a card falls back to `#N` until it arrives.
+  // subIssueTotal/subIssueCompleted are only meaningful when this task is
+  // itself someone's parent.
+  parentIssueNumber: number | null;
+  parentIssueRepo: string | null;
+  parentIssueTitle: string | null;
+  subIssueTotal: number | null;
+  subIssueCompleted: number | null;
   createdAt: string;
   updatedAt: string;
   claimedAt: string | null;

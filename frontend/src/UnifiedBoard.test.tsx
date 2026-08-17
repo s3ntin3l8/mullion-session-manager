@@ -630,6 +630,220 @@ describe("UnifiedBoard blocked-only filter", () => {
   });
 });
 
+// #701 — mirrors "UnifiedBoard blocked-only filter" above: composes with
+// the project/blocked filters via the same absoluteDropIndex path, so a
+// drag with the phase filter active must produce the same updateTask
+// calls an unfiltered drag of the same two cards would.
+describe("UnifiedBoard parent filter (#701)", () => {
+  it("shows no filter when nothing on the board has a parent", () => {
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready", parentIssueNumber: null })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByLabelText("Phase")).toBeNull();
+  });
+
+  it("narrows the board to a single phase, shows a Clear affordance, and persists across remount", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "phase 5 task",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5",
+      }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        title: "phase 8 task",
+        parentIssueNumber: 27,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 8",
+      }),
+    ];
+    const user = userEvent.setup();
+    const first = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("phase 5 task")).toBeInTheDocument();
+    expect(screen.getByText("phase 8 task")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Phase"), "s3ntin3l8/branchdam#30");
+
+    expect(screen.getByText("phase 5 task")).toBeInTheDocument();
+    expect(screen.queryByText("phase 8 task")).toBeNull();
+    expect(localStorage.getItem("crs.taskParentFilter")).toBe("s3ntin3l8/branchdam#30");
+    expect(screen.getByRole("button", { name: "Show every phase" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show every phase" }));
+    expect(screen.getByText("phase 8 task")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Phase"), "s3ntin3l8/branchdam#30");
+    first.unmount();
+
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("phase 5 task")).toBeInTheDocument();
+    expect(screen.queryByText("phase 8 task")).toBeNull();
+  });
+
+  it("filters to tasks with no parent via the reserved '(no parent)' option", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "orphan task",
+        parentIssueNumber: null,
+      }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        title: "phase 5 task",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText("Phase"), "__none__");
+
+    expect(screen.getByText("orphan task")).toBeInTheDocument();
+    expect(screen.queryByText("phase 5 task")).toBeNull();
+  });
+
+  it("shows a distinct empty state when the phase filter hides every task, with a one-click Clear", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "phase 5 task",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5",
+      }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        title: "phase 8 task",
+        parentIssueNumber: 27,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 8",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText("Phase"), "__none__");
+    expect(screen.getByText("No tasks match the selected phase.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear the phase filter" }));
+    expect(screen.getByText("phase 5 task")).toBeInTheDocument();
+    expect(screen.getByText("phase 8 task")).toBeInTheDocument();
+  });
+
+  // Mirrors the blocked-only filter's own "clears the persisted flag, not
+  // just the live filter" regression (Hermes review, PR #699) — a
+  // persisted selection for a phase that's since vanished from `tasks`
+  // must not leave the filter silently stuck on an empty board.
+  it("resets the selection once the selected phase vanishes from the board", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "phase 5 task",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5",
+      }),
+    ];
+    const user = userEvent.setup();
+    const { rerender } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText("Phase"), "s3ntin3l8/branchdam#30");
+    expect(localStorage.getItem("crs.taskParentFilter")).toBe("s3ntin3l8/branchdam#30");
+
+    // The task is re-parented (or the phase issue closes and it's
+    // unlinked) — no task on the board carries that parent anymore.
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        title: "phase 5 task",
+        parentIssueNumber: 27,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 8",
+      }),
+    ];
+    await act(async () => {
+      rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    });
+
+    expect(screen.getByText("phase 5 task")).toBeInTheDocument(); // filter cleared, not stuck empty
+    expect(localStorage.getItem("crs.taskParentFilter")).toBe("");
+    expect(screen.getByLabelText("Phase")).toHaveValue("");
+  });
+
+  it("reorders identically whether dragged with the phase filter active or not — boardOrder must stay correct", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "ready",
+        boardOrder: 0,
+        title: "first",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5",
+      }),
+      makeTask({
+        id: 3,
+        projectId: 1,
+        status: "ready",
+        boardOrder: 1,
+        title: "hidden",
+        parentIssueNumber: 27,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 8",
+      }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "ready",
+        boardOrder: 2,
+        title: "second",
+        parentIssueNumber: 30,
+        parentIssueRepo: "s3ntin3l8/branchdam",
+        parentIssueTitle: "Phase 5",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Phase"), "s3ntin3l8/branchdam#30");
+
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    const cards = readyColumn.querySelectorAll(".task-card");
+    expect(cards).toHaveLength(2); // "hidden" (Phase 8) is filtered out of the render
+
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
+
+    expect(updateTask).toHaveBeenCalledWith(3, { boardOrder: 0 });
+    expect(updateTask).toHaveBeenCalledWith(2, { boardOrder: 1 });
+    expect(updateTask).toHaveBeenCalledWith(1, { boardOrder: 2 });
+    expect(updateTask).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("UnifiedBoard detail drawer", () => {
   it("opens the drawer with the right taskId when a card body is clicked, and closes it", async () => {
     tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];

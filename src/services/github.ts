@@ -17,6 +17,17 @@ export { GitHubApiError };
 const OWNER_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?$/;
 const REPO_RE = /^[a-zA-Z0-9_.-]{1,100}$/;
 
+// #701 — strict, anchored parse of GitHub's `parent_issue_url` (a
+// remote-supplied string feeding a later outbound request — same
+// "file/API data reaching a request" shape OWNER_RE/REPO_RE above guard
+// against, for CodeQL's js/request-forgery). The owner/repo character
+// classes below must stay in sync with OWNER_RE/REPO_RE; only the fixed
+// api.github.com host and the /repos/{owner}/{repo}/issues/{n} path shape
+// are new here. Anything that doesn't match this exactly is treated as "no
+// parent" rather than partially parsed — see parseParentIssueUrl below.
+const PARENT_ISSUE_URL_RE =
+  /^https:\/\/api\.github\.com\/repos\/([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?)\/([a-zA-Z0-9_.-]{1,100})\/issues\/(\d{1,10})$/;
+
 // Fetch-on-open + short TTL, not background polling — see the plan's
 // "protect the 5000/hr budget" note. A project's Dock widget/panel re-fetches
 // at most this often even if the user reopens it repeatedly.
@@ -135,6 +146,14 @@ interface GitHubIssueApiItem {
   // Only listLabeledIssues below reads it; getRepoStatus's own use of this
   // interface just carries the extra field through unread.
   issue_dependencies_summary?: { total_blocked_by?: number };
+  // #701 — same free ride as issue_dependencies_summary above (verified live
+  // against branchdam during planning, correcting an earlier — wrong —
+  // claim that no such field exists; see issue #701's corrected body).
+  // `null` on an issue with no parent, `undefined` only in practice on a
+  // response shape this interface isn't used for (never actually absent on
+  // the real issues-list response, but typed optional defensively).
+  parent_issue_url?: string | null;
+  sub_issues_summary?: { total?: number; completed?: number };
 }
 
 interface GitHubRepoApiResponse {
@@ -327,6 +346,38 @@ export interface TaskIssue {
   // task-watcher.ts's upsertIssueTask and task-dependencies.ts's
   // dependencyGate.
   dependencyCount?: number;
+  // #701 — GitHub sub-issue hierarchy. THREE-state, same reasoning as
+  // dependencyCount above but in the opposite direction: `undefined` means
+  // unknown (a webhook-built TaskIssue has no summary to read and must not
+  // clear a previously-known parent), `null` means known-to-have-no-parent,
+  // and an object means it has one. The undefined/null split is load-bearing
+  // here in a way dependencyCount's isn't — a parent can legitimately be
+  // REMOVED, so a poll-sourced `null` has to actively clear the stored
+  // column, not just leave it alone. See task-watcher.ts's upsertIssueTask.
+  parent?: { repo: string; number: number } | null;
+  // Also free on the same response (item.sub_issues_summary). Present only
+  // when the poll sourced this TaskIssue; a webhook-built one omits it,
+  // same as dependencyCount.
+  subIssues?: { total: number; completed: number };
+}
+
+/**
+ * Strict, anchored parse of GitHub's `parent_issue_url` — see
+ * PARENT_ISSUE_URL_RE's own comment. Anything that doesn't match exactly
+ * (wrong host, malformed path, a future URL shape) is treated as "no
+ * parent" rather than partially parsed. `repo` here is "owner/repo" (the
+ * schema's `parentIssueRepo` column is that combined slug, since the parent
+ * can live in a different repo than the child's own project) — not just
+ * the repo name.
+ */
+function parseParentIssueUrl(
+  url: string | null | undefined,
+): { repo: string; number: number } | null {
+  if (!url) return null;
+  const match = PARENT_ISSUE_URL_RE.exec(url);
+  if (!match) return null;
+  const [, owner, repo, numberStr] = match;
+  return { repo: `${owner}/${repo}`, number: Number(numberStr) };
 }
 
 /**
@@ -374,6 +425,16 @@ export async function listLabeledIssues(
       body: item.body ?? null,
       htmlUrl: item.html_url,
       dependencyCount: item.issue_dependencies_summary?.total_blocked_by,
+      // #701 — parent_issue_url is `null` for an issue with no parent (not
+      // absent), so this always resolves to a definite value on a real
+      // response — parseParentIssueUrl's `undefined` handling only matters
+      // for a webhook-built item that omits the field entirely.
+      parent: parseParentIssueUrl(item.parent_issue_url),
+      subIssues:
+        item.sub_issues_summary?.total !== undefined &&
+        item.sub_issues_summary.completed !== undefined
+          ? { total: item.sub_issues_summary.total, completed: item.sub_issues_summary.completed }
+          : undefined,
     }));
 }
 

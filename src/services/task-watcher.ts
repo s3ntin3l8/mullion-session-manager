@@ -4,7 +4,7 @@ import { projects, tasks } from "../db/schema.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./host-git.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
-import { getIssueState } from "./github-write.js";
+import { getIssueState, getIssueTitle } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
@@ -75,6 +75,37 @@ const BLOCKER_DISPLAY_TTL_MS = 30 * 60 * 1000;
 // project-scoped.
 const MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP = 10;
 
+// #701 — fillParentIssueTitles' own cap. Same value as
+// MAX_READBACK_CHECKS_PER_SWEEP/MAX_DEPENDENCY_CHECKS_PER_SWEEP,
+// deliberately NOT tuned down to any one install's own distinct-parent
+// count: this is a one-shot pass that goes permanently quiet once caught
+// up (see that function's own doc comment), so there's no steady-state
+// cost a tighter cap would be protecting against — and a cap that exactly
+// matched a given install's requirement would leave zero slack for a
+// transient per-parent failure (which still consumes a slot, see
+// MAX_PARENT_TITLE_ATTEMPTS below) without stretching convergence past a
+// single sweep.
+const MAX_PARENT_TITLE_FETCHES_PER_SWEEP = 20;
+
+// A deleted or private parent 404s forever, and this pass has no TTL to
+// rate-limit re-attempts the way the blocker pass's BLOCKER_DISPLAY_TTL_MS
+// does — without a give-up point, one permanently-unreachable parent would
+// burn a cap slot every single sweep, forever. Per-watcher-instance (see
+// parentTitleFetchAttempts below), so a restart retries — correct for the
+// "parent was private, now isn't" case.
+const MAX_PARENT_TITLE_ATTEMPTS = 3;
+
+// Cap on the attempt-counter Map itself — nothing otherwise bounds how many
+// distinct permanently-unreachable parents could accumulate keys. NOT an
+// LRU (a `Map.set` on an existing key doesn't reorder JS iteration order):
+// eviction below prefers a key that's already given up
+// (attempts >= MAX_PARENT_TITLE_ATTEMPTS) over the oldest-inserted one, so
+// pressure doesn't preferentially reset exactly the entries this cap and
+// the give-up counter exist to keep quiet — a true LRU/FIFO eviction would
+// tend to evict whichever parent has been failing longest, which is
+// disproportionately likely to be one already at its give-up limit.
+const MAX_PARENT_TITLE_ATTEMPT_ENTRIES = 500;
+
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
 // auto-claim eligibility with a `Manual: true` line, mirroring the
 // roadmap's own documented convention. Matched case-insensitively, on its
@@ -117,6 +148,16 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
   // unknown, and the `where` no-op guard shouldn't fire on a column that
   // isn't actually part of this write.
   const hasDependencyCount = issue.dependencyCount !== undefined;
+  // #701 — same lockstep-only-when-present rule as hasDependencyCount above,
+  // but `null` is a meaningful, DISTINCT state from `undefined` here: a
+  // poll-sourced `issue.parent === null` means "GitHub confirms no parent"
+  // and must actively clear a previously-stored one (a parent can be
+  // removed), while `issue.parent === undefined` (a webhook-built TaskIssue,
+  // which has no parent_issue_url to read) must leave a stored parent alone.
+  const hasParent = issue.parent !== undefined;
+  const hasSubIssues = issue.subIssues !== undefined;
+  const newParentNumber = issue.parent?.number ?? null;
+  const newParentRepo = issue.parent?.repo ?? null;
 
   const row = app.db
     .insert(tasks)
@@ -128,6 +169,13 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       htmlUrl: issue.htmlUrl,
       status: initialStatus,
       dependencyCount: issue.dependencyCount ?? null,
+      parentIssueNumber: newParentNumber,
+      parentIssueRepo: newParentRepo,
+      // parentIssueTitle deliberately omitted — defaults to NULL, which is
+      // exactly what arms task-watcher.ts's fillParentIssueTitles for a
+      // freshly-ingested child.
+      subIssueTotal: issue.subIssues?.total ?? null,
+      subIssueCompleted: issue.subIssues?.completed ?? null,
     })
     .onConflictDoUpdate({
       target: [tasks.projectId, tasks.issueNumber],
@@ -137,10 +185,36 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
         htmlUrl: issue.htmlUrl,
         updatedAt: new Date(),
         ...(hasDependencyCount ? { dependencyCount: issue.dependencyCount } : {}),
+        ...(hasParent
+          ? {
+              parentIssueNumber: newParentNumber,
+              parentIssueRepo: newParentRepo,
+              // Clear the denormalised title iff the parent identity
+              // actually moved — otherwise every re-sighting would wipe a
+              // filled cache and fillParentIssueTitles would refetch it
+              // forever. Bare (unqualified) column references inside an
+              // ON CONFLICT DO UPDATE SET/WHERE refer to the row's CURRENT
+              // (pre-update) value in SQLite — i.e. the stored value being
+              // compared against, not the incoming one — verified against
+              // a real DB in task-watcher.test.ts rather than trusted from
+              // docs alone, since a silent misread here fails in either
+              // direction (title never clears, or clears every sweep).
+              parentIssueTitle: sql`CASE WHEN ${tasks.parentIssueNumber} IS NOT ${newParentNumber}
+                                          OR ${tasks.parentIssueRepo} IS NOT ${newParentRepo}
+                                     THEN NULL ELSE ${tasks.parentIssueTitle} END`,
+            }
+          : {}),
+        ...(hasSubIssues
+          ? {
+              subIssueTotal: issue.subIssues?.total,
+              subIssueCompleted: issue.subIssues?.completed,
+            }
+          : {}),
       },
-      where: hasDependencyCount
-        ? sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl} OR ${tasks.dependencyCount} IS NOT ${issue.dependencyCount}`
-        : sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
+      where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}
+        ${hasDependencyCount ? sql`OR ${tasks.dependencyCount} IS NOT ${issue.dependencyCount}` : sql``}
+        ${hasParent ? sql`OR ${tasks.parentIssueNumber} IS NOT ${newParentNumber} OR ${tasks.parentIssueRepo} IS NOT ${newParentRepo}` : sql``}
+        ${hasSubIssues ? sql`OR ${tasks.subIssueTotal} IS NOT ${issue.subIssues?.total} OR ${tasks.subIssueCompleted} IS NOT ${issue.subIssues?.completed}` : sql``}`,
     })
     .returning({ id: tasks.id })
     .get();
@@ -192,6 +266,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   let interval: ReturnType<typeof setInterval> | null = null;
   let sweepTimer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
+
+  // #701 — fillParentIssueTitles' give-up counter, keyed by `repo#number`.
+  // Lives at this scope (one per startTaskWatcher instance, i.e. per
+  // process) rather than per-tick, so it actually bounds attempts across
+  // sweeps — see MAX_PARENT_TITLE_ATTEMPTS' own comment.
+  const parentTitleFetchAttempts = new Map<string, number>();
 
   // #484 — every connected project, not just local-hosted ones; the
   // `!row.hostId` normalization (a pre-#26 row predating the NOT NULL
@@ -650,6 +730,203 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     }
   }
 
+  // #701 — a ONE-SHOT CACHE-FILL, not a TTL-guarded refresh like
+  // resolveStaleTaskBlockers above. Deliberately a different shape — say so
+  // explicitly, since a reader who just read that pass will expect a TTL
+  // here too: an issue's title does not go stale in a way that matters to a
+  // display chip, so there is no TTL and no periodic re-check. The
+  // candidate query is simply `parentIssueTitle IS NULL`, which converges
+  // to empty and then costs one cheap SELECT per sweep forever, doing
+  // nothing further. upsertIssueTask is what re-arms this pass, by nulling
+  // a stored title only when the parent identity itself changes.
+  async function fillParentIssueTitles(
+    githubContext: Map<number, { owner: string; repo: string; token: string }>,
+  ): Promise<void> {
+    const candidates = app.db
+      .select({
+        id: tasks.id,
+        projectId: tasks.projectId,
+        parentIssueNumber: tasks.parentIssueNumber,
+        parentIssueRepo: tasks.parentIssueRepo,
+      })
+      .from(tasks)
+      .where(
+        and(
+          // Hermes review — deliberate, but worth spelling out since it's
+          // a real (if narrow) gap: a child that reaches done/failed
+          // before this pass ever reaches it keeps a bare `#N` chip
+          // forever, since it drops out of candidacy the moment it goes
+          // terminal and there's no re-arm on reopen. Accepted rather than
+          // widening this to every status: a terminal task's own board
+          // relevance is already winding down, and re-checking it forever
+          // would cost a permanent trickle of GitHub calls for a cosmetic
+          // detail on a task nobody is actively looking at anymore.
+          notInArray(tasks.status, ["done", "failed"]),
+          isNotNull(tasks.parentIssueNumber),
+          isNotNull(tasks.parentIssueRepo),
+          isNull(tasks.parentIssueTitle),
+        ),
+      )
+      .orderBy(tasks.id)
+      .all();
+
+    if (candidates.length === 0) return;
+
+    // Dedup by distinct parent BEFORE fetching — this is what makes the
+    // pass converge in one sweep rather than one call per CHILD (e.g. 32
+    // children of 10 parents is 10 calls deduped, comfortably under the
+    // cap, vs. 32 calls capped and spread across several ticks otherwise).
+    interface ParentGroup {
+      parentIssueRepo: string;
+      parentIssueNumber: number;
+      rows: { id: number; projectId: number }[];
+    }
+    const byParent = new Map<string, ParentGroup>();
+    for (const row of candidates) {
+      const key = `${row.parentIssueRepo}#${row.parentIssueNumber}`;
+      let group = byParent.get(key);
+      if (!group) {
+        group = {
+          parentIssueRepo: row.parentIssueRepo!,
+          parentIssueNumber: row.parentIssueNumber!,
+          rows: [],
+        };
+        byParent.set(key, group);
+      }
+      group.rows.push({ id: row.id, projectId: row.projectId });
+    }
+
+    let fetches = 0;
+    let cappedOut = false;
+
+    for (const [key, group] of byParent) {
+      // Already gave up on this parent after repeated failures — see the
+      // catch branch below. Not re-attempted until a process restart.
+      if ((parentTitleFetchAttempts.get(key) ?? 0) >= MAX_PARENT_TITLE_ATTEMPTS) continue;
+      if (fetches >= MAX_PARENT_TITLE_FETCHES_PER_SWEEP) {
+        cappedOut = true;
+        continue;
+      }
+      // The CHILD's project token is used to fetch the PARENT, which can be
+      // in a different repo — cross-repo sub-issues are first-class in
+      // GitHub's model, same posture task-dependencies.ts's blocker fetch
+      // already takes for cross-repo blockers. `group.rows` can legitimately
+      // span more than one Mullion project (two projects registered against
+      // the same repo, or a genuine cross-repo shared parent) — deduped by
+      // token (not just the first project found), and every distinct token
+      // is tried in turn below before counting a failure. Hermes review:
+      // the give-up key is shared across every project in the group, so
+      // stopping at the first-found token would let one under-scoped
+      // project's token (403/404 on this parent) starve the whole group —
+      // including sibling projects whose OWN token could see it fine —
+      // into eventually giving up.
+      const distinctCtxs = [
+        ...new Map(
+          group.rows
+            .map((r) => githubContext.get(r.projectId))
+            .filter((c): c is { owner: string; repo: string; token: string } => c !== undefined)
+            .map((c) => [c.token, c] as const),
+        ).values(),
+      ];
+      if (distinctCtxs.length === 0) continue;
+
+      const separatorIndex = group.parentIssueRepo.indexOf("/");
+      if (separatorIndex === -1) continue; // malformed — shouldn't happen, defensive only
+      const parentOwner = group.parentIssueRepo.slice(0, separatorIndex);
+      const parentRepo = group.parentIssueRepo.slice(separatorIndex + 1);
+
+      let title: string | undefined;
+      let lastErr: unknown;
+      // Distinguishes "every distinct token in this group genuinely
+      // failed" (count it against the give-up budget) from "ran out of
+      // this sweep's own cap partway through the retry sequence" (defer,
+      // don't count) — the latter must not silently masquerade as the
+      // former, or a group with several tokens could exhaust its give-up
+      // budget purely on cap pressure rather than real failures.
+      let exhaustedAllTokens = true;
+      for (const ctx of distinctCtxs) {
+        if (fetches >= MAX_PARENT_TITLE_FETCHES_PER_SWEEP) {
+          cappedOut = true;
+          exhaustedAllTokens = false;
+          break;
+        }
+        fetches++;
+        try {
+          title = await getIssueTitle(ctx.token, parentOwner, parentRepo, group.parentIssueNumber);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      if (title !== undefined) {
+        app.db
+          .update(tasks)
+          .set({ parentIssueTitle: title })
+          .where(
+            and(
+              eq(tasks.parentIssueRepo, group.parentIssueRepo),
+              eq(tasks.parentIssueNumber, group.parentIssueNumber),
+              // Re-check, don't just trust the earlier SELECT — a
+              // concurrent re-parenting between the SELECT above and this
+              // UPDATE must not clobber a title that arrived (or was
+              // invalidated again) in between.
+              isNull(tasks.parentIssueTitle),
+            ),
+          )
+          .run();
+        parentTitleFetchAttempts.delete(key);
+        for (const row of group.rows) {
+          broadcastTaskEvent({
+            taskId: row.id,
+            projectId: row.projectId,
+            kind: "hierarchy",
+            ts: Date.now(),
+          });
+        }
+      } else if (exhaustedAllTokens) {
+        const attempts = (parentTitleFetchAttempts.get(key) ?? 0) + 1;
+        if (
+          !parentTitleFetchAttempts.has(key) &&
+          parentTitleFetchAttempts.size >= MAX_PARENT_TITLE_ATTEMPT_ENTRIES
+        ) {
+          // Evict a key that's already given up before falling back to the
+          // oldest-inserted one — see MAX_PARENT_TITLE_ATTEMPT_ENTRIES' own
+          // comment for why plain insertion-order eviction is the wrong
+          // default here.
+          let victim: string | undefined;
+          for (const [k, v] of parentTitleFetchAttempts) {
+            if (v >= MAX_PARENT_TITLE_ATTEMPTS) {
+              victim = k;
+              break;
+            }
+          }
+          victim ??= parentTitleFetchAttempts.keys().next().value;
+          if (victim !== undefined) parentTitleFetchAttempts.delete(victim);
+        }
+        parentTitleFetchAttempts.set(key, attempts);
+        if (attempts >= MAX_PARENT_TITLE_ATTEMPTS) {
+          app.log.warn(
+            { err: lastErr, parent: key, attempts },
+            "[task-watcher] giving up on this parent's title after repeated failures — will retry on restart",
+          );
+        } else {
+          app.log.debug(
+            { err: lastErr, parent: key, attempts },
+            "[task-watcher] parent title fetch failed, will retry next sweep",
+          );
+        }
+      }
+    }
+
+    if (cappedOut) {
+      app.log.debug(
+        { checked: MAX_PARENT_TITLE_FETCHES_PER_SWEEP },
+        "[task-watcher] more parents needed a title fetch than this sweep's cap allows — remainder deferred to a later sweep",
+      );
+    }
+  }
+
   async function pollOnce(): Promise<void> {
     if (running) return;
     running = true;
@@ -692,6 +969,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // refreshedByClaimPath is passed through so a row the claim path just
       // checked this same tick isn't immediately checked again here.
       await resolveStaleTaskBlockers(githubContext, refreshedByClaimPath);
+      // #701 — also reuses this tick's githubContext. No Set handshake
+      // needed the way resolveStaleTaskBlockers has one for the claim path:
+      // fillParentIssueTitles' own candidate query (parentIssueTitle IS
+      // NULL) can't overlap with anything the blocker passes above just
+      // did, since those only ever touch dependencyCount/blockedBy.
+      await fillParentIssueTitles(githubContext);
     } catch (err) {
       app.log.error({ err }, "[task-watcher] poll cycle failed");
     } finally {
