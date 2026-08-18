@@ -31,12 +31,12 @@ import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
-// ResizeMessage physically lives in src/shared/ws-protocol.ts (repo root,
-// NOT this frontend workspace — see src/routes/terminal.ts's own re-export)
-// as one arm of TerminalWSMessage; the other arm, ExitedMessage, isn't
-// imported here since its single field is checked structurally below
+// ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
+// (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
+// re-export) as two arms of TerminalWSMessage; the third arm, ExitedMessage,
+// isn't imported here since its single field is checked structurally below
 // rather than through the named type.
-import type { ResizeMessage } from "../../src/shared/ws-protocol.js";
+import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protocol.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -106,6 +106,16 @@ export function TerminalPane(props: {
   // so silently doing nothing while it's in flight (or on failure) would
   // read as broken rather than slow.
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
+  // Set from the server's GeometryMessage echo (mount effect below) whenever
+  // the applied pty geometry exceeds what actually fits this pane's own
+  // container — i.e. the pane is smaller than pty-manager.ts's
+  // MIN_TERMINAL_COLS/ROWS floor and the terminal is now rendering a grid
+  // larger than its own viewport (issue: small panes/floating windows
+  // ignoring input, since the visible viewport and the pty's grid disagree).
+  // Compared via FitAddon.proposeDimensions() rather than hardcoding the
+  // floor here — this stays correct regardless of what the backend's floor
+  // constants are.
+  const [paneTooSmall, setPaneTooSmall] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
@@ -809,16 +819,18 @@ export function TerminalPane(props: {
           term.write(new Uint8Array(event.data as ArrayBuffer));
           return;
         }
-        // P13 — terminal.ts's onExit handler sends this the instant the PTY
+        // Two JSON control frames can arrive here — see TerminalWSMessage
+        // (ws-protocol.ts) for the full union. "exited": P13 —
+        // terminal.ts's onExit handler sends this the instant the PTY
         // process exits, independent of whether the underlying WS connection
         // itself ever closes (killing a session doesn't force-close an
         // already-open browser socket — see that route's own "kept alive"
         // comment). This is the earliest, most direct "this session is
         // genuinely gone" signal available — well before any close event
         // might eventually follow, possibly never for an already-open
-        // connection. Previously dropped outright (a bare `return` for any
-        // string message); now the one string frame this protocol actually
-        // sends is read.
+        // connection. "geometry": see its own comment below. Previously
+        // dropped outright (a bare `return` for any string message); now
+        // both string frames this protocol actually sends are read.
         let parsed: unknown;
         try {
           parsed = JSON.parse(event.data);
@@ -829,6 +841,29 @@ export function TerminalPane(props: {
           sessionExited = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           setStatus("ended");
+          return;
+        }
+        // Issue: small panes/floating windows ignoring input — the server
+        // floors a too-small resize (pty-manager.ts's MIN_TERMINAL_COLS/
+        // ROWS) and echoes back whatever it actually applied (see
+        // GeometryMessage's own doc comment). If that differs from this
+        // terminal's current grid, resize xterm to match — otherwise the
+        // program keeps drawing to columns/rows this viewport never shows,
+        // and typed input appears to do nothing even though it's reaching
+        // the pty. Also mirrored into lastCols/lastRows so the next refit()
+        // (ResizeObserver-driven) computes its own delta against reality
+        // instead of immediately trying to fight this back down.
+        if ((parsed as { type?: unknown } | null)?.type === "geometry") {
+          const geo = parsed as GeometryMessage;
+          if (geo.cols !== term.cols || geo.rows !== term.rows) {
+            term.resize(geo.cols, geo.rows);
+            lastCols = geo.cols;
+            lastRows = geo.rows;
+          }
+          const proposed = fitAddon.proposeDimensions();
+          setPaneTooSmall(
+            proposed !== undefined && (geo.cols > proposed.cols || geo.rows > proposed.rows),
+          );
         }
       });
 
@@ -1240,6 +1275,13 @@ export function TerminalPane(props: {
           background: getSchemeBackground(terminalSettings.colorScheme, theme),
           padding: `${terminalSettings.padding}px`,
           boxSizing: "border-box",
+          // A pane below pty-manager.ts's MIN_TERMINAL_COLS/ROWS floor now
+          // gets resized up to the floor by the geometry-sync handler above
+          // (issue: small panes ignoring input) — xterm's canvas then renders
+          // larger than this container. Without this, that overflow would
+          // paint over whatever dockview panel sits next to it instead of
+          // clipping at the pane boundary.
+          overflow: "hidden",
           // Blocks the browser's own touch panning on both axes (so the
           // touch-scroll shim above owns vertical drags, and pull-to-refresh
           // can't start here) while keeping pinch-zoom, which the app's
@@ -1330,7 +1372,12 @@ export function TerminalPane(props: {
           )}
         </div>
       )}
-      <TerminalToasts copied={copied} copyToastKey={copyToastKey} uploadState={uploadState} />
+      <TerminalToasts
+        copied={copied}
+        copyToastKey={copyToastKey}
+        uploadState={uploadState}
+        paneTooSmall={paneTooSmall}
+      />
     </div>
   );
 }

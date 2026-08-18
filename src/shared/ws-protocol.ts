@@ -24,12 +24,11 @@
 // on `isBinary` before ever attempting to JSON.parse.
 //
 // Verified by reading the whole handler (not just grepping for "type:")
-// that these two are the only JSON frame shapes that exist on this socket:
+// that these three are the only JSON frame shapes that exist on this socket:
 // ResizeMessage flows browser->server only (TerminalPane.tsx's
-// sendResizeIfOpen), ExitedMessage flows server->browser only
-// (`session.onExit`'s handler). Both were previously duplicated declarations
-// (ResizeMessage) or a bare untyped `{ type: "exited" }` literal
-// (ExitedMessage) on both sides.
+// sendResizeIfOpen), ExitedMessage and GeometryMessage flow server->browser
+// only (`session.onExit`'s handler and the post-clamp geometry echo in
+// attachSocketToSession, respectively).
 
 export interface ResizeMessage {
   type: "resize";
@@ -41,7 +40,22 @@ export interface ExitedMessage {
   type: "exited";
 }
 
-export type TerminalWSMessage = ResizeMessage | ExitedMessage;
+// pty-manager.ts's Session floors cols/rows at MIN_TERMINAL_COLS/ROWS
+// (currently 40x10) — a client-requested size below that (a small split, or
+// dockview's own 300x300 default floating-group size) is silently clamped
+// server-side, so a ResizeMessage's cols/rows can never be trusted as the
+// terminal's actual applied geometry. This is the server's echo of what was
+// actually applied, sent once on attach and again after every resize() call
+// — see attachSocketToSession's own comment for why. The frontend uses it to
+// keep xterm's own grid (and its "pane too small" hint) in sync with the PTY
+// it's actually attached to, rather than the size it asked for.
+export interface GeometryMessage {
+  type: "geometry";
+  cols: number;
+  rows: number;
+}
+
+export type TerminalWSMessage = ResizeMessage | ExitedMessage | GeometryMessage;
 
 // ---------------------------------------------------------------------------
 // services/github-ws-broadcast.ts — GitHubWSEvent

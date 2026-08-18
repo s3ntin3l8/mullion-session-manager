@@ -137,6 +137,15 @@ vi.mock("@xterm/xterm", () => {
       // shared default afterward. See mockInitialTermSize's own doc comment.
       cols: mockInitialTermSize.cols,
       rows: mockInitialTermSize.rows,
+      // Issue: small panes ignoring input — TerminalPane's GeometryMessage
+      // handler calls this directly when the server's applied geometry
+      // differs from the current grid. A bare vi.fn() rather than a
+      // self-mutating implementation, same "test mutates cols/rows directly"
+      // posture getLatestTermInstance's own comment documents for
+      // fitCallbackQueue — a geometry-sync test asserts the call, then sets
+      // the returned instance's cols/rows itself to simulate the resize
+      // having taken effect.
+      resize: vi.fn(),
       open: vi.fn(),
       loadAddon: vi.fn(),
       dispose: vi.fn(),
@@ -194,6 +203,15 @@ vi.mock("@xterm/addon-fit", () => ({
       // so this stays a plain no-op for every test that doesn't touch the
       // queue) — see fitCallbackQueue's own doc comment above.
       fit: vi.fn(() => fitCallbackQueue.shift()?.()),
+      // Issue: small panes ignoring input — TerminalPane's GeometryMessage
+      // handler reads this to decide whether the server's applied geometry
+      // exceeds what actually fits (the "pane too small" hint), without
+      // hardcoding the backend's MIN_TERMINAL_COLS/ROWS floor. Defaults to
+      // mockInitialTermSize (i.e. "the pane fits its own grid") so every
+      // existing test — none of which know about this — stays unaffected; a
+      // geometry-sync test overrides it via
+      // getLatestFitAddonInstance().proposeDimensions.mockReturnValue(...).
+      proposeDimensions: vi.fn(() => ({ ...mockInitialTermSize })),
     };
   }),
 }));
@@ -308,9 +326,12 @@ function getLatestTermInstance() {
     focus: ReturnType<typeof vi.fn>;
     input: ReturnType<typeof vi.fn>;
     modes: { applicationCursorKeysMode: boolean };
+    resize: ReturnType<typeof vi.fn>;
     // Mutable, unlike every other field here — the deferred-connect tests
     // (issue #676's frontend follow-up) mutate these directly to simulate
-    // fitCallbackQueue's own re-measure mutating them via a real fit().
+    // fitCallbackQueue's own re-measure mutating them via a real fit(), and
+    // the geometry-sync tests do the same to simulate `resize` above having
+    // taken effect.
     cols: number;
     rows: number;
   };
@@ -322,7 +343,10 @@ function getLatestTermInstance() {
 // effects.
 function getLatestFitAddonInstance() {
   const results = (FitAddon as unknown as ReturnType<typeof vi.fn>).mock.results;
-  return results[results.length - 1]!.value as { fit: ReturnType<typeof vi.fn> };
+  return results[results.length - 1]!.value as {
+    fit: ReturnType<typeof vi.fn>;
+    proposeDimensions: ReturnType<typeof vi.fn>;
+  };
 }
 
 // Same pattern as getLatestTermInstance/getLatestFitAddonInstance above, for
@@ -2174,6 +2198,91 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
     expect(screen.getByText("Disconnected")).toBeInTheDocument();
     expect(screen.getByText("Retry now")).toBeInTheDocument();
     expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
+  });
+});
+
+// Issue: small panes/floating windows ignoring input — pty-manager.ts floors
+// a too-small resize (MIN_TERMINAL_COLS/ROWS) and TerminalPane.tsx never knew
+// about the clamp, so xterm's own grid silently drifted from what the pty was
+// actually drawing to (a 300x300 dockview default floating group, or a
+// heavily-split pane, both land under the floor at the terminal's default
+// font size). The fix is the server echoing its applied geometry back over
+// the same WS as a GeometryMessage (see that type's own doc comment in
+// ws-protocol.ts) — these tests cover TerminalPane's handler for it.
+describe("TerminalPane geometry sync (issue: small panes/floating windows ignoring input)", () => {
+  it("resizes xterm to the server's applied geometry and flags the pane as too small when it exceeds what fits", () => {
+    stubFakeWebSocket(true);
+    // Simulates a pane whose viewport only fits a 20x8 grid — smaller than
+    // pty-manager.ts's 40x10 floor, e.g. a freshly-floated session at
+    // dockview's own 300x300 default (constants.js) or a heavily-split pane.
+    mockInitialTermSize.cols = 20;
+    mockInitialTermSize.rows = 8;
+    renderPane();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    expect(term.resize).toHaveBeenCalledWith(40, 10);
+    expect(screen.getByText("Pane too small")).toBeInTheDocument();
+  });
+
+  it("is a no-op when the server's geometry already matches the fitted grid", () => {
+    stubFakeWebSocket(true);
+    mockInitialTermSize.cols = 40;
+    mockInitialTermSize.rows = 10;
+    renderPane();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    expect(term.resize).not.toHaveBeenCalled();
+    expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
+  });
+
+  it("suppresses the next refit's resize frame once the server's applied geometry lands", () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    mockInitialTermSize.cols = 20;
+    mockInitialTermSize.rows = 8;
+
+    renderPane();
+    act(() => {
+      resizeObserver.fire(); // deferred initial connect (issue #676)
+    });
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    expect(term.resize).toHaveBeenCalledWith(40, 10);
+    // Simulate the resize having actually taken effect, the same way the
+    // deferred-connect tests above simulate fitCallbackQueue's re-measure —
+    // the mocked term.resize (unlike the real xterm.js one) doesn't mutate
+    // cols/rows itself.
+    term.cols = 40;
+    term.rows = 10;
+
+    const sendsAfterGeometry = fakeWsSend.mock.calls.length;
+    act(() => {
+      resizeObserver.fire(); // e.g. the container's own layout settling further
+    });
+
+    // Without the geometry handler updating lastCols/lastRows, this refit()
+    // would see term.cols/rows (40/10) differ from the STALE lastCols/
+    // lastRows captured at mount (20/8) and re-send an already-redundant
+    // {cols:40,rows:10} frame right back to the server it just came from.
+    expect(fakeWsSend.mock.calls.length).toBe(sendsAfterGeometry);
   });
 });
 
