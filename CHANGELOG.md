@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.33](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.32...v0.2.33) (2026-08-18)
+
+
+### Bug Fixes
+
+* add a newline key to the mobile terminal key bar ([#703](https://github.com/s3ntin3l8/mullion-session-manager/issues/703)) ([3d7de54](https://github.com/s3ntin3l8/mullion-session-manager/commit/3d7de548424291c08992b1bd9a0de883996cfd00))
+* make the new-session palette usable with the keyboard open on mobile ([#705](https://github.com/s3ntin3l8/mullion-session-manager/issues/705)) ([e2ab24d](https://github.com/s3ntin3l8/mullion-session-manager/commit/e2ab24d4cdd7fd6dd567b4d196b4e1987b4caba4))
+* make the terminal scrollable by touch on mobile ([#704](https://github.com/s3ntin3l8/mullion-session-manager/issues/704)) ([15ddac7](https://github.com/s3ntin3l8/mullion-session-manager/commit/15ddac72f7d4e48e6895e663d40d64815482d398))
+
 ## [0.2.32](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.31...v0.2.32) (2026-08-17)
 
 
