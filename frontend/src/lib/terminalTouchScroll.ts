@@ -28,6 +28,18 @@ import type { Terminal } from "@xterm/xterm";
 //
 // Attached unconditionally (not gated to the mobile breakpoint) — inert
 // without touch events, and touchscreen laptops are real.
+//
+// Two accepted trade-offs, called out here so they read as decisions rather
+// than surprises (Hermes review, PR #704): once a drag commits (i.e. has
+// called preventDefault), the page owns the gesture for its duration, so
+// adding a second finger mid-scroll can't start the browser's own
+// pinch-zoom — a scroll and a pinch aren't composable mid-gesture either
+// way, so there's no gesture this would need to hand off to. And once a
+// two-finger touch resets tracking (the multi-touch abandonment below), a
+// continuing single finger is ignored until the user fully lifts and
+// re-touches, rather than resuming the scroll — simpler than trying to
+// re-derive a clean baseline mid-gesture, at the cost of a beat of dead
+// drag after an accidental second finger.
 
 // A drag shorter than this is treated as a tap/jitter, not a scroll intent —
 // keeps a tap-to-focus gesture from accidentally eating a couple of
@@ -77,6 +89,10 @@ export function attachTerminalTouchScroll(params: {
     // mouse sequences from a touch would invent a semantics no TUI expects
     // (e.g. starting a visual-mode selection mid-scroll). Mirrors xterm's
     // own wheel-teardown behavior on mouse-protocol requests (see header).
+    // Deliberately doesn't reset() on this path (or the alt-screen one
+    // below): `tracking` still gates onTouchMove/onTouchEnd, and the next
+    // valid touchstart overwrites lastY/rowHeight/accumulatedLines/
+    // movedPastThreshold wholesale before they're read again.
     if (term.modes.mouseTrackingMode !== "none") return;
     // The alternate screen has no scrollback — scrollLines() would be a
     // silent no-op there, so there's nothing to bail *into*; translating

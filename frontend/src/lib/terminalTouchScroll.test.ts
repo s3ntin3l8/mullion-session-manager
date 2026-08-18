@@ -44,15 +44,20 @@ describe("attachTerminalTouchScroll", () => {
   // every test here exercises the fontSize*lineHeight fallback row height
   // (14px), not the (untestable-in-jsdom) measured one.
 
-  it("scrolls up (negative) when the finger drags down, once past the movement threshold", () => {
+  it("scrolls up (negative) when the finger drags down, once past the movement threshold, and claims the gesture via preventDefault", () => {
     const term = createFakeTerm();
     const detach = attachTerminalTouchScroll({ term, element: container });
 
     container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
     // 14px fallback row height, threshold is 6px — 20px down covers both.
-    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 20 }]));
+    const move = touchEvent("touchmove", [{ clientY: 20 }]);
+    const prevented = !container.dispatchEvent(move);
 
     expect(term.scrollLines).toHaveBeenCalledWith(-1);
+    // The only thing stopping the browser from scrolling the phantom
+    // .xterm-viewport (styles/xterm.css) on a committed drag — a regression
+    // here would otherwise be silent under jsdom.
+    expect(prevented).toBe(true);
     detach();
   });
 
