@@ -349,7 +349,7 @@ export function CommandPalette({
   };
 
   return (
-    <div className="overlay-backdrop" onClick={onClose}>
+    <div className="overlay-backdrop cmd-palette-backdrop" onClick={onClose}>
       <div
         ref={modalRef}
         className="cmd-palette"

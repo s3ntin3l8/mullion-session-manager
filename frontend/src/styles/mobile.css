@@ -329,8 +329,16 @@
      the same underlying problem (a keyboard-shrunk `.app` containing block)
      — drop the 96px/-160px budget the desktop centered-modal layout needs
      and let the fixed chrome pin top/bottom while the results list (fixed
-     below, command-palette.css) is the one flexible child. */
-  .overlay-backdrop {
+     below, command-palette.css) is the one flexible child.
+
+     `.cmd-palette-backdrop`, not the shared `.overlay-backdrop` (Hermes
+     review, PR #705) — SavedUrlModal.tsx reuses `.overlay-backdrop` too,
+     and resetting `padding-top` there was a silent no-op only because that
+     modal's child happens to be `position: absolute` with its own inset —
+     coupling two unrelated overlays through a shared class by accident.
+     CommandPalette.tsx adds this second class purely for mobile.css to
+     hook. */
+  .cmd-palette-backdrop {
     padding-top: 0;
   }
   .cmd-palette {
@@ -340,12 +348,31 @@
     max-height: none;
     border-radius: 0;
     border: none;
+    /* Hermes review, PR #705 — on a short/landscape viewport with the
+       keyboard open, the fixed chrome (search + target strip + options
+       strip + footer) can still exceed what's left of `.app` after
+       `--kb-inset`'s shrink even with `.cmd-palette-list` at its `flex: 1;
+       min-height: 0` floor of 0px. Without this, that overflow is clipped
+       by the base rule's `overflow: hidden` (command-palette.css) and the
+       footer becomes unreachable — the same failure this PR exists to fix,
+       just at a more extreme viewport. `auto` costs nothing in the common
+       case (nothing overflows once the list has room), and turns the
+       extreme case into "scroll for the footer" instead of "can't reach
+       it". */
+    overflow-y: auto;
   }
   .cmd-palette-search {
     padding-top: calc(15px + env(safe-area-inset-top));
   }
   .cmd-palette-footer {
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  /* Hermes review, PR #705 — a floor under command-palette.css's `flex: 1;
+     min-height: 0`, so an extreme squeeze (see .cmd-palette's own comment
+     above) leaves a couple of visibly-scrollable rows rather than a
+     literal 0px gap between the target strip and the footer. */
+  .cmd-palette-list {
+    min-height: 88px;
   }
   /* iOS Safari auto-zooms the whole page on focus for any input computing
      under 16px and doesn't zoom back out on blur — same hazard already
