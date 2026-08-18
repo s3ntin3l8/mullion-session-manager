@@ -313,6 +313,49 @@
     width: 100%;
   }
 
+  /* Mobile UI/UX overhaul follow-up — the new-session/launcher palette
+     (.overlay-backdrop/.cmd-palette, command-palette.css) is `position:
+     absolute` against `.app`, which this file's own `.app` rule above
+     already shrinks from the bottom by `--kb-inset` when the keyboard
+     opens. Its desktop layout pays for that shrink twice: a fixed 96px
+     `padding-top` on the backdrop, and the palette's own `max-height:
+     calc(100% - 160px)`. On a real phone (~780px viewport, ~336px
+     keyboard) that leaves ~188px for a search row + target strip + options
+     strip + results list + footer that need ~195-225px on their own — the
+     results list (no `flex`/`min-height` of its own, see
+     command-palette.css) collapses to ~0 and the footer gets clipped by
+     `.cmd-palette`'s own `overflow: hidden` with no way to scroll to it.
+     Same full-bleed-sheet treatment as `.settings-modal` above, since it's
+     the same underlying problem (a keyboard-shrunk `.app` containing block)
+     — drop the 96px/-160px budget the desktop centered-modal layout needs
+     and let the fixed chrome pin top/bottom while the results list (fixed
+     below, command-palette.css) is the one flexible child. */
+  .overlay-backdrop {
+    padding-top: 0;
+  }
+  .cmd-palette {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+  }
+  .cmd-palette-search {
+    padding-top: calc(15px + env(safe-area-inset-top));
+  }
+  .cmd-palette-footer {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  /* iOS Safari auto-zooms the whole page on focus for any input computing
+     under 16px and doesn't zoom back out on blur — same hazard already
+     fixed above for .tasks-panel-new-project/-title, missed here. 14.5px
+     is deliberate on desktop (command-palette.css), so this stays scoped
+     to the mobile breakpoint rather than changing the shared rule. */
+  .cmd-palette-search input {
+    font-size: 16px;
+  }
+
   /* Item E — touch targets. .mobile-tab/.mobile-tab-btn and the kanban lane
      controls above are already sized for this; these are the remaining
      sub-44px interactive rows/buttons that are still reachable on mobile

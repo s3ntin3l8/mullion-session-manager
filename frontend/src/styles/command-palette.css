@@ -158,6 +158,16 @@
   flex-shrink: 0;
 }
 .cmd-palette-list {
+  /* Mobile UI/UX overhaul follow-up — without this, the list's automatic
+     flex-basis/min-height is its own content size while every sibling in
+     `.cmd-palette` (a flex column) has `min-height: auto` and refuses to
+     shrink, so on a keyboard-shrunk mobile viewport (see mobile.css's
+     .cmd-palette block) the list was the one thing squeezed to ~0 instead
+     of the intended scroller. flex:1/min-height:0 makes it the actual
+     shrinker, which is correct on desktop too (a latent bug there, just
+     never visible at desktop viewport heights). */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px;
 }
