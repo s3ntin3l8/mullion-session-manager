@@ -470,7 +470,7 @@ export function TerminalPane(props: {
     registerTerminalRepaint(props.params.sessionId, repaint);
 
     // Mobile UI/UX overhaul, item C.1 — lets MobileKeyBar.tsx inject
-    // Esc/Tab/Shift+Tab/`/` (sendInput) and DECCKM-aware arrow keys
+    // Esc/Tab/Shift+Tab/newline (sendInput) and DECCKM-aware arrow keys
     // (sendArrow, resolved against the live term.modes here — see
     // terminalInputRegistry.ts's own comment on why that resolution can't
     // happen in the bar itself) into this session's terminal from outside

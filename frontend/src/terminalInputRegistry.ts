@@ -4,8 +4,8 @@
 // (that rule only governs component files).
 //
 // Mobile UI/UX overhaul, item C.1 — the mobile key bar (MobileKeyBar.tsx)
-// needs to inject a fixed key sequence (Esc/Tab/Shift+Tab/Ctrl+C/`/`) into
-// whichever session is the currently active terminal pane, but nothing
+// needs to inject a fixed key sequence (Esc/Tab/Shift+Tab/Ctrl+C/newline)
+// into whichever session is the currently active terminal pane, but nothing
 // outside TerminalPane.tsx can otherwise reach a session's `Terminal`
 // instance or its WebSocket — both are component-private refs. Registering
 // a small per-session handle here, the same way terminalRepaintRegistry.ts
@@ -32,7 +32,7 @@
 // registration call site).
 //
 // `sendInput` is a raw passthrough for the bar's other, genuinely
-// unambiguous keys (Esc/Tab/Shift+Tab/`/`), none of which
+// unambiguous keys (Esc/Tab/Shift+Tab/newline), none of which
 // attachCustomKeyEventHandler intercepts at all.
 export interface TerminalInputHandle {
   sendInput: (data: string) => void;
