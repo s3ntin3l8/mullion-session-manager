@@ -546,8 +546,12 @@ delivered, not literally a stashed SessionStart seed. (The
 promote-to-worktree flow — a human present, but idle just the same until
 someone notices and types — had this exact bug too; it now prefers the
 same argv delivery whenever the adapter supports it, and only falls back
-to the stashed-seed mechanism for an adapter with none — see
-`routes/sessions.ts`'s promote handler.) The leading `--` form (rather than
+to the stashed-seed mechanism for an adapter with none — except for an
+opencode promote whose full-context transfer succeeds (see
+`routes/sessions.ts`'s promote handler and `docs/agent-hooks.md`), where
+the argv `--prompt` seed is skipped entirely because the whole
+conversation history carries over into the resumed `--session <id>` and
+no auto-submitted turn is possible on a resume.) The leading `--` form (rather than
 a bare
 `claude '<prompt>'`/`codex '<prompt>'`) matters: a task title starting with
 `-` would otherwise be parsed as an unrecognized option by claude's or

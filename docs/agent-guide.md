@@ -274,6 +274,13 @@ confirm which path got you here.
   longer rides this channel, though: it's delivered as `--prompt <text>`
   argv instead — a real submitted first turn, not more static context —
   since opencode gained `initialPromptArgs`; see that field's own comment.
+  For an opencode promote, Mullion goes further: it first attempts to
+  carry your **full conversation history** over via `opencode
+export`/`import` (local host only), resuming the new session with
+  `--session <id>` — in which case no seed prompt is delivered at all and
+  the resumed session shows the whole transcript, waiting for your next
+  message (a `--prompt` argv seed is only used when a transfer isn't
+  attempted or fails). See `docs/agent-hooks.md`'s opencode section.
 
 If you're on an agent without a hook adapter, or the nudge didn't reach you
 for one of the reasons above, you got here some other way (or you're

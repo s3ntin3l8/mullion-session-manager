@@ -20,7 +20,8 @@ const promoteToWorktree = {
   description:
     "Move the current session's work into a new, isolated git worktree. Blocks until a " +
     "human approves or declines the request. On approval, this session ends and a new one " +
-    "starts in the worktree, seeded with `summary` as its starting context.",
+    "starts in the worktree, seeded with `summary` as its starting context — for opencode, " +
+    "the full conversation history carries over instead of a seed.",
   inputSchema: {
     type: "object",
     required: ["summary"],
