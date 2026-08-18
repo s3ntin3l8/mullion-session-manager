@@ -71,6 +71,7 @@ kinds the parser now recognizes) is grouped by when each kind was added:
 | `elicitation`           | `state: "started" \| "finished"`, `server?`                                                           | Claude Code's `Elicitation`/`ElicitationResult` — an MCP server is asking the human a question.                                                                                                                                                                                            |
 | `permission_resolved`   | —                                                                                                     | Claude Code's `PermissionDenied` — a possible extra release for a pending `permission_request`, never the only one.                                                                                                                                                                        |
 | `plan_resolved`         | —                                                                                                     | Reserved for an agent with a direct "plan decision made" signal; no current adapter sends it (Claude Code's `progress: done`/`turn_start` already release a pending plan).                                                                                                                 |
+| `agent_session`         | `sessionId: string`                                                                                   | PR #696 — opencode only: the live opencode internal session id, re-reported on every `session.idle`, so a later promote can export/import the full conversation history into the new worktree session.                                                                                     |
 
 A `kind` this list hasn't been taught yet is accepted and stored verbatim
 rather than rejected — this is what lets a newer hook author add a message
@@ -223,10 +224,49 @@ As of the promote-flow first-turn fix, the promote-flow seed (issue
 #271/#678) no longer rides this `instructions` channel at all: it's sent
 as `--prompt <text>` argv instead, via `initialPromptArgs`, verified
 against the installed CLI to actually submit a turn rather than just add
-context — see `hook-adapters/opencode.ts`'s own comment. This
-`instructions`-based seed path survives only as a context-only fallback,
-for a caller that sets `seedPrompt` without also requesting
-`initialPrompt`.
+context — see `hook-adapters/opencode.ts`'s own comment.
+
+That's only the no-transfer path, though. As of the full-context
+carryover (PR #696), an opencode promote goes further when it can: for a
+**local** opencode session whose live opencode session id is known (the
+`agent_session` hook, above), Mullion first attempts to carry the **full
+conversation history** into the new worktree session via `opencode
+export`/`import` — the importer re-keys the imported session to the
+_current_ instance's project/directory, precisely the thing a `--fork`
+resume gets wrong — and then launches the promoted session with
+`--session <id>`. **No `--prompt` is sent on a resume**: verified against
+the bare-TUI command form Mullion actually spawns, opencode silently
+accepts but never auto-submits `--prompt` when combined with
+`--session`/`--continue` (the same failure shape as the `--fork`
+directory bug below), so a synthesized continuation nudge would just be
+dropped. Instead the transfer surfaces a `warnings[]` note: the full
+history carried over and the session is picking up where it left off,
+waiting for your next message — the imported transcript is already
+visible the moment it opens.
+
+**Why not `--fork`:** a `--session <id> --fork` resume was investigated
+and dropped — opencode's `--fork` pins the forked session's `directory`
+to the _original_ session's stored directory even with an explicit
+`--dir` pointing at the worktree, and a live tool call inside the forked
+session actually ran with the wrong `cwd` (back in the main checkout,
+defeating worktree isolation). `export`/`import` was chosen instead
+because the importer re-keys to the current project/directory.
+
+The transfer is a capability probe, never a promote-blocking dependency:
+`opencode-session-transfer.ts` resolves `{ transferred: false, reason }`
+on every failure mode rather than throwing, and the promote handler falls
+through to the ordinary seed path unchanged — an argv `--prompt` first
+turn when a seed was supplied, else a cold start — each with its own
+`warnings[]` entry. **Local host only:** `session-backend.ts`'s
+`RemoteBackend.spawn()` deliberately drops `resumeAgentSessionId` rather than forwarding it;
+remote-host carryover is an explicit follow-up, not silently
+half-implemented.
+
+The `instructions`-based `seedPrompt` channel survives as a context-only
+fallback, for a caller that sets `seedPrompt` without also requesting
+`initialPrompt` — and, since a resume can't take an auto-submitted turn,
+also carries a caller-supplied seed on the transfer path as static
+context alongside the imported transcript.
 
 Gated on the live
 `sessions.injectAgentGuide` setting's value _at this session's own spawn

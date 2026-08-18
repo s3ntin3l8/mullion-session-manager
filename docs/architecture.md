@@ -116,6 +116,10 @@ protocol.
   Codex's own hook-trust model and `CODEX_HOME`'s all-or-nothing scope rule
   out an ephemeral injection there; agy has no documented env var to
   relocate its config at all — see [`agent-hooks.md`](agent-hooks.md)),
+  `opencode-session-transfer` (PR #696 — full opencode conversation-history
+  carryover into a promoted worktree via `opencode export`/`import`,
+  re-keying the imported session to the worktree's project/directory; local
+  host only — see [`agent-hooks.md`](agent-hooks.md)),
   `agent-guide` (serves this doc set's own [`agent-guide.md`](agent-guide.md)
   into a spawned session at `SessionStart`), `push-delivery`/`push-store`
   (the web-push subscription/delivery surface behind `src/routes/push.ts`),
