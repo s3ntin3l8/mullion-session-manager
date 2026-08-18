@@ -110,27 +110,6 @@ body {
     opacity: 1;
   }
 }
-@keyframes cmuxRing {
-  /* The leading `inset 2px 0 0 var(--ring)` layer is the #98 item 2
-     background-tint companion (a static box-shadow declared alongside this
-     animation on .pane-tab.attention-ring would otherwise just be
-     overridden by it for as long as the animation runs — box-shadow can
-     only hold one value at a time — so the inset accent has to live inside
-     every keyframe step instead). */
-  0%,
-  100% {
-    box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 1.5px var(--ring),
-      0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
-  }
-  50% {
-    box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 1.5px var(--ring),
-      0 0 0 5px color-mix(in srgb, var(--ring) 6%, transparent);
-  }
-}
 @keyframes cmuxAttn {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 60%, transparent);
@@ -140,37 +119,75 @@ body {
     box-shadow: 0 0 0 6px color-mix(in srgb, var(--ring) 0%, transparent);
   }
 }
-/* #98 item 6 — the "just fired" one-shot burst, swapped in for cmuxRing for
-   JUST_FIRED_ATTENTION_MS (PaneTab.tsx) via the .attention-just-fired
-   modifier below, then handed back to cmuxRing's steady infinite pulse.
-   Ends on exactly cmuxRing's own 0%/100% box-shadow value so the handoff
-   has no visible jump. */
-@keyframes cmuxAttnBurst {
+/* Issue: attention ring doesn't cover the whole pane header. Applied to the
+   whole header row, not the individual tab (terminal.css's
+   `:has(.pane-tab.attention-ring)` rule) — a per-tab pulse used to live
+   here, painted directly on .pane-tab, but that's a descendant of dockview's
+   own .dv-tabs-container (overflow: hidden, clips the tab strip) which is in
+   turn a descendant of .dv-groupview (also overflow: hidden), so an outward-
+   extending halo on the tab itself was clipped well before it could reach
+   the split-right/split-down buttons in .dv-right-actions-container — a
+   sibling of .dv-tabs-container a per-tab shadow could never visually cross
+   into anyway. This is INSET-only (unlike that per-tab version's mix of
+   inset+outset layers), specifically so it can never be clipped by an
+   ancestor's overflow regardless of where in the grid a given header sits:
+   an inset box-shadow only ever paints inside the element's own border box,
+   so there is nothing for .dv-groupview's overflow to clip. Layer order
+   (first-listed paints on top) gives a "sharp line + softer glow" look,
+   glowing inward rather than outward. Only the ring itself moves here — the
+   tint and left-edge accent bar (`.pane-tab.attention-ring`'s own
+   `background`/`box-shadow`, terminal.css) and the group-membership
+   underline (`.pane-tab-group-attention`, terminal.css) stay per-tab: both
+   are cues about one specific tab, not the whole header, and neither was
+   reported as clipped. */
+@keyframes cmuxRingHeader {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 6.5px color-mix(in srgb, var(--ring) 18%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 6.5px color-mix(in srgb, var(--ring) 6%, transparent);
+  }
+}
+/* #98 item 6 — the "just fired" one-shot burst, swapped in for cmuxRingHeader
+   for JUST_FIRED_ATTENTION_MS (PaneTab.tsx) via the .attention-just-fired
+   modifier (terminal.css), then handed back to cmuxRingHeader's steady
+   infinite pulse. Ends on exactly cmuxRingHeader's own 0%/100% box-shadow
+   value so the handoff has no visible jump. Same inset-only reasoning as
+   cmuxRingHeader's own comment above — no `inset 2px 0 0` left-edge layer
+   (that accent is specific to the single attention tab, not the whole
+   header — see `.pane-tab.attention-ring`'s own box-shadow, terminal.css),
+   and the pulsing halo grows inward via increasing inset spread rather than
+   outward, so .dv-groupview's overflow: hidden can never clip it. */
+@keyframes cmuxAttnBurstHeader {
   0% {
     box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 0 color-mix(in srgb, var(--ring) 70%, transparent);
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 0 color-mix(in srgb, var(--ring) 70%, transparent);
   }
   30% {
     box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
   }
   45% {
     box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
   }
   75% {
     box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
   }
   100% {
     box-shadow:
-      inset 2px 0 0 var(--ring),
-      0 0 0 1.5px var(--ring),
-      0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
+      inset 0 0 0 1.5px var(--ring),
+      inset 0 0 0 6.5px color-mix(in srgb, var(--ring) 18%, transparent);
   }
 }
 /* Sidebar session click highlight — a brief one-shot ring flash on the

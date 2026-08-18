@@ -54,9 +54,26 @@
    button's inset on the right (already asymmetric between single/multi-tab
    modes, same root cause) is unaffected by this fix — that asymmetry
    wasn't reported and is out of scope here. */
+/* min-width derivation (issue: narrow headers overflow) — the worst case a
+   terminal tab (PaneTab.tsx) can still be showing once its own
+   TIGHT_TAB_THRESHOLD_PX has already dropped the agent logo and collapsed
+   the unread badge to a bare dot: .pane-tab's own padding (19px) + status
+   dot (~10px) + the collapsed unread dot (15px, only when present) + close
+   button (24px) + kebab trigger (24px) + the gaps between whichever of
+   those five children are actually rendered (8px each) = ~124px with an
+   unread notification, ~101px without one. 130px leaves a little headroom
+   above the worst case for the name to still show a character or two,
+   rather than the previous unexplained 110px, which sat BELOW that worst
+   case and let the tab's own overflow (now clipped by .pane-tab's own
+   overflow: hidden, terminal.css, rather than spilling into the next tab —
+   but still not ideal) run past the close/kebab buttons before dockview's
+   flex-shrink ever needed to stop. Applies to every panel's tab, not just
+   terminal ones — non-terminal panels use dockview's own .dv-default-tab
+   (title + close, no dot/kebab/badge), whose narrower content easily clears
+   the same floor. */
 .cmux-root .dv-tab {
   flex-shrink: 1 !important;
-  min-width: 110px;
+  min-width: 130px;
   padding-left: 0 !important;
 }
 .cmux-root .dv-default-tab-content {

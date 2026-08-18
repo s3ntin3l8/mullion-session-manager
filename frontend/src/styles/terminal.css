@@ -9,6 +9,15 @@
   padding: 0 8px 0 11px;
   min-width: 0;
   position: relative;
+  /* Issue: narrow headers overflow — this tab's irreducible content (dot +
+     name + close + kebab, ~101px, more with the unread badge — see
+     TIGHT_TAB_THRESHOLD_PX's own comment, PaneTab.tsx) used to exceed
+     .dv-tab's min-width (xterm.css) by the time every narrower-mode fallback
+     had already kicked in, and with no clipping here the excess spilled
+     into the neighboring tab instead of just being cut off at this tab's own
+     boundary (issue #103, previously only "masked" by dockview's own
+     tab-strip clipping per .pane-tab-badge's own comment above). */
+  overflow: hidden;
 }
 .pane-tab-dot-working {
   width: 7px;
@@ -79,9 +88,10 @@
   border-radius: 999px;
   /* Same overflow guard as .session-status-label above, and for the same
      reason — a long status detail must ellipsis rather than refuse to
-     shrink. Currently masked by dockview's own tab-strip clipping
-     (overflow: hidden on .dv-tabs-container) rather than actually handled,
-     so this is defense-in-depth against that clipping ever changing. */
+     shrink. Belt-and-suspenders alongside .pane-tab's own overflow: hidden
+     above (issue #103) and dockview's own tab-strip clipping (overflow:
+     hidden on .dv-tabs-container) — this element's own text-overflow still
+     needs to fire before either of those outer boundaries is ever reached. */
   flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
@@ -126,19 +136,36 @@
 }
 .pane-tab.attention-ring {
   /* #98 item 2 — background tint matching the sidebar's own
-     .session-item.status-attention treatment; the matching inset box-shadow
-     lives inside the cmuxRing/cmuxAttnBurst keyframes themselves (see their
-     own comment) rather than here, since a static box-shadow declared on
-     this rule would just be overridden for as long as the animation runs. */
-  animation: cmuxRing 2.4s ease-in-out infinite;
+     .session-item.status-attention treatment, plus a static left-edge accent
+     bar marking which tab in the group is the actual attention one (the
+     group's other tabs only get .pane-tab-group-attention's lighter
+     underline below). Both are genuinely per-TAB cues, unlike the pulsing
+     halo ring itself — that now lives on the whole header row instead (see
+     cmuxRingHeader's own comment, tokens.css, and the `:has()` rules below)
+     — so a static box-shadow works fine here; nothing competes with it for
+     this element's `box-shadow` property anymore. */
   background: color-mix(in srgb, var(--ring) 6%, transparent);
+  box-shadow: inset 2px 0 0 var(--ring);
 }
-/* #98 item 6 — see cmuxAttnBurst's own comment. Two classes (rather than
-   one combined selector) so PaneTab.tsx can toggle just this modifier on
-   its JUST_FIRED_ATTENTION_MS timeout while attention-ring itself keeps
-   tracking session.attention for as long as that stays true. */
-.pane-tab.attention-ring.attention-just-fired {
-  animation: cmuxAttnBurst 1.6s ease-out;
+/* Issue: attention ring doesn't cover the whole pane header — cmuxRing (the
+   halo previously animated on .pane-tab.attention-ring directly) is clipped
+   by dockview's own .dv-tabs-container/.dv-groupview (both overflow:
+   hidden) before it can ever reach the split-right/split-down buttons in
+   the same header's .dv-right-actions-container, a sibling .pane-tab could
+   never visually cross into anyway. Painting the ring on the whole header
+   row instead — the nearest ancestor common to both the tab strip and the
+   right-actions area — makes it actually cover the whole header, and the
+   INSET-only cmuxRingHeader/cmuxAttnBurstHeader keyframes (tokens.css) mean
+   it can never be clipped by that overflow regardless of where in the grid
+   this header sits. `.cmux-root` anchors it for the same reasons as this
+   file's own .dv-tab overrides above. Two rules (rather than one combined
+   selector), same "PaneTab.tsx toggles just the JUST_FIRED_ATTENTION_MS
+   modifier" reasoning the old per-tab pair had. */
+.cmux-root .dv-tabs-and-actions-container:has(.pane-tab.attention-ring) {
+  animation: cmuxRingHeader 2.4s ease-in-out infinite;
+}
+.cmux-root .dv-tabs-and-actions-container:has(.pane-tab.attention-ring.attention-just-fired) {
+  animation: cmuxAttnBurstHeader 1.6s ease-out;
 }
 .pane-tab.highlight-flash {
   animation: cmuxPing 0.4s ease-out;
@@ -167,10 +194,17 @@
    tabGroupAccent API). A lighter cue than attention-ring's own full
    treatment: this can be present on tabs that aren't themselves in
    attention, just siblings of one in the same dockview group. Layered
-   underneath attention-ring's own animated box-shadow (which naturally wins
-   on the one tab that has both, since an active CSS animation overrides a
-   static value for the same property regardless of selector specificity) —
-   no separate handling needed for that overlap. */
+   underneath attention-ring's own left-edge accent bar (which naturally wins
+   on the one tab that has both — `.pane-tab.attention-ring`'s two-class
+   selector outscores this single-class one, so its box-shadow simply takes
+   priority) — no separate handling needed for that overlap. Left as a
+   per-tab cue, not moved to the header level alongside the ring above: every
+   header with this class on any tab also has `.attention-ring` on the
+   session that's actually in attention (groupHasAttention is derived from
+   the same sessions the individual ring already tracks), so a header-level
+   version of this rule would always be masked by the ring's own header-level
+   animation and never actually render — see the ring's own comment above for
+   that header-level treatment. */
 .pane-tab-group-attention {
   box-shadow: inset 0 -2px 0 var(--ring);
 }
@@ -193,6 +227,16 @@
 }
 .pane-tab-unread-badge.exited {
   background: var(--dim);
+}
+/* Issue: narrow headers overflow — below TIGHT_TAB_THRESHOLD_PX (PaneTab.tsx)
+   the count text is dropped, leaving only the icon; the pill's own
+   horizontal padding (built for icon + digits) would otherwise leave an
+   oddly wide, off-center dot around that lone icon, so this collapses it
+   into an actual circle sized to the icon alone. */
+.pane-tab-unread-badge.compact {
+  padding: 0;
+  width: 15px;
+  justify-content: center;
 }
 .pane-tab-btn {
   width: 24px;

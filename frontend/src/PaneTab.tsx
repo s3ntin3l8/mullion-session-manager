@@ -21,9 +21,21 @@ import { panelSessionId } from "./panelUtils.js";
 // badge that gives way first, not the name.
 const NARROW_TAB_BADGE_THRESHOLD_PX = 190;
 
+// Issue: narrow headers overflow — below this, drop the agent logo (14px)
+// and collapse the unread badge (`.pane-tab-unread-badge`, min-width 15px —
+// unlike the status badge/branch label above, it isn't gated by `narrow` at
+// all today) down to a bare dot, on top of everything NARROW_TAB_BADGE_
+// THRESHOLD_PX already hides. Calibrated against the worst case that can
+// still be showing at this width — dot(~10px) + name + close(24px) +
+// kebab(24px) + 3 gaps(8px each) = ~82px fixed, plus the collapsed unread
+// dot(~15px) + one more gap(8px) when present = ~105px — leaving a little
+// headroom above that for the name to still show a character or two rather
+// than being squeezed to nothing the instant this mode kicks in.
+const TIGHT_TAB_THRESHOLD_PX = 150;
+
 // How long the stronger "just fired" burst (issue #98 item 6) plays before
-// settling into the steady-state cmuxRing pulse — long enough to catch the
-// eye on an unwatched dashboard, short enough not to nag once it has.
+// settling into the steady-state cmuxRingHeader pulse — long enough to catch
+// the eye on an unwatched dashboard, short enough not to nag once it has.
 const JUST_FIRED_ATTENTION_MS = 1800;
 
 export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
@@ -114,6 +126,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(props.api.title ?? "");
   const [narrow, setNarrow] = useState(false);
+  // Issue: narrow headers overflow — see TIGHT_TAB_THRESHOLD_PX's own
+  // comment. A second, tighter threshold off the exact same measurement
+  // `narrow` already uses, not a second ResizeObserver.
+  const [tight, setTight] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const tabRef = useRef<HTMLDivElement>(null);
 
@@ -133,7 +149,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width;
-      if (width !== undefined) setNarrow(width < NARROW_TAB_BADGE_THRESHOLD_PX);
+      if (width !== undefined) {
+        setNarrow(width < NARROW_TAB_BADGE_THRESHOLD_PX);
+        setTight(width < TIGHT_TAB_THRESHOLD_PX);
+      }
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -141,18 +160,19 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
 
   // The callback-ref form (rather than plain useRef + a mount effect) runs
   // during React's commit phase, before the browser paints — measuring here
-  // and calling setNarrow synchronously avoids a one-frame flash of the badge
-  // on tabs that mount already narrower than the threshold. The ResizeObserver
-  // above still owns every resize after mount. Wrapped in useCallback (rather
-  // than a plain inline function) so React doesn't treat it as a new ref on
-  // every re-render — session status updates re-render this component
-  // frequently, and an unmemoized ref callback would detach/reattach (and
-  // re-measure) on each one.
+  // and calling setNarrow/setTight synchronously avoids a one-frame flash of
+  // the badge/logo on tabs that mount already narrower than either
+  // threshold. The ResizeObserver above still owns every resize after mount.
+  // Wrapped in useCallback (rather than a plain inline function) so React
+  // doesn't treat it as a new ref on every re-render — session status
+  // updates re-render this component frequently, and an unmemoized ref
+  // callback would detach/reattach (and re-measure) on each one.
   const setTabRef = useCallback((el: HTMLDivElement | null) => {
     tabRef.current = el;
-    if (el && el.getBoundingClientRect().width < NARROW_TAB_BADGE_THRESHOLD_PX) {
-      setNarrow(true);
-    }
+    if (!el) return;
+    const width = el.getBoundingClientRect().width;
+    if (width < NARROW_TAB_BADGE_THRESHOLD_PX) setNarrow(true);
+    if (width < TIGHT_TAB_THRESHOLD_PX) setTight(true);
   }, []);
 
   // Sync the dockview tab title when the store's session name changes
@@ -201,7 +221,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
 
   // #98 item 6 — a brief stronger "just fired" burst on the false->true
   // attention transition (see JUST_FIRED_ATTENTION_MS), settling into the
-  // steady-state cmuxRing pulse. Tracked via a ref (not derived from
+  // steady-state cmuxRingHeader pulse. Tracked via a ref (not derived from
   // `session.sessionStatusAttentionRequired` directly) so a session that's
   // *already* attention-requiring on mount/reload doesn't replay the burst —
   // only a real transition this component observes does. Rich statuses
@@ -300,7 +320,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       className={`pane-tab${ringClass}${groupHasAttention ? " pane-tab-group-attention" : ""}${highlightFlash ? " highlight-flash" : ""}`}
     >
       {dot}
-      {agentLogo && (
+      {!tight && agentLogo && (
         <img src={agentLogo} alt="" width={14} height={14} className="pane-tab-agent-logo" />
       )}
       {renaming ? (
@@ -324,11 +344,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       {!narrow && badge}
       {unreadCount > 0 && unreadIconKind && (
         <span
-          className={`pane-tab-unread-badge ${unreadIconKind}`}
+          className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}
           title={`${unreadCount} unread ${unreadIconKind === "attention" ? "attention " : ""}notification${unreadCount === 1 ? "" : "s"}`}
         >
           {unreadIconKind === "attention" ? <BellIcon size={9} /> : <CheckIcon size={9} />}
-          {unreadCount}
+          {/* Issue: narrow headers overflow — this badge (unlike the branch
+              label/status badge above) was never gated by `narrow` at all,
+              so it stayed at full pill width (icon + count digits) all the
+              way down to .dv-tab's own min-width. Below TIGHT_TAB_
+              THRESHOLD_PX, drop the count text and let the `.compact`
+              modifier (terminal.css) shrink the pill to a bare dot around
+              the icon — the tooltip above still carries the actual count. */}
+          {!tight && unreadCount}
         </span>
       )}
       <button
