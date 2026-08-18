@@ -257,8 +257,8 @@ The transfer is a capability probe, never a promote-blocking dependency:
 on every failure mode rather than throwing, and the promote handler falls
 through to the ordinary seed path unchanged — an argv `--prompt` first
 turn when a seed was supplied, else a cold start — each with its own
-`warnings[]` entry. **Local host only:** `SessionBackend.RemoteBackend.spawn()`
-deliberately drops `resumeAgentSessionId` rather than forwarding it;
+`warnings[]` entry. **Local host only:** `session-backend.ts`'s
+`RemoteBackend.spawn()` deliberately drops `resumeAgentSessionId` rather than forwarding it;
 remote-host carryover is an explicit follow-up, not silently
 half-implemented.
 

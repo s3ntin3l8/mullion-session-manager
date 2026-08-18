@@ -277,9 +277,11 @@ confirm which path got you here.
   For an opencode promote, Mullion goes further: it first attempts to
   carry your **full conversation history** over via `opencode
 export`/`import` (local host only), resuming the new session with
-  `--session <id>` — in which case no seed prompt is delivered at all and
-  the resumed session shows the whole transcript, waiting for your next
-  message (a `--prompt` argv seed is only used when a transfer isn't
+  `--session <id>` — in which case no auto-submitted first turn is
+  delivered (a resume can't take one), and the resumed session shows the
+  whole transcript, waiting for your next message. A caller-supplied seed
+  still rides the static `instructions` channel alongside that transcript
+  either way (a `--prompt` argv turn is only used when a transfer isn't
   attempted or fails). See `docs/agent-hooks.md`'s opencode section.
 
 If you're on an agent without a hook adapter, or the nudge didn't reach you
