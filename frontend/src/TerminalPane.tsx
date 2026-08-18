@@ -27,6 +27,7 @@ import {
   reservedKeysFromSettings,
   SEARCH_HIGHLIGHT_LIMIT,
 } from "./lib/terminalKeys.js";
+import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
@@ -379,6 +380,10 @@ export function TerminalPane(props: {
 
     term.open(container);
     fitAddon.fit();
+    // Mobile UI/UX overhaul follow-up — see terminalTouchScroll.ts's own
+    // header comment for why xterm needs this at all (touch scrolling is a
+    // genuine no-op in the installed @xterm/xterm, not a CSS bug).
+    const detachTouchScroll = attachTerminalTouchScroll({ term, element: container });
 
     let destroyed = false;
     let ws: WebSocket | null = null;
@@ -968,6 +973,7 @@ export function TerminalPane(props: {
       if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
       resizeObserver.disconnect();
       window.removeEventListener("resize", refit);
+      detachTouchScroll();
       container.removeEventListener("contextmenu", onContextMenu);
       selectionSub.dispose();
       osc52Sub.dispose();
@@ -1234,6 +1240,12 @@ export function TerminalPane(props: {
           background: getSchemeBackground(terminalSettings.colorScheme, theme),
           padding: `${terminalSettings.padding}px`,
           boxSizing: "border-box",
+          // Blocks the browser's own touch panning on both axes (so the
+          // touch-scroll shim above owns vertical drags, and pull-to-refresh
+          // can't start here) while keeping pinch-zoom, which the app's
+          // viewport meta deliberately allows and which matters over small
+          // terminal text. See terminalTouchScroll.ts.
+          touchAction: "pinch-zoom",
         }}
       />
       <input

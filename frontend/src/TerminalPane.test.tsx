@@ -162,7 +162,16 @@ vi.mock("@xterm/xterm", () => {
       // is a plain mutable field, not a getter, so a test can flip it
       // directly to exercise the DECCKM branch in sendArrow.
       input: vi.fn(),
-      modes: { applicationCursorKeysMode: false },
+      modes: { applicationCursorKeysMode: false, mouseTrackingMode: "none" },
+      // terminalTouchScroll.ts's two bail conditions read modes.mouse
+      // TrackingMode (above) and buffer.active.type (below); scrollLines is
+      // what it calls once a drag clears the movement threshold.
+      // `undefined` element exercises that module's fontSize*lineHeight
+      // fallback row-height path, same as it does in real jsdom (no layout,
+      // clientHeight always 0) — not a stand-in for anything more specific.
+      element: undefined as HTMLElement | undefined,
+      buffer: { active: { type: "normal" as "normal" | "alternate" } },
+      scrollLines: vi.fn(),
       onData: vi.fn(() => createDisposable()),
       onTitleChange: vi.fn(() => createDisposable()),
       onSelectionChange: vi.fn(() => createDisposable()),

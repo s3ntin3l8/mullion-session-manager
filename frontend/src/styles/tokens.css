@@ -70,6 +70,16 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* Mobile UI/UX overhaul follow-up — .app below is already `position:
+     fixed; overflow: hidden`, but Chrome still permits pull-to-refresh on a
+     non-scrollable document sitting at scrollTop 0: an unconsumed touch
+     drag (e.g. over the terminal, before terminalTouchScroll.ts existed)
+     chains up to the viewport and triggers it anyway. `html` specifically —
+     Chrome reads the viewport's overscroll behavior from `html`, and
+     `body`'s value only propagates when `html`'s is `auto`. Doesn't affect
+     inner scrollers (sidebar, kanban, settings): root overscroll-behavior
+     only prevents chaining *out to* the viewport. */
+  overscroll-behavior-y: none;
 }
 
 body {

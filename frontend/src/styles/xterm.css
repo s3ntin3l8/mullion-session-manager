@@ -11,6 +11,13 @@
    relative to xterm.css) — see issue #94. */
 .xterm .xterm-viewport {
   scrollbar-width: none;
+  /* Mobile UI/UX overhaul follow-up — this div is absolutely positioned and
+     overlays the same area as the real scrollable element with no content
+     of its own, making it a plausible terminus for the ancestor
+     touch-action walk. Without this, a touch drag could scroll this
+     phantom viewport instead of (or in addition to) the terminalTouchScroll
+     shim actually moving the scrollback. */
+  touch-action: none;
 }
 .xterm .xterm-viewport::-webkit-scrollbar {
   display: none;
