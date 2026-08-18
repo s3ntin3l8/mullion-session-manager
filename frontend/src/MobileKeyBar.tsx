@@ -21,7 +21,7 @@ export interface MobileKeyBarProps {
 interface KeyBarButton {
   label: string;
   ariaLabel: string;
-  // A fixed sequence (Esc/Tab/Shift+Tab/`/`) sent via sendInput; an arrow
+  // A fixed sequence (Esc/Tab/Shift+Tab/newline) sent via sendInput; an arrow
   // direction resolved through sendArrow (DECCKM makes the actual bytes
   // context-dependent — see terminalInputRegistry.ts's own comment); or
   // Ctrl+C through its own sendCtrlC, which — unlike sendInput — has to
@@ -31,6 +31,14 @@ interface KeyBarButton {
   send: (handle: TerminalInputHandle) => void;
 }
 
+// "\x1b\r" (ESC+CR) is deliberately not "\n": it's the exact byte sequence
+// Claude Code's own `/terminal-setup` binds to Shift+Enter (VS Code's
+// `workbench.action.terminal.sendSequence` with args.text: "\x1B\r") to mean
+// "newline, don't submit" — verified against the installed `claude` binary.
+// A soft keyboard has no Shift, so this button exists to reach that same
+// meaning. Enter itself stays untouched (still submits) everywhere else —
+// remapping Enter would break bash, git commit, y/n prompts, and TUI menus,
+// which all need it to keep meaning "\r".
 const KEYS: KeyBarButton[] = [
   { label: "Esc", ariaLabel: "Escape", send: (h) => h.sendInput("\x1b") },
   { label: "Tab", ariaLabel: "Tab", send: (h) => h.sendInput("\t") },
@@ -38,7 +46,7 @@ const KEYS: KeyBarButton[] = [
   { label: "^C", ariaLabel: "Ctrl+C", send: (h) => h.sendCtrlC() },
   { label: "↑", ariaLabel: "Arrow up", send: (h) => h.sendArrow("up") },
   { label: "↓", ariaLabel: "Arrow down", send: (h) => h.sendArrow("down") },
-  { label: "/", ariaLabel: "Slash", send: (h) => h.sendInput("/") },
+  { label: "↵+", ariaLabel: "Newline (no submit)", send: (h) => h.sendInput("\x1b\r") },
 ];
 
 export function MobileKeyBar({ sessionId }: MobileKeyBarProps) {

@@ -30,7 +30,7 @@ describe("MobileKeyBar", () => {
     ["Escape", "\x1b"],
     ["Tab", "\t"],
     ["Shift+Tab", "\x1b[Z"],
-    ["Slash", "/"],
+    ["Newline (no submit)", "\x1b\r"],
   ])("sends the right sequence for %s", async (ariaLabel, sequence) => {
     const user = userEvent.setup();
     render(<MobileKeyBar sessionId={SESSION_ID} />);
