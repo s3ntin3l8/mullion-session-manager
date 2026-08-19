@@ -2267,6 +2267,28 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     expect(screen.getByText("Pane too small")).toBeInTheDocument();
   });
 
+  // Independent code review, PR #708 — unlike the backend's own
+  // isResizeMessage guard for the opposite direction of this socket, the
+  // geometry handler used to trust `parsed.cols`/`parsed.rows` unconditionally
+  // once `parsed.type === "geometry"` matched, with no check that they're
+  // actually numbers. For a remote-hosted session this frame crosses an
+  // agent-to-primary proxy that forwards it as an opaque, unvalidated
+  // pass-through (proxyToRemoteAttach, routes/terminal.ts).
+  it("ignores a malformed geometry frame (non-numeric cols/rows) instead of resizing on bad data", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: "40", rows: 10 }) });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    expect(term.resize).not.toHaveBeenCalled();
+    expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
+  });
+
   it("suppresses the next refit's resize frame once the server's applied geometry lands", () => {
     stubFakeWebSocket(true);
     const resizeObserver = stubManualResizeObserver();
@@ -2404,6 +2426,49 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
       .slice(sendsBeforeGrow)
       .map(([data]) => JSON.parse(data as string) as { type?: string; cols?: number });
     expect(resizeMessages.some((m) => m.type === "resize" && m.cols === 80)).toBe(true);
+  });
+
+  // Independent code review, PR #708 — the growth test above lands strictly
+  // ABOVE the floor, which sends a real resize and lets the geometry
+  // handler clear the hint the ordinary way. This test grows the container
+  // to land EXACTLY on the floor: refit()'s own `term.cols === lastCols &&
+  // term.rows === lastRows` guard means no resize is ever sent for that
+  // case (nothing about the applied size actually changed), so no fresh
+  // geometry echo ever arrives either — without refit() re-evaluating
+  // cappedBelowFloor itself, the hint would stay stuck up forever even
+  // though the pane is no longer too small.
+  it('clears "Pane too small" when the container grows to exactly the floor, with no resize round trip', () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    mockInitialTermSize.cols = 20;
+    mockInitialTermSize.rows = 8;
+
+    renderPane();
+    act(() => {
+      resizeObserver.fire();
+    });
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+    const term = getLatestTermInstance();
+    term.cols = 40;
+    term.rows = 10;
+    expect(screen.getByText("Pane too small")).toBeInTheDocument();
+
+    // The container grows to EXACTLY the floor — fit() would compute the
+    // same 40x10 the pty is already running at, a true no-op.
+    mockInitialTermSize.cols = 40;
+    mockInitialTermSize.rows = 10;
+    const sendsBeforeGrow = fakeWsSend.mock.calls.length;
+
+    act(() => {
+      resizeObserver.fire();
+    });
+
+    expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
+    expect(fakeWsSend.mock.calls.length).toBe(sendsBeforeGrow);
   });
 });
 

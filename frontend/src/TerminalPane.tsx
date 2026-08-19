@@ -38,6 +38,26 @@ import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
 // rather than through the named type.
 import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protocol.js";
 
+// Independent code review, PR #708 — mirrors routes/terminal.ts's own
+// isResizeMessage() runtime guard for the opposite direction of the same
+// socket. Unlike a plain `(parsed as {type?:unknown}).type === "geometry"`
+// check (still used for "exited" below, whose only field IS that literal),
+// this frame carries data the rest of this file trusts unconditionally
+// (term.resize(geo.cols, geo.rows)) — for a remote-hosted session this frame
+// crosses an internal agent-to-primary proxy (proxyToRemoteAttach,
+// routes/terminal.ts) that forwards it as an opaque, unvalidated pass-
+// through, so this is the first point on the browser side anything actually
+// checks the shape.
+function isGeometryMessage(value: unknown): value is GeometryMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "geometry" &&
+    typeof (value as { cols?: unknown }).cols === "number" &&
+    typeof (value as { rows?: unknown }).rows === "number"
+  );
+}
+
 export interface TerminalPaneParams {
   sessionId: number;
 }
@@ -459,7 +479,10 @@ export function TerminalPane(props: {
     // Hermes review, PR #708 — mirrors the `paneTooSmall` state's own
     // condition (see the geometry handler below) without needing a React-
     // state read inside this mount effect's closure. Set alongside
-    // setPaneTooSmall on every geometry echo; read by refit() below.
+    // setPaneTooSmall on every geometry echo, and re-evaluated (and kept in
+    // sync with setPaneTooSmall) inside refit() below too — see that
+    // function's own comment for why it can't just rely on the geometry
+    // handler alone.
     let cappedBelowFloor = false;
     const sendResizeIfOpen = () => {
       if (ws?.readyState === WebSocket.OPEN) {
@@ -481,9 +504,22 @@ export function TerminalPane(props: {
       // terminal.
       if (cappedBelowFloor) {
         const proposed = fitAddon.proposeDimensions();
-        if (proposed === undefined || proposed.cols < lastCols || proposed.rows < lastRows) {
-          return;
+        const stillCapped =
+          proposed === undefined || proposed.cols < lastCols || proposed.rows < lastRows;
+        // Independent code review, PR #708 — re-evaluate (and clear) the
+        // "Pane too small" hint here too, not only in the geometry handler
+        // below. That handler only ever runs after a resize round trip, but
+        // this function's own no-op guard two lines down means a pane that
+        // grows to land EXACTLY on the previously-applied floor never sends
+        // a new resize at all (term.cols/rows already match lastCols/
+        // lastRows post-fit) — no round trip, no fresh geometry echo, and
+        // without this the hint would stay stuck up even though the pane
+        // is no longer actually too small.
+        if (stillCapped !== cappedBelowFloor) {
+          cappedBelowFloor = stillCapped;
+          setPaneTooSmall(stillCapped);
         }
+        if (stillCapped) return;
       }
       fitAddon.fit();
       if (term.cols === lastCols && term.rows === lastRows) return;
@@ -875,8 +911,8 @@ export function TerminalPane(props: {
         // the pty. Also mirrored into lastCols/lastRows so the next refit()
         // (ResizeObserver-driven) computes its own delta against reality
         // instead of immediately trying to fight this back down.
-        if ((parsed as { type?: unknown } | null)?.type === "geometry") {
-          const geo = parsed as GeometryMessage;
+        if (isGeometryMessage(parsed)) {
+          const geo = parsed;
           if (geo.cols !== term.cols || geo.rows !== term.rows) {
             term.resize(geo.cols, geo.rows);
             lastCols = geo.cols;
