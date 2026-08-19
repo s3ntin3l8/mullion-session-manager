@@ -1434,20 +1434,84 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("records a 'no findings' entry and stays in reviewing when the review agent wrote nothing", async () => {
+    it("records an inconclusive entry and stays in reviewing when the review agent wrote no findings file", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
-      // Deliberately no writeFindings call — the prompt tells the agent not
-      // to create the file at all when it has nothing to report.
+      // Deliberately no writeFindings call — the prompt now tells the agent
+      // to ALWAYS write the file, so a missing one can no longer be read as
+      // a confident "clean" review; it's reported as inconclusive instead.
 
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.reviewRounds).toBe(0);
-      expect(row.reviewFindings).toContain("no findings");
+      expect(row.reviewFindings).toContain("inconclusive");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // The regression guard Change 1 exists for. Under the old "a findings
+    // file means act on it" rule, always writing a file (this prompt's own
+    // change) would have made a clean review indistinguishable from one
+    // requesting changes — auto-returning and burning the task's one round
+    // on a worker that has nothing to fix.
+    it("does NOT auto-return, and stays in reviewing, when the review agent's JSON verdict is clean", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({
+          verdict: "clean",
+          summary: "Reviewed the diff and ran the test suite; no issues found.",
+        }),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("no issues found");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    it("auto-returns exactly once, and renders anchored findings, when the review agent's JSON verdict is changes-requested", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({
+          verdict: "changes-requested",
+          summary: "One errcheck failure.",
+          findings: [
+            {
+              path: "cmd/branchdam/main_test.go",
+              line: 669,
+              body: "occupied.Close()'s error return is unchecked.",
+            },
+          ],
+        }),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(row.reviewRounds).toBe(1);
+      expect(row.reviewFindings).toContain("cmd/branchdam/main_test.go:669");
+      expect(row.reviewFindings).toContain("error return is unchecked");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).not.toBe(workerSessionId);
 
       await app.close();
     });
