@@ -228,6 +228,39 @@ export interface ParsedReviewFindings {
 }
 
 /**
+ * Normalizes one raw findings-array entry, or returns `null` to drop it —
+ * Hermes review, PR #733: an LLM routinely emits `"line": "42"` (a numeric
+ * string) rather than a bare number, so `line` is coerced through `Number`
+ * before validation rather than type-checked as `"number"` outright. Also
+ * range-checks to a positive integer: a `0`, negative, or fractional line
+ * would later fail as a GitHub inline-comment anchor (`createPullRequestReview`,
+ * task-github-sync.ts) — better to drop it here (falling back to the
+ * `changes-requested` verdict already keeping a human in the loop) than
+ * surface a 422 downstream.
+ */
+function normalizeReviewFinding(f: unknown): ReviewFinding | null {
+  if (f === null || typeof f !== "object") return null;
+  const rec = f as Record<string, unknown>;
+  if (typeof rec.path !== "string" || rec.path.length === 0) return null;
+  if (typeof rec.body !== "string" || rec.body.length === 0) return null;
+  const line = typeof rec.line === "string" ? Number(rec.line) : rec.line;
+  if (typeof line !== "number" || !Number.isInteger(line) || line <= 0) return null;
+  return {
+    path: rec.path,
+    line,
+    side: rec.side === "LEFT" ? "LEFT" : "RIGHT",
+    severity:
+      rec.severity === "blocker" ||
+      rec.severity === "major" ||
+      rec.severity === "minor" ||
+      rec.severity === "nit"
+        ? rec.severity
+        : null,
+    body: rec.body,
+  };
+}
+
+/**
  * Parses a review agent's findings-file content into a verdict — the
  * load-bearing half of the review contract (`task-reconciler.ts`'s
  * `isUsableSignal`/`shouldAutoReturn` key off the returned `verdict`, not
@@ -256,28 +289,7 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
     ) {
       const rawFindings = (obj as Record<string, unknown>).findings;
       const findings: ReviewFinding[] = Array.isArray(rawFindings)
-        ? rawFindings
-            .filter(
-              (f): f is Record<string, unknown> =>
-                f !== null &&
-                typeof f === "object" &&
-                typeof (f as Record<string, unknown>).path === "string" &&
-                typeof (f as Record<string, unknown>).line === "number" &&
-                typeof (f as Record<string, unknown>).body === "string",
-            )
-            .map((f) => ({
-              path: f.path as string,
-              line: f.line as number,
-              side: f.side === "LEFT" ? "LEFT" : "RIGHT",
-              severity:
-                f.severity === "blocker" ||
-                f.severity === "major" ||
-                f.severity === "minor" ||
-                f.severity === "nit"
-                  ? f.severity
-                  : null,
-              body: f.body as string,
-            }))
+        ? rawFindings.map(normalizeReviewFinding).filter((f): f is ReviewFinding => f !== null)
         : [];
       return {
         verdict: (obj as Record<string, unknown>).verdict as ReviewVerdict,
