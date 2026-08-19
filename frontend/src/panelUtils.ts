@@ -128,15 +128,22 @@ export interface DropTarget {
   position: Position;
 }
 
+// Floating panels report `location.type === "floating"`; everything actually
+// placed in the grid (including edge/split groups) reports "grid". Shared by
+// hasTiledPanels/maximizeIfTiled below and App.tsx's tiledPaneCount/
+// mobilePanels (Hermes review, PR #727 — those two used to each inline this
+// same `p.api.location.type === "grid"` check).
+export function isTiledPanel(panel: Pick<IDockviewPanel, "api">): boolean {
+  return panel.api.location.type === "grid";
+}
+
 // A panel opened from the sidebar/launcher should only ever *peek* (float)
 // when there's already a tiled layout to peek across — the first panel in an
-// empty workspace should dock full-screen instead (issue #121). Floating
-// groups report `location.type === "floating"`; everything actually placed in
-// the grid (including edge/split groups) reports "grid". Checking live
-// `panel.api.location` rather than a cached count keeps this correct as
+// empty workspace should dock full-screen instead (issue #121). Checking
+// live `panel.api.location` rather than a cached count keeps this correct as
 // panels are closed/docked/floated during the session.
 export function hasTiledPanels(api: DockviewApi): boolean {
-  return api.panels.some((p) => p.api.location.type === "grid");
+  return api.panels.some(isTiledPanel);
 }
 
 // Bug fix (independent review) — this used to walk `group.panels` on the
@@ -173,7 +180,7 @@ export function maximizeIfTiled(
   api: DockviewApi,
   panel: ReturnType<DockviewApi["getPanel"]> | undefined,
 ): void {
-  if (panel && panel.api.location.type === "grid") api.maximizeGroup(panel);
+  if (panel && isTiledPanel(panel)) api.maximizeGroup(panel);
 }
 
 // dockview's own DEFAULT_FLOATING_GROUP_POSITION is a bare 300x300
@@ -521,7 +528,7 @@ export function dropSessionPanel(
   // which reports no usable grid target) could never build a tiled layout.
   // Only treat the target group as a real drop target when it's actually in
   // the grid; a floating group's own quadrant target isn't one.
-  if (target && target.group && target.group.api.location.type === "grid") {
+  if (target && target.group && isTiledGroup(target.group)) {
     if (target.location === "edge") {
       api.addPanel({
         ...panelBase,
@@ -743,9 +750,9 @@ export function applyMobilePresentation(api: DockviewApi, isMobile: boolean): vo
   }
   if (api.hasMaximizedGroup()) return;
   const panel =
-    api.activePanel?.api.location.type === "grid"
+    api.activePanel && isTiledPanel(api.activePanel)
       ? api.activePanel
-      : api.panels.find((p) => p.api.location.type === "grid");
+      : api.panels.find(isTiledPanel);
   if (!panel) return;
   api.maximizeGroup(panel);
 }

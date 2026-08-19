@@ -10,6 +10,7 @@ import {
   dropSessionPanel,
   hasTiledPanels,
   isTiledGroup,
+  isTiledPanel,
   maximizeIfTiled,
   stripFloatingPanels,
   stripMaximizedNode,
@@ -697,6 +698,16 @@ describe("parseDeepLinkSessionId (issue #95 prerequisite)", () => {
     expect(parseDeepLinkSessionId("?session=90071992547409921")).toBeNull();
     // Comfortably within Number.MAX_SAFE_INTEGER still parses normally.
     expect(parseDeepLinkSessionId("?session=9007199254740991")).toBe(9007199254740991);
+  });
+});
+
+describe("isTiledPanel", () => {
+  it("is true for a tiled panel", () => {
+    expect(isTiledPanel(mockPanel("session-1", "grid")!)).toBe(true);
+  });
+
+  it("is false for a floating panel", () => {
+    expect(isTiledPanel(mockPanel("session-1", "floating")!)).toBe(false);
   });
 });
 
