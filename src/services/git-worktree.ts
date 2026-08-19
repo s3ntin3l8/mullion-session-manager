@@ -569,6 +569,95 @@ export async function removeWorktreeIfClean(
   return removed ? { removed: true } : { removed: false, reason: "remove-failed" };
 }
 
+export interface CommitWipChangesResult {
+  committed: boolean;
+  /** Set only when `committed` is false for a reason OTHER than "there was
+   * nothing to commit" — a real git failure a caller may want to log. */
+  error?: string;
+}
+
+/**
+ * Salvages uncommitted work in `worktreePath` before it's abandoned (#722's
+ * "agent ended its turn with no commits" failure path, task-reconciler.ts) —
+ * stages tracked modifications plus untracked-and-not-gitignored files, then
+ * commits with `--no-verify`.
+ *
+ * Deliberately NOT `git add -A`: a blind add would sweep in whatever the
+ * repo's own `.gitignore` doesn't cover — a build/test artifact (a
+ * `coverage.txt`) or a tool binary a pre-push hook just installed (a
+ * `.bin/`) — into a commit meant only to preserve the agent's actual work.
+ * `--no-verify` mirrors git-push.ts's own reasoning: a half-finished tree is
+ * exactly the state most likely to fail the repo's pre-commit hooks, and
+ * this is a machine-made salvage commit, not a contribution — the human
+ * decides what to do with it after Retry resumes the branch.
+ *
+ * No-ops cleanly (`committed: false`, no `error`) when there's nothing to
+ * stage — never creates an empty commit. Never throws.
+ */
+export async function commitWipChanges(
+  worktreePath: string,
+  message = "wip: agent turn ended with uncommitted changes",
+): Promise<CommitWipChangesResult> {
+  if (!isSafeAbsolutePath(worktreePath)) return { committed: false, error: "unsafe path" };
+
+  const addTracked = await runGit(worktreePath, ["add", "-u"]);
+  if (addTracked.code !== 0) {
+    return {
+      committed: false,
+      error: addTracked.stderr.trim() || `git add -u exited ${addTracked.code}`,
+    };
+  }
+
+  // `-z`, NUL-separated, not the default newline-separated form (Hermes
+  // review, PR #726) — without it, git C-style-quotes any filename
+  // containing a tab/newline/control character (e.g. `"tab\tfile.txt"`),
+  // and splitting that quoted form on "\n" produces a string `git add --`
+  // doesn't match against anything on disk, silently dropping the file from
+  // the salvage commit. `-z` emits raw bytes with no quoting, so a literal
+  // NUL split recovers the real filename even for those names.
+  const lsUntracked = await runGit(worktreePath, [
+    "ls-files",
+    "-z",
+    "--others",
+    "--exclude-standard",
+  ]);
+  const untrackedFiles = lsUntracked.stdout.split("\0").filter((entry) => entry.length > 0);
+  if (untrackedFiles.length > 0) {
+    // `:(literal)` prefix on every entry (independent review, PR #726) — `--`
+    // only ends OPTION parsing, it does not disable pathspec MAGIC: a real,
+    // on-disk filename that happens to start with `:` (e.g. `:magic.txt`)
+    // is otherwise parsed as a magic pathspec prefix and `git add` fails
+    // with "did not match any files" (verified empirically) instead of
+    // staging it. `:(literal)` forces every entry to be read as a plain,
+    // literal path, with no magic/glob interpretation at all — safe for
+    // every other filename too, not just this one.
+    const addUntracked = await runGit(worktreePath, [
+      "add",
+      "--",
+      ...untrackedFiles.map((file) => `:(literal)${file}`),
+    ]);
+    if (addUntracked.code !== 0) {
+      return {
+        committed: false,
+        error: addUntracked.stderr.trim() || `git add exited ${addUntracked.code}`,
+      };
+    }
+  }
+
+  const commit = await runGit(worktreePath, ["commit", "--no-verify", "-m", message]);
+  if (commit.code === 0) return { committed: true };
+  // "nothing to commit, working tree clean" (or the "no changes added"
+  // variant) is git's own way of saying the add step above staged nothing —
+  // a legitimate no-op, not a failure this caller needs to know about.
+  if (/nothing to commit/i.test(commit.stdout) || /nothing to commit/i.test(commit.stderr)) {
+    return { committed: false };
+  }
+  return {
+    committed: false,
+    error: commit.stderr.trim() || commit.stdout.trim() || `git commit exited ${commit.code}`,
+  };
+}
+
 // ── User-facing worktree removal (issue #442) ─────────────────────────────
 // The GitPanel's manual counterpart to 6.8's task-scoped removal above:
 // membership in `listWorktrees(cwd)` is the validity gate, not a path

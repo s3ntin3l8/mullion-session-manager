@@ -125,6 +125,11 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "Mullion does the rest: it pushes the branch, opens the pull request, and",
     "comments on and closes the issue once a human approves. Do not push, open a",
     "pull request, or comment on the issue yourself.",
+    "",
+    "If, after a previous turn, the board still shows no pull request AND a",
+    "GitHub sync error, that push or PR-open failed on Mullion's side — not",
+    "something committing again will fix. Say so plainly in your final message",
+    "instead of repeating the same turn.",
   );
 
   if (budgetMinutes > 0) {
@@ -152,7 +157,11 @@ export function buildWorkerPrompt(opts: WorkerPromptOptions): string {
   const retryNote =
     opts.mode === "retry"
       ? `\n\nThis is a retry — ${opts.branchName} already carries the earlier attempt's` +
-        " commits. Continue from them rather than starting over."
+        " commits. Continue from them rather than starting over. If the most recent" +
+        ' commit\'s message starts with "wip:", it is a machine-made salvage commit' +
+        " Mullion made when the previous turn ended with uncommitted changes, not real" +
+        " progress — fold it into a proper commit (amend it, or `git reset --soft" +
+        " HEAD~1` and recommit) before you finish."
       : "";
   return `${preamble}${retryNote}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
