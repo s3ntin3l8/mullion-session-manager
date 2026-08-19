@@ -389,7 +389,7 @@ describe("AttentionTracker settle window (emitAttentionSignalDeferred/drainDefer
     tracker.applyAttentionTransition(advanceAttention(tracker.state, { type: "output", now }));
     expect(emitEvent).not.toHaveBeenCalled();
 
-    tracker.drainDeferred(now + 3_000);
+    tracker.drainDeferred(now + 5_000);
 
     expect(emitEvent).toHaveBeenCalledWith(
       "attention",
