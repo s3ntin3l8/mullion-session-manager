@@ -755,6 +755,48 @@ describe("SessionTimeline severity/pairing/persistence", () => {
     expect(screen.getByText("Review approved")).toBeInTheDocument();
   });
 
+  // Fresh code-review finding on PR #717 — the test above only exercises a
+  // BARE attention/permissionRequest event with no paired permission_request
+  // sibling, a state production never actually produces (the backend always
+  // emits both — see attention-tracker.ts's drainDeferred). In the REAL
+  // shape, suppressPairedAttentionRows (this file) drops the `attention` row
+  // and keeps the specific-kind `permission_request` row, which notifySeverity
+  // (eventDescriptions.ts) previously didn't recognize on its own — making
+  // "Only attention" hide the exact rows it exists to surface, and the
+  // severity stripe never render on a genuinely blocked row.
+  it("'Only attention' keeps a paired permission_request row visible, with the correct severity stripe, even though its `attention` sibling gets suppressed", async () => {
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          kind: "permission_request",
+          payload: { tool: "Bash", summary: "rm -rf /tmp/x" },
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "attention",
+          payload: {
+            attention: true,
+            signal: "permissionRequest",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    // Paired suppression: only the specific-kind row survives.
+    expect(screen.getByText("Needs permission: rm -rf /tmp/x")).toBeInTheDocument();
+    const kindPill = document.querySelector(".session-timeline-row-kind.kind-permission_request");
+    expect(kindPill).not.toBeNull();
+    const row = kindPill?.closest(".session-timeline-row");
+    expect(row).toHaveClass("sev-blocked");
+
+    await userEvent.click(screen.getByRole("button", { name: "Only attention" }));
+    expect(screen.getByText("Needs permission: rm -rf /tmp/x")).toBeInTheDocument();
+  });
+
   it("activeKinds and 'Only attention' persist across a remount of the same panel", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const first = render(<SessionTimeline params={{ sessionIds: [1] }} />);

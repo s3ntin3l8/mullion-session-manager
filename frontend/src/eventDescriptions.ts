@@ -500,20 +500,52 @@ export const SIGNAL_TO_EVENT_KIND: Partial<Record<string, NotificationEvent["kin
   apiError: "stop_failure",
 };
 
-/** Severity tier for a notify-worthy event, or null for anything
- * notifyKind() itself wouldn't count (routine chatter). Reads
- * `payload.signal` for `kind === "attention"` (the SAME field describeEvent's
- * own switch keys off of) rather than `event.kind`, so it stays correct
- * post-settle-window: the four deferred kinds (attention-tracker.ts's
- * ATTENTION_SETTLE_MS) now arrive ONLY as an `attention` event — their own
- * specific NotificationEvent kind (permission_request) is emitted alongside
- * it (or, for tool_failure/stop_failure, was already emitted immediately)
- * but this function doesn't need to special-case that: `notifyKind` already
- * classifies both as "attention", and SIGNAL_TO_EVENT_KIND above is what
- * lets the timeline avoid double-counting them. */
+// Fix: SessionTimeline "Only attention" hid the very rows it means to
+// surface — suppressPairedAttentionRows keeps the SPECIFIC-kind row (e.g.
+// `permission_request`) and drops its paired `attention` sibling, but
+// notifyKind only ever recognizes `kind === "attention"` (plus a few
+// special cases), so every surviving specific-kind row fell through to
+// severity null → filtered out by "Only attention" and rendered with no
+// severity stripe at all, indistinguishable from routine chatter. This
+// classifies those specific kinds directly. Per-kind, not a flat allow-list,
+// because three of them (elicitation/question/promote_request) reuse the
+// SAME kind for their own resolution record — with no paired attention
+// then — which must NOT count (promote_request's resolution-only bogus-
+// notification history is exactly why notifyKind itself never recognized
+// this kind at all; see SIGNAL_TO_EVENT_KIND's own comment above).
+// permission_request/plan_ready/tool_failure/stop_failure have no such
+// resolution-reuses-the-kind case (hook-handlers.ts emits each exactly once,
+// at request time — resolution clears state without re-emitting), so they're
+// unconditional.
+function specificKindSeverity(
+  event: Pick<NotificationEvent, "kind" | "payload">,
+): NotifySeverity | null {
+  switch (event.kind) {
+    case "permission_request":
+    case "plan_ready":
+      return "blocked";
+    case "tool_failure":
+    case "stop_failure":
+      return "error";
+    case "elicitation":
+    case "question":
+      return event.payload.state === "started" ? "blocked" : null;
+    case "promote_request":
+      return event.payload.state === undefined ? "blocked" : null;
+    default:
+      return null;
+  }
+}
+
+/** Severity tier for a notify-worthy event, or null for anything neither
+ * notifyKind() nor specificKindSeverity() above would count (routine
+ * chatter). Reads `payload.signal` for `kind === "attention"` (the SAME
+ * field describeEvent's own switch keys off of) rather than `event.kind`. */
 export function notifySeverity(
   event: Pick<NotificationEvent, "kind" | "payload">,
 ): NotifySeverity | null {
+  const bySpecificKind = specificKindSeverity(event);
+  if (bySpecificKind !== null) return bySpecificKind;
   if (notifyKind(event) === null) return null;
   // Neither has a `payload.signal` of its own — special-cased ahead of the
   // signal read below, which would otherwise fall through to "done" for

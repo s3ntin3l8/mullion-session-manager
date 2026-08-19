@@ -654,6 +654,63 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       const event = makeEvent({ kind: "title_change", payload: { title: "zsh" } });
       expect(notifySeverity(event)).toBeNull();
     });
+
+    // Fix: "Only attention" hid the rows it means to surface —
+    // suppressPairedAttentionRows (SessionTimeline.tsx) keeps the specific
+    // NotificationEvent kind, not its paired `attention` sibling, so these
+    // kinds must classify directly, not just via their attention signal.
+    it("classifies a raw permission_request event (survivor of pairing suppression) as blocked", () => {
+      const event = makeEvent({
+        kind: "permission_request",
+        payload: { tool: "Bash", summary: "rm -rf /tmp/x" },
+      });
+      expect(notifySeverity(event)).toBe("blocked");
+    });
+
+    it("classifies a raw plan_ready event as blocked", () => {
+      const event = makeEvent({ kind: "plan_ready", payload: { plan: "1. Fix" } });
+      expect(notifySeverity(event)).toBe("blocked");
+    });
+
+    it("classifies a raw tool_failure event as error", () => {
+      const event = makeEvent({ kind: "tool_failure", payload: { tool: "Bash", error: "boom" } });
+      expect(notifySeverity(event)).toBe("error");
+    });
+
+    it("classifies a raw stop_failure event as error", () => {
+      const event = makeEvent({ kind: "stop_failure", payload: { error: "rate_limit" } });
+      expect(notifySeverity(event)).toBe("error");
+    });
+
+    it("classifies a started elicitation event as blocked but its own resolution as null", () => {
+      const started = makeEvent({
+        kind: "elicitation",
+        payload: { state: "started", server: "figma" },
+      });
+      expect(notifySeverity(started)).toBe("blocked");
+      const finished = makeEvent({ kind: "elicitation", payload: { state: "finished" } });
+      expect(notifySeverity(finished)).toBeNull();
+    });
+
+    it("classifies a started question event as blocked but its own resolution as null", () => {
+      const started = makeEvent({
+        kind: "question",
+        payload: { state: "started", header: "Which approach?" },
+      });
+      expect(notifySeverity(started)).toBe("blocked");
+      const finished = makeEvent({ kind: "question", payload: { state: "finished" } });
+      expect(notifySeverity(finished)).toBeNull();
+    });
+
+    it("classifies a promote_request REQUEST (no state) as blocked but its RESOLUTION (state set) as null", () => {
+      const request = makeEvent({
+        kind: "promote_request",
+        payload: { summary: "ready", suggestedBaseRef: null },
+      });
+      expect(notifySeverity(request)).toBe("blocked");
+      const resolution = makeEvent({ kind: "promote_request", payload: { state: "accepted" } });
+      expect(notifySeverity(resolution)).toBeNull();
+    });
   });
 
   // Making notifications relevant/scannable.
