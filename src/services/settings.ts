@@ -211,6 +211,19 @@ export interface AppSettings {
     // which points its `instructions` config at the per-session copy
     // (issue #437c) — the guide's full text, not a pointer sentence.
     injectAgentGuide: boolean;
+    // agent-briefing follow-up to #405 — gates the SessionStart injection of
+    // a PROJECT's own briefing (a marked region in its AGENTS.md/CLAUDE.md,
+    // written per-session by writeSessionBriefing — see
+    // project-briefing.ts), independently of injectAgentGuide above. Kept
+    // as its own key rather than folded into injectAgentGuide: that key's
+    // meaning is already shipped and test-asserted narrow ("gates the
+    // pointer to Mullion's own per-session GUIDE copy" — see this field's
+    // own test coverage), so reusing it would silently let muting Mullion's
+    // doc also mute a project's operating instructions. Same
+    // unconditional-write / gate-only-the-injection contract as
+    // injectAgentGuide: the per-session copy is always written at spawn
+    // time regardless of this setting.
+    injectProjectBriefing: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the
     // sessions.spawn_child control-socket op. Enforced in
@@ -386,6 +399,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // truncation the first time this ships.
     eventRetentionPerSession: 0,
     injectAgentGuide: true,
+    injectProjectBriefing: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

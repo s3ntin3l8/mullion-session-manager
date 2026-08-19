@@ -47,6 +47,8 @@ import {
   listSessionProcesses as listSessionProcessesProcess,
 } from "./session-process.js";
 import { buildLaunchPlan } from "./launch-plan.js";
+import { sessionAgentGuidePath } from "./agent-guide.js";
+import { sessionBriefingPath } from "./project-briefing.js";
 import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
 // Re-exported so existing importers (src/routes/agents.ts, this module's own
 // tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
@@ -890,6 +892,11 @@ export class Session {
   // applyHookAdapters' ctx in bootstrapMaster() below; the opencode adapter
   // is currently the only consumer.
   private readonly injectAgentGuide: boolean;
+  // Same spawn-time-snapshot posture as injectAgentGuide immediately above,
+  // for the independent sessions.injectProjectBriefing setting — see that
+  // setting's own doc comment (settings.ts) for why it's a separate key
+  // rather than reusing injectAgentGuide.
+  private readonly injectProjectBriefing: boolean;
   private readonly skipPermissions: boolean;
   // Task Master's initial-turn prompt (see CreateSessionOptions.initialPrompt
   // above) — consumed once, in bootstrapMaster() below, to build finalCommand;
@@ -1224,6 +1231,7 @@ export class Session {
     sessionsDir: string;
     reviewGateEnabled?: boolean;
     injectAgentGuide?: boolean;
+    injectProjectBriefing?: boolean;
     skipPermissions?: boolean;
     initialPrompt?: string;
     seedPrompt?: string;
@@ -1246,6 +1254,7 @@ export class Session {
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
+    this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
     this.skipPermissions = opts.skipPermissions ?? false;
     this.initialPrompt = opts.initialPrompt;
     this.seedPrompt = opts.seedPrompt;
@@ -1760,6 +1769,7 @@ export class Session {
       sessionsDir: this.sessionsDir,
       reviewGateEnabled: this.reviewGateEnabled,
       injectAgentGuide: this.injectAgentGuide,
+      injectProjectBriefing: this.injectProjectBriefing,
       skipPermissions: this.skipPermissions,
       initialPrompt: this.initialPrompt,
       seedPrompt: this.seedPrompt,
@@ -3341,12 +3351,18 @@ export class PtyManager {
   // (tests, mainly) keep compiling unchanged and behave as if the setting
   // were on, matching production's default.
   private readonly getInjectAgentGuide: () => boolean;
+  // Same live-accessor posture as getInjectAgentGuide immediately above, for
+  // the independent sessions.injectProjectBriefing setting — see that
+  // field's own doc comment for why it's a separate closure rather than
+  // folded into getInjectAgentGuide.
+  private readonly getInjectProjectBriefing: () => boolean;
 
   constructor(opts: {
     sessionsDir: string;
     reviewGateEnabled?: boolean;
     controlSocketPath?: string;
     getInjectAgentGuide?: () => boolean;
+    getInjectProjectBriefing?: () => boolean;
   }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
@@ -3374,6 +3390,7 @@ export class PtyManager {
       : path.join(this.sessionsDir, "mullion.sock");
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
+    this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
 
     // unref() so this timer alone never keeps the process (or, in tests, a
     // PtyManager instance nobody explicitly tore down) alive — same
@@ -3423,6 +3440,7 @@ export class PtyManager {
         // own doc comment for why this must be a fresh call, not a value
         // cached at PtyManager-construction/boot time.
         injectAgentGuide: this.getInjectAgentGuide(),
+        injectProjectBriefing: this.getInjectProjectBriefing(),
         skipPermissions: opts.skipPermissions,
         initialPrompt: opts.initialPrompt,
         seedPrompt: opts.seedPrompt,
@@ -3724,6 +3742,25 @@ export class PtyManager {
       unlinkSync(stateFilePath(this.sessionsDir, id));
     } catch {
       // ENOENT (never wrote a state file, or session predates this feature).
+    }
+    // agent-briefing follow-up to #405 — these two were a pre-existing leak
+    // (writeSessionAgentGuide/writeSessionBriefing write them unconditionally
+    // at spawn time, but nothing removed them at the genuinely-terminal
+    // moment this method IS) — confirmed live: dozens of stale
+    // `*.agent-guide.md` files accumulate under sessionsDir over time.
+    // Cleaned up here alongside the token/state files above rather than left
+    // as a second undecided leak once `<id>.briefing.md` joined them.
+    try {
+      unlinkSync(sessionAgentGuidePath(this.sessionsDir, id));
+    } catch {
+      // ENOENT (guide source never existed on this install, or the write
+      // itself failed — see writeSessionAgentGuide's own doc comment).
+    }
+    try {
+      unlinkSync(sessionBriefingPath(this.sessionsDir, id));
+    } catch {
+      // ENOENT (this project never had a briefing, or writeSessionBriefing
+      // already unlinked it once the marked region disappeared).
     }
   }
 

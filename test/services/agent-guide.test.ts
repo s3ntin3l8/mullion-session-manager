@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   agentGuideSourceExists,
   buildSessionAgentGuideContent,
+  MAX_GUIDE_EXCERPT_BYTES,
+  readAgentGuideExcerpt,
   sessionAgentGuidePath,
   writeSessionAgentGuide,
 } from "../../src/services/agent-guide.js";
@@ -26,6 +28,36 @@ describe("sessionAgentGuidePath", () => {
 describe("agentGuideSourceExists", () => {
   it("is true in this checkout (docs/agent-guide.md ships with the repo)", () => {
     expect(agentGuideSourceExists()).toBe(true);
+  });
+});
+
+describe("readAgentGuideExcerpt", () => {
+  it("returns the delimited tier-1 excerpt from this checkout's docs/agent-guide.md", () => {
+    const excerpt = readAgentGuideExcerpt();
+    expect(excerpt).not.toBeNull();
+    // Distinctive tier-1 phrase (the env-var summary), not just any text.
+    expect(excerpt).toContain("MULLION_HOOK_SOCKET");
+  });
+
+  it("stays at or under MAX_GUIDE_EXCERPT_BYTES (plus a possible truncation marker)", () => {
+    const excerpt = readAgentGuideExcerpt();
+    // Generous margin over the raw budget to allow for clampToBytes's own
+    // truncation marker text, without hard-coding its exact length here.
+    expect(Buffer.byteLength(excerpt ?? "", "utf8")).toBeLessThan(MAX_GUIDE_EXCERPT_BYTES + 200);
+  });
+
+  it("is an excerpt, not the whole file — omits text that only appears later in the doc", () => {
+    const excerpt = readAgentGuideExcerpt();
+    // "Spawning a child session" is a section well past the tier-1 marker.
+    expect(excerpt).not.toContain("Spawning a child session");
+  });
+
+  it("docs/agent-guide.md carries exactly one tier1 marker pair (guards against an accidental duplicate or removal)", () => {
+    const shipped = readFileSync(path.resolve(process.cwd(), "docs", "agent-guide.md"), "utf8");
+    const startCount = (shipped.match(/<!-- mullion:tier1:start -->/g) ?? []).length;
+    const endCount = (shipped.match(/<!-- mullion:tier1:end -->/g) ?? []).length;
+    expect(startCount).toBe(1);
+    expect(endCount).toBe(1);
   });
 });
 

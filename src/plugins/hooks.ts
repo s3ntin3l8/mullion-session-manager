@@ -15,7 +15,12 @@ import {
 } from "../routes/browser-automation.js";
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
-import { agentGuideSourceExists, sessionAgentGuidePath } from "../services/agent-guide.js";
+import {
+  agentGuideSourceExists,
+  readAgentGuideExcerpt,
+  sessionAgentGuidePath,
+} from "../services/agent-guide.js";
+import { readSessionBriefing } from "../services/project-briefing.js";
 import { isAuthEnabled } from "../services/auth.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
 
@@ -151,6 +156,25 @@ export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean):
       ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected."
       : "This host has in-app auth disabled, so every control-socket connection (including yours) resolves to full scope — session list/create/kill, dock control, and previews are all reachable, not just session-scoped ops.",
   ].join("\n");
+}
+
+// Issue (agent-briefing follow-up to #405) — a live session empirically
+// never opened the path buildAgentGuidePointer names (an agent told "the
+// guide is available at <path>" has no reason to go read it mid-task). This
+// wraps that same pointer with a short CONTENT excerpt ahead of it — the
+// four env vars and a one-paragraph scope summary, read straight out of
+// docs/agent-guide.md's own `mullion:tier1` marked region
+// (readAgentGuideExcerpt) — so the load-bearing facts reach context
+// directly instead of behind a path the agent has to choose to follow.
+// `excerpt` is null on any install whose docs/agent-guide.md predates the
+// markers; the pointer alone (today's behavior) is what that install falls
+// back to.
+export function buildAgentGuideBlock(
+  excerpt: string | null,
+  guidePath: string,
+  authEnabled: boolean,
+): string {
+  return [excerpt, buildAgentGuidePointer(guidePath, authEnabled)].filter(Boolean).join("\n\n");
 }
 
 /** Writes a decision back to a still-open promote connection and clears its
@@ -374,7 +398,8 @@ function handleConnection(
           // that role effectively always uses, regardless of what an
           // operator configured on the primary.
           const settings = app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS;
-          const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), sessionId);
+          const sessionsDir = path.dirname(app.pty.hookSocketPath);
+          const guidePath = sessionAgentGuidePath(sessionsDir, sessionId);
           // agentGuideSourceExists(), not just the setting: a checkout/
           // install that hasn't shipped docs/agent-guide.md (see
           // agent-guide.ts) must never send an agent to read a path that
@@ -383,11 +408,22 @@ function handleConnection(
           // own doc comment for why (the per-session write and this
           // SessionStart reply race on different clocks; the source's
           // presence doesn't).
-          const guidePointer =
+          const guideBlock =
             settings.sessions.injectAgentGuide && agentGuideSourceExists()
-              ? buildAgentGuidePointer(guidePath, isAuthEnabled(app.config))
+              ? buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, isAuthEnabled(app.config))
               : null;
-          const additionalContext = [seed, guidePointer].filter(Boolean).join("\n\n");
+          // Independent of injectAgentGuide — a different owner (the
+          // PROJECT's own operating instructions, not Mullion's doc) and a
+          // different clock (this reads the per-session copy
+          // writeSessionBriefing already wrote at spawn time, same as the
+          // opencode adapter's own existsSync check does — see
+          // project-briefing.ts). Placed last in additionalContext: it's
+          // the project's operative instruction set, and recency in a
+          // small context block favors it.
+          const briefing = settings.sessions.injectProjectBriefing
+            ? readSessionBriefing(sessionsDir, sessionId)
+            : null;
+          const additionalContext = [seed, guideBlock, briefing].filter(Boolean).join("\n\n");
           if (socket.writable) {
             socket.write(`${JSON.stringify({ additionalContext })}\n`);
           }

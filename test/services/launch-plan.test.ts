@@ -32,6 +32,13 @@ vi.mock("../../src/services/agent-guide.js", () => ({
   writeSessionAgentGuide: (...args: unknown[]) => mockWriteSessionAgentGuide(...args),
 }));
 
+const mockWriteSessionBriefing = vi.fn((..._args: unknown[]) => {
+  callOrder.push("writeSessionBriefing");
+});
+vi.mock("../../src/services/project-briefing.js", () => ({
+  writeSessionBriefing: (...args: unknown[]) => mockWriteSessionBriefing(...args),
+}));
+
 const mockApplyHookAdapters = vi.fn((command: string, _ctx: HookAdapterContext) => {
   callOrder.push("applyHookAdapters");
   return { command, envAdditions: {}, matched: false, emits: [] };
@@ -68,6 +75,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     sessionsDir: "/tmp/sessions",
     reviewGateEnabled: false,
     injectAgentGuide: true,
+    injectProjectBriefing: true,
     skipPermissions: false,
     initialPrompt: undefined,
     ...overrides,
@@ -79,6 +87,7 @@ const ORIGINAL_ENV = { ...process.env };
 beforeEach(() => {
   callOrder.length = 0;
   mockWriteSessionAgentGuide.mockClear();
+  mockWriteSessionBriefing.mockClear();
   mockApplyHookAdapters.mockClear();
   mockGetAdapterInitialPromptArgs.mockClear();
   mockResolveForwarderPath.mockClear();
@@ -209,13 +218,47 @@ describe("buildLaunchPlan — agent guide injection", () => {
   it("writes the agent guide BEFORE applying hook adapters (issue #437c — opencode's prepareLaunch reads this file off disk)", () => {
     buildLaunchPlan(baseSession());
 
-    expect(callOrder).toEqual(["writeSessionAgentGuide", "applyHookAdapters"]);
+    expect(callOrder).toEqual([
+      "writeSessionAgentGuide",
+      "writeSessionBriefing",
+      "applyHookAdapters",
+    ]);
   });
 
   it("writes the agent guide unconditionally, even when injectAgentGuide is false", () => {
     buildLaunchPlan(baseSession({ injectAgentGuide: false }));
 
     expect(mockWriteSessionAgentGuide).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("buildLaunchPlan — project briefing injection", () => {
+  it("calls writeSessionBriefing with dirname(hookSocketPath), the session id, and cwd", () => {
+    buildLaunchPlan(
+      baseSession({
+        hookSocketPath: "/tmp/sessions/hooks.sock",
+        id: "99",
+        cwd: "/tmp/project",
+      }),
+    );
+
+    expect(mockWriteSessionBriefing).toHaveBeenCalledWith("/tmp/sessions", "99", "/tmp/project");
+  });
+
+  it("writes the briefing AFTER the guide but BEFORE applying hook adapters (same #437c ordering constraint the guide has, for the identical reason)", () => {
+    buildLaunchPlan(baseSession());
+
+    expect(callOrder).toEqual([
+      "writeSessionAgentGuide",
+      "writeSessionBriefing",
+      "applyHookAdapters",
+    ]);
+  });
+
+  it("writes the briefing unconditionally, even when injectProjectBriefing is false — mirrors the guide's own invariant (gate the injection, never the write)", () => {
+    buildLaunchPlan(baseSession({ injectProjectBriefing: false }));
+
+    expect(mockWriteSessionBriefing).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -231,6 +274,7 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         controlSocketPath: "/tmp/sessions/mullion.sock",
         reviewGateEnabled: true,
         injectAgentGuide: false,
+        injectProjectBriefing: false,
         skipPermissions: true,
       }),
     );
@@ -246,6 +290,7 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         forwarderPath: "/fake/forwarder.mjs",
         reviewGateEnabled: true,
         injectAgentGuide: false,
+        injectProjectBriefing: false,
         cwd: "/tmp/project",
         skipPermissions: true,
       }),

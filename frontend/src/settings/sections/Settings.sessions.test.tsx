@@ -337,10 +337,11 @@ describe("Settings -> Sessions -> Event history cap per session", () => {
   });
 });
 
-// Issue #405 — "Inject agent guide pointer" surfaces sessions.injectAgentGuide,
-// the toggle gating the SessionStart auto-inject pointer to the per-session
-// agent guide copy. Same Toggle-row pattern as Settings.dock.test.tsx.
-describe("Settings -> Sessions -> Inject agent guide pointer", () => {
+// Issue #405 — "Inject agent guide" surfaces sessions.injectAgentGuide, the
+// toggle gating the SessionStart auto-inject excerpt+pointer to the
+// per-session agent guide copy. Same Toggle-row pattern as
+// Settings.dock.test.tsx.
+describe("Settings -> Sessions -> Inject agent guide", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -362,7 +363,7 @@ describe("Settings -> Sessions -> Inject agent guide pointer", () => {
 
   it("renders the current (default-on) toggle state", async () => {
     render(<Settings onClose={vi.fn()} initialSection="sessions" />);
-    const row = await screen.findByText("Inject agent guide pointer");
+    const row = await screen.findByText("Inject agent guide");
     const toggle = row.closest(".settings-row")?.querySelector("button");
     expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
@@ -370,7 +371,7 @@ describe("Settings -> Sessions -> Inject agent guide pointer", () => {
   it("toggles the setting and PATCHes /api/settings", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="sessions" />);
-    const row = await screen.findByText("Inject agent guide pointer");
+    const row = await screen.findByText("Inject agent guide");
     const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
 
     await user.click(toggle);
@@ -382,6 +383,61 @@ describe("Settings -> Sessions -> Inject agent guide pointer", () => {
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ sessions: { injectAgentGuide: false } }),
+        }),
+      ),
+    );
+  });
+});
+
+// agent-briefing follow-up to #405 — "Inject project briefing" surfaces the
+// independent sessions.injectProjectBriefing toggle. Same pattern as the
+// guide toggle above, deliberately duplicated rather than parameterized:
+// the two settings gate genuinely independent things (Mullion's own doc vs.
+// a project's own instructions — see settings.ts's doc comment on why
+// they're separate keys), so a shared test helper would obscure that they
+// can be toggled independently of each other.
+describe("Settings -> Sessions -> Inject project briefing", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current (default-on) toggle state", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Inject project briefing");
+    const toggle = row.closest(".settings-row")?.querySelector("button");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles the setting and PATCHes /api/settings", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Inject project briefing");
+    const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
+
+    await user.click(toggle);
+
+    expect(useDashboardStore.getState().settings.sessions.injectProjectBriefing).toBe(false);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { injectProjectBriefing: false } }),
         }),
       ),
     );

@@ -35,6 +35,15 @@ function readInjectAgentGuide(app: FastifyInstance): boolean {
     : DEFAULT_SETTINGS.sessions.injectAgentGuide;
 }
 
+// Mirrors readInjectAgentGuide immediately above, exactly — same closure
+// shape, same multi-host "agent" role app.db-absent fallback — for the
+// independent sessions.injectProjectBriefing setting.
+function readInjectProjectBriefing(app: FastifyInstance): boolean {
+  return app.db
+    ? getStoredSettings(app.db).sessions.injectProjectBriefing
+    : DEFAULT_SETTINGS.sessions.injectProjectBriefing;
+}
+
 // Rich statuses — the errorState TTL backstop reads its own threshold fresh
 // on every tick (not just once at arm-time), same "PATCH /api/settings takes
 // effect immediately" posture the reconcile interval itself has, at
@@ -146,6 +155,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     reviewGateEnabled: app.config.MULLION_REVIEW_GATE_ENABLED,
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
+    getInjectProjectBriefing: () => readInjectProjectBriefing(app),
   });
 
   app.decorate("pty", manager);

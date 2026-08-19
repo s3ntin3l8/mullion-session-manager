@@ -2,6 +2,7 @@ import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveOpenCodePluginPath, shellQuote } from "./shared.js";
 import { sessionAgentGuidePath } from "../agent-guide.js";
+import { sessionBriefingPath } from "../project-briefing.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -159,6 +160,23 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     const guidePath = sessionAgentGuidePath(ctx.sessionsDir, ctx.sessionId);
     if (existsSync(guidePath)) {
       instructions.push(guidePath);
+    }
+  }
+
+  // Same existsSync-on-the-per-session-copy posture as the guide block
+  // immediately above, for the identical reason (a dangling `instructions`
+  // entry is a real failure for opencode's own config resolution, not just
+  // ignorable prose) — but gated on `ctx.injectProjectBriefing`, the
+  // independent setting a project's own briefing uses (see that field's own
+  // doc comment). writeSessionBriefing runs before applyHookAdapters for
+  // the same ordering reason writeSessionAgentGuide does (launch-plan.ts),
+  // and — unlike the guide — unlinks any stale copy when nothing resolves,
+  // so this existsSync check never sees a briefing from a previous session
+  // that reused this id.
+  if (ctx.injectProjectBriefing) {
+    const briefingPath = sessionBriefingPath(ctx.sessionsDir, ctx.sessionId);
+    if (existsSync(briefingPath)) {
+      instructions.push(briefingPath);
     }
   }
 

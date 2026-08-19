@@ -168,6 +168,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     eventRetentionDays: 30,
     eventRetentionPerSession: 0,
     injectAgentGuide: true,
+    injectProjectBriefing: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

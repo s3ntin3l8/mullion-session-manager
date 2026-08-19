@@ -327,6 +327,36 @@ describe("DEFAULT_SETTINGS.sessions.injectAgentGuide (issue #405)", () => {
   });
 });
 
+// agent-briefing follow-up to #405 — gates the SessionStart injection of a
+// PROJECT's own briefing, independently of injectAgentGuide above (see
+// DEFAULT_SETTINGS.sessions.injectProjectBriefing's own doc comment for why
+// it's a separate key rather than reusing injectAgentGuide). Same
+// default-true / mergeSettings / type-mismatch coverage shape as the block
+// above, deliberately kept as its own describe rather than parameterized
+// together — the two settings are independent and a shared test helper
+// would obscure that.
+describe("DEFAULT_SETTINGS.sessions.injectProjectBriefing (agent-briefing follow-up to #405)", () => {
+  it("defaults to true", () => {
+    expect(DEFAULT_SETTINGS.sessions.injectProjectBriefing).toBe(true);
+  });
+
+  it("can be overridden to false via mergeSettings", () => {
+    const result = mergeSettings({ sessions: { injectProjectBriefing: false } });
+    expect(result.sessions.injectProjectBriefing).toBe(false);
+  });
+
+  it("ignores a type-mismatched patch value instead of corrupting the field", () => {
+    const result = mergeSettings({ sessions: { injectProjectBriefing: "nope" } });
+    expect(result.sessions.injectProjectBriefing).toBe(true);
+  });
+
+  it("is independent of injectAgentGuide — overriding one leaves the other at its default", () => {
+    const result = mergeSettings({ sessions: { injectAgentGuide: false } });
+    expect(result.sessions.injectAgentGuide).toBe(false);
+    expect(result.sessions.injectProjectBriefing).toBe(true);
+  });
+});
+
 // Phase 5 (Track B, issue #193 5.3b) — hard cap on live children per parent
 // enforced by createSessionRecord (services/session-lifecycle.ts), not just described
 // here; this is the sanitizeSettings clamp half of that guardrail.

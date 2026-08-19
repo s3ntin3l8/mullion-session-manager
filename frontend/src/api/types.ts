@@ -1067,6 +1067,11 @@ export interface AppSettings {
     // (src/plugins/hooks.ts), never the per-session file write itself.
     // Surfaced in Settings.tsx's Sessions section.
     injectAgentGuide: boolean;
+    // agent-briefing follow-up to #405 — mirrors src/services/settings.ts
+    // 1:1. Gates the SessionStart injection of a PROJECT's own briefing,
+    // independently of injectAgentGuide above. Surfaced in Settings.tsx's
+    // Sessions section.
+    injectProjectBriefing: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
     // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
     // per parent").

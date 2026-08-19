@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { clampToBytes, extractMarkedRegion } from "./marked-region.js";
 
 // Issue #405 — the agent-facing skill/guide doc (docs/agent-guide.md) is
 // written once, checked into the repo, and copied verbatim into a per-session
@@ -56,6 +57,44 @@ function resolveAgentGuideSourcePath(): string | null {
  */
 export function agentGuideSourceExists(): boolean {
   return resolveAgentGuideSourcePath() !== null;
+}
+
+const GUIDE_TIER1_START = "<!-- mullion:tier1:start -->";
+const GUIDE_TIER1_END = "<!-- mullion:tier1:end -->";
+
+/** Injected-context budget for the excerpt below — half of
+ * MAX_BRIEFING_BYTES (project-briefing.ts): Mullion's own doc is a
+ * supporting fact here, the project's briefing (when present) is the
+ * operative one. */
+export const MAX_GUIDE_EXCERPT_BYTES = 2048;
+
+/**
+ * The delimited tier-1 excerpt of the shipped docs/agent-guide.md — the
+ * four env vars and a one-paragraph scope-model summary — clamped to
+ * MAX_GUIDE_EXCERPT_BYTES. `null` when the source doc is missing (see
+ * resolveAgentGuideSourcePath) or carries no marked region at all: an
+ * install whose docs/agent-guide.md predates the markers degrades to
+ * nothing here rather than injecting a stale/malformed excerpt — hooks.ts
+ * falls back to the plain pointer sentence in that case, i.e. today's
+ * pre-excerpt behavior, not silence.
+ *
+ * Deliberately NOT memoized: SessionStart fires once per session, a
+ * ~10 KiB sync read is noise, and caching would make an in-place edit to
+ * docs/agent-guide.md (e.g. under `make dev`) go stale without a restart —
+ * quietly breaking the single-source property this excerpt exists to keep.
+ */
+export function readAgentGuideExcerpt(): string | null {
+  const sourcePath = resolveAgentGuideSourcePath();
+  if (!sourcePath) return null;
+  let shipped: string;
+  try {
+    shipped = readFileSync(sourcePath, "utf8");
+  } catch {
+    return null;
+  }
+  const region = extractMarkedRegion(shipped, GUIDE_TIER1_START, GUIDE_TIER1_END);
+  if (region === null || region.length === 0) return null;
+  return clampToBytes(region, MAX_GUIDE_EXCERPT_BYTES, sourcePath);
 }
 
 /**
