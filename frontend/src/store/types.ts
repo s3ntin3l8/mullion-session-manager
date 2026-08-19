@@ -247,7 +247,12 @@ export interface TasksSlice {
   // call).
   refreshTasks: () => Promise<void>;
   // Local-board CRUD (6.9/#233) — works regardless of taskMasterEnabled.
-  createTask: (projectId: number, title: string, body?: string | null) => Promise<Task>;
+  createTask: (
+    projectId: number,
+    title: string,
+    body?: string | null,
+    opts?: { agent?: string | null; reviewAgent?: string | null },
+  ) => Promise<Task>;
   updateTask: (
     id: number,
     patch: {
@@ -255,13 +260,18 @@ export interface TasksSlice {
       body?: string | null;
       status?: "backlog" | "ready";
       boardOrder?: number;
+      agent?: string | null;
+      reviewAgent?: string | null;
     },
   ) => Promise<Task>;
   deleteTask: (id: number) => Promise<void>;
   // Claims a ready task (spawns a session into an isolated worktree, seeds
   // it with the issue/task as its prompt) and returns the spawned Session so
   // the caller can open it, mirroring createSession's own return shape.
-  claimTask: (id: number) => Promise<Session>;
+  claimTask: (
+    id: number,
+    opts?: { agent?: string | null; reviewAgent?: string | null },
+  ) => Promise<Session>;
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
   approveTask: (id: number) => Promise<Task>;
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its

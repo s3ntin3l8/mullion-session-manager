@@ -843,8 +843,10 @@ export interface Task {
   // tasks claimed before this column existed). Drives the diff-stat shown
   // on the reviewing issue comment; not otherwise rendered in the UI.
   baseSha: string | null;
-  // The resolved launch command actually used for the worker session (issue
-  // `Agent:` line -> projects.defaultAgent -> settings.launchers.defaultAgent),
+  agent: string | null;
+  reviewAgent: string | null;
+  // The resolved launch command actually used for the worker session (task.agent ->
+  // issue `Agent:` line -> projects.defaultAgent -> settings.launchers.defaultAgent),
   // recorded once at claim time.
   agentCommand: string | null;
   prUrl: string | null;

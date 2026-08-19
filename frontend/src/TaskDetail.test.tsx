@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
+import type * as ApiModule from "./api/index.js";
 import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api/index.js";
 
 let tasks: Task[];
@@ -46,6 +47,20 @@ vi.mock("./store/index.js", () => ({
   eventKey: (sessionId: number, seq: number) => `${sessionId}:${seq}`,
 }));
 
+vi.mock("./api/index.js", async () => {
+  const actual = await vi.importActual<typeof ApiModule>("./api/index.js");
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      listProjectActions: vi.fn(async () => [
+        { id: "agent:claude", title: "Claude Code", kind: "agent" },
+        { id: "agent:codex", title: "Codex", kind: "agent" },
+      ]),
+    },
+  };
+});
+
 function makeTask(overrides: Partial<Task>): Task {
   return {
     id: 1,
@@ -65,6 +80,8 @@ function makeTask(overrides: Partial<Task>): Task {
     reviewRounds: 0,
     worktreePath: null,
     branchName: null,
+    agent: null,
+    reviewAgent: null,
     agentCommand: null,
     prUrl: null,
     prNumber: null,
@@ -963,5 +980,40 @@ describe("TaskDetail delete action", () => {
     tasks = [makeTask({ id: 1, status: "claimed", issueNumber: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+  });
+
+  describe("agent selection and display", () => {
+    it("renders agent dropdowns for backlog tasks and calls updateTask on change", async () => {
+      tasks = [makeTask({ id: 1, status: "backlog", agent: null, reviewAgent: null })];
+      const user = userEvent.setup();
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+      await screen.findAllByRole("option", { name: "Claude Code" });
+      const selects = screen.getAllByRole("combobox");
+      expect(selects.length).toBe(2);
+
+      await user.selectOptions(selects[0], "claude");
+      expect(updateTask).toHaveBeenCalledWith(1, { agent: "claude" });
+
+      await user.selectOptions(selects[1], "none");
+      expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
+    });
+
+    it("renders static agent and review agent metadata for in_progress tasks", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          status: "in_progress",
+          agent: "codex",
+          reviewAgent: "agy",
+          agentCommand: "codex",
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+      expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+      expect(screen.getByText("Agent: codex")).toBeInTheDocument();
+      expect(screen.getByText("Review agent: agy")).toBeInTheDocument();
+    });
   });
 });

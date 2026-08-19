@@ -90,7 +90,7 @@ export type ClaimTaskOutcome =
 export async function claimTask(
   app: FastifyInstance,
   taskId: number,
-  opts: { auto: boolean },
+  opts: { auto: boolean; agent?: string | null; reviewAgent?: string | null },
 ): Promise<ClaimTaskOutcome> {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
   if (!task) return { ok: false, reason: "not-found" };
@@ -98,7 +98,10 @@ export async function claimTask(
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
 
+  const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
+
   const command = resolveAgentCommand(app, {
+    taskAgent: effectiveAgent,
     issueBody: task.body,
     projectDefaultAgent: project.defaultAgent,
   });
@@ -335,16 +338,20 @@ export async function claimTask(
       );
     }
 
+    const patch: Partial<typeof tasks.$inferInsert> = {
+      sessionId: result.row.id,
+      worktreePath: result.row.cwd,
+      branchName,
+      agentCommand: command,
+      baseSha,
+      seedDelivered,
+    };
+    if (opts.agent !== undefined) patch.agent = opts.agent;
+    if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
+
     app.db
       .update(tasks)
-      .set({
-        sessionId: result.row.id,
-        worktreePath: result.row.cwd,
-        branchName,
-        agentCommand: command,
-        baseSha,
-        seedDelivered,
-      })
+      .set(patch)
       .where(eq(tasks.id, taskId))
       .run();
     committed = true;
@@ -457,6 +464,7 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   if (!project) return { ok: false, reason: "not-found" };
 
   const command = resolveAgentCommand(app, {
+    taskAgent: task.agent,
     issueBody: task.body,
     projectDefaultAgent: project.defaultAgent,
   });

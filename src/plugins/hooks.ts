@@ -564,9 +564,12 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   const pendingGates = new Map<string, PendingGate>();
   const pendingPromotes = new Map<string, PendingPromote>();
 
-  const server = net.createServer((socket) =>
-    handleConnection(app, socket, pendingGates, pendingPromotes),
-  );
+  const openSockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    openSockets.add(socket);
+    socket.once("close", () => openSockets.delete(socket));
+    handleConnection(app, socket, pendingGates, pendingPromotes);
+  });
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -611,8 +614,12 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // graceful shutdown, triggered by this process's own lifecycle
   // (app.close()) — never per-request, never on any attacker-reachable
   // trigger a rate limiter could meaningfully throttle.
-  app.addHook("onClose", () => {
-    server.close();
+  app.addHook("onClose", async () => {
+    for (const socket of openSockets) socket.destroy();
+    openSockets.clear();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     // Any gate/promote still pending at shutdown would otherwise leak its
     // timer past process lifetime (harmless once the process exits, but
     // real inside a single long-lived test run — see hooks.test.ts).

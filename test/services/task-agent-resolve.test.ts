@@ -28,13 +28,37 @@ describe("resolveAgentCommand", () => {
     mockGetStoredSettings.mockReturnValue({ launchers: { defaultAgent: "claude" } });
   });
 
-  it("prefers the issue body's Agent: line over everything else", () => {
+  it("prefers the task's own agent column over issue body and project default", () => {
+    const app = mockApp();
+    const command = resolveAgentCommand(app, {
+      taskAgent: "agy",
+      issueBody: "Some spec.\nAgent: codex\nMore text.",
+      projectDefaultAgent: "opencode",
+    });
+    expect(command).toBe("agy");
+  });
+
+  it("prefers the issue body's Agent: line over project default when task agent is unset", () => {
     const app = mockApp();
     const command = resolveAgentCommand(app, {
       issueBody: "Some spec.\nAgent: codex\nMore text.",
       projectDefaultAgent: "opencode",
     });
     expect(command).toBe("codex");
+  });
+
+  it("falls through past an unrecognized task agent name, logging a warning", () => {
+    const app = mockApp();
+    const command = resolveAgentCommand(app, {
+      taskAgent: "invalid-cli",
+      issueBody: "Agent: codex",
+      projectDefaultAgent: "opencode",
+    });
+    expect(command).toBe("codex");
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "invalid-cli" }),
+      expect.stringContaining("unrecognized agent"),
+    );
   });
 
   it("falls through to the project default when the issue has no Agent: line", () => {
@@ -93,6 +117,47 @@ describe("resolveReviewAgentCommand", () => {
       projectDefaultReviewAgent: null,
     });
     expect(command).toBeNull();
+  });
+
+  it("prefers the task's own reviewAgent column over issue body and project default", () => {
+    const app = mockApp();
+    const command = resolveReviewAgentCommand(app, {
+      taskReviewAgent: "opencode",
+      issueBody: "ReviewAgent: codex",
+      projectDefaultReviewAgent: "agy",
+    });
+    expect(command).toBe("opencode");
+  });
+
+  it("explicitly disables review agent when taskReviewAgent is 'none' or empty string", () => {
+    const app = mockApp();
+    const commandNone = resolveReviewAgentCommand(app, {
+      taskReviewAgent: "none",
+      issueBody: "ReviewAgent: codex",
+      projectDefaultReviewAgent: "agy",
+    });
+    expect(commandNone).toBeNull();
+
+    const commandEmpty = resolveReviewAgentCommand(app, {
+      taskReviewAgent: "",
+      issueBody: "ReviewAgent: codex",
+      projectDefaultReviewAgent: "agy",
+    });
+    expect(commandEmpty).toBeNull();
+  });
+
+  it("falls through past an unrecognized task reviewAgent name, logging a warning", () => {
+    const app = mockApp();
+    const command = resolveReviewAgentCommand(app, {
+      taskReviewAgent: "not-an-agent",
+      issueBody: "ReviewAgent: codex",
+      projectDefaultReviewAgent: "agy",
+    });
+    expect(command).toBe("codex");
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "not-an-agent" }),
+      expect.stringContaining("unrecognized agent"),
+    );
   });
 
   it("prefers the issue body's ReviewAgent: line over the project default", () => {

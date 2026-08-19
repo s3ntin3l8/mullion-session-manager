@@ -11,6 +11,8 @@ import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.j
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend } from "../services/session-backend.js";
 
+import { KNOWN_AGENTS } from "../services/agent-detect.js";
+
 // Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
 // "reviewing" for a terminal state. Fire-and-forget, same posture as the
 // GitHub sync calls below it: cleanup succeeding or failing doesn't change
@@ -48,6 +50,8 @@ interface CreateTaskBody {
   body?: string | null;
   status?: LocalCreatableStatus;
   boardOrder?: number;
+  agent?: string | null;
+  reviewAgent?: string | null;
 }
 
 interface UpdateTaskBody {
@@ -55,6 +59,13 @@ interface UpdateTaskBody {
   body?: string | null;
   status?: LocalCreatableStatus;
   boardOrder?: number;
+  agent?: string | null;
+  reviewAgent?: string | null;
+}
+
+interface ClaimTaskBody {
+  agent?: string | null;
+  reviewAgent?: string | null;
 }
 
 const createTaskSchema = {
@@ -68,6 +79,8 @@ const createTaskSchema = {
       body: { type: ["string", "null"] },
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
       boardOrder: { type: "integer", minimum: 0 },
+      agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
     },
   },
 };
@@ -82,6 +95,19 @@ const updateTaskSchema = {
       body: { type: ["string", "null"] },
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
       boardOrder: { type: "integer", minimum: 0 },
+      agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+    },
+  },
+};
+
+const claimTaskSchema = {
+  body: {
+    type: ["object", "null"],
+    additionalProperties: false,
+    properties: {
+      agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
     },
   },
 };
@@ -123,6 +149,8 @@ const TASK_ROW_COLUMNS = {
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
+  agent: tasks.agent,
+  reviewAgent: tasks.reviewAgent,
   agentCommand: tasks.agentCommand,
   prUrl: tasks.prUrl,
   prNumber: tasks.prNumber,
@@ -286,7 +314,7 @@ export async function tasksRoute(app: FastifyInstance) {
     "/api/tasks",
     { schema: createTaskSchema },
     async (request, reply) => {
-      const { projectId, title, body, status, boardOrder } = request.body;
+      const { projectId, title, body, status, boardOrder, agent, reviewAgent } = request.body;
       if (!getProjectOr404(projectId)) return reply.notFound("Project not found");
 
       const [created] = app.db
@@ -297,6 +325,8 @@ export async function tasksRoute(app: FastifyInstance) {
           body: body ?? null,
           status: status ?? "backlog",
           boardOrder: boardOrder ?? 0,
+          agent: agent ?? null,
+          reviewAgent: reviewAgent ?? null,
         })
         .returning()
         .all();
@@ -329,7 +359,7 @@ export async function tasksRoute(app: FastifyInstance) {
       const existing = getLocalTaskOr404(taskId);
       if (!existing) return reply.notFound();
 
-      const { title, body, status, boardOrder } = request.body;
+      const { title, body, status, boardOrder, agent, reviewAgent } = request.body;
       if ((title !== undefined || body !== undefined) && existing.issueNumber !== null) {
         return reply.conflict(
           "Cannot edit title/body of a task linked to a GitHub issue — edit the issue itself; boardOrder and status remain editable here",
@@ -341,7 +371,7 @@ export async function tasksRoute(app: FastifyInstance) {
       // *existing* row's status: a task already past backlog/ready needs
       // 6.2's full transition table, not this route.
       if (
-        status !== undefined &&
+        (status !== undefined || agent !== undefined || reviewAgent !== undefined) &&
         !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus)
       ) {
         return reply.conflict(
@@ -354,6 +384,8 @@ export async function tasksRoute(app: FastifyInstance) {
       if (body !== undefined) patch.body = body;
       if (status !== undefined) patch.status = status;
       if (boardOrder !== undefined) patch.boardOrder = boardOrder;
+      if (agent !== undefined) patch.agent = agent;
+      if (reviewAgent !== undefined) patch.reviewAgent = reviewAgent;
 
       const [updated] = app.db
         .update(tasks)
@@ -416,38 +448,47 @@ export async function tasksRoute(app: FastifyInstance) {
   // check, a task created via the (deliberately un-gated) local board with
   // `status: "ready"` could reach claim with Task Master off — the exact
   // bypass the gate exists to prevent.
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/claim", async (request, reply) => {
-    if (!resolveTaskMasterConfig(app).enabled) {
-      return reply.forbidden(
-        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
-      );
-    }
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
-
-    const outcome = await claimTask(app, taskId, { auto: false });
-    if (!outcome.ok) {
-      switch (outcome.reason) {
-        case "not-found":
-          return reply.notFound();
-        case "not-ready":
-          return reply.conflict(outcome.detail ?? "Task is not ready");
-        case "cap":
-          return reply
-            .code(429)
-            .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
-        case "worktree-failed":
-          return reply.badGateway(outcome.detail ?? "Failed to create a worktree for this task");
-        case "spawn-failed":
-          return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
-        case "no-seed-channel":
-          return reply.badRequest(outcome.detail ?? "Resolved agent can't receive a seed prompt");
+  app.post<{ Params: { id: string }; Body: ClaimTaskBody }>(
+    "/api/tasks/:id/claim",
+    { schema: claimTaskSchema },
+    async (request, reply) => {
+      if (!resolveTaskMasterConfig(app).enabled) {
+        return reply.forbidden(
+          "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+        );
       }
-    }
+      const taskId = Number(request.params.id);
+      if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
-    reply.code(201);
-    return { ...outcome.session, seedDelivered: outcome.seedDelivered };
-  });
+      const body = request.body ?? {};
+      const outcome = await claimTask(app, taskId, {
+        auto: false,
+        agent: body.agent,
+        reviewAgent: body.reviewAgent,
+      });
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case "not-found":
+            return reply.notFound();
+          case "not-ready":
+            return reply.conflict(outcome.detail ?? "Task is not ready");
+          case "cap":
+            return reply
+              .code(429)
+              .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
+          case "worktree-failed":
+            return reply.badGateway(outcome.detail ?? "Failed to create a worktree for this task");
+          case "spawn-failed":
+            return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
+          case "no-seed-channel":
+            return reply.badRequest(outcome.detail ?? "Resolved agent can't receive a seed prompt");
+        }
+      }
+
+      reply.code(201);
+      return { ...outcome.session, seedDelivered: outcome.seedDelivered };
+    },
+  );
 
   // #483 — retries a "failed" task by resuming on its preserved branch
   // (task-claim.ts's retryTask). Same gate as claim: this leads to

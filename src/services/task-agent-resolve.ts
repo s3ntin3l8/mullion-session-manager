@@ -24,19 +24,34 @@ function parseDirectiveLine(body: string | null, re: RegExp): string | null {
 
 /**
  * Resolution precedence for the worker agent, most specific wins:
- * 1. The issue body's own `Agent: <name>` line.
- * 2. The project's `defaultAgent` column (6.9/#233).
- * 3. The install-wide `settings.launchers.defaultAgent`.
+ * 1. The task's own `agent` column (manual per-task override).
+ * 2. The issue body's own `Agent: <name>` line.
+ * 3. The project's `defaultAgent` column (6.9/#233).
+ * 4. The install-wide `settings.launchers.defaultAgent`.
  *
- * An unrecognized name at step 1 or 2 is logged and falls through to the
+ * An unrecognized name at step 1, 2 or 3 is logged and falls through to the
  * next tier rather than failing the claim — a typo in an issue body
  * shouldn't block autonomous pickup any more than a stale project setting
  * should.
  */
 export function resolveAgentCommand(
   app: FastifyInstance,
-  opts: { issueBody: string | null; projectDefaultAgent: string | null },
+  opts: {
+    taskAgent?: string | null;
+    issueBody: string | null;
+    projectDefaultAgent: string | null;
+  },
 ): string {
+  if (opts.taskAgent) {
+    if ((KNOWN_AGENTS as readonly string[]).includes(opts.taskAgent)) {
+      return opts.taskAgent;
+    }
+    app.log.warn(
+      { name: opts.taskAgent },
+      "[task-agent-resolve] task's agent names an unrecognized agent, falling through",
+    );
+  }
+
   const fromIssue = parseDirectiveLine(opts.issueBody, AGENT_LINE_RE);
   if (fromIssue !== null) {
     if ((KNOWN_AGENTS as readonly string[]).includes(fromIssue)) return fromIssue;
@@ -65,15 +80,35 @@ export function resolveAgentCommand(
  * agent is opt-in per project/task, not a new install-wide default, since
  * it's an additive advisory feature (see the Review agent design decision)
  * rather than a required part of the loop. Returns null when nothing
- * configures one — "no review agent, human reviews directly," today's
- * behavior, unchanged.
+ * configures one or when explicitly set to "none" — "no review agent,
+ * human reviews directly," today's behavior, unchanged.
  */
 export function resolveReviewAgentCommand(
   app: FastifyInstance,
-  opts: { issueBody: string | null; projectDefaultReviewAgent: string | null },
+  opts: {
+    taskReviewAgent?: string | null;
+    issueBody: string | null;
+    projectDefaultReviewAgent: string | null;
+  },
 ): string | null {
+  if (opts.taskReviewAgent !== undefined && opts.taskReviewAgent !== null) {
+    if (opts.taskReviewAgent === "none" || opts.taskReviewAgent === "") {
+      return null;
+    }
+    if ((KNOWN_AGENTS as readonly string[]).includes(opts.taskReviewAgent)) {
+      return opts.taskReviewAgent;
+    }
+    app.log.warn(
+      { name: opts.taskReviewAgent },
+      "[task-agent-resolve] task's reviewAgent names an unrecognized agent, falling through",
+    );
+  }
+
   const fromIssue = parseDirectiveLine(opts.issueBody, REVIEW_AGENT_LINE_RE);
   if (fromIssue !== null) {
+    if (fromIssue === "none" || fromIssue === "false") {
+      return null;
+    }
     if ((KNOWN_AGENTS as readonly string[]).includes(fromIssue)) return fromIssue;
     app.log.warn(
       { name: fromIssue },

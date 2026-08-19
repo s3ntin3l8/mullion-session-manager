@@ -113,8 +113,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return tasksRefreshInFlight;
     },
 
-    createTask: async (projectId, title, body) => {
-      const task = await api.createTask(projectId, title, body);
+    createTask: async (projectId, title, body, opts) => {
+      const task = await api.createTask(projectId, title, body, opts);
       void get().refreshTasks();
       return task;
     },
@@ -130,8 +130,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       void get().refreshTasks();
     },
 
-    claimTask: async (id) => {
-      const session = await api.claimTask(id);
+    claimTask: async (id, opts) => {
+      const session = await api.claimTask(id, opts);
       // Best-effort (Hermes review, PR #281): the claim itself already
       // succeeded and the caller already has `session` to open directly —
       // a transient failure in these follow-up refreshes must not surface

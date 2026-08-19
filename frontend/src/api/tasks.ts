@@ -21,16 +21,27 @@ export const tasksApi = {
   // Phase 6 (6.9/#233) — local-board creation, works with
   // MULLION_TASK_MASTER_ENABLED off. A task created here has no GitHub
   // issue link (issueNumber/htmlUrl stay null).
-  createTask: (projectId: number, title: string, body?: string | null) =>
+  createTask: (
+    projectId: number,
+    title: string,
+    body?: string | null,
+    opts?: { agent?: string | null; reviewAgent?: string | null },
+  ) =>
     request<Task>("/api/tasks", {
       method: "POST",
-      body: JSON.stringify({ projectId, title, body: body ?? undefined }),
+      body: JSON.stringify({
+        projectId,
+        title,
+        body: body ?? undefined,
+        agent: opts?.agent ?? undefined,
+        reviewAgent: opts?.reviewAgent ?? undefined,
+      }),
     }),
 
   // boardOrder is editable for any task; title/body only for a task with no
-  // linked GitHub issue; status only while the task is still backlog/ready
-  // (see routes/tasks.ts's own doc comment — claimed/in_progress/reviewing/
-  // done/failed require claim/approve/reject instead).
+  // linked GitHub issue; status, agent, and reviewAgent only while the task
+  // is still backlog/ready (see routes/tasks.ts's own doc comment —
+  // claimed/in_progress/reviewing/done/failed require claim/approve/reject instead).
   updateTask: (
     id: number,
     patch: {
@@ -38,6 +49,8 @@ export const tasksApi = {
       body?: string | null;
       status?: "backlog" | "ready";
       boardOrder?: number;
+      agent?: string | null;
+      reviewAgent?: string | null;
     },
   ) => request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
@@ -47,8 +60,11 @@ export const tasksApi = {
   // agent there seeded with the issue/task as its prompt, and returns the
   // spawned Session — same response shape createSession returns, plus
   // whether the seed prompt was actually delivered.
-  claimTask: (id: number) =>
-    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/claim`, { method: "POST" }),
+  claimTask: (id: number, opts?: { agent?: string | null; reviewAgent?: string | null }) =>
+    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/claim`, {
+      method: "POST",
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
 
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
   approveTask: (id: number) => request<Task>(`/api/tasks/${id}/approve`, { method: "POST" }),

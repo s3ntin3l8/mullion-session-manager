@@ -639,6 +639,26 @@
   font-size: 11.5px;
   color: var(--muted);
 }
+.task-detail-agents-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+.task-detail-agent-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.task-detail-agent-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 140px;
+}
 .task-detail-link {
   color: var(--accent-solid);
   text-decoration: none;
