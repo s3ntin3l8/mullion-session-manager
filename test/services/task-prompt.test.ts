@@ -279,6 +279,38 @@ describe("parseReviewFindings", () => {
     expect(parsed.findings).toEqual([]);
   });
 
+  // Hermes review, PR #733 — an LLM routinely emits a numeric string
+  // ("line": "42") rather than a bare number; coercing it is what keeps a
+  // real finding from silently vanishing.
+  it("coerces a numeric-string line to a number rather than dropping the finding", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "changes-requested",
+        summary: "s",
+        findings: [{ path: "a.go", line: "42", body: "b" }],
+      }),
+    );
+    expect(parsed.findings).toEqual([
+      { path: "a.go", line: 42, side: "RIGHT", severity: null, body: "b" },
+    ]);
+  });
+
+  // Hermes review, PR #733 — a 0/negative/fractional line would later fail
+  // as a GitHub inline-comment anchor (createPullRequestReview); dropping it
+  // here is better than surfacing a 422 downstream.
+  it("drops a finding whose line is zero, negative, fractional, or non-numeric text", () => {
+    for (const line of [0, -1, 3.5, "not-a-number"]) {
+      const parsed = parseReviewFindings(
+        JSON.stringify({
+          verdict: "changes-requested",
+          summary: "s",
+          findings: [{ path: "a.go", line, body: "b" }],
+        }),
+      );
+      expect(parsed.findings).toEqual([]);
+    }
+  });
+
   // The safety property Change 1 exists for: an agent that ignores the JSON
   // contract must never silently read as "clean" — it must default to the
   // verdict that keeps a human in the loop.
