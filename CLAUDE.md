@@ -9,6 +9,11 @@ and read [`docs/architecture.md`](docs/architecture.md), plus the
 "non-obvious model" bullet below, before touching
 `src/services/pty-manager.ts` or the terminal WS protocol.
 
+> **Before anything else, read [`AGENTS.md`](AGENTS.md).** It has the
+> non-negotiables — worktree usage, branch/PR rules, the pre-push gate, and
+> the review loop — in one short page. Everything below is depth on top of
+> that, not a replacement for it.
+
 ## Commands (Makefile)
 
 | Command              | Does                                                                            |
