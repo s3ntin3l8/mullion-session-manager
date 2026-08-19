@@ -948,6 +948,31 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("does not record a draft PR that opened after the task already left 'reviewing' (independent review, PR #725)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createReviewingTaskWithNoPR(app);
+      // Simulates a concurrent give-up landing while openDraftPRForTask's
+      // own network call is still in flight — by the time it resolves, the
+      // task is no longer "reviewing".
+      mockOpenDraftPRForTask.mockImplementation(async () => {
+        app.db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, taskId)).run();
+        return {
+          ok: true,
+          prUrl: "https://github.com/test-owner/test-repo/pull/99",
+          prNumber: 99,
+        };
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.prUrl).toBeNull();
+      expect(row.prNumber).toBeNull();
+
+      await app.close();
+    });
+
     it("does not touch a reviewing task that already has a PR", async () => {
       const app = await buildApp();
       await createReviewingTaskWithNoPR(app, 7);

@@ -804,9 +804,12 @@ exists.
 inside `reconcileTasks`, separate from `processReviewingTasks` — that one is
 joined on the _review_ session and can't see a task with no review agent
 configured). Every reconcile tick, any `reviewing` task with `prNumber IS
-NULL` gets another `openDraftPRForTask` attempt, at most once per 5 minutes
-per task (a process-local, in-memory backoff — not durable, and deliberately
-so: losing it on a restart just costs one harmless extra attempt). This is
+NULL` gets another `openDraftPRForTask` attempt — starting at 5 minutes after
+the last one and doubling on every further consecutive failure, capped at 1
+hour, so a permanently-stuck reason doesn't retry forever at full frequency
+(process-local, in-memory backoff — not durable, and deliberately so: losing
+it on a restart just costs one harmless extra attempt; deliberately not a
+give-up cap either — see the constant's own comment). This is
 what makes "the worker cleaned up its worktree and ended its turn again,
 trusting Mullion to push and open the PR" (task-prompt.ts's own framing)
 actually work when the first, inline attempt at `→ reviewing` failed —

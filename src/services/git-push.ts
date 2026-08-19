@@ -37,6 +37,15 @@
 // multi-minute pre-push suite is not something a synchronous HTTP handler
 // can support running, so this skips it unconditionally rather than trying
 // to bound it.
+//
+// Known gap this doesn't cover (independent review): a repo using Git LFS
+// relies on its OWN `pre-push` hook (`git lfs pre-push`) to actually upload
+// LFS objects — `--no-verify` skips that too, so a promoted branch's LFS
+// pointers can reference objects that were never uploaded. "CI on the PR is
+// the real gate" doesn't hold here; CI can't recover an object this push
+// never sent. No Task Master target repo uses LFS today — if one starts to,
+// this needs its own fix (e.g. an explicit `git lfs push` before the
+// `--no-verify` push), not a blanket workaround.
 import { spawn as spawnChild } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 

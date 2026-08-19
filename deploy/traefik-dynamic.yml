@@ -152,5 +152,13 @@ http:
     claude-remote-session-transport:
       forwardingTimeouts:
         dialTimeout: 30s
-        responseHeaderTimeout: 30s
+        # 150s, not Traefik's own 30s-ish default (independent review) — the
+        # task-approve endpoint (POST /api/tasks/:id/approve) synchronously
+        # pushes the task's branch server-side before responding, and
+        # git-push.ts's own GIT_TIMEOUT_MS budgets up to 120s for that single
+        # push (raised from 30s so a target repo's pre-push hook can't starve
+        # it — see that file's header comment). A shorter value here means
+        # the browser gets a 504 from Traefik for a request that goes on to
+        # succeed moments later server-side.
+        responseHeaderTimeout: 150s
         idleConnTimeout: 1800s

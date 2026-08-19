@@ -159,11 +159,26 @@ async function maybeOpenDraftPR(
     );
     return;
   }
-  app.db
+  // CAS'd on `status = "reviewing"` (independent review, PR #725) — the
+  // retry sweep below awaits a real network call (openDraftPRForTask) per
+  // task, which is long enough for a concurrent give-up/approve/reject to
+  // resolve the task out from under it. Without this guard, a give-up that
+  // lands mid-call flips the task to "failed" and its own
+  // closeDraftPRForTask no-ops (prNumber was still null when it ran) — this
+  // write would then land anyway, leaving a "failed" task with an open
+  // draft PR nothing will ever close.
+  const updated = app.db
     .update(tasks)
     .set({ prUrl: result.prUrl, prNumber: result.prNumber })
-    .where(eq(tasks.id, task.id))
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
     .run();
+  if (updated.changes === 0) {
+    app.log.info(
+      { taskId: task.id, prUrl: result.prUrl },
+      "task reconcile: draft PR opened but the task left 'reviewing' before this could record it — leaving the PR as-is for a human to notice",
+    );
+    return;
+  }
   app.log.info({ taskId: task.id, prUrl: result.prUrl }, "task reconcile: draft PR opened");
 }
 
@@ -212,8 +227,13 @@ const MAX_DRAFT_PR_RETRIES_PER_SWEEP = 20;
 const MAX_DRAFT_PR_RETRY_ENTRIES = 500;
 const draftPrRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
 
+// `attempts` is stored post-increment (1 after the very first attempt —
+// see the `.set()` call below), so the exponent is `attempts - 1`: the
+// first wait is exactly DRAFT_PR_RETRY_TTL_MS (2**0), then it doubles from
+// there. Independent review, PR #726 — using `attempts` directly here made
+// the very first backoff 10 minutes, not the 5 the constant name implies.
 function draftPrRetryBackoffMs(attempts: number): number {
-  return Math.min(DRAFT_PR_RETRY_TTL_MS * 2 ** attempts, DRAFT_PR_RETRY_MAX_TTL_MS);
+  return Math.min(DRAFT_PR_RETRY_TTL_MS * 2 ** (attempts - 1), DRAFT_PR_RETRY_MAX_TTL_MS);
 }
 
 async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
@@ -230,31 +250,67 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
     .all();
   if (rows.length === 0) return;
 
+  // Grouped by host and run concurrently (independent review, PR #725) —
+  // same shape as the claimed/in_progress sweep and processReviewingTasks
+  // below. Each `maybeOpenDraftPR` call can now legitimately take up to
+  // GIT_TIMEOUT_MS (120s, git-push.ts) for a single push; a flat sequential
+  // loop over every stranded task regardless of host would let one slow or
+  // unreachable host serialize into a multi-minute stall of this sweep,
+  // ahead of (and inside the same taskReconcileRunning-guarded tick as) the
+  // budget force-fail for unrelated claimed/in_progress tasks on OTHER
+  // hosts — the kind of "hard backstop, not a negotiation" that sweep's own
+  // doc comment describes.
+  const byHost = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const group = byHost.get(row.project.hostId) ?? [];
+    group.push(row);
+    byHost.set(row.project.hostId, group);
+  }
+
   const now = Date.now();
+  // Shared across every host's concurrent loop below on purpose — this is
+  // still one sweep-wide cap, not a per-host one. Safe without a lock: JS
+  // only interleaves at `await` points, and every check-then-increment
+  // below is synchronous, so two host loops can never both pass the check
+  // before either increments.
   let attempted = 0;
 
-  for (const { task, project } of rows) {
-    if (attempted >= MAX_DRAFT_PR_RETRIES_PER_SWEEP) break;
+  await Promise.all(
+    [...byHost.values()].map(async (hostRows) => {
+      for (const { task, project } of hostRows) {
+        if (attempted >= MAX_DRAFT_PR_RETRIES_PER_SWEEP) return;
 
-    const state = draftPrRetryState.get(task.id);
-    if (state !== undefined && now - state.lastAttemptedAt < draftPrRetryBackoffMs(state.attempts))
-      continue;
+        const state = draftPrRetryState.get(task.id);
+        if (
+          state !== undefined &&
+          now - state.lastAttemptedAt < draftPrRetryBackoffMs(state.attempts)
+        )
+          continue;
 
-    attempted++;
-    if (!draftPrRetryState.has(task.id) && draftPrRetryState.size >= MAX_DRAFT_PR_RETRY_ENTRIES) {
-      const oldest = draftPrRetryState.keys().next().value;
-      if (oldest !== undefined) draftPrRetryState.delete(oldest);
-    }
-    draftPrRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
+        attempted++;
+        if (
+          !draftPrRetryState.has(task.id) &&
+          draftPrRetryState.size >= MAX_DRAFT_PR_RETRY_ENTRIES
+        ) {
+          const oldest = draftPrRetryState.keys().next().value;
+          if (oldest !== undefined) draftPrRetryState.delete(oldest);
+        }
+        draftPrRetryState.set(task.id, {
+          lastAttemptedAt: now,
+          attempts: (state?.attempts ?? 0) + 1,
+        });
 
-    // maybeOpenDraftPR already re-reads the task's current git status and
-    // is idempotent/best-effort (it's the exact same call the "-> reviewing"
-    // transition makes) — nothing here duplicates that logic. A successful
-    // open sets tasks.prNumber, which drops the task out of this sweep's own
-    // WHERE clause on the next tick, so there's no need to reset `attempts`
-    // back to 0 here on success — it simply never gets read again.
-    await maybeOpenDraftPR(app, task, project);
-  }
+        // maybeOpenDraftPR already re-reads the task's current git status
+        // and is idempotent/best-effort (it's the exact same call the
+        // "-> reviewing" transition makes) — nothing here duplicates that
+        // logic. A successful open sets tasks.prNumber, which drops the
+        // task out of this sweep's own WHERE clause on the next tick, so
+        // there's no need to reset `attempts` back to 0 here on success —
+        // it simply never gets read again.
+        await maybeOpenDraftPR(app, task, project);
+      }
+    }),
+  );
 }
 
 /**
