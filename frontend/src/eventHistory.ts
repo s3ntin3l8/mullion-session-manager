@@ -1,4 +1,5 @@
 import type { NotificationEvent, StoredEventRow } from "./api/index.js";
+import { ALL_KINDS } from "./eventDescriptions.js";
 
 // Issue #213 (roadmap 4.7) — the frontend half of "unified session history".
 // The backend query surface (GET /api/events, api.listEventHistory) already
@@ -8,34 +9,13 @@ import type { NotificationEvent, StoredEventRow } from "./api/index.js";
 // NotificationEvents from the store — see that component's own comment for
 // why this is "swap in a second data source", not "build new filters".
 //
-// KIND_LABELS lives here (not in SessionTimeline.tsx, where the equivalent
-// list originally lived) specifically so this module can validate a stored
-// row's `kind` against it without an import cycle: SessionTimeline.tsx
-// imports FROM here, so the reverse can't also be true.
-export const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
-  attention: "Attention",
-  status_change: "Status",
-  title_change: "Title",
-  file_change: "Files",
-  review_gate: "Review",
-  promote_request: "Promote",
-  permission_request: "Permission",
-  stop_failure: "Stop",
-  tool_failure: "Tool",
-  session_end: "Exit",
-  plan_ready: "Plan",
-  // Rich statuses (issue: extend surfaced session statuses).
-  elicitation: "Elicitation",
-  // OpenCode v2 events.
-  question: "Question",
-  todo: "Todo",
-  session_diff: "Diff",
-  // Issue #404.
-  dev_server_detected: "Dev Server",
-};
-
-export const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];
-
+// KIND_LABELS/ALL_KINDS moved to eventDescriptions.ts (making notifications
+// relevant/scannable) so NotificationBell.tsx's kind pill and this file's
+// stored-row validation share one label vocabulary instead of two that could
+// drift — that module has no import of its own that would cycle back here
+// (it only pulls the `NotificationEvent` type from api/index.ts), so this
+// direction is safe. ALL_KINDS is re-imported here (not just re-exported)
+// because KNOWN_KINDS below needs it directly.
 const KNOWN_KINDS = new Set<string>(ALL_KINDS);
 
 function isKnownKind(kind: string): kind is NotificationEvent["kind"] {

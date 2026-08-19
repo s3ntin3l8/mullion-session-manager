@@ -108,5 +108,14 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
         dismissedEventKeys: { ...state.dismissedEventKeys, [eventKey(sessionId, seq)]: true },
       }));
     },
+
+    dismissEvents: (sessionId, seqs) => {
+      if (seqs.length === 0) return;
+      set((state) => {
+        const dismissedEventKeys = { ...state.dismissedEventKeys };
+        for (const seq of seqs) dismissedEventKeys[eventKey(sessionId, seq)] = true;
+        return { dismissedEventKeys };
+      });
+    },
   };
 };

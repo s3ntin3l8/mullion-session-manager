@@ -232,7 +232,7 @@ describe("AttentionTracker.resolveDeferredTurnEnd", () => {
     expect(tracker.turnEndPingSent).toBe(false);
   });
 
-  it("fires the deferred agentIdle ping once the turn has ended and nothing is outstanding", () => {
+  it("SCHEDULES (not fires) the agentIdle ping once the turn has ended and nothing is outstanding, then fires it once its settle window (ATTENTION_SETTLE_MS) elapses", () => {
     const { tracker, emitEvent } = makeTracker();
     tracker.lastTurnEndedAt = Date.now();
     tracker.setBackgroundTasks([]);
@@ -240,7 +240,14 @@ describe("AttentionTracker.resolveDeferredTurnEnd", () => {
 
     tracker.resolveDeferredTurnEnd();
 
+    // The one-shot guard latches immediately (so a second concurrent call
+    // can't double-schedule) but nothing is emitted yet — see
+    // emitAttentionSignalDeferred's own doc comment.
     expect(tracker.turnEndPingSent).toBe(true);
+    expect(emitEvent).not.toHaveBeenCalled();
+
+    tracker.drainDeferred(Date.now() + 3_000);
+
     expect(emitEvent).toHaveBeenCalledWith(
       "attention",
       expect.objectContaining({ attention: true, signal: "agentIdle" }),
@@ -252,12 +259,195 @@ describe("AttentionTracker.resolveDeferredTurnEnd", () => {
     tracker.lastTurnEndedAt = Date.now();
     tracker.setBackgroundTasks([]);
     tracker.resolveDeferredTurnEnd();
+    // Let the first ping actually fire, so the guard below is proven
+    // against a genuinely already-PINGED latch, not merely an already-
+    // scheduled one.
+    tracker.drainDeferred(Date.now() + 3_000);
     expect(tracker.turnEndPingSent).toBe(true);
     emitEvent.mockClear();
 
     // A later, unrelated call (e.g. a reordered SubagentStop) must not
-    // re-fire a duplicate "Finished" ping for this same still-latched turn.
+    // re-schedule (let alone re-fire) a duplicate "Finished" ping for this
+    // same still-latched turn.
     tracker.resolveDeferredTurnEnd();
+    tracker.drainDeferred(Date.now() + 3_000);
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+});
+
+// Settle-window mechanism (ATTENTION_SETTLE_MS) — the core fix for the
+// 537-of-538-measured phantom opencode permission notifications (see the PR
+// description). emitAttentionSignalDeferred() schedules a kind into the
+// `deferred` map WITHOUT touching `state`/emitting anything; drainDeferred()
+// flushes anything past its dueAt; cancelDeferred()/clearIfConfirmedKind()/
+// clearAttention() drop a pending entry with NOTHING ever emitted — that
+// silence (not a confirm-then-immediately-clear race) is what makes a
+// fast-resolving permission produce zero bell rows, zero timeline rows, zero
+// pushes.
+describe("AttentionTracker settle window (emitAttentionSignalDeferred/drainDeferred/cancelDeferred)", () => {
+  it("a resolution arriving BEFORE the settle window elapses cancels the deferred emit with ZERO events — no attention, no paired NotificationEvent", () => {
+    const { tracker, emitEvent } = makeTracker();
+
+    tracker.emitAttentionSignalDeferred("permissionRequest", { tool: "opencode" }, [
+      {
+        kind: "permission_request",
+        payload: { tool: "opencode", summary: "external_directory /x/*" },
+      },
+    ]);
+    expect(emitEvent).not.toHaveBeenCalled();
+
+    // Auto-approved well inside the window — clearIfConfirmedKind is what
+    // permission_resolved (hook-handlers.ts) actually calls; it cancels a
+    // still-PENDING deferred entry even though nothing has confirmed yet
+    // (state never left "idle" — see its own doc comment for why this is
+    // the PRIMARY cancel path, not a fallback).
+    tracker.clearIfConfirmedKind("permissionRequest");
+
+    // Even advancing well past the window now finds nothing left to flush.
+    tracker.drainDeferred(Date.now() + 5_000);
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(tracker.state.state).toBe("idle");
+  });
+
+  it("confirm-after-window emits alsoEmit FIRST, then the attention event, preserving today's ordering", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    tracker.emitAttentionSignalDeferred(
+      "permissionRequest",
+      { tool: "Bash", summary: "rm -rf /tmp/x" },
+      [{ kind: "permission_request", payload: { tool: "Bash", summary: "rm -rf /tmp/x" } }],
+    );
+    expect(emitEvent).not.toHaveBeenCalled();
+
+    tracker.drainDeferred(now + 2_000);
+
+    expect(emitEvent).toHaveBeenNthCalledWith(1, "permission_request", {
+      tool: "Bash",
+      summary: "rm -rf /tmp/x",
+    });
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      "attention",
+      expect.objectContaining({ attention: true, signal: "permissionRequest", tool: "Bash" }),
+    );
+    expect(tracker.state.state).toBe("attention");
+    expect(tracker.state.confirmedKind).toBe("permissionRequest");
+  });
+
+  it("a not-yet-due deferred emit is left alone by a drain that hasn't reached its window yet", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    tracker.emitAttentionSignalDeferred("toolFailure", { title: "Tool failed" });
+    tracker.drainDeferred(now + 500); // well short of toolFailure's 2s window
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(tracker.state.state).toBe("idle");
+  });
+
+  it("two deferred kinds in flight at once each flush independently on their own dueAt — the Map-keyed-by-kind design, not a single slot", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    // permissionRequest: 2s window. toolFailure: also 2s, but scheduled
+    // later in wall-clock terms — its own dueAt is independent.
+    tracker.emitAttentionSignalDeferred("permissionRequest", { tool: "Bash" }, [
+      { kind: "permission_request", payload: { tool: "Bash" } },
+    ]);
+    tracker.emitAttentionSignalDeferred("toolFailure", { title: "Tool failed" });
+
+    // Cancelling ONE must never touch the OTHER's own pending entry.
+    tracker.cancelDeferred("permissionRequest");
+    tracker.drainDeferred(now + 5_000);
+
+    // permissionRequest was cancelled — neither its alsoEmit nor its
+    // attention event ever appears.
+    expect(emitEvent).not.toHaveBeenCalledWith("permission_request", expect.anything());
+    expect(emitEvent).not.toHaveBeenCalledWith(
+      "attention",
+      expect.objectContaining({ signal: "permissionRequest" }),
+    );
+    // toolFailure, never cancelled, confirms on its own.
+    expect(emitEvent).toHaveBeenCalledWith(
+      "attention",
+      expect.objectContaining({ attention: true, signal: "toolFailure" }),
+    );
+  });
+
+  it("a pending agentIdle survives arbitrary plain output (deliberately NOT output-cancellable — see ATTENTION_SETTLE_MS's own comment) and still confirms on tick", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    tracker.emitAttentionSignalDeferred("agentIdle", {});
+    // A plain output-driven transition through the byte-parsed machine (the
+    // agent's own post-Stop prompt redraw) must not touch the deferred map
+    // at all — applyAttentionTransition only ever mutates `state`/emits via
+    // the machine's own `emit` entries, which a bare "output" input from
+    // idle never produces.
+    tracker.applyAttentionTransition(advanceAttention(tracker.state, { type: "output", now }));
+    expect(emitEvent).not.toHaveBeenCalled();
+
+    tracker.drainDeferred(now + 3_000);
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      "attention",
+      expect.objectContaining({ attention: true, signal: "agentIdle" }),
+    );
+  });
+
+  it("a pending agentIdle IS cancelled by cancelDeferred — what hook-handlers.ts's progress case calls on a phase:'generating' message", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    tracker.emitAttentionSignalDeferred("agentIdle", {});
+    tracker.cancelDeferred("agentIdle");
+    tracker.drainDeferred(now + 5_000);
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(["toolFailure", "apiError"] as const)(
+    "a pending %s IS cancelled by cancelDeferred — what pty-manager.ts's onData calls on the agent's next real output chunk",
+    (kind) => {
+      const { tracker, emitEvent } = makeTracker();
+      const now = Date.now();
+
+      tracker.emitAttentionSignalDeferred(kind, { title: "x" });
+      tracker.cancelDeferred(kind);
+      tracker.drainDeferred(now + 5_000);
+
+      expect(emitEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clearDeferred() drops everything pending with nothing emitted — the exit/respawn path", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    tracker.emitAttentionSignalDeferred("permissionRequest", { tool: "Bash" }, [
+      { kind: "permission_request", payload: { tool: "Bash" } },
+    ]);
+    tracker.emitAttentionSignalDeferred("agentIdle", {});
+
+    tracker.clearDeferred();
+    tracker.drainDeferred(now + 5_000);
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("clearAttention() also drops every pending deferred emit, not just the confirmed flag — a fresh human prompt supersedes whatever was still settling", () => {
+    const { tracker, emitEvent } = makeTracker();
+    const now = Date.now();
+
+    tracker.emitAttentionSignalDeferred("permissionRequest", { tool: "Bash" }, [
+      { kind: "permission_request", payload: { tool: "Bash" } },
+    ]);
+    tracker.clearAttention(); // turn_start / a genuine keystroke
+    emitEvent.mockClear();
+
+    tracker.drainDeferred(now + 5_000);
 
     expect(emitEvent).not.toHaveBeenCalled();
   });

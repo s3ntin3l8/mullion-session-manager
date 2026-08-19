@@ -46,6 +46,12 @@ export const STORAGE_KEYS = {
   taskBlockedOnlyFilter: "crs.taskBlockedOnlyFilter",
   // #701
   taskParentFilter: "crs.taskParentFilter",
+  // Making notifications relevant/scannable — SessionTimeline.tsx's kind
+  // filter and "Only attention" quick toggle previously reset to their
+  // defaults on every panel remount (plain useState); persisting them here
+  // is what makes them survive closing and reopening the panel.
+  timelineKinds: "crs.timelineKinds",
+  timelineOnlyAttention: "crs.timelineOnlyAttention",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

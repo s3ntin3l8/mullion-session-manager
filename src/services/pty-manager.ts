@@ -1616,6 +1616,7 @@ export class Session {
     this.attention.backgroundTasks = [];
     this.attention.backgroundTasksAt = null;
     this.attention.state = INITIAL_ATTENTION_STATE;
+    this.attention.clearDeferred();
     // Re-apply restored state if we had it, so the UI sees the known
     // pre-restart state until hooks catch up with fresh data.
     if (savedState) {
@@ -1946,10 +1947,27 @@ export class Session {
         this.attention.applyAttentionTransition(
           advanceAttention(this.attention.state, { type: "signal", kind: candidateKind, now }),
         );
+        // See the cancelDeferred() call below — a genuine candidate signal
+        // is real program output by construction (a bell/OSC/title change
+        // can't fire from nothing), so it counts too.
+        this.attention.cancelDeferred("toolFailure");
+        this.attention.cancelDeferred("apiError");
       } else if (!this.redrawNudge.suppressingOutput) {
         this.attention.applyAttentionTransition(
           advanceAttention(this.attention.state, { type: "output", now }),
         );
+        // Settle-window cancel (attention-tracker.ts's ATTENTION_SETTLE_MS):
+        // for these two kinds specifically, the agent's own next output
+        // chunk genuinely IS the resolution — "it recovered on its own
+        // turn" (140/140 measured tool failures cleared this way) — unlike
+        // permissionRequest/agentIdle, which need an explicit hook message
+        // to cancel (see ATTENTION_SETTLE_MS's own comment for why those
+        // two would be wrongly killed by this same gate). Gated on
+        // !suppressingOutput for the identical reason the plain-output
+        // `{type:"output"}` feed just above is: Mullion's own synthetic
+        // resize repaint is not the agent doing anything.
+        this.attention.cancelDeferred("toolFailure");
+        this.attention.cancelDeferred("apiError");
       }
 
       for (const listener of this.dataListeners) listener(chunk);
@@ -1985,6 +2003,12 @@ export class Session {
       // handler is the only place that path passes through before a later
       // respawn's first chunk arrives.
       this.detectCarry = "";
+      // A settling permission/tool-failure/turn-end ping has nothing left
+      // to settle for once the process is gone — drop it rather than let a
+      // stray drainDeferred() tick fire it for a session that already
+      // reported "exited" (or, if reattached, that a fresh incarnation's
+      // own hooks will re-raise from scratch if still relevant).
+      this.attention.clearDeferred();
       // Issue #166: mirrors terminal.ts's own onExit handler, which sends a
       // `{type:"exited"}` control message to every attached browser socket
       // on this exact same event regardless of whether the client died from
@@ -2368,6 +2392,10 @@ export class Session {
       emitEvent: (kind, payload) => self.emitEvent(kind, payload),
       emitAttentionSignalWithExtras: (kind, extras) =>
         self.attention.emitAttentionSignalWithExtras(kind, extras),
+      emitAttentionSignalDeferred: (kind, extras, alsoEmit) =>
+        self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit),
+      cancelDeferred: (kind) => self.attention.cancelDeferred(kind),
+      markStateDirty: () => self.stateFile.schedule(),
       clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
       clearAttention: () => self.attention.clearAttention(),
       resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
@@ -2584,6 +2612,10 @@ export class Session {
     this.attention.applyAttentionTransition(
       advanceAttention(this.attention.state, { type: "tick", now }),
     );
+    // Settle-window flush (see attention-tracker.ts's ATTENTION_SETTLE_MS) —
+    // piggy-backs on this same tick rather than a second timer, same
+    // reasoning as the "tick" input just above.
+    this.attention.drainDeferred(now);
 
     const hadSustainedStreak =
       this.activityStreakStart !== null &&

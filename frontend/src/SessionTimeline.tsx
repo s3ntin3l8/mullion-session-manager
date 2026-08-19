@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore, eventKey } from "./store/index.js";
-import { describeEvent } from "./eventDescriptions.js";
-import { api } from "./api/index.js";
-import type { NotificationEvent, Session, StoredEventRow } from "./api/index.js";
-import { formatRelativeAge } from "./relativeTime.js";
 import {
   ALL_KINDS,
   KIND_LABELS,
-  fromLiveEvent,
-  mergeTimelineEvents,
-  toTimelineEvent,
-} from "./eventHistory.js";
+  describeEvent,
+  notifyLabel,
+  notifySeverity,
+  SIGNAL_TO_EVENT_KIND,
+} from "./eventDescriptions.js";
+import { api } from "./api/index.js";
+import type { NotificationEvent, Session, StoredEventRow } from "./api/index.js";
+import { formatRelativeAge } from "./relativeTime.js";
+import { fromLiveEvent, mergeTimelineEvents, toTimelineEvent } from "./eventHistory.js";
 import type { TimelineEvent } from "./eventHistory.js";
+import { truncateHead } from "./lib/truncatePath.js";
+import { STORAGE_KEYS, readJSON, readBool, writeJSON, writeBool } from "./lib/persistedState.js";
 
 export interface SessionTimelineParams {
   // Phase 6 (6.5/#218) widened this from a single required `sessionId` to
@@ -45,8 +48,94 @@ export interface SessionTimelineParams {
 // live in-memory store: it also fetches persisted `session_events` history
 // (GET /api/events, api.listEventHistory) and merges the two (see
 // eventHistory.ts's mergeTimelineEvents). KIND_LABELS/ALL_KINDS moved to
-// eventHistory.ts so that module can validate a stored row's `kind` without
-// this file importing back from it.
+// eventDescriptions.ts (making notifications relevant/scannable) so this
+// panel's kind-chip vocabulary and NotificationBell.tsx's pill vocabulary
+// share one source instead of two that could drift.
+
+// Making notifications relevant/scannable — title_change (86% of every
+// row this app has ever persisted) and file_change (another 2%) are opt-out
+// of the DEFAULT filter, not removed as chip options: a session actively
+// spamming title updates used to be the first thing a freshly-opened
+// timeline showed, burying any actual signal under routine chatter. Both
+// stay one click away via their own chips.
+const DEFAULT_ACTIVE_KINDS = ALL_KINDS.filter(
+  (kind) => kind !== "title_change" && kind !== "file_change",
+);
+
+/** Restores a persisted kind selection, validated against ALL_KINDS so a
+ * future release dropping/renaming a kind can't leave a stale, unrecognized
+ * string permanently stuck in someone's localStorage. Absent/invalid
+ * persisted state falls back to DEFAULT_ACTIVE_KINDS, not "everything" —
+ * this IS the default now. */
+function loadPersistedActiveKinds(): Set<NotificationEvent["kind"]> {
+  const stored = readJSON<string[] | null>(STORAGE_KEYS.timelineKinds, null);
+  if (stored === null) return new Set(DEFAULT_ACTIVE_KINDS);
+  const known = new Set<string>(ALL_KINDS);
+  const restored = stored.filter((k) => known.has(k)) as NotificationEvent["kind"][];
+  return restored.length > 0 ? new Set(restored) : new Set(DEFAULT_ACTIVE_KINDS);
+}
+
+// How close in time a specific-kind event (e.g. permission_request) and its
+// paired `attention` event (see eventDescriptions.ts's SIGNAL_TO_EVENT_KIND)
+// must land to be treated as the SAME occurrence for row-suppression
+// purposes. NOT uniformly same-tick: permission_request's own event and its
+// paired `attention` really are emitted back-to-back in one call
+// (attention-tracker.ts's emitAttentionSignalDeferred/drainDeferred —
+// `alsoEmit` fires immediately before `attention`), but tool_failure/
+// stop_failure's own event fires immediately at the hook while the paired
+// `attention` only lands after the full settle window (up to
+// ATTENTION_SETTLE_MS, currently 2000ms) — so this window must stay
+// generously larger than that settle delay, not just large enough for WS
+// delivery/render jitter. Do not shrink this without checking
+// ATTENTION_SETTLE_MS's largest value first.
+const PAIRED_ROW_WINDOW_MS = 5_000;
+
+/** Drops an `attention` event when a specific-kind sibling for the SAME
+ * occurrence already covers it — e.g. a `permission_request` row and its
+ * paired `attention`/`permissionRequest` row would otherwise both describe
+ * the exact same request. NotificationBell.tsx doesn't need this (it only
+ * ever shows ONE of the two per notifyKind's classification, never both),
+ * but the timeline shows every describable event, so without this it always
+ * doubled every one of the seven paired kinds. Text-based folding (see
+ * NotificationBell.tsx's foldConsecutiveRows) can't substitute: the two
+ * rows' text comes from different describeEvent branches and rarely
+ * matches verbatim (e.g. tool_failure's own case vs. attention/toolFailure's
+ * case format the same error differently). */
+// Hermes review, PR #717 — the naive version re-scanned the FULL merged
+// event list (events.some(...)) for every single `attention` row, so a
+// long-lived session with thousands of routine rows (title_change alone is
+// ~86% of every row ever persisted, per eventHistory.ts) turned into
+// millions of comparisons per live tick. Indexing by `sessionId|kind` first
+// means each attention row's lookup only scans events of its OWN paired
+// kind (e.g. permission_request occurrences — typically a tiny fraction of
+// the total) instead of the entire history.
+function suppressPairedAttentionRows(events: TimelineEvent[]): TimelineEvent[] {
+  const byKey = new Map<string, TimelineEvent[]>();
+  for (const event of events) {
+    const key = `${event.sessionId}|${event.kind}`;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(event);
+    else byKey.set(key, [event]);
+  }
+  return events.filter((event) => {
+    if (event.kind !== "attention") return true;
+    const signal = typeof event.payload.signal === "string" ? event.payload.signal : null;
+    if (signal === null) return true;
+    const pairedKind = SIGNAL_TO_EVENT_KIND[signal];
+    if (pairedKind === undefined) return true;
+    const bucket = byKey.get(`${event.sessionId}|${pairedKind}`);
+    if (bucket === undefined) return true;
+    return !bucket.some(
+      (other) => other !== event && Math.abs(other.ts - event.ts) <= PAIRED_ROW_WINDOW_MS,
+    );
+  });
+}
+
+// Row text is head-truncated (truncatePath.ts) past this length — same
+// "the timeline is a fixed-width dockview panel, calibrated by eye" posture
+// as NotificationBell.tsx's own NOTIF_ROW_TEXT_MAX, just a bit more generous
+// since a timeline row doesn't also carry a kind pill competing for width.
+const TIMELINE_ROW_TEXT_MAX = 100;
 
 // Phase 5 (Track A, #195/5.5a) — group/filter the timeline by the subagent
 // that produced each event. `agentId` rides file_change/tool_failure/
@@ -130,9 +219,27 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [allSessions, sessionIdsKey],
   );
-  const [activeKinds, setActiveKinds] = useState<Set<NotificationEvent["kind"]>>(
-    () => new Set(ALL_KINDS),
+  // Making notifications relevant/scannable — persisted across panel
+  // remounts (see loadPersistedActiveKinds' own comment); defaults to
+  // DEFAULT_ACTIVE_KINDS (everything except title_change/file_change), not
+  // ALL_KINDS.
+  const [activeKinds, setActiveKinds] =
+    useState<Set<NotificationEvent["kind"]>>(loadPersistedActiveKinds);
+  useEffect(() => {
+    writeJSON(STORAGE_KEYS.timelineKinds, Array.from(activeKinds));
+  }, [activeKinds]);
+  // Making notifications relevant/scannable — a quick, persisted toggle
+  // that narrows to only notifySeverity()-classified rows (the SAME
+  // notify-worthy set NotificationBell.tsx's feed already shows), layered
+  // ON TOP of activeKinds rather than replacing it — so turning it back off
+  // restores whatever kind selection was already in place, instead of
+  // resetting it.
+  const [onlyAttention, setOnlyAttention] = useState<boolean>(() =>
+    readBool(STORAGE_KEYS.timelineOnlyAttention, false),
   );
+  useEffect(() => {
+    writeBool(STORAGE_KEYS.timelineOnlyAttention, onlyAttention);
+  }, [onlyAttention]);
   // Empty set = no agent filtering (show everything, including unattributed
   // events) — unlike activeKinds above, this can't default to "every known
   // key selected" since the key set grows as new subagents appear over the
@@ -281,7 +388,11 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // for the sidebar's status line, just over the whole history instead of
   // only the newest entry.
   const described = useMemo<DescribedEvent[]>(() => {
-    const merged = mergeTimelineEvents(historyEvents, liveEvents);
+    // Making notifications relevant/scannable — suppressPairedAttentionRows
+    // runs BEFORE describeEvent, on the raw merged list: it needs the OTHER
+    // sibling events still present to detect a pairing, so it can't run on
+    // an already-filtered `result`.
+    const merged = suppressPairedAttentionRows(mergeTimelineEvents(historyEvents, liveEvents));
     const result: DescribedEvent[] = [];
     for (const event of merged) {
       const d = describeEvent(event);
@@ -365,6 +476,10 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     const query = search.trim().toLowerCase();
     return described.filter(({ event, text }) => {
       if (!activeKinds.has(event.kind)) return false;
+      // Making notifications relevant/scannable — layered on top of
+      // activeKinds (see onlyAttention's own state comment), not a
+      // replacement for it.
+      if (onlyAttention && notifySeverity(event) === null) return false;
       if (query !== "" && !text.toLowerCase().includes(query)) return false;
       if (reachableActiveAgentKeys.size > 0) {
         const key = eventAgentId(event) ?? UNATTRIBUTED_AGENT_KEY;
@@ -372,7 +487,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
       }
       return true;
     });
-  }, [described, activeKinds, search, reachableActiveAgentKeys]);
+  }, [described, activeKinds, onlyAttention, search, reachableActiveAgentKeys]);
 
   const toggleKind = (kind: NotificationEvent["kind"]) => {
     setActiveKinds((prev) => {
@@ -413,6 +528,17 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Search timeline"
         />
+        {/* Making notifications relevant/scannable — layered on top of the
+            kind chips below, not a replacement (see onlyAttention's own
+            state comment). */}
+        <button
+          type="button"
+          className={`session-timeline-kind-chip session-timeline-only-attention${onlyAttention ? " active" : ""}`}
+          aria-pressed={onlyAttention}
+          onClick={() => setOnlyAttention((v) => !v)}
+        >
+          Only attention
+        </button>
         <div className="session-timeline-kinds" role="group" aria-label="Filter by kind">
           {ALL_KINDS.map((kind) => (
             <button
@@ -484,48 +610,59 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
         </div>
       ) : (
         <div className="session-timeline-list cmux-scroll">
-          {filtered.map(({ event, text }) => (
-            <div
-              key={
-                event.rowId !== undefined
-                  ? `h:${event.rowId}`
-                  : eventKey(event.sessionId ?? -1, event.seq)
-              }
-              className="session-timeline-row"
-            >
-              <span className="session-timeline-row-time">{formatRelativeAge(event.ts)}</span>
-              <span className={`session-timeline-row-kind kind-${event.kind}`}>
-                {KIND_LABELS[event.kind]}
-              </span>
-              <span className="session-timeline-row-text">
-                {text}
-                {/* Hermes review, PR #560 — `event.sessionId === null` alone
-                    is unreachable here: every history fetch is scoped by an
-                    explicit `sessionId` filter (eq(sessionEvents.sessionId,
-                    id)), and SQL equality never matches a NULL column, so a
-                    row whose session was deleted (onDelete: "set null")
-                    drops out of every future per-session query entirely —
-                    it can only ever surface from an unscoped, cross-session
-                    query this panel doesn't make. Keyed off the session's
-                    absence from the live store instead, which IS reachable:
-                    a multi-session panel (worker + review agent) can have
-                    one session still alive while the other was removed, and
-                    that session's already-fetched rows should still read as
-                    orphaned. The `sessionId === null` check stays as a
-                    harmless defensive fallback in case a future query
-                    surface ever does return one. */}
-                {(event.sessionId === null || !sessions.some((s) => s.id === event.sessionId)) && (
-                  <span
-                    className="session-timeline-row-orphan"
-                    title="This event's session no longer exists"
-                  >
-                    {" "}
-                    (session removed)
-                  </span>
-                )}
-              </span>
-            </div>
-          ))}
+          {filtered.map(({ event, text }) => {
+            // Making notifications relevant/scannable — for an `attention`
+            // event, labels by its signal (permissionRequest → "Permission"),
+            // not the generic "attention" kind — same notifyLabel()
+            // NotificationBell.tsx's own pill uses, so the two surfaces
+            // never disagree about what to call the same event.
+            const label =
+              event.kind === "attention" ? notifyLabel(event) : (KIND_LABELS[event.kind] ?? "?");
+            const severity = notifySeverity(event) ?? "none";
+            const fullText = text;
+            const displayText = truncateHead(text, TIMELINE_ROW_TEXT_MAX);
+            return (
+              <div
+                key={
+                  event.rowId !== undefined
+                    ? `h:${event.rowId}`
+                    : eventKey(event.sessionId ?? -1, event.seq)
+                }
+                className={`session-timeline-row sev-${severity}`}
+              >
+                <span className="session-timeline-row-time">{formatRelativeAge(event.ts)}</span>
+                <span className={`session-timeline-row-kind kind-${event.kind}`}>{label}</span>
+                <span className="session-timeline-row-text" title={fullText}>
+                  {displayText}
+                  {/* Hermes review, PR #560 — `event.sessionId === null` alone
+                      is unreachable here: every history fetch is scoped by an
+                      explicit `sessionId` filter (eq(sessionEvents.sessionId,
+                      id)), and SQL equality never matches a NULL column, so a
+                      row whose session was deleted (onDelete: "set null")
+                      drops out of every future per-session query entirely —
+                      it can only ever surface from an unscoped, cross-session
+                      query this panel doesn't make. Keyed off the session's
+                      absence from the live store instead, which IS reachable:
+                      a multi-session panel (worker + review agent) can have
+                      one session still alive while the other was removed, and
+                      that session's already-fetched rows should still read as
+                      orphaned. The `sessionId === null` check stays as a
+                      harmless defensive fallback in case a future query
+                      surface ever does return one. */}
+                  {(event.sessionId === null ||
+                    !sessions.some((s) => s.id === event.sessionId)) && (
+                    <span
+                      className="session-timeline-row-orphan"
+                      title="This event's session no longer exists"
+                    >
+                      {" "}
+                      (session removed)
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
       {anyNextCursor && (

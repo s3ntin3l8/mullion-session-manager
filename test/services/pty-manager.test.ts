@@ -947,6 +947,10 @@ describe("PtyManager", () => {
     const pty = fakePtyChildren[0];
 
     session.emitHookEvent({ kind: "progress", phase: "done" });
+    // agentIdle now settles for 3s (ATTENTION_SETTLE_MS) before it confirms —
+    // advance past that window so it's actually CONFIRMED before exercising
+    // the output-clears-it behavior this test is about.
+    session.tick(Date.now() + 3_000);
     expect(session.toInfo().attention).toBe(true);
 
     pty.emitData("the agent's next turn starts producing output");
@@ -2974,6 +2978,11 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
 
       session.emitHookEvent({ kind: "progress", phase: "done" });
+      // agentIdle now settles for 3s (ATTENTION_SETTLE_MS) before it
+      // confirms — advance past that window (see cancelDeferred's own
+      // comment for why a plain tick, with no intervening
+      // progress:generating, lets it confirm rather than cancel).
+      session.tick(Date.now() + 3_000);
 
       const events = session.getEvents();
       expect(events.map((e) => e.kind)).toEqual(["status_change", "attention"]);
@@ -3038,6 +3047,10 @@ describe("PtyManager", () => {
           { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
         ],
       });
+      // The drain resolves resolveDeferredTurnEnd()'s guards and SCHEDULES
+      // the ping (ATTENTION_SETTLE_MS's 3s agentIdle window) rather than
+      // firing it immediately — advance past it.
+      session.tick(Date.now() + 3_000);
 
       const events = session.getEvents();
       expect(events.map((e) => e.kind)).toEqual(["status_change", "status_change", "attention"]);
@@ -3077,6 +3090,9 @@ describe("PtyManager", () => {
           { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
         ],
       });
+      // Same as the previous test — the drain SCHEDULES the deferred ping;
+      // advance past its 3s settle window.
+      session.tick(Date.now() + 3_000);
 
       const events = session.getEvents();
       expect(events.map((e) => e.kind)).toEqual([
@@ -3108,8 +3124,9 @@ describe("PtyManager", () => {
       await waitForSpawn(session);
 
       // An ordinary Stop with no backgroundTasks at all — resolves and
-      // fires agentIdle immediately, same as any plain "done".
+      // schedules the deferred agentIdle ping, same as any plain "done".
       session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.tick(Date.now() + 3_000); // past ATTENTION_SETTLE_MS.agentIdle
       expect(session.toInfo().attention).toBe(true);
       expect(
         session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
@@ -3158,6 +3175,8 @@ describe("PtyManager", () => {
         agentType: "Explore",
         backgroundTasks: drainedTasks,
       });
+      // The drain SCHEDULES the deferred ping; confirm it before asserting.
+      session.tick(Date.now() + 3_000);
       expect(
         session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
       ).toHaveLength(1);
@@ -3188,16 +3207,19 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
 
-      // First plain "done" — fires immediately.
+      // First plain "done" — schedules the deferred ping; confirm it.
       session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.tick(Date.now() + 3_000);
       expect(
         session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
       ).toHaveLength(1);
 
       // A second, independent "done" (e.g. a distinct later Stop) — this is
-      // a genuinely NEW turn-end occurrence and gets its own single ping,
-      // not suppressed by the prior latch's one-shot guard.
+      // a genuinely NEW turn-end occurrence and gets its own single ping
+      // (its own fresh settle window), not suppressed by the prior latch's
+      // one-shot guard.
       session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.tick(Date.now() + 3_000);
       expect(
         session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
       ).toHaveLength(2);
@@ -3288,8 +3310,12 @@ describe("PtyManager", () => {
       // statement). Fixed by pairing each latch reset with its own
       // clearIfConfirmedKind call BEFORE resolveDeferredTurnEnd() runs: the
       // orphaned planReady is cleared first, so agentIdle then confirms
-      // fresh as the CURRENT, honest confirmedKind instead.
+      // fresh as the CURRENT, honest confirmedKind instead — once its own
+      // settle window (ATTENTION_SETTLE_MS) elapses; the clearing of
+      // planReady itself is still synchronous, only agentIdle's own
+      // confirmation is deferred.
       session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.tick(Date.now() + 3_000);
 
       expect(session.toInfo()).toMatchObject({
         planState: "idle",
@@ -3574,7 +3600,12 @@ describe("PtyManager", () => {
 
       session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
 
+      // permissionState updates synchronously — session status must stay
+      // truthful immediately — but the permission_request/attention EVENT
+      // pair is deferred (ATTENTION_SETTLE_MS) until it either confirms or
+      // is cancelled by a fast auto-resolution. Advance past the window.
       expect(session.toInfo().permissionState).toBe("pending");
+      session.tick(Date.now() + 2_000);
       const events = session.getEvents();
       const event = events[events.length - 2];
       expect(event.kind).toBe("permission_request");
@@ -3598,7 +3629,11 @@ describe("PtyManager", () => {
         errorDetails: "rate limited",
       });
 
+      // The stop_failure NotificationEvent itself is immediate; only the
+      // trailing `attention` (apiError) ping is deferred — advance past its
+      // settle window before checking for it.
       expect(session.toInfo().errorState).toBe("api_error");
+      session.tick(Date.now() + 2_000);
       const events = session.getEvents();
       const event = events[events.length - 2];
       expect(event.kind).toBe("stop_failure");
@@ -3624,7 +3659,11 @@ describe("PtyManager", () => {
         summary: "ls: no such file",
       });
 
+      // Same shape as stop_failure above — the tool_failure NotificationEvent
+      // is immediate, only the trailing `attention` (toolFailure) ping is
+      // deferred.
       expect(session.toInfo().errorState).toBe("tool_failure");
+      session.tick(Date.now() + 2_000);
       const events = session.getEvents();
       const event = events[events.length - 2];
       expect(event.kind).toBe("tool_failure");
@@ -3759,6 +3798,9 @@ describe("PtyManager", () => {
           tool: "ExitPlanMode",
           summary: "ExitPlanMode",
         });
+        // permissionState updates synchronously; attentionKind only reaches
+        // "permissionRequest" once the settle window confirms it.
+        session.tick(Date.now() + 2_000);
 
         expect(session.toInfo()).toMatchObject({
           permissionState: "pending",
@@ -4079,6 +4121,14 @@ describe("PtyManager", () => {
 
         session.emitHookEvent({ kind: "progress", phase: "done" });
         session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+        // Both the deferred agentIdle (progress:done) and the deferred
+        // toolFailure (tool_failure) ping are still settling — advance past
+        // both windows (session.tick() is explicit-clock, unaffected by the
+        // faked setTimeout/clearTimeout above). toolFailure drains after
+        // agentIdle (insertion order) and neither is immune, so it becomes
+        // the final confirmedKind — output-clearable, which is exactly what
+        // this test goes on to exercise.
+        session.tick(Date.now() + 3_000);
         expect(session.toInfo()).toMatchObject({
           errorState: "tool_failure",
           lastTurnEndedAt: expect.any(Number),
@@ -4165,6 +4215,9 @@ describe("PtyManager", () => {
       // silently suppressed by stale one-shot state from before the
       // keystroke.
       session.emitHookEvent({ kind: "progress", phase: "done" });
+      // This turn-end resolves cleanly (no outstanding work) and SCHEDULES
+      // its own fresh deferred agentIdle ping — advance past the window.
+      session.tick(Date.now() + 3_000);
       expect(
         session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
       ).toHaveLength(1);
@@ -4204,6 +4257,11 @@ describe("PtyManager", () => {
 
       session.emitHookEvent({ kind: "progress", phase: "done" });
       session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+      // Confirm both deferred pings (see the repaint test above for why
+      // toolFailure ends up the final confirmedKind) before eventsBefore is
+      // captured, so the synthetic write below is checked against a
+      // steady, already-confirmed state.
+      session.tick(Date.now() + 3_000);
       const eventsBefore = session.getEvents().length;
 
       // A focus-report is filtered by isGenuineUserInput — not a real
@@ -4292,6 +4350,10 @@ describe("PtyManager", () => {
           tool: "Bash",
           summary: "rm -rf /tmp/x",
         });
+        // Confirm it (settle window) — the sweep this test exercises only
+        // makes sense against an already-CONFIRMED flag, per the test's own
+        // name ("...it confirmed").
+        session.tick(now + 2_000);
         expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: true });
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
@@ -5271,11 +5333,50 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      // Confirm it first — this test is specifically about clearing an
+      // already-CONFIRMED flag (see the next test for the "still pending,
+      // never confirmed at all" case, which is the actual 537-phantom-
+      // permission fix).
+      session.tick(Date.now() + 2_000);
       expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: true });
 
       session.emitHookEvent({ kind: "permission_resolved" });
 
       expect(session.toInfo()).toMatchObject({ permissionState: "idle", attention: false });
+    });
+
+    it("settle-window fix: permission_resolved arriving BEFORE the settle window elapses cancels the still-pending deferred emit with ZERO events — the 537-of-538 auto-approved-opencode-permission case", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const eventsBefore = session.getEvents().length;
+
+      session.emitHookEvent({
+        kind: "permission_request",
+        tool: "opencode",
+        summary: "external_directory /tmp/worktree/*",
+      });
+      // permissionState is truthful immediately — the sidebar must reflect
+      // the agent being genuinely blocked, even though nothing has been
+      // reported to the user yet.
+      expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: false });
+
+      // Auto-approved by the agent's own trust config well inside the 2s
+      // settle window (measured mean: 26ms) — no session.tick() at all.
+      session.emitHookEvent({ kind: "permission_resolved" });
+
+      expect(session.toInfo()).toMatchObject({ permissionState: "idle", attention: false });
+      // No permission_request row, no attention event — nothing at all.
+      // Advance well past the window too, to prove drainDeferred() has
+      // nothing left to flush (the entry was actually removed, not just
+      // not-yet-due).
+      session.tick(Date.now() + 5_000);
+      expect(session.getEvents().slice(eventsBefore)).toEqual([]);
     });
 
     it("plan_resolved: clears planState and a confirmed planReady attention signal", async () => {
@@ -5302,6 +5403,11 @@ describe("PtyManager", () => {
       await waitForSpawn(b);
 
       manager.emitHookEvent("2", { kind: "progress", phase: "done" });
+      // agentIdle settles for 3s before it confirms — advance the RIGHT
+      // session's clock past that window (proving routing extends to
+      // drainDeferred() too: `a` never scheduled anything, so ticking it
+      // would be a no-op regardless).
+      b.tick(Date.now() + 3_000);
 
       expect(a.getEvents()).toHaveLength(0);
       // "done" also drives attention (issue: agentIdle) — see the dedicated
@@ -5389,11 +5495,20 @@ describe("PtyManager", () => {
       await waitForSpawn(session);
       expect(session.toInfo().errorState).toBe("idle");
 
+      const eventsBefore = session.getEvents().length;
       session.emitHookEvent({ kind: "stop_failure", error: "rate_limit" });
       expect(session.toInfo().errorState).toBe("api_error");
 
+      // Recovery arriving purely over the hook channel (no PTY output bytes
+      // in between) must cancel the still-settling deferred apiError ping
+      // too, not just clear errorState — otherwise the ping fires 2s later
+      // reporting a failure the session has already recovered from.
       session.emitHookEvent({ kind: "progress", phase: "thinking" });
       expect(session.toInfo().errorState).toBe("idle");
+
+      session.tick(Date.now() + 5_000);
+      const emitted = session.getEvents().slice(eventsBefore);
+      expect(emitted.some((e) => e.kind === "attention")).toBe(false);
     });
   });
 
@@ -5471,6 +5586,12 @@ describe("PtyManager", () => {
       // place — two distinct specific kinds still replace each other
       // exactly as before.
       session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      // permissionRequest settles for 2s before it confirms and actually
+      // supersedes reviewGate as confirmedKind — advance past it, or
+      // resolveGate("approved") below would still be resolving the
+      // CURRENTLY-confirmed reviewGate (not a stale one) and this test
+      // would no longer be exercising what its name says.
+      session.tick(Date.now() + 2_000);
       expect(session.toInfo().attention).toBe(true);
 
       session.resolveGate("approved");
@@ -6557,6 +6678,8 @@ describe("Session state file persistence (issue #323)", () => {
         { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
       ],
     });
+    // The drain SCHEDULES the deferred agentIdle ping; confirm it.
+    session.tick(Date.now() + 3_000);
 
     expect(
       session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),

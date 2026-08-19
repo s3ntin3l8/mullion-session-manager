@@ -52,6 +52,49 @@ import {
   type AttentionTransition,
 } from "./attention-detect.js";
 
+/** Which hook-originated attention kinds get a settle window before they
+ * ever reach the user, and how long. Deliberately separate from
+ * attention-detect.ts's ATTENTION_CONFIRM_MS (which stays at 0 for every one
+ * of these kinds, unchanged) — the two answer different questions. See this
+ * class's own header comment for the full "why not just raise
+ * ATTENTION_CONFIRM_MS" rationale; in short, `advanceAttention`'s single
+ * `pendingKind` slot would let one deferred kind silently displace another
+ * (Claude Code fires `hookNotification` alongside `permissionRequest`), and
+ * its output-cancels-pending rule would kill `agentIdle` on the agent's own
+ * post-Stop prompt redraw. Measured against 7 days of real session_events
+ * (see the PR description): `permissionRequest` resolves in a mean of 26ms
+ * when auto-approved (537/538 raised events), `toolFailure`/`apiError`
+ * resolve on the agent's own very next output chunk (140/140), and
+ * `agentIdle` flaps within ~3s when a background Task/Agent call reopens the
+ * turn (465/517). Every other kind keeps firing immediately via
+ * emitAttentionSignalWithExtras — they're either already zero-debounce by
+ * construction (reviewGate/planReady/promoteRequest/elicitation/question —
+ * see that method's own doc comment) or, for hookNotification specifically,
+ * the generic catch-all Claude Code fires ALONGSIDE a specific kind, where
+ * delaying it too would just duplicate the specific kind's own window for no
+ * benefit. */
+const ATTENTION_SETTLE_MS: Partial<Record<AttentionSignalKind, number>> = {
+  permissionRequest: 2000,
+  agentIdle: 3000,
+  toolFailure: 2000,
+  apiError: 2000,
+};
+
+/** One notification event kind + payload to emit alongside the eventual
+ * "attention" event, in the same order Session's hook handlers already
+ * produce them today (e.g. permission_request before attention) — see
+ * emitAttentionSignalDeferred's doc comment. */
+interface AlsoEmit {
+  kind: NotificationEvent["kind"];
+  payload: Record<string, unknown>;
+}
+
+interface DeferredEmit {
+  extras: Record<string, unknown>;
+  alsoEmit: AlsoEmit[];
+  dueAt: number;
+}
+
 /** Callbacks/identity Session provides so this class can log and emit
  * without owning the event ring buffer or state-file scheduling itself —
  * see this file's header comment for why this mirrors RedrawNudgeHost's
@@ -83,6 +126,14 @@ export class AttentionTracker {
   // to false everywhere lastTurnEndedAt is freshly set OR cleared, so the
   // next genuine turn end gets its own single ping.
   turnEndPingSent = false;
+
+  // Kinds currently waiting out their ATTENTION_SETTLE_MS window before
+  // ever reaching the user — keyed by kind, NOT a single slot, so two
+  // deferred kinds legitimately in flight at once (see ATTENTION_SETTLE_MS's
+  // own comment) each get their own timer and neither can silently displace
+  // the other. Drained by drainDeferred() from the existing 500ms tick
+  // (pty-manager.ts's ATTENTION_EVAL_INTERVAL_MS) — no new timer.
+  private deferred = new Map<AttentionSignalKind, DeferredEmit>();
 
   constructor(private readonly host: AttentionTrackerHost) {}
 
@@ -134,13 +185,40 @@ export class AttentionTracker {
    * superseded it (e.g. a fresh hookNotification while a reviewGate
    * resolution is still in flight) doesn't wrongly dismiss that newer flag.
    * A no-op outside "attention" or for any other confirmedKind.
+   *
+   * Also cancels a still-PENDING deferred emit of this kind (see
+   * ATTENTION_SETTLE_MS) — this is the primary way a deferred emit ever
+   * dies before reaching the user: the machine itself hasn't seen the
+   * signal yet (emitAttentionSignalDeferred doesn't touch `state` until the
+   * window elapses), so the `state.state === "attention"` branch above
+   * can't have fired for it. permission_resolved/plan_resolved/tool_done
+   * (hook-handlers.ts) all call this on exactly the same kind they'd have
+   * raised, which is what makes a genuinely-fast resolution — the 537/538
+   * auto-approved opencode permissions the settle window exists for —
+   * produce zero events at all rather than a race between "confirm" and
+   * "clear".
    */
   clearIfConfirmedKind(kind: AttentionSignalKind): void {
+    this.cancelDeferred(kind);
     if (this.state.state === "attention" && this.state.confirmedKind === kind) {
       this.applyAttentionTransition(
         advanceAttention(this.state, { type: "userInput", now: Date.now() }),
       );
     }
+  }
+
+  /** Drops a pending deferred emit for `kind` without emitting anything —
+   * the settle window's cancel path. Safe to call whether or not `kind` is
+   * actually pending. Public (not just used internally by
+   * clearIfConfirmedKind above): pty-manager.ts's onData also calls this
+   * directly for toolFailure/apiError, whose cancel IS a plain output chunk
+   * rather than a resolved-decision hook message (see ATTENTION_SETTLE_MS's
+   * own comment — "the agent recovered on its own next turn" needs no hook
+   * round-trip to know that), and hook-handlers.ts's `progress` case calls
+   * it for agentIdle on a `phase: "generating"` message (the agent resumed
+   * work before the turn-complete ping ever fired). */
+  cancelDeferred(kind: AttentionSignalKind): void {
+    this.deferred.delete(kind);
   }
 
   /**
@@ -157,8 +235,14 @@ export class AttentionTracker {
    * same reason. Routed through applyAttentionTransition (not a direct
    * state mutation) so the resulting `{attention:false}` is actually
    * emitted, same as write()'s own userInput clear.
+   *
+   * Also drops EVERY pending deferred emit, not just one kind — a fresh
+   * human prompt (or a genuine keystroke, see write()) supersedes whatever
+   * was still settling; none of it is worth surfacing once the user has
+   * already moved the session forward themselves.
    */
   clearAttention(): void {
+    this.deferred.clear();
     this.applyAttentionTransition(
       advanceAttention(this.state, { type: "userInput", now: Date.now() }),
     );
@@ -218,6 +302,70 @@ export class AttentionTracker {
     this.host.emitEvent("attention", { attention: true, signal: kind, ...extras });
   }
 
+  /**
+   * The settle-window counterpart to emitAttentionSignalWithExtras above,
+   * for the kinds listed in ATTENTION_SETTLE_MS. Deliberately does NOT touch
+   * `this.state`/advanceAttention at all yet — the machine, SessionInfo's
+   * `attention`/`attentionAt`/`attentionKind`, the favicon badge, and every
+   * NotificationEvent stay exactly as they were until drainDeferred() below
+   * either confirms this (the window elapses untouched) or a resolution
+   * arrives first and cancels it (cancelDeferred/clearIfConfirmedKind/
+   * clearAttention) — in which case NOTHING is ever emitted: no attention
+   * event, no `alsoEmit` event, no timeline row, no push, no DB row. That
+   * silence is the point: it's how the 537-of-538 opencode permissions this
+   * class was built to stop reporting (auto-approved in a measured mean of
+   * 26ms, see ATTENTION_SETTLE_MS) disappear instead of flashing and
+   * clearing.
+   *
+   * `alsoEmit` lets a caller (permission_request today) defer its own
+   * structured NotificationEvent alongside the attention signal, so a
+   * phantom permission produces no timeline row either — not just no bell
+   * ring. Replaces any earlier still-pending deferred emit of the SAME
+   * kind (a second permission_request for a different tool while the first
+   * is still settling is exceedingly rare in practice, and "the newest
+   * candidate wins" matches confirmAttention's own "refresh, don't queue"
+   * semantics) — but never touches a DIFFERENT kind's own pending entry,
+   * which is the whole reason `deferred` is a Map and not a single field.
+   */
+  emitAttentionSignalDeferred(
+    kind: Extract<
+      AttentionSignalKind,
+      "permissionRequest" | "agentIdle" | "toolFailure" | "apiError"
+    >,
+    extras: Record<string, unknown>,
+    alsoEmit: AlsoEmit[] = [],
+  ): void {
+    const settleMs = ATTENTION_SETTLE_MS[kind] ?? 0;
+    this.deferred.set(kind, { extras, alsoEmit, dueAt: Date.now() + settleMs });
+  }
+
+  /**
+   * Flushes every deferred emit whose settle window has elapsed. Called
+   * from Session.tick() (pty-manager.ts), which already runs every
+   * ATTENTION_EVAL_INTERVAL_MS (500ms) and already feeds the machine a
+   * `{type:"tick"}` input — piggy-backing here means no second timer.
+   *
+   * Order matters and is deliberate: `alsoEmit` first (so a flushed
+   * permission_request's own NotificationEvent still precedes its
+   * "attention" event, matching today's pre-settle-window ordering), THEN
+   * advanceAttention sees the signal for the first time (so `state`/
+   * SessionInfo.attention only change at the exact moment the user is
+   * actually told — not 2-3s earlier when the hook message first arrived),
+   * THEN the attention event itself. Skips applyAttentionTransition() for
+   * the same reason emitAttentionSignalWithExtras does (see its own doc
+   * comment): extras never fit AttentionEmit's fixed shape, and this is
+   * already an always-emit call site, not a re-emit-suppressible one.
+   */
+  drainDeferred(now: number): void {
+    for (const [kind, entry] of this.deferred) {
+      if (entry.dueAt > now) continue;
+      this.deferred.delete(kind);
+      for (const also of entry.alsoEmit) this.host.emitEvent(also.kind, also.payload);
+      this.state = advanceAttention(this.state, { type: "signal", kind, now }).next;
+      this.host.emitEvent("attention", { attention: true, signal: kind, ...entry.extras });
+    }
+  }
+
   /** Issue #428 — the ONLY place `backgroundTasks`/`backgroundTasksAt` are
    * written. Called from both the "progress" and "subagent" hook cases,
    * each with their own present-only-update guard around the call (a
@@ -244,12 +392,37 @@ export class AttentionTracker {
    * after any `backgroundTasks` update (a plain Stop with no background work
    * resolves it immediately; a SubagentStop or the staleness sweep resolves
    * it late instead of never; a repeated report of the same already-drained
-   * state is a no-op instead of a duplicate ping). */
+   * state is a no-op instead of a duplicate ping).
+   *
+   * Now schedules through emitAttentionSignalDeferred rather than firing
+   * immediately — 465 of 517 measured turn-ends were flaps where a further
+   * `progress: {phase: "generating"}` arrived within ~3s of this call (the
+   * agent reopened the same turn, e.g. a background Task/Agent call this
+   * class's own #428 doc comment already accounts for elsewhere). The
+   * hook-handlers.ts `progress` case's non-"done" branch cancels this via
+   * `ctx.cancelDeferred("agentIdle")` when that happens — see that call
+   * site's own comment for why `turnEndPingSent` needs no extra handling on
+   * cancel (every `done` message unconditionally resets it before calling
+   * back in here, regardless of whether the PRIOR latch's ping fired,
+   * settled, or was cancelled). */
   resolveDeferredTurnEnd(): void {
     if (this.lastTurnEndedAt === null) return;
     if (this.turnEndPingSent) return;
     if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
     this.turnEndPingSent = true;
-    this.emitAttentionSignalWithExtras("agentIdle", {});
+    this.emitAttentionSignalDeferred("agentIdle", {});
+  }
+
+  /** Drops every pending deferred emit with no attempt to emit anything —
+   * distinct from clearAttention() (which also runs a real userInput
+   * transition through the machine and emits {attention:false}). Called on
+   * session exit (pty-manager.ts's exit path) and on respawn/reset
+   * (alongside the existing `this.attention.state = INITIAL_ATTENTION_STATE`
+   * reset there): a settling permission/tool-failure/turn-end ping for a
+   * process that no longer exists, or is about to be replaced by a fresh
+   * incarnation with `eventSeq`/state of its own, has nothing left to
+   * settle FOR. */
+  clearDeferred(): void {
+    this.deferred.clear();
   }
 }

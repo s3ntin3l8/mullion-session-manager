@@ -422,11 +422,25 @@
   border-radius: 999px;
   margin-top: 1px;
 }
-.notif-event-icon.attention {
-  color: var(--ring);
-  background: color-mix(in srgb, var(--ring) 16%, transparent);
+/* Making notifications relevant/scannable — three-tier severity replaces
+   the old bell-or-check binary (see eventDescriptions.ts's notifySeverity):
+   "blocked" (needs a decision, e.g. a permission/plan/review) gets the same
+   --p token sidebar.css's .session-dot-permission and
+   SessionTimeline.tsx's own kind-permission_request chip already use, so a
+   row reads consistently across the sidebar, the bell, and the timeline;
+   "error" (something broke) is red, distinct from "blocked" for the first
+   time — the old binary collapsed both into the same generic bell; "done"
+   (informational — a turn ended, or the process exited) keeps the
+   pre-existing green check treatment. */
+.notif-event-icon.notif-sev-blocked {
+  color: var(--p);
+  background: color-mix(in srgb, var(--p) 16%, transparent);
 }
-.notif-event-icon.exited {
+.notif-event-icon.notif-sev-error {
+  color: var(--r);
+  background: color-mix(in srgb, var(--r) 16%, transparent);
+}
+.notif-event-icon.notif-sev-done {
   color: var(--g);
   background: color-mix(in srgb, var(--g) 16%, transparent);
 }
@@ -437,6 +451,18 @@
   flex-direction: column;
   gap: 1px;
 }
+/* Making notifications relevant/scannable — the row's kind pill (e.g.
+   "Permission", "Tool"), suppressed by EventRow itself when it would just
+   repeat the row's own text verbatim. Small/muted/uppercase so it reads as
+   metadata, not competing with the row's own text for attention. */
+.notif-event-kind-pill {
+  align-self: flex-start;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
 .notif-event-text {
   font-size: 12.5px;
   font-weight: 600;
@@ -445,6 +471,13 @@
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+/* Making notifications relevant/scannable — the ×N repeat count on a
+   collapsed row (NotificationBell.tsx's foldConsecutiveRows). */
+.notif-event-repeat {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--muted);
 }
 .notif-event-time {
   font-size: 10.5px;

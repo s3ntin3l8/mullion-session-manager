@@ -3,12 +3,13 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { eventKey, useDashboardStore } from "./store/index.js";
-import { describeEvent, notifyKind } from "./eventDescriptions.js";
+import { describeEvent, notifyKind, notifyLabel, notifySeverity } from "./eventDescriptions.js";
 import { api } from "./api/index.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
-import { BellIcon, CheckIcon, CloseIcon } from "./ui/icons.js";
+import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { truncateHead } from "./lib/truncatePath.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
 // currently ringing" list into an actual event feed: one row per buffered
@@ -49,6 +50,10 @@ import { useFocusTrap } from "./hooks/useFocusTrap.js";
 
 const HEADER_ROW_HEIGHT = 34;
 const EVENT_ROW_ESTIMATE_HEIGHT = 60;
+// Making notifications relevant/scannable — the panel is a fixed-width
+// popover (see the portal's inline style below), so this is a character
+// budget calibrated by eye against that width, not a measured pixel value.
+const NOTIF_ROW_TEXT_MAX = 72;
 
 interface FeedHeaderItem {
   type: "header";
@@ -60,11 +65,64 @@ interface FeedHeaderItem {
 interface FeedEventItem {
   type: "event";
   sessionId: number;
+  // The newest event in this row's group — its own seq/ts/payload drive the
+  // row's icon/pill/text/age. See `foldedSeqs` below for why this alone
+  // isn't enough to fully describe a collapsed row.
   event: NotificationEvent;
   read: boolean;
+  // Making notifications relevant/scannable — every event this row
+  // represents, newest first, always including `event.seq` itself
+  // (`repeatCount === foldedSeqs.length`). A row that wasn't collapsed has
+  // exactly one entry. Needed because dismissing a collapsed row must
+  // dismiss every folded event, not just the one driving the display — see
+  // EventRow's onDismiss below, and buildFeedItems'/foldConsecutiveRows' own
+  // comments for why the read cursor doesn't need the same treatment.
+  foldedSeqs: number[];
 }
 
 type FeedItem = FeedHeaderItem | FeedEventItem;
+
+// Making notifications relevant/scannable — folds consecutive rows (already
+// sorted newest-first by the caller) that would render IDENTICALLY into one
+// row carrying a repeat count, so e.g. 25 auto-approved opencode
+// `external_directory` permission asks for the same glob pattern show as one
+// "×25" row instead of 25 visually-identical ones. "Identical" is
+// (severity, described text) — text alone would also fold e.g. a `bell` and
+// a `hookNotification` that happen to produce the same generic fallback
+// text, which severity keeps distinct. Deliberately does NOT fold non-
+// adjacent duplicates (an unrelated event in between breaks the run) — that
+// preserves chronological reading order rather than reordering the feed
+// around a foldable value.
+function foldConsecutiveRows(
+  rows: { event: NotificationEvent; read: boolean; text: string; severity: string | null }[],
+): { event: NotificationEvent; read: boolean; foldedSeqs: number[] }[] {
+  const folded: {
+    event: NotificationEvent;
+    read: boolean;
+    foldedSeqs: number[];
+    text: string;
+    severity: string | null;
+  }[] = [];
+  for (const row of rows) {
+    const last = folded[folded.length - 1];
+    if (last && last.severity === row.severity && last.text === row.text) {
+      last.foldedSeqs.push(row.event.seq);
+      // The representative event stays the NEWEST of the group (`rows`
+      // arrives newest-first, so `last` was already set from the first —
+      // i.e. newest — row of this run) — `event`/`read`/`text`/`severity`
+      // are intentionally left untouched here.
+      continue;
+    }
+    folded.push({
+      event: row.event,
+      read: row.read,
+      foldedSeqs: [row.event.seq],
+      text: row.text,
+      severity: row.severity,
+    });
+  }
+  return folded.map(({ event, read, foldedSeqs }) => ({ event, read, foldedSeqs }));
+}
 
 // Turns the raw per-session event slices into one flat, virtualizable list:
 // a header row per session (only sessions with at least one feed-eligible,
@@ -78,16 +136,25 @@ function buildFeedItems(
   lastSeenSeq: Record<number, number>,
   dismissedEventKeys: Record<string, true>,
 ): FeedItem[] {
-  const groups: { session: Session; rows: { event: NotificationEvent; read: boolean }[] }[] = [];
+  const groups: {
+    session: Session;
+    rows: { event: NotificationEvent; read: boolean; foldedSeqs: number[] }[];
+  }[] = [];
 
   for (const session of sessions) {
     const sessionEvents = events[session.id];
     if (!sessionEvents || sessionEvents.length === 0) continue;
     const cursor = lastSeenSeq[session.id] ?? 0;
-    const rows = sessionEvents
+    const rawRows = sessionEvents
       .filter((e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq)])
-      .map((e) => ({ event: e, read: e.seq <= cursor }))
+      .map((e) => ({
+        event: e,
+        read: e.seq <= cursor,
+        text: describeEvent(e)?.text ?? "Event",
+        severity: notifySeverity(e),
+      }))
       .sort((a, b) => b.event.seq - a.event.seq);
+    const rows = foldConsecutiveRows(rawRows);
     if (rows.length > 0) groups.push({ session, rows });
   }
 
@@ -103,7 +170,13 @@ function buildFeedItems(
       subtitle: project?.name ?? "Unknown project",
     });
     for (const row of group.rows) {
-      items.push({ type: "event", sessionId: group.session.id, event: row.event, read: row.read });
+      items.push({
+        type: "event",
+        sessionId: group.session.id,
+        event: row.event,
+        read: row.read,
+        foldedSeqs: row.foldedSeqs,
+      });
     }
   }
   return items;
@@ -122,6 +195,13 @@ function buildFeedItems(
 // stays cheap enough to run on every tick regardless of panel state. See
 // the `items` useMemo below (gated on `open`) for where the expensive full
 // build now actually happens.
+// Making notifications relevant/scannable — deliberately counts RAW
+// unread notify-worthy events, not folded groups: the toolbar badge is a
+// magnitude indicator ("how much happened while you were away"), not a
+// promise that exactly this many rows will be visible once the panel opens
+// — replicating foldConsecutiveRows' sort-and-group work here would also
+// defeat the whole point of this function existing separately from
+// buildFeedItems (see the P3 perf fix comment above).
 function countUnread(
   sessions: Session[],
   events: Record<number, NotificationEvent[]>,
@@ -149,12 +229,25 @@ function countUnread(
 // selectors.
 const EMPTY_FEED_ITEMS: FeedItem[] = [];
 
-// Feed items are always pre-filtered to notifyKind() !== null (see
-// buildFeedItems), so this only ever sees the two kinds it's built for.
+// Making notifications relevant/scannable — three-tier severity replaces
+// the old bell-or-check binary (see eventDescriptions.ts's notifySeverity
+// for the full tier rationale): "blocked" (needs a decision) gets its own
+// distinct icon/color from "error" (something broke), which the old binary
+// collapsed into the same generic bell. `notifySeverity` can return null for
+// a shape neither table covers (defensive, not expected given feed items
+// are always pre-filtered to notifyKind() !== null) — falls back to the old
+// binary's "attention" treatment rather than rendering nothing.
 function kindTreatment(event: NotificationEvent): { icon: ReactNode; className: string } {
-  return notifyKind(event) === "attention"
-    ? { icon: <BellIcon size={13} />, className: "attention" }
-    : { icon: <CheckIcon size={13} />, className: "exited" };
+  const severity =
+    notifySeverity(event) ?? (notifyKind(event) === "attention" ? "blocked" : "done");
+  switch (severity) {
+    case "blocked":
+      return { icon: <BlockedIcon size={13} />, className: "notif-sev-blocked" };
+    case "error":
+      return { icon: <WarningTriangleIcon size={13} />, className: "notif-sev-error" };
+    case "done":
+      return { icon: <CheckIcon size={13} />, className: "notif-sev-done" };
+  }
 }
 
 export function NotificationBell({
@@ -183,7 +276,7 @@ export function NotificationBell({
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq);
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   const markEventSeen = useDashboardStore((s) => s.markEventSeen);
-  const dismissEvent = useDashboardStore((s) => s.dismissEvent);
+  const dismissEvents = useDashboardStore((s) => s.dismissEvents);
   const openRequest = useDashboardStore((s) => s.notificationsPanelOpenRequest);
 
   const [open, setOpen] = useState(false);
@@ -412,7 +505,17 @@ export function NotificationBell({
                             }}
                             onOpenBrowser={onOpenBrowser}
                             onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
-                            onDismiss={() => dismissEvent(item.sessionId, item.event.seq)}
+                            // Making notifications relevant/scannable — a
+                            // collapsed row dismisses EVERY folded seq, not
+                            // just the newest: dismissedEventKeys is a
+                            // per-event set (see this file's own header
+                            // comment on why dismiss is deliberately NOT
+                            // cursor-based), so dismissing only the head
+                            // would resurrect the older folded rows on the
+                            // very next render.
+                            onDismiss={() => {
+                              dismissEvents(item.sessionId, item.foldedSeqs);
+                            }}
                           />
                         )}
                       </div>
@@ -446,7 +549,15 @@ function EventRow({
   const described = describeEvent(item.event);
   const { icon, className } = kindTreatment(item.event);
   const age = formatRelativeAge(item.event.ts);
-  const text = described?.text ?? "Event";
+  const fullText = described?.text ?? "Event";
+  // Making notifications relevant/scannable — head-truncated (see
+  // truncatePath.ts's own comment for why: a permission summary's ONLY
+  // distinguishing part is usually its tail, and CSS ellipsis cuts the
+  // wrong end). The untruncated text stays in the row's aria-label/title so
+  // nothing is actually lost, just not shown inline.
+  const text = truncateHead(fullText, NOTIF_ROW_TEXT_MAX);
+  const label = notifyLabel(item.event);
+  const repeatCount = item.foldedSeqs.length;
 
   const open = () => {
     if (!session) return;
@@ -485,7 +596,11 @@ function EventRow({
       className={`notif-event-row${item.read ? " read" : ""}`}
       role="button"
       tabIndex={0}
-      aria-label={`${text} — ${age}`}
+      aria-label={
+        repeatCount > 1
+          ? `${label}: ${fullText} — ${age}, repeated ${repeatCount} times`
+          : `${label}: ${fullText} — ${age}`
+      }
       onClick={open}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") open();
@@ -493,7 +608,15 @@ function EventRow({
     >
       <span className={`notif-event-icon ${className}`}>{icon}</span>
       <span className="notif-event-body">
-        <span className="notif-event-text">{text}</span>
+        {/* Suppressed when the pill would just repeat the row's own text
+            verbatim (e.g. a plain bell: SIGNAL_LABELS.bell === "Bell" and
+            describeEvent's own text for it is also "Bell") — showing the
+            same word twice is noise, not information. */}
+        {label !== fullText && <span className="notif-event-kind-pill">{label}</span>}
+        <span className="notif-event-text" title={fullText}>
+          {text}
+        </span>
+        {repeatCount > 1 && <span className="notif-event-repeat">×{repeatCount}</span>}
         <span className="notif-event-time">{age}</span>
         {isPendingGate && <GateActions sessionId={item.sessionId} />}
         {isPendingDevServer && eventPort && (

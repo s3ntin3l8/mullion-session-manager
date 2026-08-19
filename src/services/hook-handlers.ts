@@ -150,6 +150,35 @@ export interface SessionHookContext {
     >,
     extras: Record<string, unknown>,
   ): void;
+  // The settle-window counterpart to emitAttentionSignalWithExtras just
+  // above — see attention-tracker.ts's ATTENTION_SETTLE_MS/
+  // emitAttentionSignalDeferred for the full rationale. Narrower still:
+  // only permission_request routes through here today (tool_failure/
+  // stop_failure keep their emitEvent immediate and defer just the
+  // attention signal with an empty alsoEmit — see those cases below).
+  // `agentIdle` is, same as emitAttentionSignalWithExtras above, reached
+  // only via resolveDeferredTurnEnd(), never through this facade.
+  emitAttentionSignalDeferred(
+    kind: Extract<AttentionSignalKind, "permissionRequest" | "toolFailure" | "apiError">,
+    extras: Record<string, unknown>,
+    alsoEmit?: { kind: NotificationEvent["kind"]; payload: Record<string, unknown> }[],
+  ): void;
+  // Cancels a still-settling deferred emit with nothing emitted — the
+  // `progress` case's `phase !== "done"` branch below uses this to cancel a
+  // pending `agentIdle` ping the moment the agent resumes work, which is
+  // the measured "465 of 517 turn-ends were flaps" case
+  // resolveDeferredTurnEnd()'s own doc comment describes.
+  cancelDeferred(kind: AttentionSignalKind): void;
+  // Marks the session's state file dirty (SessionStateFile.schedule()) with
+  // no NotificationEvent attached. Needed specifically because
+  // emitAttentionSignalDeferred above does NOT call ctx.emitEvent()
+  // immediately — emitEvent() is the ONLY thing that otherwise dirties the
+  // state file (see pty-manager.ts's own emitEvent()) — so a handler that
+  // sets session fields (permissionState/permissionAt/pendingPermissionTool
+  // today) but defers its NotificationEvent must dirty the file itself, or
+  // a restart/kill within the settle window would silently persist stale
+  // (idle) state despite the session being live-blocked the whole time.
+  markStateDirty(): void;
   clearIfConfirmedKind(kind: AttentionSignalKind): void;
   /** Fix: sticky needs_input — see AttentionTracker.clearAttention()'s own
    * doc comment for why `turn_start` needs this over `clearIfConfirmedKind`. */
@@ -277,18 +306,42 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // see turnEndPingSent's own doc comment).
         ctx.turnEndPingSent = false;
         ctx.resolveDeferredTurnEnd();
-      } else if (progress.backgroundTasks !== undefined) {
-        // Issue #428 — a non-"done" progress message isn't expected to
-        // carry `backgroundTasks` per Claude Code's documented shape (only
-        // Stop/SubagentStop do), but if a future/other adapter ever
-        // reports a drain this way, resolve a still-latched prior Stop
-        // rather than requiring the next "done" to catch it. Deliberately
-        // NOT called on every plain thinking/generating message with no
-        // `backgroundTasks` field — lastTurnEndedAt only clears via
-        // turn_start/write()'s genuine-input check, and re-checking it on
-        // every unrelated progress tick would risk re-firing `agentIdle`
-        // for an agent whose forwarder never sends turn_start.
-        ctx.resolveDeferredTurnEnd();
+      } else {
+        // Settle-window cancel for `agentIdle` (attention-tracker.ts's
+        // ATTENTION_SETTLE_MS) — a non-"done" phase (thinking/generating)
+        // means the agent resumed work, which is exactly the measured flap
+        // (465 of 517 real turn-ends: a background Task/Agent call reopened
+        // the same turn within ~3s of Stop). Cancels a still-settling
+        // deferred ping with nothing emitted; a no-op if none is pending.
+        // Unconditional (not gated on backgroundTasks below) — any genuine
+        // progress at all is evidence the turn isn't really over yet.
+        //
+        // Safe with turnEndPingSent's one-shot guard: cancelling here never
+        // needs to reset it, because the NEXT "done" branch above always
+        // resets it to false unconditionally before calling
+        // resolveDeferredTurnEnd() again (see that field's own doc comment
+        // in attention-tracker.ts) — so a cancelled ping's latch doesn't
+        // permanently block a later genuine one.
+        ctx.cancelDeferred("agentIdle");
+        if (progress.backgroundTasks !== undefined) {
+          // Issue #428 — a non-"done" progress message isn't expected to
+          // carry `backgroundTasks` per Claude Code's documented shape (only
+          // Stop/SubagentStop do), but if a future/other adapter ever
+          // reports a drain this way, resolve a still-latched prior Stop
+          // rather than requiring the next "done" to catch it. Deliberately
+          // NOT called on every plain thinking/generating message with no
+          // `backgroundTasks` field — lastTurnEndedAt only clears via
+          // turn_start/write()'s genuine-input check, and re-checking it on
+          // every unrelated progress tick would risk re-firing `agentIdle`
+          // for an agent whose forwarder never sends turn_start. (The
+          // cancelDeferred() just above already handled the "agent resumed
+          // work" case for THIS message; this handles the separate "a
+          // prior Stop's outstanding tasks just drained" case, which only
+          // ever proceeds past resolveDeferredTurnEnd()'s own guards when
+          // turnEndPingSent is still false — i.e. nothing was scheduled to
+          // cancel in the first place.)
+          ctx.resolveDeferredTurnEnd();
+        }
       }
       // Any progress signal (thinking/generating/done) proves the agent
       // loop is alive and advancing — a previous tool failure was either
@@ -297,6 +350,18 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.errorState = "idle";
       ctx.errorAt = null;
       ctx.errorDetail = null;
+      // Settle-window cancel for toolFailure/apiError, same reasoning as
+      // agentIdle's cancelDeferred() above: pty-manager.ts's onData only
+      // cancels these on actual PTY output bytes, but recovery can also
+      // arrive purely over the hook channel (no output in between) — e.g. a
+      // forwarder that reports "generating" again before any bytes reach
+      // the terminal. Without this, the deferred ping still fires 2s later
+      // reporting a failure ctx.errorState here has already cleared,
+      // leaving the notification-worthiness check (keyed on sessionStatus
+      // at *emit* time, not schedule time) racing against a state that's
+      // already moved on. No-op if neither is pending.
+      ctx.cancelDeferred("toolFailure");
+      ctx.cancelDeferred("apiError");
     },
   ],
   [
@@ -436,14 +501,35 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       if (pr.tool === "ExitPlanMode" && ctx.planState === "pending") {
         return;
       }
+      // permissionState/permissionAt/pendingPermissionTool are set
+      // immediately, not deferred — session status (session-status.ts's
+      // awaiting_permission) is derived live off these, so the sidebar
+      // stays truthful the moment the agent is actually blocked, even while
+      // the NOTIFICATION for it is still settling below.
       ctx.permissionState = "pending";
       ctx.permissionAt = Date.now();
       ctx.pendingPermissionTool = pr.tool;
-      ctx.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
-      ctx.emitAttentionSignalWithExtras("permissionRequest", {
-        tool: pr.tool,
-        summary: pr.summary,
-      });
+      // The settle window below means ctx.emitEvent() won't run for
+      // possibly 2s — normally the thing that dirties the state file (see
+      // markStateDirty's own doc comment) — so mark it dirty explicitly
+      // here, right alongside the fields above, or a kill()/restart inside
+      // that window would persist a stale `permissionState: "idle"` despite
+      // the session being live-blocked the whole time.
+      ctx.markStateDirty();
+      // Settle-window fix — 537 of 538 permission requests measured over 7
+      // days of real session_events were auto-approved by the agent's own
+      // trust config in a mean of 26ms, well before a human could ever see
+      // them (opencode's external_directory glob prompts, mostly). Both the
+      // permission_request row AND the attention ping are deferred together
+      // (alsoEmit) so a phantom permission produces neither a bell ring nor
+      // a timeline row — see attention-tracker.ts's
+      // emitAttentionSignalDeferred for the full ordering/cancellation
+      // contract. Cancelled by permission_resolved/tool_done below (via
+      // ctx.clearIfConfirmedKind("permissionRequest"), which now also
+      // cancels a merely-pending deferred entry, not just a confirmed one).
+      ctx.emitAttentionSignalDeferred("permissionRequest", { tool: pr.tool, summary: pr.summary }, [
+        { kind: "permission_request", payload: { tool: pr.tool, summary: pr.summary } },
+      ]);
     },
   ],
   [
@@ -456,13 +542,22 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // comment in hook-protocol.ts), falling back to the free-text detail
       // when the adapter couldn't classify the failure.
       ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
+      // The NotificationEvent itself stays immediate — the user wants
+      // failures in the timeline as history regardless of whether the agent
+      // then recovers on its own. Only the ATTENTION ping is deferred (D1
+      // below is about which kind, not whether it settles).
       ctx.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
       // Fix: sticky needs_input (D1) — `apiError`, not `hookNotification`:
       // this is turbulence the agent's own next turn resolves, not "blocked
       // pending a human decision" — see attention-detect.ts's
       // OUTPUT_IMMUNE_KINDS doc comment for why raising the generic immune
       // kind here used to leave `needs_input` stuck on a working session.
-      ctx.emitAttentionSignalWithExtras("apiError", {
+      // Settle-window fix — measured 140/140 real tool/API failures over 7
+      // days cleared on the agent's own very next PTY output chunk (see
+      // pty-manager.ts onData's cancelDeferred("apiError") call); this
+      // defers the ping so a failure the agent recovers from in ~2s never
+      // rings at all.
+      ctx.emitAttentionSignalDeferred("apiError", {
         title: "API Error",
         body: sf.error,
       });
@@ -487,7 +582,9 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         agentId: tf.agentId ?? null,
       });
       // Fix: sticky needs_input (D1) — see stop_failure's own comment above.
-      ctx.emitAttentionSignalWithExtras("toolFailure", {
+      // Settle-window fix — same reasoning and same measured 140/140
+      // recovery-by-output rate as stop_failure's apiError above.
+      ctx.emitAttentionSignalDeferred("toolFailure", {
         title: `Tool failed: ${tf.tool}`,
         body: tf.error,
       });

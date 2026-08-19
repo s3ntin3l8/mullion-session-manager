@@ -82,6 +82,14 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+// Making notifications relevant/scannable — every "Bell" query below is
+// scoped to `.session-timeline-row-text` (not the row's own kind pill,
+// `.session-timeline-row-kind`): a plain bell attention row now renders
+// "Bell" in BOTH the pill (SIGNAL_LABELS.bell) and the described text
+// (describeEvent's "bell" case), so an unscoped getByText/findByText
+// matches two elements. This file's fixture default (`makeRow` below) is
+// deliberately still the plain bell shape — the ambiguity is in the query,
+// not the fixture, so scoping the query is the fix, not swapping the kind.
 function makeRow(overrides: Partial<StoredEventRow> = {}): StoredEventRow {
   return {
     id: 1,
@@ -114,6 +122,10 @@ function errorResponse(): Response {
 }
 
 beforeEach(() => {
+  // Making notifications relevant/scannable — see SessionTimeline.test.tsx's
+  // identical beforeEach comment: activeKinds/onlyAttention now persist to
+  // real localStorage, which jsdom doesn't reset between tests on its own.
+  localStorage.clear();
   sessions = [makeSession()];
   events = {};
 });
@@ -135,7 +147,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     events = { 1: [{ seq: 2, sessionId: 1, kind: "session_end", ts: 2000, payload: {} }] };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Session ended")).toBeInTheDocument();
   });
 
@@ -154,7 +168,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     events = { 1: [{ seq: 1, sessionId: 1, kind: "attention", ts: 1000, payload: {} }] };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(await screen.findAllByText("Bell")).toHaveLength(1);
+    expect(
+      await screen.findAllByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toHaveLength(1);
   });
 
   it("a seq collision across a backend restart renders both events, not one", async () => {
@@ -181,7 +197,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     );
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Session ended")).toBeInTheDocument();
   });
 
@@ -224,7 +242,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     );
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("(session removed)")).toBeInTheDocument();
   });
 
@@ -250,7 +270,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     // The live event still renders — persistence being off only affects
     // durability across a restart, not the live ring buffer (roadmap.md's
     // own "continues to operate independently" guarantee).
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
   });
 
   it("does not show the persistence-off hint while still loading", () => {
@@ -285,7 +307,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     );
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     const loadOlder = screen.getByRole("button", { name: "Load older events" });
 
     await userEvent.click(loadOlder);
@@ -304,7 +328,7 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
       })),
     );
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
-    await screen.findByText("Bell");
+    await screen.findByText("Bell", { selector: ".session-timeline-row-text" });
 
     // Hermes review, PR #560 — the hint is gated on a non-empty search box:
     // it has nothing to say about an empty one.
@@ -356,7 +380,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Couldn't load history for this session.",
     );
@@ -386,7 +412,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
-    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -478,7 +506,9 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     );
     render(<SessionTimeline params={{ sessionIds: [1, 2] }} />);
 
-    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("(session removed)")).toBeInTheDocument();
   });
 });

@@ -27,8 +27,10 @@ const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
 });
 
-const dismissEvent = vi.fn((sessionId: number, seq: number) => {
-  dismissedEventKeys = { ...dismissedEventKeys, [eventKey(sessionId, seq)]: true };
+const dismissEvents = vi.fn((sessionId: number, seqs: number[]) => {
+  const next = { ...dismissedEventKeys };
+  for (const seq of seqs) next[eventKey(sessionId, seq)] = true;
+  dismissedEventKeys = next;
 });
 
 function storeState() {
@@ -40,7 +42,7 @@ function storeState() {
     lastSeenSeq,
     dismissedEventKeys,
     markEventSeen,
-    dismissEvent,
+    dismissEvents,
     notificationsPanelOpenRequest,
   };
 }
@@ -191,7 +193,7 @@ beforeEach(() => {
   dismissedEventKeys = {};
   notificationsPanelOpenRequest = 0;
   markEventSeen.mockClear();
-  dismissEvent.mockClear();
+  dismissEvents.mockClear();
   resolveReviewGate.mockClear();
   resolveReviewGate.mockResolvedValue(undefined);
   acceptDevServerPort.mockClear();
@@ -270,7 +272,21 @@ describe("NotificationBell", () => {
   });
 
   it("per-event mark-read advances the cursor to that event's own seq, without touching newer unread events", async () => {
-    events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
+    // Making notifications relevant/scannable — two IDENTICAL bell events
+    // (the old default here) now fold into a single collapsed row (see
+    // buildFeedItems' foldConsecutiveRows), which would defeat this test's
+    // own premise of two independently mark-readable rows. Distinct
+    // signals (bell vs hookNotification) keep them from folding, same as
+    // any two genuinely different notifications would in practice.
+    events = {
+      1: [
+        makeEvent({ seq: 1 }),
+        makeEvent({
+          seq: 2,
+          payload: { attention: true, signal: "hookNotification", title: "heads up", body: "" },
+        }),
+      ],
+    };
     await openPanel();
     const markReadButtons = screen.getAllByRole("button", { name: "Mark read" });
     expect(markReadButtons).toHaveLength(2);
@@ -287,7 +303,7 @@ describe("NotificationBell", () => {
     expect(screen.getByText("Bell")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(dismissEvent).toHaveBeenCalledWith(1, 1);
+    expect(dismissEvents).toHaveBeenCalledWith(1, [1]);
     first.unmount();
 
     // Simulate the dismissal actually landing in the store (the mock above
@@ -301,6 +317,21 @@ describe("NotificationBell", () => {
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
     expect(screen.getByText("No notifications yet")).toBeInTheDocument();
+  });
+
+  it("dismissing a folded (×N) row dismisses every folded seq in a single batched call", async () => {
+    // Three identical consecutive events (same kind/payload → same
+    // severity+text) fold into one row (foldConsecutiveRows) — its Dismiss
+    // button must clear all three seqs at once via dismissEvents, not just
+    // the representative (newest) one.
+    events = {
+      1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 }), makeEvent({ seq: 3 })],
+    };
+    await openPanel();
+    expect(screen.getByText("×3")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(dismissEvents).toHaveBeenCalledWith(1, [3, 2, 1]);
   });
 
   it("mark-all-read advances every unread session's cursor to its true latest seq across all buffered events, not just notification-worthy ones", async () => {

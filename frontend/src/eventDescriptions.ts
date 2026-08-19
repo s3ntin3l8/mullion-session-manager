@@ -138,6 +138,25 @@ export function describeEvent(
             attention: true,
           };
         }
+        // Making notifications relevant/scannable — this case was simply
+        // missing: an opencode `question.asked` hook raises the `question`
+        // attention signal (hook-handlers.ts) carrying a `header`, but this
+        // switch had no case for it, so it silently fell through to the
+        // generic "Needs input" default below. Mirrors `elicitation` just
+        // above (same shape: an MCP-style "the agent needs a decision from
+        // you" signal, just from opencode's own `question` tool instead of
+        // an MCP server). Load-bearing for the severity/notifyKind cleanup
+        // below, which now relies on the `attention` event (not the
+        // `question` NotificationEvent kind) as `question`'s sole notifiable
+        // representation — degrading to "Needs input" here would have been
+        // the only visible text left for it.
+        case "question": {
+          const header = typeof event.payload.header === "string" ? event.payload.header : null;
+          return {
+            text: header ? `Needs answer: ${header}` : "Needs answer",
+            attention: true,
+          };
+        }
         // Fix: sticky needs_input — stop_failure/tool_failure now raise
         // apiError/toolFailure instead of the generic hookNotification (see
         // src/services/hook-handlers.ts), so without these two cases the
@@ -391,27 +410,226 @@ export function describeLatestEvent(
 // NotificationBell.tsx's event feed + unread bell count (issue #169) — both
 // must agree on this set, or the panel and the tab badges it's meant to
 // summarize could disagree.
-export function notifyKind(event: NotificationEvent): "attention" | "exited" | null {
+//
+// Making notifications relevant/scannable — shorter than it used to be.
+// `permission_request`, `stop_failure`, `tool_failure`, `plan_ready`,
+// `promote_request`, `elicitation` (started), and `question` (started) are
+// gone: every one of those NotificationEvent kinds is always accompanied by
+// a paired `attention` event carrying the same information (see
+// src/services/hook-handlers.ts's raise sites), which the first check below
+// already matches — keeping both meant this function (and everything built
+// on it: the bell feed, the unread badge, desktop notifications) counted
+// each one twice. `promote_request` was worse than redundant: its OTHER
+// raise site (pty-manager.ts's Session.resolvePromote) fires with NO paired
+// attention signal at all, carrying `{state: "accepted"|"declined"}` — a
+// RESOLUTION record, not a request — so the old unconditional check here
+// was firing a bogus notification every time a promote was resolved, not
+// just when one was requested. Dropping the kind removes that for free.
+//
+// Parameter is `Pick<NotificationEvent, "kind" | "payload">`, not the full
+// type — same reasoning as describeEvent's own doc comment above: this
+// function never reads `seq`/`sessionId`/`ts`, which is what lets
+// SessionTimeline.tsx's widened `TimelineEvent` (sessionId: number | null,
+// for a persisted-history row whose session may since have been deleted)
+// pass through here — and to notifySeverity/notifyLabel below, which share
+// this same narrowing for the same reason — without a cast.
+export function notifyKind(
+  event: Pick<NotificationEvent, "kind" | "payload">,
+): "attention" | "exited" | null {
   if (event.kind === "attention" && event.payload.attention === true) return "attention";
   if (event.kind === "status_change" && event.payload.reason === "exited") return "exited";
   if (event.kind === "review_gate" && event.payload.state === "waiting") return "attention";
-  if (event.kind === "permission_request") return "attention";
-  if (event.kind === "stop_failure") return "attention";
-  if (event.kind === "tool_failure") return "attention";
-  if (event.kind === "plan_ready") return "attention";
-  // Rich statuses (issue: extend surfaced session statuses) — promote_request
-  // was missing from this set entirely (issue #271 predates this list's most
-  // recent update); elicitation only counts while it's actually pending
-  // ("finished" doesn't need a fresh notification of its own).
-  if (event.kind === "promote_request") return "attention";
-  if (event.kind === "elicitation" && event.payload.state === "started") return "attention";
-  if (event.kind === "question" && event.payload.state === "started") return "attention";
   // Issue #404 — only the initial "pending a decision" event (no `state`
   // yet) counts as a notification; the accepted/dismissed follow-up events
   // are routine history, same as review_gate's "waiting"-only check above.
+  // No paired `attention` signal exists for this kind (see
+  // useAttentionNotifications.ts's own explicit skip), so it stays here.
   if (event.kind === "dev_server_detected" && event.payload.state === undefined) return "attention";
   return null;
 }
+
+// Making notifications relevant/scannable — a finer-grained classification
+// than notifyKind's binary "attention"/"exited", used by NotificationBell.tsx
+// (row icon/color) and SessionTimeline.tsx (row color + paired-row
+// suppression), NOT by notifyKind's own consumers (PaneTab's tab badge,
+// desktopNotify.ts) — those stay on the coarser attention/exited split
+// deliberately, since a tab badge only has room for one bell-or-check
+// distinction, not three tiers.
+//
+// - "blocked": the agent is explicitly waiting on a human DECISION —
+//   mirrors attention-detect.ts's OUTPUT_IMMUNE_KINDS (a cosmetic repaint
+//   must not look like resolution) plus hookNotification, which is
+//   deliberately immune for the same reason without being one of the
+//   per-state latches that set owns.
+// - "error": turbulence the agent's own next turn typically resolves on its
+//   own (attention-detect.ts's PENDING_OUTPUT_CANCELS-equivalent — the
+//   agent's own next output chunk cancels these before they even confirm,
+//   see attention-tracker.ts's ATTENTION_SETTLE_MS).
+// - "done": informational — a turn ended, or the byte-parsed heuristics
+//   (bell/title/silence/...), or the process exited. None of these are
+//   "something is broken" or "something needs a decision".
+export type NotifySeverity = "blocked" | "error" | "done";
+
+const BLOCKED_SIGNALS = new Set([
+  "permissionRequest",
+  "planReady",
+  "reviewGate",
+  "promoteRequest",
+  "elicitation",
+  "question",
+  "hookNotification",
+]);
+
+const ERROR_SIGNALS = new Set(["toolFailure", "apiError"]);
+
+// Signal -> the specific NotificationEvent kind it's paired with, where one
+// exists. SessionTimeline.tsx uses this to suppress the generic `attention`
+// row when the specific-kind row (which carries the same information, via a
+// different describeEvent branch) already covers it — see that component's
+// own comment for why a text-based fold can't do this instead. `null`/absent
+// means the signal has no paired kind at all (the byte-parsed signals, plus
+// agentIdle, which is attention-only by construction).
+export const SIGNAL_TO_EVENT_KIND: Partial<Record<string, NotificationEvent["kind"]>> = {
+  reviewGate: "review_gate",
+  promoteRequest: "promote_request",
+  permissionRequest: "permission_request",
+  planReady: "plan_ready",
+  elicitation: "elicitation",
+  question: "question",
+  toolFailure: "tool_failure",
+  apiError: "stop_failure",
+};
+
+// Fix: SessionTimeline "Only attention" hid the very rows it means to
+// surface — suppressPairedAttentionRows keeps the SPECIFIC-kind row (e.g.
+// `permission_request`) and drops its paired `attention` sibling, but
+// notifyKind only ever recognizes `kind === "attention"` (plus a few
+// special cases), so every surviving specific-kind row fell through to
+// severity null → filtered out by "Only attention" and rendered with no
+// severity stripe at all, indistinguishable from routine chatter. This
+// classifies those specific kinds directly. Per-kind, not a flat allow-list,
+// because three of them (elicitation/question/promote_request) reuse the
+// SAME kind for their own resolution record — with no paired attention
+// then — which must NOT count (promote_request's resolution-only bogus-
+// notification history is exactly why notifyKind itself never recognized
+// this kind at all; see SIGNAL_TO_EVENT_KIND's own comment above).
+// permission_request/plan_ready/tool_failure/stop_failure have no such
+// resolution-reuses-the-kind case (hook-handlers.ts emits each exactly once,
+// at request time — resolution clears state without re-emitting), so they're
+// unconditional.
+function specificKindSeverity(
+  event: Pick<NotificationEvent, "kind" | "payload">,
+): NotifySeverity | null {
+  switch (event.kind) {
+    case "permission_request":
+    case "plan_ready":
+      return "blocked";
+    case "tool_failure":
+    case "stop_failure":
+      return "error";
+    case "elicitation":
+    case "question":
+      return event.payload.state === "started" ? "blocked" : null;
+    case "promote_request":
+      return event.payload.state === undefined ? "blocked" : null;
+    default:
+      return null;
+  }
+}
+
+/** Severity tier for a notify-worthy event, or null for anything neither
+ * notifyKind() nor specificKindSeverity() above would count (routine
+ * chatter). Reads `payload.signal` for `kind === "attention"` (the SAME
+ * field describeEvent's own switch keys off of) rather than `event.kind`. */
+export function notifySeverity(
+  event: Pick<NotificationEvent, "kind" | "payload">,
+): NotifySeverity | null {
+  const bySpecificKind = specificKindSeverity(event);
+  if (bySpecificKind !== null) return bySpecificKind;
+  if (notifyKind(event) === null) return null;
+  // Neither has a `payload.signal` of its own — special-cased ahead of the
+  // signal read below, which would otherwise fall through to "done" for
+  // both (wrong: each represents a decision genuinely pending on the user,
+  // not routine completion). `status_change`'s "exited" case has no such
+  // special case: it correctly falls through to "done" via `signal === null`
+  // below, same tier a `bell`/`silence`/etc. attention event gets.
+  if (event.kind === "dev_server_detected" || event.kind === "review_gate") return "blocked";
+  const signal = typeof event.payload.signal === "string" ? event.payload.signal : null;
+  if (signal === null) return "done";
+  if (BLOCKED_SIGNALS.has(signal)) return "blocked";
+  if (ERROR_SIGNALS.has(signal)) return "error";
+  return "done";
+}
+
+// Short kind label for the bell/timeline's pill — for an `attention` event,
+// keyed by its SIGNAL (not its `kind`, which is always the generic
+// "attention"), so a permission reads "Permission" not "Attention". Values
+// deliberately match KIND_LABELS below where a signal has a paired
+// NotificationEvent kind (SIGNAL_TO_EVENT_KIND), so a row doesn't read
+// differently depending on whether it arrived as the specific-kind event or
+// the paired attention event.
+export const SIGNAL_LABELS: Record<string, string> = {
+  bell: "Bell",
+  notification: "Notification",
+  titleIdle: "Idle",
+  altScreenExit: "Screen",
+  silence: "Silence",
+  hookNotification: "Notification",
+  reviewGate: "Review",
+  agentIdle: "Finished",
+  promoteRequest: "Promote",
+  permissionRequest: "Permission",
+  planReady: "Plan",
+  elicitation: "Elicitation",
+  question: "Question",
+  toolFailure: "Tool",
+  apiError: "API Error",
+};
+
+/** The kind pill's label for any notify-worthy event — an `attention` event
+ * labels by its signal (SIGNAL_LABELS), everything else by its own kind
+ * (KIND_LABELS). Falls back to "Notification" for a shape neither table
+ * covers (a future signal/kind this hasn't been taught yet) rather than
+ * rendering a blank pill. */
+export function notifyLabel(event: Pick<NotificationEvent, "kind" | "payload">): string {
+  if (event.kind === "attention") {
+    const signal = typeof event.payload.signal === "string" ? event.payload.signal : null;
+    return (signal !== null ? SIGNAL_LABELS[signal] : undefined) ?? "Notification";
+  }
+  return KIND_LABELS[event.kind] ?? "Notification";
+}
+
+// Moved from frontend/src/eventHistory.ts (making notifications relevant/
+// scannable) so NotificationBell.tsx's kind pill and SessionTimeline.tsx's
+// filter chips share one label vocabulary instead of two that could drift.
+// Safe direction: eventHistory.ts already has no consumers importing FROM
+// this module in a way that would cycle back here (it only imports
+// NotificationEvent/StoredEventRow types from api/index.ts) — see that
+// file's own re-export of these two for why its consumers don't need to
+// change their import path.
+export const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
+  attention: "Attention",
+  status_change: "Status",
+  title_change: "Title",
+  file_change: "Files",
+  review_gate: "Review",
+  promote_request: "Promote",
+  permission_request: "Permission",
+  stop_failure: "Stop",
+  tool_failure: "Tool",
+  session_end: "Exit",
+  plan_ready: "Plan",
+  // Rich statuses (issue: extend surfaced session statuses).
+  elicitation: "Elicitation",
+  // OpenCode v2 events.
+  question: "Question",
+  todo: "Todo",
+  session_diff: "Diff",
+  // Issue #404.
+  dev_server_detected: "Dev Server",
+};
+
+export const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];
 
 export interface UnreadEventSummary {
   count: number;

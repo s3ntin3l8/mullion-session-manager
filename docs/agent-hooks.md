@@ -52,7 +52,7 @@ kinds the parser now recognizes) is grouped by when each kind was added:
 | `kind`                  | Fields                                                                                                | Meaning                                                                                                                                                                                                                                                                                    |
 | ----------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `notification`          | `title: string`, `body: string`                                                                       | Surfaces in the notification bell/desktop-notify, same as a BEL.                                                                                                                                                                                                                           |
-| `progress`              | `phase: "thinking" \| "generating" \| "done"`, `lastAssistantMessage?`, `backgroundTasks?`, `detail?` | Drives the sidebar status line; `done` is the authoritative "turn over" signal — see `backgroundTasks` below for why it doesn't unconditionally mean "idle now."                                                                                                                           |
+| `progress`              | `phase: "thinking" \| "generating" \| "done"`, `lastAssistantMessage?`, `backgroundTasks?`, `detail?` | Drives the sidebar status line; `done` is the authoritative "turn over" signal — see `backgroundTasks` below for why it doesn't unconditionally mean "idle now," and "Settle window" below for why its `agentIdle` attention ping doesn't fire immediately either.                         |
 | `file_change`           | `path: string`, `action: "modify" \| "create" \| "delete"`, `agentId?`, `agentType?`                  | A file the agent touched (issue #177's sidebar strip). `agentId`/`agentType` (Phase 5, Track A) are present when the change happened inside a subagent.                                                                                                                                    |
 | `review_gate`           | `state: "waiting" \| "approved" \| "denied"`, `prompt: string`                                        | A pending decision (issue #178's review gate — see below).                                                                                                                                                                                                                                 |
 | `promote_request`       | `summary: string`, `suggestedBaseRef?`                                                                | Issue #271 — a model-invoked "start work in a worktree" request.                                                                                                                                                                                                                           |
@@ -60,9 +60,9 @@ kinds the parser now recognizes) is grouped by when each kind was added:
 | `notification_resolved` | —                                                                                                     | Follow-up to #275 — a confirmed `notification` was resolved with no keystroke (an auto-approved permission).                                                                                                                                                                               |
 | `git_branch`            | `branch: string`, `worktree?: string`                                                                 | Sidebar worktree detection — a `git worktree add`/checkout the agent ran.                                                                                                                                                                                                                  |
 | `cwd_changed`           | `cwd: string`                                                                                         | Sidebar worktree detection — the agent's shell changed directory.                                                                                                                                                                                                                          |
-| `permission_request`    | `tool: string`, `summary: string`                                                                     | PR #300 — a tool-permission dialog is blocking the agent.                                                                                                                                                                                                                                  |
-| `stop_failure`          | `error: string`, `errorDetails?`, `errorType?`                                                        | PR #300 — the turn ended on an API error (rate_limit, overloaded, ...).                                                                                                                                                                                                                    |
-| `tool_failure`          | `tool: string`, `error: string`, `summary?`, `agentId?`, `agentType?`                                 | PR #300 — a tool call itself failed. `agentId`/`agentType` (Phase 5, Track A) are present when the failure happened inside a subagent.                                                                                                                                                     |
+| `permission_request`    | `tool: string`, `summary: string`                                                                     | PR #300 — a tool-permission dialog is blocking the agent. Both this event and its attention ping now settle before notifying — see below.                                                                                                                                                  |
+| `stop_failure`          | `error: string`, `errorDetails?`, `errorType?`                                                        | PR #300 — the turn ended on an API error (rate_limit, overloaded, ...). This event is still emitted immediately; only its attention ping settles — see below.                                                                                                                              |
+| `tool_failure`          | `tool: string`, `error: string`, `summary?`, `agentId?`, `agentType?`                                 | PR #300 — a tool call itself failed. `agentId`/`agentType` (Phase 5, Track A) are present when the failure happened inside a subagent. This event is still emitted immediately; only its attention ping settles — see below.                                                               |
 | `session_end`           | `reason: string`, `exitCode?: number`                                                                 | PR #300 — the session terminated, with why (and, when available, its exit code).                                                                                                                                                                                                           |
 | `plan_ready`            | `plan: string`, `filePath?`, `summary?`                                                               | PR #300 — Claude Code's `ExitPlanMode` produced a plan awaiting review.                                                                                                                                                                                                                    |
 | `turn_start`            | —                                                                                                     | Issue: extend surfaced session statuses — a deterministic "a new turn just started" signal (Claude Code/Codex `UserPromptSubmit`); releases every pending `awaiting_*` status.                                                                                                             |
@@ -80,6 +80,43 @@ malformed message (missing/wrong-typed fields for a _recognized_ kind, or
 invalid JSON) gets a `{"error": "..."}` reply on the same connection, which
 stays open — only a failed handshake or an oversized/unterminated line
 closes it. See `src/services/hook-protocol.ts` for the authoritative parser.
+
+### Settle window before notifying (making notifications relevant/scannable)
+
+Four attention signals no longer notify the instant their triggering hook
+message arrives: `permissionRequest` (2s), `toolFailure`/`apiError` (2s
+each), and `agentIdle` (3s) — see `src/services/attention-tracker.ts`'s
+`ATTENTION_SETTLE_MS`. This is deliberately a separate mechanism from
+`attention-detect.ts`'s existing `ATTENTION_CONFIRM_MS` debounce (which
+stays at 0 for all four and is otherwise unchanged) — that debounce answers
+"is this raw byte noise?", this settle window answers "did a human ever
+actually need to see this?" Measured against 7 days of real
+`session_events`: 537 of 538 `permission_request`s were auto-approved by the
+agent's own trust config in a mean of 26ms (mostly opencode's
+`external_directory` glob prompts), 140 of 140 tool/API failures recovered
+on the agent's own very next output chunk, and 465 of 517 `agentIdle`
+"turn finished" pings were flaps where a background `Agent`/`Task` call
+reopened the same turn within a few seconds.
+
+Each of the four is cancelled — meaning nothing is ever emitted at all, not
+even to the timeline — by a specific resolution, not a generic timeout:
+
+- `permissionRequest` — a `permission_resolved` message, a `tool_done`
+  matching the pending tool, or `progress: done`'s own unconditional latch
+  clears (all already release a confirmed `permissionRequest`; they now also
+  cancel a merely-pending one).
+- `toolFailure`/`apiError` — the agent's own next real PTY output chunk (NOT
+  a hook message — the state machine treats byte-level output as the
+  resolution for these two specifically, unlike the other three).
+- `agentIdle` — a `progress` message reporting any phase other than `"done"`
+  (i.e. the agent resumed generating before the turn-complete ping fired).
+
+All four are also cancelled by `turn_start` or a genuine keystroke, same as
+an already-confirmed flag would be. If a hook author is testing against
+Mullion, expect these four notifications to lag their triggering message by
+up to the windows above when nothing intervenes, and to sometimes not appear
+at all when something does — that's the fix working as intended, not a
+delivery bug.
 
 ### `backgroundTasks` and the `background` status (issue #428)
 
