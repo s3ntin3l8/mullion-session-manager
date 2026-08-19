@@ -85,6 +85,14 @@ export interface WorkerPreambleOptions {
  * spawn. Kept to the things an agent cannot discover from inside the
  * worktree — deliberately NOT a restatement of CLAUDE.md, which the agent
  * already reads (the worktree is a checkout of the same repo).
+ *
+ * The verification-gate bullet below doesn't break that rule even though it
+ * points at CLAUDE.md/AGENTS.md/README: it names no commands, so it stays
+ * correct across the arbitrary target repos Task Master runs against (a Go
+ * repo's gate looks nothing like this one's `make lint`). It establishes an
+ * obligation this repo's own docs can't — Mullion opens the pull request
+ * only AFTER the worker's turn ends, so nothing already in a target repo's
+ * docs tells the agent it will never see CI's result.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   const { task, branchName, worktreePath, budgetMinutes, auto } = opts;
@@ -99,6 +107,11 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "",
     "When you are done:",
     "",
+    "- Run the repo's own verification gate before you commit — the commands its",
+    "  CLAUDE.md / AGENTS.md / README document (lint, typecheck, tests, formatting),",
+    "  not just the test suite. Mullion opens the pull request AFTER your turn ends,",
+    "  so you never see CI's result: do not claim CI is green. Report only what you",
+    "  actually ran, and say so plainly if you skipped something.",
     `- Commit your work on ${branchName}. Uncommitted changes never reach the pull`,
     '  request, and the review summary reports them as "nothing changed".',
     "- Leave the worktree clean. Untracked files count as dirty and block approval",

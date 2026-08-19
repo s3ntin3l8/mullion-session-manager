@@ -50,6 +50,14 @@ describe("buildTaskMasterPreamble", () => {
     expect(buildTaskMasterPreamble(BASE)).toContain("Untracked files count as dirty");
   });
 
+  // The worker's own CI never exists yet — Mullion opens the PR only after
+  // the turn ends — so a confident "CI is green" claim can only be a guess.
+  it("tells the worker to run its own verification gate and not claim CI is green", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    expect(out).toContain("Run the repo's own verification gate before you commit");
+    expect(out).toContain("do not claim CI is green");
+  });
+
   it("warns that an outstanding background job suppresses the completion signal", () => {
     expect(buildTaskMasterPreamble(BASE)).toContain(
       "Finish or cancel any background job before you end your turn",
