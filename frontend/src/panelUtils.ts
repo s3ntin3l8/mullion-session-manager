@@ -139,15 +139,41 @@ export function hasTiledPanels(api: DockviewApi): boolean {
   return api.panels.some((p) => p.api.location.type === "grid");
 }
 
-// A group's own panels all share its location — a floating group's panels
-// are all floating together, a grid group's are all tiled together — so
-// this checks via one of them; DockviewGroupPanel itself has no direct
-// location.type accessor (unlike IDockviewPanel). Shared by
-// applyMobilePresentation below and useMobileLayout.ts's onDidAddGroup
-// handler, both of which need to skip floating groups for the same reason:
-// see applyMobilePresentation's own comment for the crash this prevents.
-export function isTiledGroup(group: Pick<DockviewGroupPanel, "panels">): boolean {
-  return group.panels.some((p) => p.api.location.type === "grid");
+// Bug fix (independent review) — this used to walk `group.panels` on the
+// theory that DockviewGroupPanel had no direct location accessor of its
+// own. Verified against the installed dockview-core:
+// `DockviewGroupPanelApiImpl.get location()` reads `this._group.model.
+// location` directly off the group, and `DockviewPanelApiImpl.get
+// location()` (a panel's own) just proxies `this.group.api.location` right
+// back — the group-level value was always the source of truth. That matters
+// for `onDidAddGroup`: `DockviewComponent._doAddPanel` fires
+// `_onDidAddGroup` immediately after `createGroup`/`createGroupAtLocation`,
+// *before* `group.model.openPanel(...)` ever attaches a panel — so
+// `group.panels` was reliably `[]` at the exact moment
+// useMobileLayout.ts's onDidAddGroup handler read it, making the old
+// `isTiledGroup` return `false` unconditionally for every brand-new group,
+// tiled or floating. Reading `group.api.location.type` directly is correct
+// at that same moment, since the group's location is set at creation time.
+export function isTiledGroup(group: Pick<DockviewGroupPanel, "api">): boolean {
+  return group.api.location.type === "grid";
+}
+
+// Bug fix (independent review) — every open-or-focus-by-stable-id helper
+// below (and usePanelOpener.ts's onOpenBrowserUrl/onOpenBlankBrowser) calls
+// `api.maximizeGroup(panel)` on mobile, same as applyMobilePresentation
+// used to before its own fix — and the same throw applies here: an
+// "existing" panel being refocused may have floated on desktop before a
+// breakpoint change into mobile (applyMobilePresentation deliberately never
+// re-tiles a floating panel), and even a freshly-added panel with no
+// explicit position lands in `api.activeGroup` (verified in dockview-core's
+// `_doAddPanel`), which is itself a floating group whenever the *previously*
+// active panel was one (e.g. a workspace with no tiled panels at all).
+// Mirrors applyMobilePresentation's own floating-skip rather than crashing.
+export function maximizeIfTiled(
+  api: DockviewApi,
+  panel: ReturnType<DockviewApi["getPanel"]> | undefined,
+): void {
+  if (panel && panel.api.location.type === "grid") api.maximizeGroup(panel);
 }
 
 // dockview's own DEFAULT_FLOATING_GROUP_POSITION is a bare 300x300
@@ -290,7 +316,7 @@ export function openSessionPanel(
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -307,7 +333,7 @@ export function openSessionPanel(
     params: { sessionId: session.id },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // Self-contained variant of openSessionPanel for callers without `isMobile`
@@ -334,7 +360,7 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
   const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -345,7 +371,7 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
     params: { sessionIds: [session.id] },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // Phase 3 (#181) — opens (or focuses) a session's CDP-controlled browser
@@ -362,7 +388,7 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
   const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -373,7 +399,7 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
     params: { sessionId: session.id },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // Phase 6 (6.5/#218) — opens (or focuses) a task's detail panel
@@ -392,7 +418,7 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
   const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -403,7 +429,7 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
     params: { taskId: task.id },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // PR 34h of the hook-extraction series — App.tsx used to declare six
@@ -450,7 +476,7 @@ export function openOrFocusProjectPanel(
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -461,7 +487,7 @@ export function openOrFocusProjectPanel(
     params: { projectId },
     ...(config.applyDesktopPositioning && !isMobile ? desktopPositioning(api) : {}),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {

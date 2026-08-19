@@ -6,6 +6,7 @@ import { useDashboardStore } from "../store/index.js";
 import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspace,
+  maximizeIfTiled,
   openOrFocusProjectPanel,
   openSessionPanel,
   openTimelinePanel,
@@ -310,7 +311,13 @@ export function usePanelOpener({
         title: label,
         params: { kind: "external", url, projectId },
       });
-      if (isMobile) dockviewApi.maximizeGroup(panel);
+      // Bug fix (independent review) — no explicit position/floating option
+      // is passed here, so a fresh panel joins `activeGroup` (verified in
+      // dockview-core's `_doAddPanel`) — which can itself be floating (e.g.
+      // a workspace with no tiled panels), making a bare `maximizeGroup`
+      // throw the same way applyMobilePresentation's own fix (panelUtils.ts)
+      // prevents elsewhere.
+      if (isMobile) maximizeIfTiled(dockviewApi, panel);
       setSidebarOpen(false);
     },
     [dockviewApi, isMobile, setSidebarOpen, leaveTaskView],
@@ -325,7 +332,8 @@ export function usePanelOpener({
       title: "Preview",
       params: { kind: "external" },
     });
-    if (isMobile) dockviewApi.maximizeGroup(panel);
+    // Same guard as onOpenBrowserUrl above — see its own comment.
+    if (isMobile) maximizeIfTiled(dockviewApi, panel);
     setSidebarOpen(false);
   }, [dockviewApi, isMobile, setSidebarOpen, leaveTaskView]);
 

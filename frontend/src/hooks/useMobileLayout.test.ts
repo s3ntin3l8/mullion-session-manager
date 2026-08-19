@@ -68,15 +68,20 @@ function makeMockApi(options: { activePanel?: unknown } = {}) {
   return {
     api: api as unknown as DockviewApi,
     groups,
-    // `panels` defaults to a single tiled member — isTiledGroup (panelUtils.ts)
-    // reads `group.panels`, not a location field on the group itself, so a
-    // group with no panels would throw on `.some(...)` rather than behave as
-    // floating. Pass "floating" to exercise the onDidAddGroup skip-floating
-    // path (useMobileLayout.ts).
+    // Deliberately carries `api.location.type` but no `panels` array at
+    // all — real dockview-core fires `onDidAddGroup` immediately after
+    // group creation, strictly before any panel is attached (verified
+    // against the installed package; see isTiledGroup's own comment in
+    // panelUtils.ts), so `group.panels` is reliably `[]` at the exact
+    // moment this hook's onDidAddGroup listener fires. Omitting it here
+    // pins isTiledGroup to reading the group's own location rather than a
+    // panels-derived fallback that would mask a regression back to that
+    // broken timing assumption. Pass "floating" to exercise the
+    // onDidAddGroup skip-floating path (useMobileLayout.ts).
     addGroup: (locationType: "grid" | "floating" = "grid") => {
       const group = {
         header: { hidden: false },
-        panels: [{ api: { location: { type: locationType } } }],
+        api: { location: { type: locationType } },
       };
       groups.push(group);
       return group as unknown as { header: { hidden: boolean } };
