@@ -307,11 +307,25 @@ describe("renderReviewFindingsMarkdown", () => {
     expect(out).toBe("Reviewed the diff and ran `go test ./...`; no issues found.");
   });
 
-  it("renders the summary followed by a path:line bullet per finding", () => {
+  it("renders the summary followed by a path:line bullet per finding, prefixed with its severity", () => {
     const out = renderReviewFindingsMarkdown(parseReviewFindings(CHANGES_REQUESTED_JSON));
     expect(out).toContain("One errcheck failure golangci-lint would catch.");
-    expect(out).toContain("**cmd/branchdam/main_test.go:669**");
+    expect(out).toContain("[major] **cmd/branchdam/main_test.go:669**");
     expect(out).toContain("wrap it or assign to `_` explicitly");
+  });
+
+  it("omits the severity prefix entirely for a finding with no recognized severity", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "changes-requested",
+        summary: "s",
+        findings: [{ path: "a.go", line: 1, body: "b" }],
+      }),
+    );
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toContain("- **a.go:1** — b");
+    expect(out).not.toContain("[null]");
+    expect(out).not.toContain("undefined");
   });
 });
 
