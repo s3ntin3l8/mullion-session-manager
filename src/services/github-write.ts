@@ -358,25 +358,90 @@ export async function createPullRequest(
  * `pr_number` recorded on a task row, not the id from the create response
  * that minted it (approve can run in a fresh process from whichever
  * `-> reviewing` transition opened the draft).
+ *
+ * `headSha` was already on the wire and previously discarded — added for
+ * `createPullRequestReview` below, which needs the exact commit its
+ * `comments[]` anchors bind to.
  */
 export async function getPullRequestByNumber(
   token: string,
   owner: string,
   repo: string,
   number: number,
-): Promise<{ number: number; htmlUrl: string; nodeId: string; draft: boolean }> {
+): Promise<{ number: number; htmlUrl: string; nodeId: string; draft: boolean; headSha: string }> {
   const result = await githubRequest<{
     number: number;
     html_url: string;
     node_id: string;
     draft: boolean;
+    head: { sha: string };
   }>(token, owner, repo, "GET", `/pulls/${number}`);
   return {
     number: result.number,
     htmlUrl: result.html_url,
     nodeId: result.node_id,
     draft: result.draft,
+    headSha: result.head.sha,
   };
+}
+
+/**
+ * A single anchored review comment, GitHub's own `path`/`line`/`side` shape
+ * — mirrors `task-prompt.ts`'s `ReviewFinding` so `task-github-sync.ts` can
+ * pass findings straight through with no reshaping.
+ */
+export interface ReviewCommentParams {
+  path: string;
+  line: number;
+  side?: "LEFT" | "RIGHT";
+  body: string;
+}
+
+/**
+ * Posts the review agent's findings as an actual PR review (`POST
+ * /pulls/:n/reviews`) instead of an ordinary issue comment — gives Task
+ * Master's review a place in the Reviews timeline with real inline anchored
+ * comments, not prose citing `file:42` in a conversation comment.
+ *
+ * `event` is deliberately NOT a parameter: only `"COMMENT"` is ever valid
+ * here. The PR this posts to was opened by this same GitHub App installation
+ * (`task-promote.ts`'s `openDraftPRForTask`), and GitHub rejects both
+ * `APPROVE` and `REQUEST_CHANGES` from a PR's own author with a 422 — so
+ * this posts a comment-only review with no merge-gating state. Actually
+ * gating merge on this review needs a second identity (a separate App or
+ * PAT) — a materially bigger, deliberately deferred piece of work; see the
+ * tracking issue linked from docs/tasks.md's review-agent section.
+ *
+ * `commitId` should be the PR's current head SHA (`getPullRequestByNumber`'s
+ * `headSha`) — GitHub anchors `comments[].line` against that specific
+ * commit's diff, not "whatever HEAD is when this call lands."
+ */
+export async function createPullRequestReview(
+  token: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  params: { body: string; commitId: string; comments?: ReviewCommentParams[] },
+): Promise<{ id: number; htmlUrl: string }> {
+  const result = await githubRequest<{ id: number; html_url: string }>(
+    token,
+    owner,
+    repo,
+    "POST",
+    `/pulls/${pullNumber}/reviews`,
+    {
+      body: params.body,
+      commit_id: params.commitId,
+      event: "COMMENT",
+      comments: params.comments?.map((c) => ({
+        path: c.path,
+        line: c.line,
+        side: c.side ?? "RIGHT",
+        body: c.body,
+      })),
+    },
+  );
+  return { id: result.id, htmlUrl: result.html_url };
 }
 
 /**
