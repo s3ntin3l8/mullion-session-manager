@@ -431,6 +431,27 @@ describe("usePanelOpener — onOpenBrowserUrl", () => {
 
     expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
   });
+
+  // Bug fix (independent review) — no explicit position/floating option is
+  // passed to addPanel here, so in real dockview-core the new panel joins
+  // `activeGroup`, which can itself be floating (e.g. a workspace with no
+  // tiled panels) — `maximizeGroup` on it would throw. This mock's addPanel
+  // only tags a panel floating when `opts.floating` is set (unlike real
+  // dockview's activeGroup-joining behavior), so this test overrides it for
+  // one call to stand in for that case directly.
+  it("does not crash when the panel lands in an already-floating active group on mobile", () => {
+    const api = mockDockviewApi();
+    (api.addPanel as ReturnType<typeof vi.fn>).mockImplementationOnce((opts) => ({
+      id: opts.id,
+      api: { location: { type: "floating" } },
+    }));
+    const { result } = setup({ dockviewApi: api, isMobile: true });
+
+    expect(() =>
+      result.current.onOpenBrowserUrl(1, "https://example.com", "Example"),
+    ).not.toThrow();
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
 });
 
 describe("usePanelOpener — onOpenBlankBrowser", () => {
@@ -467,5 +488,18 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenBlankBrowser()).not.toThrow();
     expect(setSidebarOpen).not.toHaveBeenCalled();
+  });
+
+  // Same scenario as onOpenBrowserUrl's own test above — see its comment.
+  it("does not crash when the panel lands in an already-floating active group on mobile", () => {
+    const api = mockDockviewApi();
+    (api.addPanel as ReturnType<typeof vi.fn>).mockImplementationOnce((opts) => ({
+      id: opts.id,
+      api: { location: { type: "floating" } },
+    }));
+    const { result } = setup({ dockviewApi: api, isMobile: true });
+
+    expect(() => result.current.onOpenBlankBrowser()).not.toThrow();
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 });

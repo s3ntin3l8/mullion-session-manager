@@ -42,6 +42,7 @@ import {
   childPanelPosition,
   shouldAutoOpenChildPanels,
   panelSessionId,
+  isTiledPanel,
 } from "./panelUtils.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
@@ -1064,25 +1065,45 @@ export function App() {
   // floating (peek) panels, so a lone floating panel would otherwise hide the
   // "nothing tiled here" hint even though the grid itself is empty (#121).
   const tiledPaneCount = useMemo(
-    () => dockviewApi?.panels.filter((p) => p.api.location.type === "grid").length ?? 0,
+    () => dockviewApi?.panels.filter(isTiledPanel).length ?? 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
     [dockviewApi, panelsVersion],
   );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const mobilePanels = useMemo(() => dockviewApi?.panels ?? [], [dockviewApi, panelsVersion]);
-  // Projects with a session tiled in the active workspace, derived from the
-  // live dockview panels the same way mobilePanels above walks them for the
-  // mobile tab bar (panel.params.sessionId -> session.projectId) — reactive
-  // via mobilePanels (which itself carries panelsVersion, bumped on every
-  // dockview layout change, including a workspace-switch fromJSON() restore;
-  // see the onDidLayoutChange effect above). Deduped, first-seen order kept
-  // so the Dock's columns don't reshuffle on every render. There's no
+  // Filtered to tiled panels only, same as tiledPaneCount above and for the
+  // same reason (independent code review): a leftover floating panel would
+  // otherwise get a tab in the mobile bar, and tapping it calls
+  // dockviewApi.maximizeGroup(panel) below — maximizeGroup on a floating
+  // panel throws (see applyMobilePresentation's own comment in
+  // panelUtils.ts), so that tap would crash inside this click handler.
+  // Only feeds the mobile tab bar — Hermes review, PR #727: workspaceProjectIds
+  // below deliberately does NOT reuse this array, since it also drives the
+  // desktop Dock and a tiled-only filter there would silently drop a project
+  // whose only open session is a floating (peeked) panel.
+  const mobilePanels = useMemo(
+    () => dockviewApi?.panels.filter(isTiledPanel) ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+    [dockviewApi, panelsVersion],
+  );
+  // Projects with a session open in the active workspace, derived from the
+  // live dockview panels (panel.params.sessionId -> session.projectId) —
+  // reactive via panelsVersion, bumped on every dockview layout change,
+  // including a workspace-switch fromJSON() restore (see the
+  // onDidLayoutChange effect above). Deduped, first-seen order kept so the
+  // Dock's columns don't reshuffle on every render. There's no
   // workspace<->project link in the DB (workspaces.layout is an opaque
   // dockview blob) — this is what makes a "per-workspace dock" possible
   // without a schema change.
+  //
+  // Hermes review, PR #727 — deliberately walks ALL panels, not
+  // `mobilePanels` (which is tiled-only). `<Dock>` below renders on desktop
+  // too, and a project whose only open session is a floating (peeked) panel
+  // should still get a Dock column there — mobilePanels' tiled-only filter
+  // exists solely to keep the mobile tab bar's own maximizeGroup-on-tap safe
+  // (App.tsx's own comment on that array), a mobile-crash concern that
+  // shouldn't also silently drop a desktop Dock column.
   const workspaceProjectIds = useMemo(() => {
     const ids: number[] = [];
-    for (const panel of mobilePanels) {
+    for (const panel of dockviewApi?.panels ?? []) {
       const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
       if (sessionId == null) continue;
       const session = sessions.find((s) => s.id === sessionId);
@@ -1090,7 +1111,8 @@ export function App() {
       if (!ids.includes(session.projectId)) ids.push(session.projectId);
     }
     return ids;
-  }, [mobilePanels, sessions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+  }, [dockviewApi, sessions, panelsVersion]);
 
   // Mobile UI/UX overhaul, item C.2 — the key bar only makes sense while a
   // terminal session is the active mobile pane (not the timeline/Agent

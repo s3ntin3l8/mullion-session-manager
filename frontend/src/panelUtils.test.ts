@@ -9,6 +9,9 @@ import {
   closeLegacyPanels,
   dropSessionPanel,
   hasTiledPanels,
+  isTiledGroup,
+  isTiledPanel,
+  maximizeIfTiled,
   stripFloatingPanels,
   stripMaximizedNode,
   stripHiddenHeaders,
@@ -39,10 +42,16 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
 }
 
 // A grid-target group for dropSessionPanel tests — real DockviewGroupPanels
-// expose the same `api.location.type` shape panels do. `header.hidden` is
-// mutable (a plain object, not a getter/setter) so applyMobilePresentation's
-// tests below can assert against it directly the same way the real
-// DockviewGroupPanel.header does (see panelUtils.ts's own comment on that).
+// expose `api.location.type` directly (isTiledGroup, panelUtils.ts, reads
+// this rather than `group.panels` — see that function's own comment on why:
+// the group-level value is populated at creation time, before any panel
+// attaches, which matters for onDidAddGroup). `header.hidden` is mutable (a
+// plain object, not a getter/setter) so applyMobilePresentation's tests
+// below can assert against it directly the same way the real
+// DockviewGroupPanel.header does. Deliberately carries no `panels` array —
+// leaving it absent (rather than populated) is what pins isTiledGroup to
+// the group's own `api.location`, not a panel-derived fallback that would
+// silently mask a regression back to the old, panels-based implementation.
 function mockGroup(id: string, locationType: "grid" | "floating" = "grid") {
   return {
     id,
@@ -223,6 +232,26 @@ describe("openSessionPanel", () => {
     openSessionPanel(api, SESSION_NO_PROJECT, false, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  // Bug fix (independent review) — refocusing an "existing" panel on mobile
+  // used to call `api.maximizeGroup(existing)` unconditionally. A panel
+  // opened on desktop (where a tiled panel already existing floats every
+  // later one — desktopPositioning above) stays floating across a later
+  // breakpoint crossing into mobile (applyMobilePresentation deliberately
+  // never re-tiles it — panelUtils.ts's own comment), so reopening that
+  // exact panel while mobile hit `maximizeGroup` on a floating panel and
+  // threw the same way applyMobilePresentation's pre-fix bug did.
+  it("does not crash refocusing an existing FLOATING panel on mobile", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {}, floating: {} });
+    const existing = api.getPanel("session-1")!;
+    existing.api.setActive = vi.fn();
+
+    expect(() => openSessionPanel(api, EXISTING_SESSION, true, PROJECTS)).not.toThrow();
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 });
 
@@ -672,6 +701,16 @@ describe("parseDeepLinkSessionId (issue #95 prerequisite)", () => {
   });
 });
 
+describe("isTiledPanel", () => {
+  it("is true for a tiled panel", () => {
+    expect(isTiledPanel(mockPanel("session-1", "grid")!)).toBe(true);
+  });
+
+  it("is false for a floating panel", () => {
+    expect(isTiledPanel(mockPanel("session-1", "floating")!)).toBe(false);
+  });
+});
+
 describe("hasTiledPanels", () => {
   it("is false for an empty workspace", () => {
     const api = mockDockviewApi();
@@ -688,6 +727,63 @@ describe("hasTiledPanels", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} });
     expect(hasTiledPanels(api)).toBe(true);
+  });
+});
+
+describe("isTiledGroup", () => {
+  it("is true for a tiled group", () => {
+    expect(isTiledGroup(mockGroup("group-1", "grid"))).toBe(true);
+  });
+
+  it("is false for a floating group", () => {
+    expect(isTiledGroup(mockGroup("group-1", "floating"))).toBe(false);
+  });
+
+  // Bug fix (independent review) — this is the exact scenario that broke
+  // the old `group.panels`-based implementation: `DockviewComponent.
+  // _doAddPanel` fires `onDidAddGroup` immediately after group creation, but
+  // strictly before any panel is attached to it, so `group.panels` is
+  // reliably `[]` at that moment for every new group. Reading the group's
+  // own `api.location.type` (verified against dockview-core's
+  // `DockviewGroupPanelApiImpl` — the group is the source of truth, a
+  // panel's own `location` just proxies it back) gives the correct answer
+  // even with zero panels attached yet. mockGroup deliberately carries no
+  // `panels` field at all (see its own comment), so this test only passes
+  // against the group-location-based implementation.
+  it("is correct even before any panel has been attached to the group", () => {
+    const freshlyCreatedTiledGroup = mockGroup("group-1", "grid");
+    const freshlyCreatedFloatingGroup = mockGroup("group-2", "floating");
+
+    expect(isTiledGroup(freshlyCreatedTiledGroup)).toBe(true);
+    expect(isTiledGroup(freshlyCreatedFloatingGroup)).toBe(false);
+  });
+});
+
+describe("maximizeIfTiled", () => {
+  it("maximizes a tiled panel", () => {
+    const api = mockDockviewApi();
+    const panel = mockPanel("session-1", "grid");
+
+    maximizeIfTiled(api, panel);
+
+    expect(api.maximizeGroup).toHaveBeenCalledWith(panel);
+  });
+
+  it("does not maximize, and does not throw, for a floating panel", () => {
+    const api = mockDockviewApi();
+    const panel = mockPanel("session-1", "floating");
+
+    expect(() => maximizeIfTiled(api, panel)).not.toThrow();
+
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("no-ops on an undefined panel", () => {
+    const api = mockDockviewApi();
+
+    expect(() => maximizeIfTiled(api, undefined)).not.toThrow();
+
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 });
 
@@ -1111,6 +1207,39 @@ describe("applyMobilePresentation (issue #85)", () => {
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 
+  // Bug fix (independent code review) — a floating activePanel used to be
+  // passed straight to maximizeGroup, which throws inside dockview-core
+  // (getGridLocation walks DOM ancestry for a `dv-grid-view` class and never
+  // finds one for a floating panel's element). See panelUtils.ts's own
+  // comment on applyMobilePresentation for the verified root cause.
+  it("falls back to a tiled panel when activePanel is floating", () => {
+    const floatingActive = mockPanel("floating-1", "floating");
+    const tiled = mockPanel("session-1", "grid");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [floatingActive, tiled],
+      activePanel: floatingActive,
+    });
+
+    applyMobilePresentation(api, true);
+
+    expect(api.maximizeGroup).toHaveBeenCalledWith(tiled);
+    expect(api.maximizeGroup).not.toHaveBeenCalledWith(floatingActive);
+  });
+
+  it("maximizes nothing, and does not throw, when every panel is floating", () => {
+    const floatingActive = mockPanel("floating-1", "floating");
+    const floatingOther = mockPanel("floating-2", "floating");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [floatingActive, floatingOther],
+      activePanel: floatingActive,
+    });
+
+    expect(() => applyMobilePresentation(api, true)).not.toThrow();
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
   it("exits maximization when leaving mobile with something maximized", () => {
     const api = mockApiForPresentation({ maximized: true });
 
@@ -1154,6 +1283,38 @@ describe("applyMobilePresentation (issue #85)", () => {
     const group = mockGroup("group-1");
     group.header.hidden = true;
     const api = mockApiForPresentation({ maximized: true, groups: [group] });
+
+    applyMobilePresentation(api, false);
+
+    expect(group.header.hidden).toBe(false);
+  });
+
+  // A floating group's header is its only drag handle and close button
+  // (panelUtils.ts's own comment) — hiding it entering mobile would strand
+  // the user with no way to move or close it.
+  it("leaves a floating group's header visible when entering mobile", () => {
+    const tiled = mockGroup("group-1", "grid");
+    const floating = mockGroup("group-2", "floating");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [mockPanel("session-1")],
+      activePanel: mockPanel("session-1"),
+      groups: [tiled, floating],
+    });
+
+    applyMobilePresentation(api, true);
+
+    expect(tiled.header.hidden).toBe(true);
+    expect(floating.header.hidden).toBe(false);
+  });
+
+  // Restore must cover both kinds of group, not just tiled ones: a group
+  // hidden while tiled and then dragged into a floating position before the
+  // next breakpoint change must still come back on the way out of mobile.
+  it("restores a group's header when leaving mobile even if it is now floating", () => {
+    const group = mockGroup("group-1", "floating");
+    group.header.hidden = true;
+    const api = mockApiForPresentation({ maximized: false, groups: [group] });
 
     applyMobilePresentation(api, false);
 

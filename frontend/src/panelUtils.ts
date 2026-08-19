@@ -128,15 +128,59 @@ export interface DropTarget {
   position: Position;
 }
 
+// Floating panels report `location.type === "floating"`; everything actually
+// placed in the grid (including edge/split groups) reports "grid". Shared by
+// hasTiledPanels/maximizeIfTiled below and App.tsx's tiledPaneCount/
+// mobilePanels (Hermes review, PR #727 — those two used to each inline this
+// same `p.api.location.type === "grid"` check).
+export function isTiledPanel(panel: Pick<IDockviewPanel, "api">): boolean {
+  return panel.api.location.type === "grid";
+}
+
 // A panel opened from the sidebar/launcher should only ever *peek* (float)
 // when there's already a tiled layout to peek across — the first panel in an
-// empty workspace should dock full-screen instead (issue #121). Floating
-// groups report `location.type === "floating"`; everything actually placed in
-// the grid (including edge/split groups) reports "grid". Checking live
-// `panel.api.location` rather than a cached count keeps this correct as
+// empty workspace should dock full-screen instead (issue #121). Checking
+// live `panel.api.location` rather than a cached count keeps this correct as
 // panels are closed/docked/floated during the session.
 export function hasTiledPanels(api: DockviewApi): boolean {
-  return api.panels.some((p) => p.api.location.type === "grid");
+  return api.panels.some(isTiledPanel);
+}
+
+// Bug fix (independent review) — this used to walk `group.panels` on the
+// theory that DockviewGroupPanel had no direct location accessor of its
+// own. Verified against the installed dockview-core:
+// `DockviewGroupPanelApiImpl.get location()` reads `this._group.model.
+// location` directly off the group, and `DockviewPanelApiImpl.get
+// location()` (a panel's own) just proxies `this.group.api.location` right
+// back — the group-level value was always the source of truth. That matters
+// for `onDidAddGroup`: `DockviewComponent._doAddPanel` fires
+// `_onDidAddGroup` immediately after `createGroup`/`createGroupAtLocation`,
+// *before* `group.model.openPanel(...)` ever attaches a panel — so
+// `group.panels` was reliably `[]` at the exact moment
+// useMobileLayout.ts's onDidAddGroup handler read it, making the old
+// `isTiledGroup` return `false` unconditionally for every brand-new group,
+// tiled or floating. Reading `group.api.location.type` directly is correct
+// at that same moment, since the group's location is set at creation time.
+export function isTiledGroup(group: Pick<DockviewGroupPanel, "api">): boolean {
+  return group.api.location.type === "grid";
+}
+
+// Bug fix (independent review) — every open-or-focus-by-stable-id helper
+// below (and usePanelOpener.ts's onOpenBrowserUrl/onOpenBlankBrowser) calls
+// `api.maximizeGroup(panel)` on mobile, same as applyMobilePresentation
+// used to before its own fix — and the same throw applies here: an
+// "existing" panel being refocused may have floated on desktop before a
+// breakpoint change into mobile (applyMobilePresentation deliberately never
+// re-tiles a floating panel), and even a freshly-added panel with no
+// explicit position lands in `api.activeGroup` (verified in dockview-core's
+// `_doAddPanel`), which is itself a floating group whenever the *previously*
+// active panel was one (e.g. a workspace with no tiled panels at all).
+// Mirrors applyMobilePresentation's own floating-skip rather than crashing.
+export function maximizeIfTiled(
+  api: DockviewApi,
+  panel: ReturnType<DockviewApi["getPanel"]> | undefined,
+): void {
+  if (panel && isTiledPanel(panel)) api.maximizeGroup(panel);
 }
 
 // dockview's own DEFAULT_FLOATING_GROUP_POSITION is a bare 300x300
@@ -279,7 +323,7 @@ export function openSessionPanel(
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -296,7 +340,7 @@ export function openSessionPanel(
     params: { sessionId: session.id },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // Self-contained variant of openSessionPanel for callers without `isMobile`
@@ -323,7 +367,7 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
   const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -334,7 +378,7 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
     params: { sessionIds: [session.id] },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // Phase 3 (#181) — opens (or focuses) a session's CDP-controlled browser
@@ -351,7 +395,7 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
   const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -362,7 +406,7 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
     params: { sessionId: session.id },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // Phase 6 (6.5/#218) — opens (or focuses) a task's detail panel
@@ -381,7 +425,7 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
   const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -392,7 +436,7 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
     params: { taskId: task.id },
     ...(!isMobile && desktopPositioning(api)),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 // PR 34h of the hook-extraction series — App.tsx used to declare six
@@ -439,7 +483,7 @@ export function openOrFocusProjectPanel(
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
-    if (isMobile) api.maximizeGroup(existing);
+    if (isMobile) maximizeIfTiled(api, existing);
     return;
   }
 
@@ -450,7 +494,7 @@ export function openOrFocusProjectPanel(
     params: { projectId },
     ...(config.applyDesktopPositioning && !isMobile ? desktopPositioning(api) : {}),
   });
-  if (isMobile) api.maximizeGroup(panel);
+  if (isMobile) maximizeIfTiled(api, panel);
 }
 
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
@@ -484,7 +528,7 @@ export function dropSessionPanel(
   // which reports no usable grid target) could never build a tiled layout.
   // Only treat the target group as a real drop target when it's actually in
   // the grid; a floating group's own quadrant target isn't one.
-  if (target && target.group && target.group.api.location.type === "grid") {
+  if (target && target.group && isTiledGroup(target.group)) {
     if (target.location === "edge") {
       api.addPanel({
         ...panelBase,
@@ -673,16 +717,42 @@ export function serializeForPersist(api: DockviewApi): SerializedDockview {
 // group's own flex layout, which the browser reflows on its own — no
 // separate dockview relayout call needed, and TerminalPane's existing
 // ResizeObserver → refit picks up the resulting size change.
+// Bug fix (independent code review): `api.activePanel`/`api.panels[0]` can
+// be a FLOATING panel (desktopPositioning floats every panel opened once a
+// tiled one already exists — panelUtils.ts's own desktopPositioning) —
+// `api.maximizeGroup()` on one throws, verified against the installed
+// dockview-core: `Gridview.maximizeView` calls `getGridLocation(view.
+// element)`, which walks DOM ancestry looking for a `dv-grid-view` class and
+// throws "Invalid grid element" once it runs off the top, which is exactly
+// what a floating group's element does (it isn't in the grid tree). That
+// throw used to escape mid-function, AFTER the header.hidden loop below had
+// already run — leaving every header hidden with nothing maximized. Now:
+// only tiled groups ever get their header hidden or get passed to
+// maximizeGroup; a workspace with only floating panels maximizes nothing
+// (there is nothing tiled to show single-pane) rather than crashing.
+//
+// The header.hidden sync itself is deliberately asymmetric: only TILED
+// groups are ever hidden entering mobile, but EVERY group (tiled or
+// floating) is restored to visible leaving it. A floating group's header is
+// its only drag handle and close button — hiding it was never done to begin
+// with (the loop below only touches tiled groups going in) — but the
+// restore direction has to cover both anyway, otherwise a group that was
+// tiled while its header got hidden and then dragged into a floating
+// position before the next breakpoint change would leave mobile with a
+// hidden header and no way to undo it.
 export function applyMobilePresentation(api: DockviewApi, isMobile: boolean): void {
   for (const group of api.groups) {
-    group.header.hidden = isMobile;
+    if (!isMobile || isTiledGroup(group)) group.header.hidden = isMobile;
   }
   if (!isMobile) {
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
     return;
   }
   if (api.hasMaximizedGroup()) return;
-  const panel = api.activePanel ?? api.panels[0];
+  const panel =
+    api.activePanel && isTiledPanel(api.activePanel)
+      ? api.activePanel
+      : api.panels.find(isTiledPanel);
   if (!panel) return;
   api.maximizeGroup(panel);
 }
