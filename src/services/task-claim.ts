@@ -687,11 +687,7 @@ export async function retryTask(
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
 
-    app.db
-      .update(tasks)
-      .set(patch)
-      .where(eq(tasks.id, taskId))
-      .run();
+    app.db.update(tasks).set(patch).where(eq(tasks.id, taskId)).run();
     committed = true;
     recordTaskTransition(app, {
       taskId,

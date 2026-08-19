@@ -391,9 +391,7 @@ export async function tasksRoute(app: FastifyInstance) {
         !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) &&
         existing.status !== "failed"
       ) {
-        return reply.conflict(
-          `Cannot edit agents for a task in status "${existing.status}"`,
-        );
+        return reply.conflict(`Cannot edit agents for a task in status "${existing.status}"`);
       }
 
       const patch: Partial<typeof tasks.$inferInsert> = {};
@@ -523,30 +521,31 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
       const outcome = await retryTask(app, taskId, request.body || undefined);
-    if (!outcome.ok) {
-      switch (outcome.reason) {
-        case "not-found":
-          return reply.notFound();
-        case "not-failed":
-          return reply.conflict(outcome.detail ?? "Task is not failed");
-        case "cap":
-          return reply
-            .code(429)
-            .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
-        case "no-worktree":
-          return reply.badRequest(outcome.detail ?? "Task has no recorded branch to resume");
-        case "remote-not-supported":
-          return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
-        case "worktree-failed":
-          return reply.badGateway(outcome.detail ?? "Failed to resume this task's worktree");
-        case "spawn-failed":
-          return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case "not-found":
+            return reply.notFound();
+          case "not-failed":
+            return reply.conflict(outcome.detail ?? "Task is not failed");
+          case "cap":
+            return reply
+              .code(429)
+              .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
+          case "no-worktree":
+            return reply.badRequest(outcome.detail ?? "Task has no recorded branch to resume");
+          case "remote-not-supported":
+            return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
+          case "worktree-failed":
+            return reply.badGateway(outcome.detail ?? "Failed to resume this task's worktree");
+          case "spawn-failed":
+            return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
+        }
       }
-    }
 
-    reply.code(201);
-    return { ...outcome.session, seedDelivered: outcome.seedDelivered };
-  });
+      reply.code(201);
+      return { ...outcome.session, seedDelivered: outcome.seedDelivered };
+    },
+  );
 
   // Phase 6 (6.2/#215, promotion added in 6.7/#220) — approve acts on a
   // task in "reviewing" (task-state.ts's canTransition table is the single
