@@ -27,19 +27,27 @@
      own header comment documents a real, known limitation: it resolves a
      sessionId to whichever registration is most recent, with no
      disambiguation between a session's main pane and a Dock monitor for
-     that same session. That's currently masked because mobile.css hides
-     `.dock` entirely below 700px, so a key-bar tap there can only ever hit
-     the main pane. This PR makes the key bar pointer-coarse-gated (not
-     phone-only), which would otherwise make the Dock reachable at the same
-     time as the key bar on tablet — reopening exactly the ambiguity that
-     comment describes, where a key-bar tap could silently target a Dock
-     monitor's terminal instead of the pane the user is actually looking
-     at. Chose to keep the Dock hidden here too (same as phone) rather than
-     fix the registry to resolve by visibility — that fix needs either
-     preferring the non-Dock registration specifically or keying by
-     (sessionId, pane) and having the caller resolve the visible one, both
-     larger changes than this PR's own crash/positioning scope. Revisit if
-     Dock-on-touch turns out to matter in practice. */
+     that same session. Below 700px this was masked because mobile.css hid
+     `.dock` entirely; making the key bar pointer-coarse-gated (not
+     phone-only) would otherwise make the Dock reachable at the same time
+     as the key bar on tablet too, reopening exactly the ambiguity that
+     comment describes.
+
+     This `display: none` alone only hides the element visually — it does
+     NOT stop Dock.tsx from mounting DockColumn/DockMonitor/TerminalPane,
+     which is what actually calls registerTerminalInput() (independent
+     review: the original version of this fix relied on the CSS hide alone
+     and didn't close the gap for that reason). Dock.tsx's own `collapsed`
+     check now also gates on the same `isCoarsePointer` this query
+     expresses, so DockColumn genuinely never mounts — and therefore never
+     registers — under a coarse pointer; this rule is the paired visual
+     layer for that, not the actual fix. Chose to keep the Dock unmounted
+     here too (same as phone) rather than fix the registry to resolve by
+     visibility — that fix needs either preferring the non-Dock
+     registration specifically or keying by (sessionId, pane) and having
+     the caller resolve the visible one, both larger changes than this
+     PR's own crash/positioning scope. Revisit if Dock-on-touch turns out
+     to matter in practice. */
   .dock {
     display: none !important;
   }

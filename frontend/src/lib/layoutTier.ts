@@ -13,8 +13,21 @@ import { useDashboardStore } from "../store/index.js";
 // grid capped at a user-configurable pane count, see panelUtils.ts's
 // tabletPositioning) rather than either phone's single maximized pane or
 // desktop's unbounded columns.
-export const PHONE_BREAKPOINT_QUERY = "(max-width: 699px)";
-export const TABLET_BREAKPOINT_QUERY = "(min-width: 700px) and (max-width: 1279px)";
+// Independent review — `.98px` upper bounds, not bare integers: adjacent
+// `max-width: 699px` / `min-width: 700px` queries leave a live gap at any
+// fractional CSS width in (699, 700) — routine under non-100% browser zoom
+// or a non-integer devicePixelRatio, and exactly the kind of odd metric
+// this tier's own "foldable reporting ambiguous width" motivating case
+// makes plausible. Neither query matches there, so resolveLayoutTier falls
+// through to its final `return "desktop"` — silently skipping tablet
+// entirely — and useLayoutTier's own boundary listeners (only the phone
+// and desktop MQLs) never fire for a resize that lands in that gap either,
+// so it doesn't even self-correct on a later, unambiguous resize in the
+// same direction. `.98px` shrinks the gap by 100x versus a bare integer,
+// well under the sub-pixel precision browsers actually round CSS widths
+// to, without changing the intended breakpoints.
+export const PHONE_BREAKPOINT_QUERY = "(max-width: 699.98px)";
+export const TABLET_BREAKPOINT_QUERY = "(min-width: 700px) and (max-width: 1279.98px)";
 export const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1280px)";
 
 // Touch affordances (key bar, tab-strip panning, 44px hit targets) are

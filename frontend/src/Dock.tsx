@@ -24,6 +24,7 @@ import { useArmedKill } from "./dock/useArmedKill.js";
 import { useTransientStatus } from "./dock/useTransientStatus.js";
 import { DockMonitor } from "./dock/DockMonitor.js";
 import { AddColumnControl } from "./dock/AddColumnControl.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 
 // Issue #73 — how often a column with at least one discovered Docker
 // control re-fetches GET .../dock while the dock is expanded, so a
@@ -86,6 +87,18 @@ export function Dock({
   // selectors mean this only re-renders when one of THEM changes identity.
   const projects = useDashboardStore((s) => s.projects);
   const sessions = useDashboardStore((s) => s.sessions);
+  // Bug fix (independent review, tablet tier plan PR 4) — tablet.css's own
+  // `.dock { display: none }` under `(pointer: coarse)` only hides this
+  // element visually; it doesn't stop React from mounting DockColumn below,
+  // which is what actually calls TerminalPane's registerTerminalInput() for
+  // every running dock monitor. A CSS-only hide left the same
+  // most-recent-registration-wins ambiguity terminalInputRegistry.ts's own
+  // header comment documents (a key-bar tap could silently target an
+  // invisible Dock monitor's terminal instead of the visible pane) fully
+  // reachable underneath the hidden element — this actually skips mounting
+  // DockColumn (and therefore registering) under a coarse pointer, rather
+  // than just hiding the result.
+  const isCoarsePointer = useCoarsePointer();
   const [collapsed, setCollapsed] = useState(() => readBool(STORAGE_KEYS.dockCollapsed, false));
   const [height, setHeight] = useState(() => {
     const n = readNumber(STORAGE_KEYS.dockHeight, NaN);
@@ -256,7 +269,7 @@ export function Dock({
           />
         </button>
       </div>
-      {!collapsed && (
+      {!collapsed && !isCoarsePointer && (
         <div className="dock-columns">
           {columnIds.length === 0 && (
             <div className="dock-empty dock-empty-workspace">

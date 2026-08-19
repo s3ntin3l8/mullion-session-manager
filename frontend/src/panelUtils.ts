@@ -215,21 +215,43 @@ function desktopPositioning(
 // layout work of its own, rather than being a relabeled desktop. Docks as
 // its own column (`position: { direction: "right" }`) while fewer than
 // `cap` columns are tiled; once the cap is reached, a new panel opens as a
-// tab in the active group instead (`{}` — dockview's own bare-add default,
-// the same mechanism phone already uses for single-pane mode and PR 1 made
-// touch-scrollable) — never as a float, so no floating-window touch
-// interaction is introduced on tablet at all.
+// tab in a tiled group instead — never as a float, so no floating-window
+// touch interaction is introduced on tablet at all.
 //
 // Grouped by `group.id`, not by panel count: a tablet group that already
 // holds two tabs (from a user manually tabbing panels together, or PR 1's
 // now-scrollable strip) still counts as ONE column against the cap, not
 // two — the cap limits simultaneously visible columns, not open panels.
+//
+// Independent review — the at-cap branch used to return a bare `{}`,
+// relying on dockview's own default of attaching to `api.activeGroup`.
+// That's an ambiguity, not a determinism: desktopPositioning floats every
+// panel opened once a tiled one exists, so a workspace that started at
+// desktop width and was later narrowed into tablet range can have a
+// floating group as `activeGroup` (applyLayoutPresentation's tablet branch
+// only exits stale maximize and restores headers — it doesn't close or
+// re-tile pre-existing floats). A bare add there would tab the new panel
+// into that FLOATING group, reintroducing exactly the floating-window
+// touch interaction this function's own contract says tablet must never
+// have. Targeting a tiled panel explicitly (preferring the active one when
+// it's tiled, else the first tiled panel — same fallback
+// applyLayoutPresentation itself already uses to pick a maximize target)
+// removes the ambiguity instead of relying on it resolving the way this
+// function needs.
 function tabletPositioning(
   api: DockviewApi,
   cap: TabletPaneCap,
-): { position: { direction: "right" } } | Record<string, never> {
-  const tiledGroupIds = new Set(api.panels.filter(isTiledPanel).map((p) => p.group.id));
-  return tiledGroupIds.size < cap ? { position: { direction: "right" } } : {};
+):
+  | { position: { direction: "right" } }
+  | { position: { referencePanel: IDockviewPanel; direction: "within" } }
+  | Record<string, never> {
+  const tiledPanels = api.panels.filter(isTiledPanel);
+  const tiledGroupIds = new Set(tiledPanels.map((p) => p.group.id));
+  if (tiledGroupIds.size < cap) return { position: { direction: "right" } };
+  const target =
+    api.activePanel && isTiledPanel(api.activePanel) ? api.activePanel : tiledPanels[0];
+  if (!target) return {};
+  return { position: { referencePanel: target, direction: "within" } };
 }
 
 // Single switch every open-or-focus-by-stable-id helper below routes
@@ -242,6 +264,7 @@ function positioningForTier(
 ):
   | { floating: { width: number; height: number } }
   | { position: { direction: "right" } }
+  | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
   switch (layout.tier) {
     case "phone":

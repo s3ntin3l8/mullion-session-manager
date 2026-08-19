@@ -80,6 +80,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Independent review — jsdom's matchMedia never evaluates real CSS (every
+// test in this file mocks it), so this can't exercise actual browser-side
+// query evaluation. What it CAN pin: the query strings themselves use a
+// `.98px` upper bound rather than a bare integer, so a future edit can't
+// silently reintroduce the adjacent-integer gap at the phone/tablet and
+// tablet/desktop seams (any fractional width in that gap — routine under
+// non-100% browser zoom or a non-integer devicePixelRatio — would match
+// neither the "max" nor the "min" query, and resolveLayoutTier's fallthrough
+// silently resolves it to desktop, the one tier with no explicit handling).
+describe("breakpoint query boundaries", () => {
+  it("uses a fractional upper bound, not a bare integer, to avoid an adjacent-query gap", () => {
+    expect(PHONE_BREAKPOINT_QUERY).toMatch(/max-width:\s*699\.\d+px/);
+    expect(TABLET_BREAKPOINT_QUERY).toMatch(/max-width:\s*1279\.\d+px/);
+  });
+});
+
 describe("resolveLayoutTier", () => {
   it("resolves phone/tablet/desktop from live width when layoutMode is auto", () => {
     stubBreakpointMedia("phone");

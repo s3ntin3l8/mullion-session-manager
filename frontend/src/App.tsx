@@ -1471,8 +1471,15 @@ export function App() {
                 // only — Hermes review: unscoped, this also swaps desktop's
                 // subtle on-hover custom overlay thumb for an always-visible
                 // native scrollbar, a needless mouse-facing side effect for
-                // a touch-only fix.
-                scrollbars={window.matchMedia("(pointer: coarse)").matches ? "native" : "custom"}
+                // a touch-only fix. Tablet tier plan, PR 4 (independent
+                // review) — reads the same live `isCoarsePointer` state the
+                // key bar above uses, not its own one-shot matchMedia()
+                // snapshot: this used to only reflect pointer type at mount,
+                // so a runtime pointer-type change (a 2-in-1 laptop's
+                // keyboard attach/detach, a devtools emulation toggle)
+                // wouldn't update it until next remount, unlike every other
+                // pointer-coarse-gated affordance this plan added.
+                scrollbars={isCoarsePointer ? "native" : "custom"}
               />
               {/* Empty tiled grid (design States doc §1D) — an overlay, not a
                   conditionally-mounted replacement, so dockview's own API

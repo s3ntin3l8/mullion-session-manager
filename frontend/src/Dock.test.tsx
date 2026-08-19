@@ -130,6 +130,31 @@ describe("Dock", () => {
       );
       expect(localStorage.getItem("crs.dockManualProjects")).toBe("[]");
     });
+
+    // Bug fix (independent review, tablet tier plan PR 4) — tablet.css's own
+    // `.dock { display: none }` under `(pointer: coarse)` only hid this
+    // element visually; DockColumn (and therefore DockMonitor's own
+    // TerminalPane, which registers with terminalInputRegistry on mount
+    // regardless of CSS visibility) still mounted underneath it. Proves the
+    // real fix: DockColumn never mounts at all under a coarse pointer, so
+    // it never gets the chance to register.
+    it("does not mount any DockColumn under a coarse pointer, even though the outer element still renders", async () => {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query === "(pointer: coarse)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+      useDashboardStore.setState({ projects: [PROJECT, PROJECT_2], sessions: [] });
+      render(<Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      expect(document.querySelector(".dock")).toBeInTheDocument();
+      expect(document.querySelectorAll(".dock-column")).toHaveLength(0);
+      expect(screen.queryByText("mullion")).not.toBeInTheDocument();
+    });
   });
 
   describe("collapse", () => {

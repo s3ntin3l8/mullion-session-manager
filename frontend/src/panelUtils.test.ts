@@ -287,7 +287,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 
-  it("docks as a tab into the active group once the cap is reached", () => {
+  it("docks as a tab into a tiled group once the cap is reached", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} });
     (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
@@ -298,9 +298,58 @@ describe("tabletPositioning (via openSessionPanel)", () => {
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[2][0];
     expect(addCall.id).toBe("session-2");
-    expect(addCall).not.toHaveProperty("position");
+    // Independent review — no `activePanel` set here, so this falls back to
+    // the first tiled panel (session-1), same fallback
+    // applyLayoutPresentation itself uses to pick a maximize target. An
+    // explicit `referencePanel`, not a bare add relying on dockview's own
+    // `activeGroup` default — see tabletPositioning's own comment on why
+    // that ambiguity is exactly what the next test below exploits.
+    expect(addCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
     expect(addCall).not.toHaveProperty("floating");
     expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  // Bug fix (independent review) — the at-cap branch used to return a bare
+  // `{}`, relying on dockview's own default of attaching to
+  // `api.activeGroup`. That default is not always tiled: a workspace
+  // narrowed from desktop width into tablet range can have a floating
+  // group as `activeGroup` (applyLayoutPresentation's tablet branch never
+  // closes or re-tiles pre-existing floats — only phone's own single-pane
+  // maximize path ever interacts with floating panels at all). A bare add
+  // there tabbed the new panel into that FLOATING group, reintroducing the
+  // exact floating-window touch interaction the "never floats on tablet"
+  // test above exists to rule out.
+  it("docks into a tiled group, not a floating activePanel/activeGroup, once the cap is reached", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
+    api.addPanel({ id: "session-3", component: "terminal", params: {} });
+    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
+    // Simulates the narrowed-from-desktop scenario: activePanel is a
+    // leftover floating panel, not one of the two tiled groups above.
+    api.addPanel({ id: "floating-1", component: "terminal", params: {}, floating: {} });
+    (api as unknown as { activePanel: unknown }).activePanel = api.getPanel("floating-1");
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[3][0];
+    expect(addCall.id).toBe("session-2");
+    expect(addCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
+    expect(addCall).not.toHaveProperty("floating");
   });
 
   it("counts a group already holding two tabs as ONE column, not two, against the cap", () => {

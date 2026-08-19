@@ -6,7 +6,7 @@ import { useDashboardStore } from "./store/index.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./ui/icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
-import { useLayoutTier } from "./lib/layoutTier.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 
 export interface BrowserPanelParams {
   projectId?: number;
@@ -99,8 +99,8 @@ export function BrowserPanel({
   api?: DockviewPanelApi;
 }) {
   const isExternal = params.kind === "external";
-  const { projects, projectUrls, refreshProjectUrls, settings } = useDashboardStore();
-  const layoutTier = useLayoutTier(settings.layoutMode);
+  const { projects, projectUrls, refreshProjectUrls } = useDashboardStore();
+  const isCoarsePointer = useCoarsePointer();
   const project = isExternal ? undefined : projects.find((p) => p.id === params.projectId);
   const projectId = project?.id;
   const devServerUrl = project?.devServerUrl;
@@ -561,9 +561,13 @@ export function BrowserPanel({
           // login screen itself) — this one fires the instant an empty
           // browser panel mounts, with no click involved, popping the
           // keyboard before the user has asked to type a URL. Tablet tier
-          // plan, PR 4 — extended from phone-only to phone-or-tablet: the
-          // same soft-keyboard concern applies on a touch-primary tablet.
-          autoFocus={state.status === "empty" && layoutTier === "desktop"}
+          // plan, PR 4 — gated on pointer coarseness (independent review:
+          // was briefly tier-gated, which had it backwards — a touchscreen
+          // laptop at desktop width would still pop the keyboard, and an
+          // explicit `layoutMode: "tablet"` override on a mouse/trackpad
+          // device would lose autofocus it doesn't need to), same as the
+          // key bar and 44px hit targets elsewhere in this plan.
+          autoFocus={state.status === "empty" && !isCoarsePointer}
           onKeyDown={(e) => {
             if (e.key === "Enter") navigate();
           }}
