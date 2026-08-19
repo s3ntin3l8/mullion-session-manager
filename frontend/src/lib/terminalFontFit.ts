@@ -53,6 +53,16 @@ export function computeFitFontSize(
   const ratio = Math.min(proposedCols / targetCols, proposedRows / targetRows);
   const rawTarget = configuredFontSize * ratio;
   const achievable = rawTarget >= minFontSize;
-  const fontSize = Math.max(minFontSize, Math.min(configuredFontSize, Math.floor(rawTarget)));
+  // Independent code review — clamp order matters here: `minFontSize` is
+  // clamped to `configuredFontSize` FIRST, so a (currently unreachable in
+  // this app — Settings floors the configured size well above
+  // MIN_RENDER_FONT_SIZE) caller-supplied `minFontSize` above
+  // `configuredFontSize` can't push the result past what this function's
+  // own doc comment promises: never larger than the user's setting.
+  const effectiveMinFontSize = Math.min(minFontSize, configuredFontSize);
+  const fontSize = Math.max(
+    effectiveMinFontSize,
+    Math.min(configuredFontSize, Math.floor(rawTarget)),
+  );
   return { fontSize, achievable };
 }

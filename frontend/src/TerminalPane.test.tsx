@@ -2288,6 +2288,65 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
   });
 
+  // Independent code review — the shrink test above proves the font goes
+  // DOWN; this proves it comes back UP once the pane is genuinely spacious
+  // again, via a pure container resize with no settings/theme change
+  // involved (refit()'s own fitRetryTick bump, not the geometry handler —
+  // see that bump's own comment for why a resize-only path needs it too).
+  it("restores the configured font once the container grows back past the floor", () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    renderPane();
+    act(() => {
+      resizeObserver.fire(); // deferred initial connect (issue #676)
+    });
+
+    let baseCols = 25;
+    let baseRows = 9;
+    const proposedAt = (fontSize: number) => ({
+      cols: Math.floor(baseCols * (14 / fontSize)),
+      rows: Math.floor(baseRows * (14 / fontSize)),
+    });
+    getLatestFitAddonInstance().proposeDimensions.mockImplementation(() => {
+      const fontSize = (getLatestTermInstance().options.fontSize as number | undefined) ?? 14;
+      return proposedAt(fontSize);
+    });
+    const settle = () => {
+      const term = getLatestTermInstance();
+      const fontSize = (term.options.fontSize as number | undefined) ?? 14;
+      const proposed = proposedAt(fontSize);
+      term.cols = proposed.cols;
+      term.rows = proposed.rows;
+    };
+    fitCallbackQueue.push(settle);
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+    const term = getLatestTermInstance();
+    expect(term.options.fontSize).toBe(8); // same shrink as the test above
+
+    // The container genuinely widens — 50x20 comfortably fits the 40x10
+    // floor even at the full configured 14px font, unlike the earlier
+    // 25x9 (which only fit once shrunk). Several settle callbacks queued
+    // since the resize->tick->re-measure->resize chain can take a few
+    // internal passes to converge (see fitRetryTick's own comment) — see
+    // that settle-cascade converging is exactly what this test is
+    // verifying, not a fixed call count.
+    baseCols = 50;
+    baseRows = 20;
+    for (let i = 0; i < 5; i++) fitCallbackQueue.push(settle);
+
+    act(() => {
+      resizeObserver.fire();
+    });
+
+    expect(term.options.fontSize).toBe(14);
+    expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
+  });
+
   it("is a no-op when the server's geometry already matches the fitted grid", () => {
     stubFakeWebSocket(true);
     mockInitialTermSize.cols = 40;

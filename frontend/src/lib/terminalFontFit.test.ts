@@ -16,9 +16,19 @@ describe("computeFitFontSize", () => {
   });
 
   it("clamps at MIN_RENDER_FONT_SIZE and reports achievable:false when even the floor doesn't fit", () => {
-    // Ratio 0.5 would need a fontSize of 3, well under the floor.
-    const result = computeFitFontSize(6, 20, 8, 40, 10, 8);
+    // Ratio 0.5 would need a fontSize of 5, well under the floor.
+    const result = computeFitFontSize(10, 20, 8, 40, 10, 8);
     expect(result).toEqual({ fontSize: 8, achievable: false });
+  });
+
+  it("never clamps above configuredFontSize even when minFontSize is larger", () => {
+    // Independent code review — a minFontSize above configuredFontSize
+    // (currently unreachable in the app: Settings floors the configured
+    // size well above MIN_RENDER_FONT_SIZE) must not push the result past
+    // the "never larger than the user's setting" contract this function's
+    // own doc comment promises.
+    const result = computeFitFontSize(6, 20, 8, 40, 10, 8);
+    expect(result.fontSize).toBeLessThanOrEqual(6);
   });
 
   it("never grows the font past what the user configured", () => {

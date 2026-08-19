@@ -1313,6 +1313,17 @@ export function TerminalPane(props: {
       // a visible regression the pane's actual size never actually asked
       // for; the next real resize/geometry event will retry.
       if (!proposed) return;
+      // Hermes + independent review — `achievable` (also returned here) is
+      // deliberately NOT consulted to skip this shrink: even when the floor
+      // can't be fully met, applying `fontSize` (clamped to
+      // MIN_RENDER_FONT_SIZE) still shows strictly more of the grid than
+      // staying at the configured size would, so it's never a futile
+      // change — only a partial one. The "Pane too small" toast for that
+      // partial case is owned entirely by refit()'s pre-existing
+      // cappedBelowFloor branch below (unmodified by this feature, see its
+      // own comment), which re-measures against the font size this line
+      // just applied — that's what decides whether the shrink was enough,
+      // not `achievable` here.
       const { fontSize } = computeFitFontSize(
         terminalSettings.fontSize,
         proposed.cols,
