@@ -279,7 +279,10 @@ export interface TasksSlice {
   rejectTask: (id: number, feedback?: string) => Promise<Task>;
   // #483 — failed -> claimed: resumes on the preserved branch, spawning a
   // new session there. Same return shape as claimTask.
-  retryTask: (id: number) => Promise<Session>;
+  retryTask: (
+    id: number,
+    opts?: { agent?: string | null; reviewAgent?: string | null },
+  ) => Promise<Session>;
   // #483 — reviewing -> failed: the other resolver of a reviewing task.
   giveUpTask: (id: number, reason?: string) => Promise<Task>;
   // #488 — connects the single /ws/tasks channel once (App.tsx's mount

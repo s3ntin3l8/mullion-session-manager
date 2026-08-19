@@ -68,13 +68,18 @@ interface ClaimTaskBody {
   reviewAgent?: string | null;
 }
 
+interface RetryTaskBody {
+  agent?: string | null;
+  reviewAgent?: string | null;
+}
+
 const createTaskSchema = {
   body: {
     type: "object",
     required: ["projectId", "title"],
     additionalProperties: false,
     properties: {
-      projectId: { type: "integer" },
+      projectId: { type: "integer", minimum: 1 },
       title: { type: "string", minLength: 1 },
       body: { type: ["string", "null"] },
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
@@ -111,6 +116,8 @@ const claimTaskSchema = {
     },
   },
 };
+
+const retryTaskSchema = claimTaskSchema;
 
 // Phase 2.5 Task Master, Thin Slice (issue #219/#227) — read endpoint for
 // the sidebar's Tasks section. Always registered, regardless of Task Master
@@ -362,7 +369,7 @@ export async function tasksRoute(app: FastifyInstance) {
       const { title, body, status, boardOrder, agent, reviewAgent } = request.body;
       if ((title !== undefined || body !== undefined) && existing.issueNumber !== null) {
         return reply.conflict(
-          "Cannot edit title/body of a task linked to a GitHub issue — edit the issue itself; boardOrder and status remain editable here",
+          "Cannot edit title/body of a task linked to a GitHub issue — edit the issue itself; boardOrder, status, and agents remain editable here",
         );
       }
       // The request schema's own `enum` already restricts `status` to
@@ -371,11 +378,21 @@ export async function tasksRoute(app: FastifyInstance) {
       // *existing* row's status: a task already past backlog/ready needs
       // 6.2's full transition table, not this route.
       if (
-        (status !== undefined || agent !== undefined || reviewAgent !== undefined) &&
+        status !== undefined &&
         !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus)
       ) {
         return reply.conflict(
           `Task is past the backlog/ready stage (status: ${existing.status}) — its status can no longer be edited directly`,
+        );
+      }
+
+      if (
+        (agent !== undefined || reviewAgent !== undefined) &&
+        !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) &&
+        existing.status !== "failed"
+      ) {
+        return reply.conflict(
+          `Cannot edit agents for a task in status "${existing.status}"`,
         );
       }
 
@@ -493,16 +510,19 @@ export async function tasksRoute(app: FastifyInstance) {
   // #483 — retries a "failed" task by resuming on its preserved branch
   // (task-claim.ts's retryTask). Same gate as claim: this leads to
   // spawning a session, genuinely new autonomous work the flag must cover.
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/retry", async (request, reply) => {
-    if (!resolveTaskMasterConfig(app).enabled) {
-      return reply.forbidden(
-        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
-      );
-    }
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+  app.post<{ Params: { id: string }; Body: RetryTaskBody }>(
+    "/api/tasks/:id/retry",
+    { schema: retryTaskSchema },
+    async (request, reply) => {
+      if (!resolveTaskMasterConfig(app).enabled) {
+        return reply.forbidden(
+          "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+        );
+      }
+      const taskId = Number(request.params.id);
+      if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
-    const outcome = await retryTask(app, taskId);
+      const outcome = await retryTask(app, taskId, request.body || undefined);
     if (!outcome.ok) {
       switch (outcome.reason) {
         case "not-found":

@@ -80,8 +80,11 @@ export const tasksApi = {
   // #483 — failed -> claimed: resumes on the task's preserved
   // mullion/task-<id> branch (no work lost) rather than starting a fresh
   // one, spawning a new session there. Same response shape as claimTask.
-  retryTask: (id: number) =>
-    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/retry`, { method: "POST" }),
+  retryTask: (id: number, opts?: { agent?: string | null; reviewAgent?: string | null }) =>
+    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/retry`, {
+      method: "POST",
+      body: opts ? JSON.stringify(opts) : undefined,
+    }),
 
   // #483 — reviewing -> failed: the other resolver of a reviewing task,
   // alongside approve/reject, for when the answer is "give up entirely"

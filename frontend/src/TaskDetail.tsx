@@ -112,7 +112,9 @@ export function TaskDetail({
     project?.defaultAgent || settings?.launchers?.defaultAgent || "claude";
   const projectDefaultReviewAgent = project?.defaultReviewAgent || "None";
   const isEditableStatus =
-    (task.status === "backlog" || task.status === "ready") && task.agentCommand === null;
+    task.status === "backlog" ||
+    (task.status === "ready" && task.agentCommand === null) ||
+    task.status === "failed";
 
   const workerSession =
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;

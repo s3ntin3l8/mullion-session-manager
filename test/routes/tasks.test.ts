@@ -785,6 +785,31 @@ describe("tasks route", () => {
         process.env.MULLION_TASK_MASTER_ENABLED = "true";
       }
     });
+
+    it("applies agent override from request body", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 82);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/retry`,
+        payload: { agent: "codex", reviewAgent: "none" },
+      });
+      expect(res.statusCode).toBe(201);
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json()).toMatchObject({
+        status: "claimed",
+        agent: "codex",
+        reviewAgent: "none",
+        agentCommand: "codex",
+      });
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
   });
 
   describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
@@ -1948,6 +1973,26 @@ describe("tasks route", () => {
         payload: { agent: "codex" },
       });
       expect(res.statusCode).toBe(409);
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id allows editing agent and reviewAgent on a failed task", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-agent-failed");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "failed task", status: "failed", agent: "claude" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { agent: "codex", reviewAgent: "none" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ agent: "codex", reviewAgent: "none" });
 
       await app.close();
     });

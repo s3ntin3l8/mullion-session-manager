@@ -999,6 +999,19 @@ describe("TaskDetail delete action", () => {
       expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
     });
 
+    it("renders agent dropdowns for failed tasks so user can adjust agent before retrying", async () => {
+      tasks = [makeTask({ id: 1, status: "failed", agent: "claude", reviewAgent: null })];
+      const user = userEvent.setup();
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+      await screen.findAllByRole("option", { name: "Claude Code" });
+      const selects = screen.getAllByRole("combobox");
+      expect(selects.length).toBe(2);
+
+      await user.selectOptions(selects[0], "codex");
+      expect(updateTask).toHaveBeenCalledWith(1, { agent: "codex" });
+    });
+
     it("renders static agent and review agent metadata for in_progress tasks", () => {
       tasks = [
         makeTask({

@@ -156,8 +156,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
-    retryTask: async (id) => {
-      const session = await api.retryTask(id);
+    retryTask: async (id, opts) => {
+      const session = await api.retryTask(id, opts);
       // Same dual-refresh reasoning as claimTask above — a new session was
       // just spawned, so the sessions list needs it too.
       void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});

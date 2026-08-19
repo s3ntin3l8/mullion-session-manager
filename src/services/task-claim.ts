@@ -452,15 +452,21 @@ export type RetryTaskOutcome =
  * supported` in `RetryTaskOutcome`'s union survives only as the
  * version-skew case (an agent build predating this proxy route).
  */
-export async function retryTask(app: FastifyInstance, taskId: number): Promise<RetryTaskOutcome> {
+export async function retryTask(
+  app: FastifyInstance,
+  taskId: number,
+  opts: { agent?: string | null; reviewAgent?: string | null } = {},
+): Promise<RetryTaskOutcome> {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
   if (!task) return { ok: false, reason: "not-found" };
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
 
+  const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
+
   const command = resolveAgentCommand(app, {
-    taskAgent: task.agent,
+    taskAgent: effectiveAgent,
     issueBody: task.body,
     projectDefaultAgent: project.defaultAgent,
   });
@@ -672,14 +678,18 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
       result.initialPromptApplied,
     );
 
+    const patch: Partial<typeof tasks.$inferInsert> = {
+      sessionId: result.row.id,
+      worktreePath: result.row.cwd,
+      agentCommand: command,
+      seedDelivered,
+    };
+    if (opts.agent !== undefined) patch.agent = opts.agent;
+    if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
+
     app.db
       .update(tasks)
-      .set({
-        sessionId: result.row.id,
-        worktreePath: result.row.cwd,
-        agentCommand: command,
-        seedDelivered,
-      })
+      .set(patch)
       .where(eq(tasks.id, taskId))
       .run();
     committed = true;
