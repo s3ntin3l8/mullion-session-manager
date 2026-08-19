@@ -334,16 +334,22 @@ export function PaneActionsMenu({
                 <span className="pane-tab-overflow-hint">↵</span>
               </button>
             )}
-            {/* Issue: narrow headers overflow — the only other entry point
-                for split (PaneHeaderActions.tsx's header-level buttons)
-                hides once its group gets too narrow, which would otherwise
-                leave no way to split a pane that's already cramped enough to
-                need this menu in the first place. Gated on `session`, same
-                as Rename above: splitting is meaningless for a pane whose
-                session hasn't loaded yet. Reference panel is THIS tab's own
-                `api.id`, not the group's active one — this menu is opened
-                from a specific tab, so split acts relative to that tab
-                regardless of which one in the group happens to be active. */}
+            {/* Issue: narrow headers overflow — PaneHeaderActions.tsx's
+                header-level split buttons hide once their group gets too
+                narrow; this is the fallback entry point for a TERMINAL
+                pane that's cramped enough to need it (independent code
+                review, PR #709 — this menu only ever renders for terminal
+                panels, tabComponents in panels/registry.tsx, so a narrow
+                group made up of non-terminal panels — github/git/timeline/
+                browser — has no such fallback once its header buttons
+                hide; that's a pre-existing gap in this menu's own
+                coverage, not something this change introduces or closes).
+                Gated on `session`, same as Rename above: splitting is
+                meaningless for a pane whose session hasn't loaded yet.
+                Reference panel is THIS tab's own `api.id`, not the group's
+                active one — this menu is opened from a specific tab, so
+                split acts relative to that tab regardless of which one in
+                the group happens to be active. */}
             {session && (
               <button
                 className="pane-tab-overflow-item"

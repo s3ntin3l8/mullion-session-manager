@@ -25,18 +25,50 @@ function makeProps(overrides: { activePanel?: { id: string } | undefined } = {})
   } as unknown as IDockviewHeaderActionsProps;
 }
 
-// Captures the observer's callback so a test can simulate a live resize of
-// the header row (this component's own immediate parent, per its own
-// comment) — same pattern as PaneTab.test.tsx's own tight-mode resize test.
+// Wraps every render in the real dockview DOM nesting (see the "observes
+// the real header row" test's own comment for the source-verified shape) —
+// the component's own ResizeObserver effect no-ops (`closest()` finds
+// nothing) without a `.dv-tabs-and-actions-container` ancestor, so any test
+// that wants resizeCallback to actually do something needs this, not a bare
+// `render(<PaneHeaderActions .../>)`.
+function renderInHeader(props: IDockviewHeaderActionsProps) {
+  return render(
+    <div className="dv-tabs-and-actions-container">
+      <div className="dv-right-actions-container">
+        <div className="dv-react-part">
+          <PaneHeaderActions {...props} />
+        </div>
+      </div>
+    </div>,
+  );
+}
+
+// Captures the observer's callback (to simulate a live resize of the header
+// row, same pattern as PaneTab.test.tsx's own tight-mode resize test) AND
+// the element `.observe()` was actually called with — the latter is what
+// the "observes the real header row" test below needs: independent review
+// (PR #709) found the first version of this component observed the wrong
+// element (a shrink-to-fit wrapper dockview-react inserts, not the header
+// row), which every OTHER test in this file — all of which invoke
+// resizeCallback directly, bypassing whatever element was actually observed
+// — would have kept passing right through.
 let resizeCallback: ResizeObserverCallback = () => {};
+let observedElement: Element | null = null;
 
 beforeEach(() => {
   requestSplit.mockClear();
+  observedElement = null;
   vi.stubGlobal(
     "ResizeObserver",
     vi.fn(function (this: unknown, callback: ResizeObserverCallback) {
       resizeCallback = callback;
-      return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+      return {
+        observe: vi.fn((el: Element) => {
+          observedElement = el;
+        }),
+        unobserve: vi.fn(),
+        disconnect: vi.fn(),
+      };
     }),
   );
 });
@@ -48,7 +80,7 @@ describe("PaneHeaderActions", () => {
   });
 
   it("calls requestSplit with the active panel's id and the clicked direction", async () => {
-    render(<PaneHeaderActions {...makeProps()} />);
+    renderInHeader(makeProps());
 
     await userEvent.click(screen.getByTitle("Split right"));
     expect(requestSplit).toHaveBeenCalledWith("session-1", "right");
@@ -63,7 +95,7 @@ describe("PaneHeaderActions", () => {
   // stays reachable via each tab's own kebab menu (PaneActionsMenu.test.tsx
   // covers that fallback).
   it("hides both split buttons once the header row narrows below the threshold", () => {
-    render(<PaneHeaderActions {...makeProps()} />);
+    renderInHeader(makeProps());
     expect(screen.getByTitle("Split right")).toBeInTheDocument();
     expect(screen.getByTitle("Split down")).toBeInTheDocument();
 
@@ -78,8 +110,27 @@ describe("PaneHeaderActions", () => {
     expect(screen.queryByTitle("Split down")).not.toBeInTheDocument();
   });
 
+  // Independent code review (PR #709) — verified against the real
+  // dockview-core/dockview-react source (tabsContainer.js's
+  // setRightActionsElement / dockview-react's `.dv-react-part` wrapper):
+  // dockview mounts this component several levels deep,
+  // .dv-tabs-and-actions-container > ... > .dv-right-actions-container >
+  // .dv-react-part > (this component's own root), and neither
+  // .dv-right-actions-container nor .dv-react-part has any flex-grow of its
+  // own — both are shrink-to-fit around this component's two buttons, same
+  // as the component's own root span. Reproduces that real nesting (rather
+  // than the flat single-parent shape the other tests in this file use) to
+  // prove the fix actually walks up to the true header row instead of
+  // stopping at one of those shrink-to-fit wrappers.
+  it("observes the real header row (.dv-tabs-and-actions-container), not a shrink-to-fit wrapper", () => {
+    renderInHeader(makeProps());
+
+    expect(observedElement).not.toBeNull();
+    expect(observedElement).toHaveClass("dv-tabs-and-actions-container");
+  });
+
   it("shows the split buttons again once the header widens back out", () => {
-    render(<PaneHeaderActions {...makeProps()} />);
+    renderInHeader(makeProps());
 
     act(() => {
       resizeCallback(

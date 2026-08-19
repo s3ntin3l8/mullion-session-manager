@@ -35,17 +35,31 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
   const spanRef = useRef<HTMLSpanElement>(null);
   const [hidden, setHidden] = useState(false);
 
-  // Measures the immediate PARENT (.dv-tabs-and-actions-container — the
-  // whole header row this span is one flex child of, alongside the tab
-  // strip), not this span's own width: hiding this span's own children
-  // would shrink ITS width toward zero the instant they hide, which would
-  // immediately observe itself as "no longer too narrow" and un-hide again
-  // — a feedback loop. The span itself always renders (even with zero
-  // visible children) purely so this ref, and the observer it drives,
-  // survives the hidden/visible transition instead of being torn down and
-  // never able to re-observe a header that later widens back out.
+  // Measures .dv-tabs-and-actions-container — the whole header row this
+  // span ultimately sits inside, alongside the tab strip — NOT this span's
+  // own width (hiding this span's own children would shrink ITS width
+  // toward zero the instant they hide, which would immediately observe
+  // itself as "no longer too narrow" and un-hide again, a feedback loop).
+  //
+  // Independent code review (PR #709) — the first version of this used
+  // `spanRef.current?.parentElement`, on the assumption that dockview
+  // mounts this span as a direct child of the header row. It doesn't:
+  // dockview-react wraps every framework-rendered slot in its own
+  // `.dv-react-part` div (`setRightActionsElement`, dockview-core), which
+  // dockview then appends into `.dv-right-actions-container` — a plain,
+  // un-styled flex child with no `flex-grow` of its own
+  // (`.dv-right-actions-container { display: flex }`, dockview.css). Both
+  // of those wrapper levels are therefore shrink-to-fit around this span's
+  // own two buttons, same as the span itself — `parentElement` measured
+  // one of those wrappers, not the header row, so `hidden` flipped `true`
+  // on this component's very first observation (~58px, the buttons' own
+  // footprint) regardless of the header's real width, and could never
+  // recover since nothing ever grows a shrink-to-fit element back out.
+  // `closest()` walks up through however many wrapper levels dockview's
+  // internals happen to use and finds the actual header row by its stable,
+  // public class name instead of relying on a specific nesting depth.
   useEffect(() => {
-    const el = spanRef.current?.parentElement;
+    const el = spanRef.current?.closest<HTMLElement>(".dv-tabs-and-actions-container");
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width;
