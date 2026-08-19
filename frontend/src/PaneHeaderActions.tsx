@@ -76,6 +76,14 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
     observerRef.current = null;
     const header = el?.closest<HTMLElement>(".dv-tabs-and-actions-container");
     if (!header) return;
+    // Hermes review, PR #709 — the synchronous getBoundingClientRect() read
+    // here (before the ResizeObserver's own first delivery, which is async)
+    // is the same one-frame-flash fix PaneTab.tsx's own setTabRef already
+    // applies for its narrow-tab threshold: without it, a group that mounts
+    // already narrower than the threshold would render the split buttons
+    // for one frame (hidden starts false) before the observer's initial
+    // callback ever gets a chance to correct it.
+    setHidden(header.getBoundingClientRect().width < HIDE_SPLIT_ACTIONS_BELOW_GROUP_WIDTH_PX);
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width;
       if (width !== undefined) setHidden(width < HIDE_SPLIT_ACTIONS_BELOW_GROUP_WIDTH_PX);

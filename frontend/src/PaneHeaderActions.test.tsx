@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
@@ -77,6 +77,27 @@ beforeEach(() => {
       };
     }),
   );
+  // setSpanRef's own synchronous getBoundingClientRect() read (Hermes
+  // review, PR #709 — avoids a one-frame flash of the buttons on a group
+  // that mounts already narrower than the threshold) would otherwise read
+  // jsdom's real, un-stubbed getBoundingClientRect() — always {width: 0}
+  // — and hide the buttons on every single mount by default, well before
+  // any test gets to simulate a real resize. Same fixture value PaneTab.
+  // test.tsx's own beforeEach uses for the identical reason (its narrow-tab
+  // threshold's own synchronous measure).
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    width: 300,
+  } as DOMRect);
+});
+
+// Hermes review, PR #709 — test hygiene: this file re-stubs ResizeObserver
+// fresh in every beforeEach, and jsdom's environment resets between test
+// files, so a missing unstub here was harmless in practice — restored
+// anyway to match the repo's usual stub/unstub pairing and stop this file
+// from being the exception if it ever grows a test that relies on the real
+// global.
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("PaneHeaderActions", () => {
