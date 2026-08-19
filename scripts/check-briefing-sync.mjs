@@ -15,13 +15,13 @@
 // to update. It instead carries a short pointer at the top to AGENTS.md, so
 // it is not in FILES below and is not expected to have a marked region.
 //
-// Deliberately an explicit file list, not a glob: docs/agent-guide.md also
-// carries a delimited region (`<!-- mullion:tier1:start/end -->`), a
-// different block for a different purpose (Mullion's own env-var/scope
-// summary, not the project's workflow rules). A glob over "any file with
-// mullion: markers" would either wrongly demand the guide match this block,
-// or silently swallow it depending on iteration order — see the plan doc
-// this script was written against.
+// Deliberately an explicit file list, not a glob: docs/agent-guide.md is
+// planned to carry its own delimited region (`<!-- mullion:tier1:start/end
+// -->`) for a different purpose (Mullion's own env-var/scope summary, not
+// the project's workflow rules) once the platform-side briefing channel
+// lands. A glob over "any file with mullion: markers" would either wrongly
+// demand the guide match this block, or silently swallow it depending on
+// iteration order — see the plan doc this script was written against.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

@@ -8,6 +8,15 @@ you are. For architecture and full detail, see [`CLAUDE.md`](CLAUDE.md),
 Mullion-hosted session, that last one is also injected into your context
 automatically).
 
+**Note for opencode:** having this file present means your own loader reads
+_only_ this file, not `CLAUDE.md` — per opencode's own docs, "if you have
+both AGENTS.md and CLAUDE.md, only AGENTS.md is used." `CLAUDE.md`'s deeper
+invariants (the opaque-blob rule for `sessions.command`/`workspaces.layout`,
+the three `NODE_ENV=test` guards, ESM `.js` specifiers, `app.config` over
+`process.env`, `db:generate` after schema edits) are **not** auto-loaded for
+you — explicitly go read `CLAUDE.md` yourself before touching anything it
+covers, rather than assuming it reached your context automatically.
+
 <!-- mullion:briefing:start -->
 
 - **Work in a worktree.** Developer worktrees live under `.wt/`, e.g.
