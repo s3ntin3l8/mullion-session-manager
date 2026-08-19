@@ -1416,6 +1416,24 @@ export function App() {
                 // — full-width mode stretches a single tab to fill the
                 // group instead.
                 singleTabMode="fullwidth"
+                // Independent code review, PR #723 — dockview's default
+                // ('custom') wraps the tab strip in its own `.dv-scrollable`
+                // div, whose `.dv-scrollable > .dv-tabs-container { overflow:
+                // hidden }` (dockview.css) wins on specificity over the base
+                // `.dv-tabs-container { overflow: auto }` rule — confirmed by
+                // this app's own pre-existing comments elsewhere (tokens.css,
+                // terminal.css, both written for issue #103) already noting
+                // that element is `overflow: hidden` in practice. Under
+                // `overflow: hidden` the touch-action CSS in xterm.css has
+                // nothing to hand a pan gesture to — the strip was only ever
+                // reachable via the custom widget's own wheel/thumb-drag
+                // handling, never a touch flick. `native` restores the plain
+                // `.dv-tabs-container` element with no wrapper, so the base
+                // rule's `overflow: auto` (and the touch-action override)
+                // actually apply. Scoped to the tab header only (per
+                // dockview's own doc comment on this option) — no other
+                // scrollable widget in this app uses dockview's Scrollbar.
+                scrollbars="native"
               />
               {/* Empty tiled grid (design States doc §1D) — an overlay, not a
                   conditionally-mounted replacement, so dockview's own API
