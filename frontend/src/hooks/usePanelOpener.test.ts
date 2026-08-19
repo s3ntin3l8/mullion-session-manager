@@ -278,7 +278,9 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     const githubCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
       (call) => call[0].id === "github-1",
     )![0];
-    expect(githubCall).toHaveProperty("floating", true);
+    // An explicit size, not dockview's own cramped 300x300 default — see
+    // panelUtils.ts's desktopPositioning/DEFAULT_FLOATING_PANEL_SIZE.
+    expect(githubCall).toHaveProperty("floating", { width: 720, height: 460 });
   });
 
   it.each([

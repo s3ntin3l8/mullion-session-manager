@@ -272,13 +272,21 @@ describe("terminal route (/ws/terminal)", () => {
     const messages = collectMessages(ws);
     await waitForOpenOrClose(ws);
 
-    // First frame is always the (here content-less, preamble-only) backlog.
-    await waitUntil(() => messages.length > 0);
+    // First frame is always the (here content-less, preamble-only) backlog;
+    // the second is always the geometry echo (see the "echoes the session's
+    // applied geometry" test below) — both sent unconditionally on attach,
+    // before this test's own "hello from pty" push.
+    await waitUntil(() => messages.length > 1);
     expect(messages[0].toString("utf8")).toBe("\x1b[?1049l");
+    expect(JSON.parse(messages[1].toString("utf8"))).toEqual({
+      type: "geometry",
+      cols: 80,
+      rows: 24,
+    });
 
     pty.emitData("hello from pty");
-    await waitUntil(() => messages.length > 1);
-    expect(messages[1].toString("utf8")).toBe("hello from pty");
+    await waitUntil(() => messages.length > 2);
+    expect(messages[2].toString("utf8")).toBe("hello from pty");
 
     ws.send(new TextEncoder().encode("echo hi\n"));
     await waitUntil(() => pty.writeSpy.mock.calls.length > 0);
@@ -300,6 +308,76 @@ describe("terminal route (/ws/terminal)", () => {
     ws.send(JSON.stringify({ type: "resize", cols: 120, rows: 40 }));
     await waitUntil(() => pty.resizeSpy.mock.calls.length > 0);
     expect(pty.resizeSpy).toHaveBeenCalledWith(120, 40);
+
+    ws.close();
+    await app.close();
+  });
+
+  // Issue: small panes/floating windows ignoring input — pty-manager.ts's
+  // Session.resize() floors every resize at MIN_TERMINAL_COLS/ROWS
+  // (currently 40x10, issue #676), but until now nothing told the client
+  // when that happened: TerminalPane.tsx kept sending the terminal's own
+  // (too-small) fitted size and had no way to learn the pty actually applied
+  // something bigger, so its own xterm grid silently drifted from what the
+  // pty was drawing to. attachSocketToSession now echoes the applied
+  // geometry back as a `{type:"geometry"}` frame — once right after attach,
+  // and again after every resize() call — so the client can stay in sync
+  // regardless of whether its own request got clamped.
+  it("echoes the session's applied geometry once on attach, right after the scrollback backlog", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    ws.binaryType = "arraybuffer";
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+
+    // messages[0] is the (here content-less) scrollback backlog — see the
+    // "streams pty output..." test above for that same invariant.
+    // session-lifecycle.ts spawns every new session at its own
+    // DEFAULT_COLS/ROWS (80x24), well above the floor, and getOrCreate()
+    // ignores this WS's own cols/rows query params for a session that's
+    // already alive (see this file's own header comment) — so the echoed
+    // geometry here reflects that spawn-time size, not this URL's.
+    await waitUntil(() => messages.length > 1);
+    expect(JSON.parse(messages[1].toString("utf8"))).toEqual({
+      type: "geometry",
+      cols: 80,
+      rows: 24,
+    });
+
+    ws.close();
+    await app.close();
+  });
+
+  it("clamps a below-floor resize and echoes the CLAMPED geometry back, not the requested size", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, pty } = await createProjectAndSession(app);
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    ws.binaryType = "arraybuffer";
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    await waitUntil(() => messages.length > 1); // backlog + initial geometry
+
+    ws.send(JSON.stringify({ type: "resize", cols: 5, rows: 3 }));
+
+    // The pty itself only ever sees the floored size, exactly like a
+    // too-small resize at spawn time already did (pty-manager.test.ts) —
+    // never the raw below-floor request.
+    await waitUntil(() => pty.resizeSpy.mock.calls.length > 0);
+    expect(pty.resizeSpy).toHaveBeenCalledWith(40, 10);
+
+    await waitUntil(() => messages.length > 2);
+    expect(JSON.parse(messages[2].toString("utf8"))).toEqual({
+      type: "geometry",
+      cols: 40,
+      rows: 10,
+    });
 
     ws.close();
     await app.close();

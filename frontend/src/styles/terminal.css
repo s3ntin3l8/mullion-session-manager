@@ -559,3 +559,31 @@
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
 }
+
+/* Issue: small panes/floating windows ignoring input — a standing condition
+   (see TerminalToasts.tsx's own paneTooSmall doc comment), unlike the
+   transient copy/upload toasts (styles/destructive-confirm.css — where this
+   rule originally lived too, a surprising home for a terminal-pane style;
+   Hermes review, PR #708), so it's anchored at the BOTTOM rather than
+   sharing their top-center spot: this can coexist with either of them, or
+   with the top-left find bar/top-right attach-image button, without
+   overlapping. Warning tone (--o), same vocabulary as the sidebar/pane-tab's
+   "plan" status color, not the destructive --r used for the upload-failed
+   state — a too-small pane isn't an error, just unusable at its current
+   size. */
+.terminal-too-small-indicator {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  translate: -50% 0;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--term) 82%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid color-mix(in srgb, var(--o) 45%, var(--border));
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--o);
+  z-index: 10;
+  pointer-events: none;
+}

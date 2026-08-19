@@ -1324,6 +1324,16 @@ export class Session {
     return this.ptyProcess !== null;
   }
 
+  // The post-clamp geometry actually applied to the pty (constructor and
+  // resize() above both funnel through clampTerminalSize before assigning
+  // this.cols/this.rows) — routes/terminal.ts echoes this back to the
+  // browser as a GeometryMessage so xterm's own grid never drifts from what
+  // a too-small request was floored to. See MIN_TERMINAL_COLS/ROWS's own
+  // doc comment for why that floor exists.
+  get size(): { cols: number; rows: number } {
+    return { cols: this.cols, rows: this.rows };
+  }
+
   get subscriberCount(): number {
     return this.dataListeners.size;
   }

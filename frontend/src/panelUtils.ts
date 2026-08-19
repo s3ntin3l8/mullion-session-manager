@@ -139,6 +139,42 @@ export function hasTiledPanels(api: DockviewApi): boolean {
   return api.panels.some((p) => p.api.location.type === "grid");
 }
 
+// dockview's own DEFAULT_FLOATING_GROUP_POSITION is a bare 300x300
+// (constants.js) — comfortably enough for chrome-only panels, but a
+// terminal panel's xterm instance fits inside that at well under
+// pty-manager.ts's MIN_TERMINAL_COLS/ROWS floor (40x10) even at the
+// terminal settings' default fontSize (14px, AppearanceSection.tsx), and
+// gets worse at any larger size the fontSize slider allows (10-20px). Below
+// that floor the pty keeps running at the floored size regardless — see
+// GeometryMessage's own doc comment (ws-protocol.ts) — so the visible
+// xterm grid silently drifts from what the pty is actually drawing, and
+// input from a viewport smaller than that grid reads as "the terminal
+// stopped responding" (issue: small panes/floating windows ignoring
+// input). 720x460 clears 40x10 with margin at every allowed fontSize.
+// Applied to every panel kind opened via desktopPositioning below, not
+// just terminal ones — a GitHub/timeline/task-detail panel squeezed into
+// 300x300 is unusable too, even though only a terminal pane is actually
+// broken by it.
+const DEFAULT_FLOATING_PANEL_SIZE = { width: 720, height: 460 };
+
+// The float-if-tiled-else-dock desktop positioning shared by every
+// open-or-focus-by-stable-id helper below (openSessionPanel,
+// openTimelinePanel, openBrowserPanePanel, openTaskDetailPanel, and
+// openOrFocusProjectPanel via its own applyDesktopPositioning gate): float
+// only when there's a tiled panel to peek across, giving the floating group
+// an explicit size (see DEFAULT_FLOATING_PANEL_SIZE above) rather than
+// dockview's cramped default; otherwise dock into the grid via `position:
+// { direction: "right" }` (see openSessionPanel's own comment on why this
+// is needed even without an existing floating group — a bare `addPanel`
+// would land back inside one).
+function desktopPositioning(
+  api: DockviewApi,
+): { floating: { width: number; height: number } } | { position: { direction: "right" } } {
+  return hasTiledPanels(api)
+    ? { floating: DEFAULT_FLOATING_PANEL_SIZE }
+    : { position: { direction: "right" } };
+}
+
 // A dockview panel's `params` is untyped (Parameters = Record<string,
 // unknown> | undefined) from the group/board's point of view — only a
 // `terminal` component panel's params are actually `{ sessionId: number }`;
@@ -248,11 +284,8 @@ export function openSessionPanel(
   }
 
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
-  // Desktop: float only when there's a tiled panel to peek across; otherwise
-  // dock into the grid. `position: { direction: "right" }` (rather than a bare
-  // add) forces grid placement even when the active group is currently
-  // floating — a bare `addPanel` would add into the active group and land
-  // back inside the floating window. Mobile keeps its existing bare add +
+  // Desktop: see desktopPositioning's own comment for the float-vs-dock
+  // choice and floating size. Mobile keeps its existing bare add +
   // maximizeGroup — it never has floating groups and relies on the
   // single-group + mobile-tabs model, which an explicit position would break.
   const panel = api.addPanel({
@@ -261,8 +294,7 @@ export function openSessionPanel(
     tabComponent: "terminal",
     title: initialPaneTitle(session, projectName),
     params: { sessionId: session.id },
-    ...(!isMobile &&
-      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+    ...(!isMobile && desktopPositioning(api)),
   });
   if (isMobile) api.maximizeGroup(panel);
 }
@@ -300,8 +332,7 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
     component: "timeline",
     title: `Timeline: ${session.name || session.command}`,
     params: { sessionIds: [session.id] },
-    ...(!isMobile &&
-      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+    ...(!isMobile && desktopPositioning(api)),
   });
   if (isMobile) api.maximizeGroup(panel);
 }
@@ -329,8 +360,7 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
     component: "browserPane",
     title: `Agent Browser: ${session.name || session.command}`,
     params: { sessionId: session.id },
-    ...(!isMobile &&
-      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+    ...(!isMobile && desktopPositioning(api)),
   });
   if (isMobile) api.maximizeGroup(panel);
 }
@@ -360,8 +390,7 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
     component: "task-detail",
     title: `Task: ${task.title}`,
     params: { taskId: task.id },
-    ...(!isMobile &&
-      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+    ...(!isMobile && desktopPositioning(api)),
   });
   if (isMobile) api.maximizeGroup(panel);
 }
@@ -388,8 +417,7 @@ export interface ProjectPanelKindConfig {
   // "GitHub"), so a single field covers both rather than two.
   titleLabel: string;
   // Whether to apply the float-if-tiled-else-dock desktop positioning
-  // (`hasTiledPanels(api) ? { floating: true } : { position: { direction:
-  // "right" } }`) when creating a NEW panel. True for every kind except
+  // (desktopPositioning above) when creating a NEW panel. True for every kind except
   // `browser`: App.tsx's pre-existing onOpenBrowser never carried this
   // spread — a genuine asymmetry from the other five, not an oversight in
   // this generalization — so usePanelOpener.ts's onOpenBrowser passes
@@ -420,11 +448,7 @@ export function openOrFocusProjectPanel(
     component: config.kind,
     title: project ? `${config.titleLabel}: ${project.name}` : config.titleLabel,
     params: { projectId },
-    ...(config.applyDesktopPositioning && !isMobile
-      ? hasTiledPanels(api)
-        ? { floating: true }
-        : { position: { direction: "right" } }
-      : {}),
+    ...(config.applyDesktopPositioning && !isMobile ? desktopPositioning(api) : {}),
   });
   if (isMobile) api.maximizeGroup(panel);
 }
