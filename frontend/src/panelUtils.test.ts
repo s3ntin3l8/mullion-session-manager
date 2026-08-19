@@ -173,16 +173,22 @@ describe("openSessionPanel", () => {
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 
-  it("floats (peeks) when a tiled panel already exists", () => {
+  it("floats (peeks) when a tiled panel already exists, sized above the terminal floor", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
     openSessionPanel(api, NEW_SESSION, false, PROJECTS);
 
+    // An explicit size, not dockview's own 300x300 default (constants.js) —
+    // that comes out under pty-manager.ts's MIN_TERMINAL_COLS/ROWS floor at
+    // the terminal's default fontSize, which is exactly what made a
+    // freshly-floated session ignore keyboard input (issue: small panes/
+    // floating windows ignoring input). See desktopPositioning's own comment
+    // in panelUtils.ts for the derivation.
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "session-2",
-        floating: true,
+        floating: { width: 720, height: 460 },
       }),
     );
     expect(api.maximizeGroup).not.toHaveBeenCalled();
@@ -276,7 +282,7 @@ describe("openTimelinePanel", () => {
     openTimelinePanel(api, NEW_SESSION);
 
     expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "timeline-2", floating: true }),
+      expect.objectContaining({ id: "timeline-2", floating: { width: 720, height: 460 } }),
     );
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
@@ -344,7 +350,7 @@ describe("openBrowserPanePanel", () => {
     openBrowserPanePanel(api, NEW_SESSION);
 
     expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "browserPane-2", floating: true }),
+      expect.objectContaining({ id: "browserPane-2", floating: { width: 720, height: 460 } }),
     );
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
@@ -509,7 +515,7 @@ describe("openOrFocusProjectPanel", () => {
     openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
 
     expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "github-1", floating: true }),
+      expect.objectContaining({ id: "github-1", floating: { width: 720, height: 460 } }),
     );
   });
 

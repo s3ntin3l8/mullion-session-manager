@@ -15,9 +15,21 @@ export interface TerminalToastsProps {
   // CSS fade animation wouldn't restart).
   copyToastKey: number;
   uploadState: "idle" | "uploading" | "error";
+  // Issue: small panes/floating windows ignoring input — true for as long as
+  // this pane's viewport is smaller than the pty's applied grid (pty-
+  // manager.ts's MIN_TERMINAL_COLS/ROWS floor), per TerminalPane's own
+  // GeometryMessage handler. Unlike `copied`/`uploadState` above this is a
+  // standing condition, not a one-shot event — it stays up for as long as
+  // the mismatch does, rather than auto-dismissing on a timer.
+  paneTooSmall: boolean;
 }
 
-export function TerminalToasts({ copied, copyToastKey, uploadState }: TerminalToastsProps) {
+export function TerminalToasts({
+  copied,
+  copyToastKey,
+  uploadState,
+  paneTooSmall,
+}: TerminalToastsProps) {
   return (
     <>
       {copied && (
@@ -28,6 +40,11 @@ export function TerminalToasts({ copied, copyToastKey, uploadState }: TerminalTo
       {uploadState !== "idle" && (
         <div className={`terminal-upload-indicator ${uploadState === "error" ? "error" : ""}`}>
           {uploadState === "uploading" ? "Uploading image…" : "Image upload failed"}
+        </div>
+      )}
+      {paneTooSmall && (
+        <div className="terminal-too-small-indicator" title="Enlarge this pane to use it normally">
+          Pane too small
         </div>
       )}
     </>

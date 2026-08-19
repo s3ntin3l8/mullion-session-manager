@@ -13,9 +13,9 @@ import type { SocketLike } from "../services/socket-channel.js";
 // prior importer to preserve), purely so a reader of this file can jump
 // straight to the canonical definition instead of one more hop through
 // ws-protocol.ts.
-import type { ResizeMessage, ExitedMessage } from "../shared/ws-protocol.js";
+import type { ResizeMessage, ExitedMessage, GeometryMessage } from "../shared/ws-protocol.js";
 
-export type { ResizeMessage, ExitedMessage };
+export type { ResizeMessage, ExitedMessage, GeometryMessage };
 
 function isResizeMessage(value: unknown): value is ResizeMessage {
   return (
@@ -63,12 +63,30 @@ export function attachSocketToSession(
     "terminal ws attached",
   );
 
+  // The requested cols/rows above may have been floored by
+  // clampTerminalSize (MIN_TERMINAL_COLS/ROWS, pty-manager.ts) — echo the
+  // post-clamp size the session actually applied so the frontend's xterm
+  // grid never silently drifts from the PTY it's attached to (issue: small
+  // panes ignoring input). Defined here (needs `session`, `socket`) but sent
+  // AFTER the scrollback backlog below, not before it — every existing
+  // consumer of this socket (the frontend's own WS message handler, and this
+  // file's own test suite) assumes the very first frame is that backlog;
+  // sending this first would silently break that invariant for a change this
+  // fix doesn't need to make. Sent once there, and again after every later
+  // resize() below.
+  const sendGeometry = () => {
+    if (socket.readyState !== socket.OPEN) return;
+    const geometryMessage: GeometryMessage = { type: "geometry", ...session.size };
+    socket.send(JSON.stringify(geometryMessage));
+  };
+
   // Replay whatever this session produced while unwatched. In the common
   // case (browser tab closed, Node process never restarted) this alone
   // reconstructs the screen correctly, with no dtach-level reattach
   // involved at all — see pty-manager.ts.
   const backlog = session.getScrollback();
   if (backlog.length > 0) socket.send(backlog);
+  sendGeometry();
 
   // A fresh spawn/respawn already nudges via attachClient() (pty-manager.ts).
   // A reattach to an already-alive client — the common case for a plain
@@ -123,6 +141,7 @@ export function attachSocketToSession(
 
     if (isResizeMessage(parsed)) {
       session.resize(parsed.cols, parsed.rows);
+      sendGeometry();
       return;
     }
     // Unrecognized control frames (including a since-removed message type)

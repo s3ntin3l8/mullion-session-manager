@@ -31,12 +31,32 @@ import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
-// ResizeMessage physically lives in src/shared/ws-protocol.ts (repo root,
-// NOT this frontend workspace — see src/routes/terminal.ts's own re-export)
-// as one arm of TerminalWSMessage; the other arm, ExitedMessage, isn't
-// imported here since its single field is checked structurally below
+// ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
+// (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
+// re-export) as two arms of TerminalWSMessage; the third arm, ExitedMessage,
+// isn't imported here since its single field is checked structurally below
 // rather than through the named type.
-import type { ResizeMessage } from "../../src/shared/ws-protocol.js";
+import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protocol.js";
+
+// Independent code review, PR #708 — mirrors routes/terminal.ts's own
+// isResizeMessage() runtime guard for the opposite direction of the same
+// socket. Unlike a plain `(parsed as {type?:unknown}).type === "geometry"`
+// check (still used for "exited" below, whose only field IS that literal),
+// this frame carries data the rest of this file trusts unconditionally
+// (term.resize(geo.cols, geo.rows)) — for a remote-hosted session this frame
+// crosses an internal agent-to-primary proxy (proxyToRemoteAttach,
+// routes/terminal.ts) that forwards it as an opaque, unvalidated pass-
+// through, so this is the first point on the browser side anything actually
+// checks the shape.
+function isGeometryMessage(value: unknown): value is GeometryMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "geometry" &&
+    typeof (value as { cols?: unknown }).cols === "number" &&
+    typeof (value as { rows?: unknown }).rows === "number"
+  );
+}
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -106,6 +126,16 @@ export function TerminalPane(props: {
   // so silently doing nothing while it's in flight (or on failure) would
   // read as broken rather than slow.
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
+  // Set from the server's GeometryMessage echo (mount effect below) whenever
+  // the applied pty geometry exceeds what actually fits this pane's own
+  // container — i.e. the pane is smaller than pty-manager.ts's
+  // MIN_TERMINAL_COLS/ROWS floor and the terminal is now rendering a grid
+  // larger than its own viewport (issue: small panes/floating windows
+  // ignoring input, since the visible viewport and the pty's grid disagree).
+  // Compared via FitAddon.proposeDimensions() rather than hardcoding the
+  // floor here — this stays correct regardless of what the backend's floor
+  // constants are.
+  const [paneTooSmall, setPaneTooSmall] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
@@ -446,6 +476,14 @@ export function TerminalPane(props: {
 
     let lastCols = term.cols;
     let lastRows = term.rows;
+    // Hermes review, PR #708 — mirrors the `paneTooSmall` state's own
+    // condition (see the geometry handler below) without needing a React-
+    // state read inside this mount effect's closure. Set alongside
+    // setPaneTooSmall on every geometry echo, and re-evaluated (and kept in
+    // sync with setPaneTooSmall) inside refit() below too — see that
+    // function's own comment for why it can't just rely on the geometry
+    // handler alone.
+    let cappedBelowFloor = false;
     const sendResizeIfOpen = () => {
       if (ws?.readyState === WebSocket.OPEN) {
         const message: ResizeMessage = { type: "resize", cols: term.cols, rows: term.rows };
@@ -453,6 +491,36 @@ export function TerminalPane(props: {
       }
     };
     const refit = () => {
+      // Hermes review, PR #708 — once the server has floored this pane's
+      // geometry (cappedBelowFloor), calling fitAddon.fit() unconditionally
+      // on every subsequent layout event (any ResizeObserver delivery, not
+      // just a real resize of THIS pane) drags xterm's own grid back down to
+      // whatever the still-too-small container can currently hold — undoing
+      // the sync from the geometry handler below and sending a resize the
+      // server will just floor right back, over and over. Skip fit()/resize
+      // entirely while capped, UNLESS the container has actually grown
+      // enough to hold the known floor — proposeDimensions() is read-only
+      // (unlike fit()), so checking it first doesn't itself perturb the
+      // terminal.
+      if (cappedBelowFloor) {
+        const proposed = fitAddon.proposeDimensions();
+        const stillCapped =
+          proposed === undefined || proposed.cols < lastCols || proposed.rows < lastRows;
+        // Independent code review, PR #708 — re-evaluate (and clear) the
+        // "Pane too small" hint here too, not only in the geometry handler
+        // below. That handler only ever runs after a resize round trip, but
+        // this function's own no-op guard two lines down means a pane that
+        // grows to land EXACTLY on the previously-applied floor never sends
+        // a new resize at all (term.cols/rows already match lastCols/
+        // lastRows post-fit) — no round trip, no fresh geometry echo, and
+        // without this the hint would stay stuck up even though the pane
+        // is no longer actually too small.
+        if (stillCapped !== cappedBelowFloor) {
+          cappedBelowFloor = stillCapped;
+          setPaneTooSmall(stillCapped);
+        }
+        if (stillCapped) return;
+      }
       fitAddon.fit();
       if (term.cols === lastCols && term.rows === lastRows) return;
       lastCols = term.cols;
@@ -809,16 +877,18 @@ export function TerminalPane(props: {
           term.write(new Uint8Array(event.data as ArrayBuffer));
           return;
         }
-        // P13 — terminal.ts's onExit handler sends this the instant the PTY
+        // Two JSON control frames can arrive here — see TerminalWSMessage
+        // (ws-protocol.ts) for the full union. "exited": P13 —
+        // terminal.ts's onExit handler sends this the instant the PTY
         // process exits, independent of whether the underlying WS connection
         // itself ever closes (killing a session doesn't force-close an
         // already-open browser socket — see that route's own "kept alive"
         // comment). This is the earliest, most direct "this session is
         // genuinely gone" signal available — well before any close event
         // might eventually follow, possibly never for an already-open
-        // connection. Previously dropped outright (a bare `return` for any
-        // string message); now the one string frame this protocol actually
-        // sends is read.
+        // connection. "geometry": see its own comment below. Previously
+        // dropped outright (a bare `return` for any string message); now
+        // both string frames this protocol actually sends are read.
         let parsed: unknown;
         try {
           parsed = JSON.parse(event.data);
@@ -829,6 +899,37 @@ export function TerminalPane(props: {
           sessionExited = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           setStatus("ended");
+          return;
+        }
+        // Issue: small panes/floating windows ignoring input — the server
+        // floors a too-small resize (pty-manager.ts's MIN_TERMINAL_COLS/
+        // ROWS) and echoes back whatever it actually applied (see
+        // GeometryMessage's own doc comment). If that differs from this
+        // terminal's current grid, resize xterm to match — otherwise the
+        // program keeps drawing to columns/rows this viewport never shows,
+        // and typed input appears to do nothing even though it's reaching
+        // the pty. Also mirrored into lastCols/lastRows so the next refit()
+        // (ResizeObserver-driven) computes its own delta against reality
+        // instead of immediately trying to fight this back down.
+        if (isGeometryMessage(parsed)) {
+          const geo = parsed;
+          if (geo.cols !== term.cols || geo.rows !== term.rows) {
+            term.resize(geo.cols, geo.rows);
+            lastCols = geo.cols;
+            lastRows = geo.rows;
+          }
+          // Hermes review, PR #708 — proposeDimensions() returns undefined
+          // when the container can't fit even one full character cell (a
+          // near-collapsed pane, or the brief zero-height layout state
+          // during a drag). Treating that as "not too small" hid the hint
+          // exactly when the pane was most unusable; undefined now counts
+          // as too small, same as a proposed size that's genuinely smaller
+          // than the applied geometry.
+          const proposed = fitAddon.proposeDimensions();
+          const tooSmall =
+            proposed === undefined || geo.cols > proposed.cols || geo.rows > proposed.rows;
+          cappedBelowFloor = tooSmall;
+          setPaneTooSmall(tooSmall);
         }
       });
 
@@ -1240,6 +1341,13 @@ export function TerminalPane(props: {
           background: getSchemeBackground(terminalSettings.colorScheme, theme),
           padding: `${terminalSettings.padding}px`,
           boxSizing: "border-box",
+          // A pane below pty-manager.ts's MIN_TERMINAL_COLS/ROWS floor now
+          // gets resized up to the floor by the geometry-sync handler above
+          // (issue: small panes ignoring input) — xterm's canvas then renders
+          // larger than this container. Without this, that overflow would
+          // paint over whatever dockview panel sits next to it instead of
+          // clipping at the pane boundary.
+          overflow: "hidden",
           // Blocks the browser's own touch panning on both axes (so the
           // touch-scroll shim above owns vertical drags, and pull-to-refresh
           // can't start here) while keeping pinch-zoom, which the app's
@@ -1330,7 +1438,12 @@ export function TerminalPane(props: {
           )}
         </div>
       )}
-      <TerminalToasts copied={copied} copyToastKey={copyToastKey} uploadState={uploadState} />
+      <TerminalToasts
+        copied={copied}
+        copyToastKey={copyToastKey}
+        uploadState={uploadState}
+        paneTooSmall={paneTooSmall}
+      />
     </div>
   );
 }
