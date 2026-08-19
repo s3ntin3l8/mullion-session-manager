@@ -2450,6 +2450,45 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     expect(screen.getByText("Pane too small")).toBeInTheDocument();
   });
 
+  // mullion-reviewer, PR "target the PTY floor" — fitFloorRef is now set
+  // from every pane's very first geometry echo (it's just the constant
+  // floor), so applyFontFit runs on every settings/theme change for every
+  // pane, INCLUDING a `display:none` one dockview keeps mounted (a restored
+  // workspace's inactive tabs — see the settings-sync effect's own comment
+  // on that). FitAddon.proposeDimensions() reads `getComputedStyle(...)
+  // .width/height` via parseInt, which resolves to NaN (not undefined) for
+  // such a container — a case the `!proposed` check alone doesn't catch.
+  // Without the Number.isFinite guards (both here and inside
+  // computeFitFontSize), NaN would flow through the ratio math and back out
+  // as the font size, which `fontSize === term.options.fontSize` can never
+  // match (NaN !== NaN) — reapplying on every subsequent settings/theme
+  // change forever, on a pane that was never actually narrow.
+  it("does not corrupt the font when a hidden pane's container reports NaN dimensions on a settings change", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    // Establishes fitFloorRef (any valid echo does, post-fix) without
+    // implying the pane is actually too small.
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+        });
+      }
+    });
+
+    // Simulates FitAddon.proposeDimensions() on a `display:none` container.
+    getLatestFitAddonInstance().proposeDimensions.mockReturnValue({ cols: NaN, rows: NaN });
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, fontSize: 18 } },
+      }));
+    });
+
+    expect(getLatestTermInstance().options.fontSize).toBe(18);
+  });
+
   // Independent code review, PR #708 — unlike the backend's own
   // isResizeMessage guard for the opposite direction of this socket, the
   // geometry handler used to trust `parsed.cols`/`parsed.rows` unconditionally
