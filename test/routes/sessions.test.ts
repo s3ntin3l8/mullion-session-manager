@@ -54,8 +54,9 @@ vi.mock("../../src/services/opencode-session-transfer.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { buildAgentGuidePointer } = await import("../../src/plugins/hooks.js");
-const { sessionAgentGuidePath } = await import("../../src/services/agent-guide.js");
+const { buildAgentGuideBlock } = await import("../../src/plugins/hooks.js");
+const { readAgentGuideExcerpt, sessionAgentGuidePath } =
+  await import("../../src/services/agent-guide.js");
 const { transferOpencodeSession } = await import("../../src/services/opencode-session-transfer.js");
 
 const tmpDb = path.join(os.tmpdir(), `sessions-test-${process.pid}.db`);
@@ -2017,7 +2018,7 @@ describe("sessions route", () => {
           String(newSessionId),
         );
         expect(JSON.parse(await replyPromise)).toEqual({
-          additionalContext: `resume the refactor\n\n${buildAgentGuidePointer(guidePath, false)}`,
+          additionalContext: `resume the refactor\n\n${buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false)}`,
         });
         socket.destroy();
 
@@ -2083,7 +2084,7 @@ describe("sessions route", () => {
           String(newSessionId),
         );
         expect(JSON.parse(await replyPromise)).toEqual({
-          additionalContext: buildAgentGuidePointer(guidePath, false),
+          additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false),
         });
         socket.destroy();
 

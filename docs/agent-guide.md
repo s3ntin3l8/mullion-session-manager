@@ -11,6 +11,28 @@ your launcher already wired up for structured notifications
 entry point to all three — read the **scope model** section before you reach
 for command syntax, it's the part most likely to surprise you.
 
+<!-- mullion:tier1:start -->
+
+You have four extra environment variables: `MULLION_HOOK_SOCKET` (structured
+notifications — `mullion notify`), `MULLION_HOOK_TOKEN` (authenticates both
+the hook socket and the control socket, at session scope), `MULLION_SOCKET_PATH`
+(control socket location), and `MULLION_SESSION_ID` (which session you are).
+That's all of them — no fifth var, no config file.
+
+`MULLION_HOOK_TOKEN` gives you **session scope**: everything you need to act
+on yourself (get/rename/logs, the `browser` surface, `project actions`, your
+own MCP tools), but full-scope ops (`session list/create/kill`, `dock
+start/stop/list`, `preview *`, `project list/dock`, `agents list`) will 403 —
+that's expected, not a bug. Run `mullion config` to see your resolved scope.
+One exception: if this host has in-app auth disabled entirely, every
+connection resolves to full scope regardless.
+
+The rest of this file — the full scope table, CLI vs. MCP, browser
+automation, spawning a child session, notifying the human — is below. Read
+it before you build anything that assumes more than the above.
+
+<!-- mullion:tier1:end -->
+
 A copy of this exact file lives at
 `<the directory $MULLION_HOOK_SOCKET is in>/<your $MULLION_SESSION_ID>.agent-guide.md`
 (there's no separate env var naming that directory directly — derive it from

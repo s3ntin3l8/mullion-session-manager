@@ -49,6 +49,14 @@ export interface HookAdapterContext {
    * hooks.ts itself, not here, because their SessionStart is a live hook
    * round trip this context has no equivalent of. */
   injectAgentGuide: boolean;
+  /** Same spawn-time-snapshot caveat as `injectAgentGuide` immediately
+   * above, for the same reason: opencode's adapter has no live hook round
+   * trip to re-check `sessions.injectProjectBriefing` against, so this is a
+   * snapshot taken at spawn time. Mirrors that setting, not
+   * `injectAgentGuide` — a project's own briefing and Mullion's guide are
+   * gated independently (see settings.ts's own comment on why they're
+   * separate keys). */
+  injectProjectBriefing: boolean;
   /** This session's working directory. Optional — only agy's adapter reads
    * it today (to pre-trust a fresh worktree, see agy.ts's
    * mergeAgyTrustedWorkspace), so it's not required on every ctx literal

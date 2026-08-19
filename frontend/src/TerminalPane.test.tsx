@@ -486,6 +486,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         eventRetentionDays: 30,
         eventRetentionPerSession: 0,
         injectAgentGuide: true,
+        injectProjectBriefing: true,
         maxChildSessionsPerParent: 5,
         autoOpenChildPanels: false,
       },

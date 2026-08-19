@@ -22,6 +22,7 @@ import type { HookMessageKind } from "./hook-protocol.js";
 import { buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
+import { writeSessionBriefing } from "./project-briefing.js";
 import {
   applyHookAdapters,
   getAdapterInitialPromptArgs,
@@ -76,6 +77,7 @@ export interface LaunchPlanSession {
   readonly sessionsDir: string;
   readonly reviewGateEnabled: boolean;
   readonly injectAgentGuide: boolean;
+  readonly injectProjectBriefing: boolean;
   readonly skipPermissions: boolean;
   readonly initialPrompt: string | undefined;
   /** Issue #678 — see HookAdapterContext.seedPrompt's own doc comment for
@@ -184,6 +186,19 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // ordering changes nothing for Claude Code/Codex/agy.
   writeSessionAgentGuide(path.dirname(session.hookSocketPath), session.id);
 
+  // agent-briefing follow-up to #405 — same unconditional-write / must-
+  // precede-applyHookAdapters posture as writeSessionAgentGuide immediately
+  // above, and for the identical reason: the opencode adapter's
+  // prepareLaunch does its own existsSync check on this exact per-session
+  // path. Not gated on `sessions.injectProjectBriefing` here either — that
+  // setting only gates the injection (hooks.ts, opencode's `instructions`
+  // entry), never the file's own write. Unlike the guide, this write also
+  // UNLINKS a stale copy from a previous spawn when nothing resolves for
+  // this session's cwd (project-briefing.ts's own doc comment) — a project
+  // briefing can disappear between spawns in a way the shipped guide never
+  // does.
+  writeSessionBriefing(path.dirname(session.hookSocketPath), session.id, session.cwd);
+
   // Phase 2 (issue #174): if `session.command` matches a known agent with a
   // hook adapter (currently just Claude Code), rewrite the command/env for
   // this launch only — see hook-adapters/index.ts's applyHookAdapters for
@@ -206,6 +221,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     forwarderPath: resolveForwarderPath(),
     reviewGateEnabled: session.reviewGateEnabled,
     injectAgentGuide: session.injectAgentGuide,
+    injectProjectBriefing: session.injectProjectBriefing,
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,
     seedPrompt: session.seedPrompt,

@@ -184,18 +184,36 @@ export function SessionsSection() {
         />
       </Row>
       <Row
-        label="Inject agent guide pointer"
+        label="Inject agent guide"
         desc={
-          "On SessionStart, point a Claude Code session at its own copy of" +
-          " the Mullion agent guide (docs/agent-guide.md) — the control-socket" +
-          " scope model, browser automation, and dock-control limits. Claude" +
-          " Code only; other agents still get the on-disk copy and their MCP" +
-          " tools, just no automatic pointer."
+          "On SessionStart, carry a short excerpt of the Mullion agent guide" +
+          " (docs/agent-guide.md) — the control-socket scope model, browser" +
+          " automation, and dock-control limits — into every session's own" +
+          " context, plus a pointer to the full file. Reaches all four" +
+          " agents (Claude Code, Codex, opencode, agy), just via different" +
+          " mechanisms per agent."
         }
       >
         <Toggle
           on={s.injectAgentGuide}
           onChange={(v) => updateSettings({ sessions: { injectAgentGuide: v } })}
+        />
+      </Row>
+      <Row
+        label="Inject project briefing"
+        desc={
+          "On SessionStart, carry a project-authored block into every" +
+          " session's starting context: a <!-- mullion:briefing:start -->" +
+          " region in the project's AGENTS.md or CLAUDE.md, or a" +
+          " .agents/briefing.md file. The extracted region is capped at 4 KB" +
+          " (a short header and, if truncated, a truncation note add a" +
+          " little on top). Projects with no such region are unaffected —" +
+          " nothing is injected."
+        }
+      >
+        <Toggle
+          on={s.injectProjectBriefing}
+          onChange={(v) => updateSettings({ sessions: { injectProjectBriefing: v } })}
         />
       </Row>
       <Row

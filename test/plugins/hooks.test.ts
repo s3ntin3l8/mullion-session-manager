@@ -8,7 +8,8 @@ import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
 import { projects, sessions } from "../../src/db/schema.js";
 import type { ManagedBrowser } from "../../src/services/browser-manager.js";
-import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
+import { readAgentGuideExcerpt, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
+import { sessionBriefingPath } from "../../src/services/project-briefing.js";
 
 // Real integration test against the actual listening Unix socket — same
 // "app.inject() can't drive this, so build a real app and connect a real
@@ -51,7 +52,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { buildApp } = await import("../../src/app.js");
-const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS, buildAgentGuidePointer } =
+const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS, buildAgentGuideBlock } =
   await import("../../src/plugins/hooks.js");
 
 /** Connects a raw net socket to `path`, resolving once actually connected. */
@@ -723,12 +724,14 @@ describe("hooksPlugin (issue #172)", () => {
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
       // Issue #405 — `sessions.injectAgentGuide` defaults to true, and this
-      // repo checkout ships docs/agent-guide.md, so with no seed stashed the
-      // reply is the guide pointer alone (no empty additionalContext
-      // anymore — see the "setting disabled" case below for that).
+      // repo checkout ships docs/agent-guide.md, so with no seed stashed and
+      // no project briefing for cwd "/tmp" (no marked AGENTS.md/CLAUDE.md
+      // there) the reply is the guide block alone (excerpt + pointer — see
+      // buildAgentGuideBlock's own doc comment for why this replaced the
+      // pointer-only reply).
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
       expect(JSON.parse(await replyPromise)).toEqual({
-        additionalContext: buildAgentGuidePointer(guidePath, false),
+        additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false),
       });
       socket.destroy();
     });
@@ -751,17 +754,17 @@ describe("hooksPlugin (issue #172)", () => {
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-      const guidePointer = buildAgentGuidePointer(guidePath, false);
+      const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
       expect(JSON.parse(await replyPromise)).toEqual({
-        additionalContext: `picks up where the last session left off\n\n${guidePointer}`,
+        additionalContext: `picks up where the last session left off\n\n${guideBlock}`,
       });
 
       // Single-use: a second session_start for the same id gets no seed —
-      // but the guide pointer is generated FRESH on every call (never
+      // but the guide block is generated FRESH on every call (never
       // stashed/consumed itself), so it's still present.
       const secondReplyPromise = waitForLine(socket);
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
-      expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: guidePointer });
+      expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: guideBlock });
       socket.destroy();
     });
 
@@ -785,9 +788,16 @@ describe("hooksPlugin (issue #172)", () => {
         socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
         const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-        expect(JSON.parse(await replyPromise)).toEqual({
-          additionalContext: buildAgentGuidePointer(guidePath, true),
+        const reply = JSON.parse(await replyPromise);
+        expect(reply).toEqual({
+          additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, true),
         });
+        // Dedicated assertion, not just structural equality against a
+        // rebuilt expected value: the actual reply text must carry the
+        // session-scope claim, not the full-disabled wording — this is a
+        // correctness claim about what the agent is told, not a formatting
+        // detail, and must survive the excerpt/block refactor.
+        expect(reply.additionalContext).toContain("MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN");
         socket.destroy();
       } finally {
         delete process.env.MULLION_AUTH_TOKEN;
@@ -817,11 +827,168 @@ describe("hooksPlugin (issue #172)", () => {
       const replyPromise = waitForLine(socket);
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
-      // Only the seed, no pointer — same reply shape as before issue #405.
+      // Only the seed, no guide block — same reply shape as before issue #405.
       expect(JSON.parse(await replyPromise)).toEqual({
         additionalContext: "picks up where the last session left off",
       });
       socket.destroy();
+    });
+
+    describe("project briefing (agent-briefing follow-up to #405)", () => {
+      let projectDir: string;
+
+      afterEach(() => {
+        if (projectDir) fs.rmSync(projectDir, { recursive: true, force: true });
+      });
+
+      it("composes seed, guide block, and briefing in that order when all three are present", async () => {
+        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
+        fs.writeFileSync(
+          path.join(projectDir, "AGENTS.md"),
+          "<!-- mullion:briefing:start -->\nbranch off origin/main\n<!-- mullion:briefing:end -->",
+        );
+
+        app = await buildApp();
+        await app.ready();
+        // Explicit, not relied-on-default: this test file shares one DB
+        // across every `it()` (test/setup.ts isolates per FILE, not per
+        // test — see CLAUDE.md), so an earlier test's PATCH (e.g. "omits
+        // the guide pointer when disabled") would otherwise leak into this
+        // one depending on execution order.
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: true, injectProjectBriefing: true } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: projectDir,
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        app.pty.stashSeed("1", "picks up where the last session left off");
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+        const briefingPath = sessionBriefingPath(path.dirname(app.pty.hookSocketPath), "1");
+        const briefing = fs.readFileSync(briefingPath, "utf8");
+        expect(JSON.parse(await replyPromise)).toEqual({
+          additionalContext: `picks up where the last session left off\n\n${guideBlock}\n\n${briefing}`,
+        });
+        expect(briefing).toContain("branch off origin/main");
+        socket.destroy();
+      });
+
+      it("omits the briefing but keeps the guide block when sessions.injectProjectBriefing is disabled", async () => {
+        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
+        fs.writeFileSync(
+          path.join(projectDir, "AGENTS.md"),
+          "<!-- mullion:briefing:start -->\nbranch off origin/main\n<!-- mullion:briefing:end -->",
+        );
+
+        app = await buildApp();
+        await app.ready();
+        // Explicit about BOTH keys, not just the one under test — see the
+        // "composes all three" test's comment above for why.
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: true, injectProjectBriefing: false } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: projectDir,
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+        expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: guideBlock });
+        socket.destroy();
+      });
+
+      it("omits the guide block but keeps the briefing when sessions.injectAgentGuide is disabled", async () => {
+        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
+        fs.writeFileSync(
+          path.join(projectDir, "AGENTS.md"),
+          "<!-- mullion:briefing:start -->\nbranch off origin/main\n<!-- mullion:briefing:end -->",
+        );
+
+        app = await buildApp();
+        await app.ready();
+        // Explicit about BOTH keys — see the "composes all three" test's
+        // comment above for why.
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: false, injectProjectBriefing: true } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: projectDir,
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const briefingPath = sessionBriefingPath(path.dirname(app.pty.hookSocketPath), "1");
+        const briefing = fs.readFileSync(briefingPath, "utf8");
+        expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: briefing });
+        socket.destroy();
+      });
+
+      it("reply is byte-identical to the no-briefing case when the project has no marked region", async () => {
+        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
+        // No AGENTS.md/CLAUDE.md/.agents/briefing.md at all in this cwd.
+
+        app = await buildApp();
+        await app.ready();
+        // Explicit — see the "composes all three" test's comment above.
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: true, injectProjectBriefing: true } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: projectDir,
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+        expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: guideBlock });
+        socket.destroy();
+      });
     });
 
     it("latches hooksProven via markHooksProven — follow-up to #275 (gap #1) — since session_start bypasses emitHookEvent entirely", async () => {
