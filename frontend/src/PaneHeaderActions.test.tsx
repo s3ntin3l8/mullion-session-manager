@@ -27,20 +27,26 @@ function makeProps(overrides: { activePanel?: { id: string } | undefined } = {})
 
 // Wraps every render in the real dockview DOM nesting (see the "observes
 // the real header row" test's own comment for the source-verified shape) —
-// the component's own ResizeObserver effect no-ops (`closest()` finds
+// the component's own ResizeObserver setup no-ops (`closest()` finds
 // nothing) without a `.dv-tabs-and-actions-container` ancestor, so any test
 // that wants resizeCallback to actually do something needs this, not a bare
-// `render(<PaneHeaderActions .../>)`.
-function renderInHeader(props: IDockviewHeaderActionsProps) {
-  return render(
+// `render(<PaneHeaderActions .../>)`. Exposed as its own function (rather
+// than folded into renderInHeader below) so the deferred-mount test can pass
+// it straight to RTL's own `rerender` with updated props on the same tree.
+function headerTree(props: IDockviewHeaderActionsProps) {
+  return (
     <div className="dv-tabs-and-actions-container">
       <div className="dv-right-actions-container">
         <div className="dv-react-part">
           <PaneHeaderActions {...props} />
         </div>
       </div>
-    </div>,
+    </div>
   );
+}
+
+function renderInHeader(props: IDockviewHeaderActionsProps) {
+  return render(headerTree(props));
 }
 
 // Captures the observer's callback (to simulate a live resize of the header
@@ -127,6 +133,35 @@ describe("PaneHeaderActions", () => {
 
     expect(observedElement).not.toBeNull();
     expect(observedElement).toHaveClass("dv-tabs-and-actions-container");
+  });
+
+  // Hermes review, PR #709 — the component's own `!props.activePanel`
+  // early return means the span (and this ResizeObserver setup) doesn't
+  // necessarily exist on this component's very first render. A plain ref +
+  // `useEffect(..., [])` only gets one chance to attach an observer, at
+  // that first render — if the group briefly has no active panel when this
+  // component first mounts (e.g. a race while dockview is still assembling
+  // the group), the span never renders on that pass, the effect no-ops
+  // forever, and later renders where activePanel finally arrives get NO
+  // observer at all: the buttons would stay visible regardless of actual
+  // width. The fix (a callback ref) must attach exactly when the span
+  // itself first appears in the DOM, however many renders that takes.
+  it("still hides on narrow once activePanel arrives after mounting with none", () => {
+    const { rerender } = render(headerTree(makeProps({ activePanel: undefined })));
+    expect(screen.queryByTitle("Split right")).not.toBeInTheDocument();
+
+    rerender(headerTree(makeProps()));
+    expect(screen.getByTitle("Split right")).toBeInTheDocument();
+
+    act(() => {
+      resizeCallback(
+        [{ contentRect: { width: 150 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+
+    expect(screen.queryByTitle("Split right")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Split down")).not.toBeInTheDocument();
   });
 
   it("shows the split buttons again once the header widens back out", () => {
