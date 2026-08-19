@@ -13,11 +13,11 @@ repos:
       - id: check-yaml
       - id: check-json
       - id: check-merge-conflict
-      # Enforces AGENTS.md/CLAUDE.md's "never commit directly to main" rule
-      # locally, not just via branch protection on the remote — catches the
-      # mistake before a push even happens. Default protected branches
-      # (master, main) already cover this repo's default branch; no args
-      # needed.
+      # Enforces this repo's "never commit directly to main" rule (see
+      # CLAUDE.md's Git workflow section) locally, not just via branch
+      # protection on the remote — catches the mistake before a push even
+      # happens. Default protected branches (master, main) already cover
+      # this repo's default branch; no args needed.
       - id: no-commit-to-branch
 
   - repo: local

@@ -9,12 +9,21 @@
 //
 // Usage:
 //   node scripts/review-threads.mjs list [<pr-number>]
-//   node scripts/review-threads.mjs reply <comment-id> <body>
+//   node scripts/review-threads.mjs reply <comment-id> <body> [<pr-number>]
 //   node scripts/review-threads.mjs resolve <thread-id>
 import { execFileSync } from "node:child_process";
 
+// Every gh call goes through here so a bad thread/comment id, an
+// unauthenticated `gh`, or "no PR for this branch" surfaces as a short,
+// readable message instead of a raw Node stack trace containing the full
+// reconstructed command (GraphQL query body included).
 function gh(args) {
-  return execFileSync("gh", args, { encoding: "utf8" });
+  try {
+    return execFileSync("gh", args, { encoding: "utf8" });
+  } catch (err) {
+    const stderr = err.stderr?.toString().trim();
+    throw new Error(stderr || err.message, { cause: err });
+  }
 }
 
 function currentRepo() {
@@ -104,35 +113,42 @@ function replyToComment(commentId, body, prNumber) {
 
 const [cmd, ...rest] = process.argv.slice(2);
 
-if (cmd === "list") {
-  const pr = rest[0] ?? currentPrNumber();
-  listThreads(pr);
-} else if (cmd === "reply") {
-  const [commentId, body] = rest;
-  if (!commentId || !body) {
-    console.error("Usage: node scripts/review-threads.mjs reply <comment-id> <body>");
+try {
+  if (cmd === "list") {
+    const pr = rest[0] ?? currentPrNumber();
+    listThreads(pr);
+  } else if (cmd === "reply") {
+    const [commentId, body, prNumber] = rest;
+    if (!commentId || !body) {
+      console.error(
+        "Usage: node scripts/review-threads.mjs reply <comment-id> <body> [<pr-number>]",
+      );
+      process.exit(1);
+    }
+    replyToComment(commentId, body, prNumber ?? currentPrNumber());
+  } else if (cmd === "resolve") {
+    const [threadId] = rest;
+    if (!threadId) {
+      console.error("Usage: node scripts/review-threads.mjs resolve <thread-id>");
+      process.exit(1);
+    }
+    resolveThread(threadId);
+  } else {
+    console.error(
+      [
+        "Usage:",
+        "  node scripts/review-threads.mjs list [<pr-number>]",
+        "  node scripts/review-threads.mjs reply <comment-id> <body> [<pr-number>]",
+        "  node scripts/review-threads.mjs resolve <thread-id>",
+        "",
+        "Reply first (with the comment's databaseId from `list`), then resolve",
+        "(with the thread's GraphQL id, also from `list`) — see CLAUDE.md's",
+        "'Addressing Review Feedback' section for why both steps are required.",
+      ].join("\n"),
+    );
     process.exit(1);
   }
-  replyToComment(commentId, body, currentPrNumber());
-} else if (cmd === "resolve") {
-  const [threadId] = rest;
-  if (!threadId) {
-    console.error("Usage: node scripts/review-threads.mjs resolve <thread-id>");
-    process.exit(1);
-  }
-  resolveThread(threadId);
-} else {
-  console.error(
-    [
-      "Usage:",
-      "  node scripts/review-threads.mjs list [<pr-number>]",
-      "  node scripts/review-threads.mjs reply <comment-id> <body>",
-      "  node scripts/review-threads.mjs resolve <thread-id>",
-      "",
-      "Reply first (with the comment's databaseId from `list`), then resolve",
-      "(with the thread's GraphQL id, also from `list`) — see CLAUDE.md's",
-      "'Addressing Review Feedback' section for why both steps are required.",
-    ].join("\n"),
-  );
+} catch (err) {
+  console.error(`Error: ${err.message}`);
   process.exit(1);
 }

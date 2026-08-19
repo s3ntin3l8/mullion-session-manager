@@ -49,6 +49,10 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 	@if [ -z "$(name)" ]; then echo "Usage: make wt name=<slug>"; exit 1; fi
 	@echo "$(name)" | grep -Eq '^[a-zA-Z0-9._-]+$$' || \
 		(echo "Invalid name '$(name)': use only letters, digits, '.', '_', '-'."; exit 1)
+	@case "$(name)" in main|master) echo "Refusing name '$(name)': would create a worktree" \
+		"whose branch is immediately unusable (no-commit-to-branch blocks it, and a" \
+		"local '$(name)' ref may not already exist to catch this via the branch check" \
+		"below)."; exit 1 ;; esac
 	@if [ -e ".wt/$(name)" ]; then echo ".wt/$(name) already exists."; exit 1; fi
 	@if git show-ref --verify --quiet "refs/heads/$(name)"; then \
 		echo "Branch '$(name)' already exists."; exit 1; \
