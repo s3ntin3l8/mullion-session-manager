@@ -42,17 +42,23 @@ export const PUSH_SEND_TIMEOUT_MS = 10_000;
 // /ws/events' replay-on-reconnect backlog problem; PtyManager.onEvent
 // delivers each event exactly once, live, so there's no backlog to filter
 // here.
+//
+// Shorter than it used to be: `permission_request`, `stop_failure`,
+// `tool_failure`, `plan_ready`, `promote_request`, `elicitation`, and
+// `question` are gone. Every one of those NotificationEvent kinds is always
+// accompanied by a paired `attention` event carrying the same information
+// (see hook-handlers.ts's raise sites and attention-tracker.ts's
+// emitAttentionSignalWithExtras/emitAttentionSignalDeferred, which now emit
+// BOTH from one call), and the `attention` case just below already matches
+// it — keeping both here meant a single agent action pushed the phone
+// twice. `promote_request` in particular was doubly wrong: its OTHER raise
+// site (pty-manager.ts's resolvePromote) fires with no paired attention
+// signal at all, so it was pushing a notification for the RESOLUTION of a
+// promote request, not just the request itself.
 function isNotifiableEvent(event: NotificationEvent): boolean {
   if (event.kind === "attention" && event.payload.attention === true) return true;
   if (event.kind === "status_change" && event.payload.reason === "exited") return true;
   if (event.kind === "review_gate" && event.payload.state === "waiting") return true;
-  if (event.kind === "permission_request") return true;
-  if (event.kind === "stop_failure") return true;
-  if (event.kind === "tool_failure") return true;
-  if (event.kind === "plan_ready") return true;
-  if (event.kind === "promote_request") return true;
-  if (event.kind === "elicitation" && event.payload.state === "started") return true;
-  if (event.kind === "question" && event.payload.state === "started") return true;
   // dev_server_detected deliberately excluded, not ported with its
   // "state === undefined" pending check like the frontend's notifyKind has:
   // this kind has no matching SessionStatus (see session-status.ts), so a

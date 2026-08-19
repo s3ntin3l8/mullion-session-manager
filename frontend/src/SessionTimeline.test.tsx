@@ -100,6 +100,14 @@ let fetchImpl: (url: string) => EventHistoryPage = () => ({
 });
 
 beforeEach(() => {
+  // Making notifications relevant/scannable — activeKinds/onlyAttention now
+  // persist to real localStorage (SessionTimeline.tsx's
+  // loadPersistedActiveKinds/STORAGE_KEYS.timelineKinds/
+  // timelineOnlyAttention), which jsdom does not reset between tests on its
+  // own (see persistedState.test.ts's own beforeEach for the established
+  // pattern). Without this, one test's toggleKind()/setOnlyAttention() call
+  // leaks its filter state into the next test's fresh mount.
+  localStorage.clear();
   sessions = [makeSession()];
   events = {};
   fetchImpl = () => ({ persistenceEnabled: false, events: [], nextCursor: null });
@@ -141,19 +149,29 @@ describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
           sessionId: 2,
           seq: 1,
           ts: 2000,
-          kind: "file_change",
-          payload: { path: "src/review.ts", action: "modify" },
+          // Making notifications relevant/scannable — was file_change,
+          // which is now hidden by DEFAULT (see DEFAULT_ACTIVE_KINDS); this
+          // test isn't about file_change at all, just multi-session merge
+          // order, so tool_failure (on by default) is an equally-fine
+          // second distinct row.
+          kind: "tool_failure",
+          payload: { tool: "review-tool", error: "boom" },
         }),
       ],
     };
     render(<SessionTimeline params={{ sessionIds: [1, 2] }} />);
 
-    const rows = screen.getAllByText(/Bell|Changed src\/review\.ts/);
+    // Scoped to the row TEXT specifically (not the kind pill, which for a
+    // bell event also reads "Bell" — see eventDescriptions.ts's
+    // SIGNAL_LABELS.bell/describeEvent's own "bell" case, both "Bell").
+    const rows = screen.getAllByText(/Bell|Tool failed: review-tool — boom/, {
+      selector: ".session-timeline-row-text",
+    });
     // Session 1's event has the earlier ts (1000 vs. 2000) despite the
     // higher seq — wall-clock order wins, since seq is only comparable
     // within one session.
     expect(rows[0]).toHaveTextContent("Bell");
-    expect(rows[1]).toHaveTextContent("Changed src/review.ts");
+    expect(rows[1]).toHaveTextContent("Tool failed: review-tool — boom");
   });
 
   it("falls back to the pre-6.5 { sessionId } param shape (a workspace layout saved before this PR)", () => {
@@ -163,7 +181,12 @@ describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
     sessions = [makeSession({ id: 1 })];
     events = { 1: [makeEvent({ sessionId: 1, seq: 1 })] };
     render(<SessionTimeline params={{ sessionId: 1 }} />);
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    // Making notifications relevant/scannable — scoped to the row text: a
+    // bell event's kind pill ALSO reads "Bell" (SIGNAL_LABELS.bell), so an
+    // unscoped query matches two elements.
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
   });
 
   it("merges subagent labels across every requested session", () => {
@@ -235,17 +258,22 @@ describe("SessionTimeline (issue #212)", () => {
         makeEvent({
           seq: 2,
           ts: 2000,
-          kind: "file_change",
-          payload: { path: "src/a.ts", action: "modify" },
+          // Making notifications relevant/scannable — was file_change, now
+          // hidden by default; swapped for tool_failure (on by default) —
+          // this test is about row ORDER, not file_change specifically.
+          kind: "tool_failure",
+          payload: { tool: "a-tool", error: "boom" },
         }),
       ],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    const rows = screen.getAllByText(/Bell|Changed src\/a\.ts/);
+    const rows = screen.getAllByText(/Bell|Tool failed: a-tool — boom/, {
+      selector: ".session-timeline-row-text",
+    });
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Bell");
-    expect(rows[1]).toHaveTextContent("Changed src/a.ts");
+    expect(rows[1]).toHaveTextContent("Tool failed: a-tool — boom");
   });
 
   it("drops events describeEvent can't describe (e.g. a bare title_change with no title)", async () => {
@@ -268,13 +296,32 @@ describe("SessionTimeline (issue #212)", () => {
       ],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
-    expect(screen.getByText("Bell")).toBeInTheDocument();
-    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    // Making notifications relevant/scannable — file_change is one of the
+    // two kinds (with title_change) now hidden by DEFAULT (see
+    // DEFAULT_ACTIVE_KINDS): title_change/file_change together were 88% of
+    // every event this app has ever persisted, so a fresh timeline no
+    // longer opens buried in routine chatter. This is new coverage for
+    // that default, layered onto the pre-existing "toggling a chip works"
+    // coverage below.
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "false");
 
-    // Untoggling "Files" hides the file_change row without touching the
+    // Toggling "Files" ON reveals the file_change row without touching the
     // attention one.
     await userEvent.click(screen.getByRole("button", { name: "Files" }));
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+
+    // Toggling it back OFF hides it again.
+    await userEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
   });
 
@@ -293,8 +340,11 @@ describe("SessionTimeline (issue #212)", () => {
         makeEvent({ seq: 1 }),
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/Widget.tsx", action: "create" },
+          // Making notifications relevant/scannable — was file_change, now
+          // hidden by default; swapped for tool_failure (on by default) —
+          // this test is about search matching, not file_change.
+          kind: "tool_failure",
+          payload: { tool: "Widget", error: "boom" },
         }),
       ],
     };
@@ -303,7 +353,7 @@ describe("SessionTimeline (issue #212)", () => {
     await userEvent.type(screen.getByLabelText("Search timeline"), "widget");
 
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
-    expect(screen.getByText("Created src/Widget.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: Widget — boom")).toBeInTheDocument();
   });
 
   it("search and kind filters combine (both must match)", async () => {
@@ -312,20 +362,24 @@ describe("SessionTimeline (issue #212)", () => {
         makeEvent({ seq: 1 }),
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/bell-widget.ts", action: "modify" },
+          // Making notifications relevant/scannable — was file_change, now
+          // hidden by default; swapped for tool_failure (on by default),
+          // keeping "bell" in the substring so both rows still match the
+          // search term, same as the original fixture intended.
+          kind: "tool_failure",
+          payload: { tool: "bell-widget", error: "boom" },
         }),
       ],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     await userEvent.type(screen.getByLabelText("Search timeline"), "bell");
-    // Both rows match the text search ("Bell" and ".../bell-widget.ts"), but
+    // Both rows match the text search ("Bell" and "...bell-widget..."), but
     // untoggling "Attention" should still remove only that one.
     await userEvent.click(screen.getByRole("button", { name: "Attention" }));
 
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
-    expect(screen.getByText("Changed src/bell-widget.ts")).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: bell-widget — boom")).toBeInTheDocument();
   });
 });
 
@@ -344,7 +398,11 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(screen.queryByRole("group", { name: "Filter by subagent" })).not.toBeInTheDocument();
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    // Making notifications relevant/scannable — scoped to the row text: a
+    // bell event's kind pill also reads "Bell".
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
   });
 
   it("renders one chip per distinct agentId, labeled from session.subagents when known", () => {
@@ -402,32 +460,35 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     // Distinct first-8-char prefixes ("alpha-fa"/"beta-fak") so the
     // truncated-label fallback produces two distinguishable button names —
     // real agentIds don't share a prefix like the shorter fixtures elsewhere
-    // in this file do.
+    // in this file do. Making notifications relevant/scannable — kind
+    // swapped from file_change (now hidden by default) to tool_failure (on
+    // by default); this test is about subagent-chip filtering, not
+    // file_change specifically.
     events = {
       1: [
         makeEvent({
           seq: 1,
-          kind: "file_change",
-          payload: { path: "src/a.ts", action: "modify", agentId: "alpha-fake-subagent-id" },
+          kind: "tool_failure",
+          payload: { tool: "toolA", error: "err-a", agentId: "alpha-fake-subagent-id" },
         }),
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/b.ts", action: "modify", agentId: "beta-fake-subagent-id" },
+          kind: "tool_failure",
+          payload: { tool: "toolB", error: "err-b", agentId: "beta-fake-subagent-id" },
         }),
       ],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
-    expect(screen.getByText("Changed src/b.ts")).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolB — err-b")).toBeInTheDocument();
 
     await userEvent.click(
       screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
     );
 
-    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
-    expect(screen.queryByText("Changed src/b.ts")).not.toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
+    expect(screen.queryByText("Tool failed: toolB — err-b")).not.toBeInTheDocument();
   });
 
   it("degrades a fully-stale agent selection back to showing everything, instead of dead-ending the timeline", async () => {
@@ -435,18 +496,20 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     // selected agentId can age out of the buffer entirely while a stale
     // selection for it lingers in component state. Filtering against that
     // stale selection verbatim would leave every event failing the check
-    // with no visible chip left to un-click to recover.
+    // with no visible chip left to un-click to recover. Making
+    // notifications relevant/scannable — kind swapped from file_change to
+    // tool_failure, same reasoning as the test above.
     events = {
       1: [
         makeEvent({
           seq: 1,
-          kind: "file_change",
-          payload: { path: "src/a.ts", action: "modify", agentId: "alpha-fake-subagent-id" },
+          kind: "tool_failure",
+          payload: { tool: "toolA", error: "err-a", agentId: "alpha-fake-subagent-id" },
         }),
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/b.ts", action: "modify", agentId: "beta-fake-subagent-id" },
+          kind: "tool_failure",
+          payload: { tool: "toolB", error: "err-b", agentId: "beta-fake-subagent-id" },
         }),
       ],
     };
@@ -455,8 +518,8 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     await userEvent.click(
       screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
     );
-    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
-    expect(screen.queryByText("Changed src/b.ts")).not.toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
+    expect(screen.queryByText("Tool failed: toolB — err-b")).not.toBeInTheDocument();
 
     // Simulate the cap evicting "alpha"'s event out of the buffer entirely —
     // its option (and chip) disappears, but the earlier click left it
@@ -465,25 +528,27 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
       1: [
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/b.ts", action: "modify", agentId: "beta-fake-subagent-id" },
+          kind: "tool_failure",
+          payload: { tool: "toolB", error: "err-b", agentId: "beta-fake-subagent-id" },
         }),
       ],
     };
     rerender(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     expect(screen.queryByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) })).toBeNull();
-    expect(screen.getByText("Changed src/b.ts")).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolB — err-b")).toBeInTheDocument();
   });
 
   it("selecting an agent chip isolates it — both chips must be selected to see unattributed and a subagent together", async () => {
+    // Making notifications relevant/scannable — kind swapped from
+    // file_change to tool_failure, same reasoning as the tests above.
     events = {
       1: [
         makeEvent({ seq: 1 }), // unattributed (attention/Bell)
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/a.ts", action: "modify", agentId: "subagent-test-id-1" },
+          kind: "tool_failure",
+          payload: { tool: "toolA", error: "err-a", agentId: "subagent-test-id-1" },
         }),
       ],
     };
@@ -493,12 +558,16 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     // SessionTimeline.tsx. Combining both chips is how a caller sees
     // everything again.
     await userEvent.click(screen.getByRole("button", { name: "Unattributed" }));
-    expect(screen.getByText("Bell")).toBeInTheDocument();
-    expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Tool failed: toolA — err-a")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
-    expect(screen.getByText("Bell")).toBeInTheDocument();
-    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
   });
 
   it("selecting a subagent chip alone hides unattributed events too — isolation, not an allowlist for subagents only", async () => {
@@ -508,14 +577,16 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     // it would hide any other subagent's events. Distinct from the test above,
     // which clicks "Unattributed" first — this covers the subagent-chip-first
     // order, which is the one order the isolate-model comment describes but
-    // nothing previously exercised.
+    // nothing previously exercised. Making notifications relevant/scannable
+    // — kind swapped from file_change to tool_failure, same reasoning as
+    // the tests above.
     events = {
       1: [
         makeEvent({ seq: 1 }), // unattributed (attention/Bell)
         makeEvent({
           seq: 2,
-          kind: "file_change",
-          payload: { path: "src/a.ts", action: "modify", agentId: "subagent-test-id-1" },
+          kind: "tool_failure",
+          payload: { tool: "toolA", error: "err-a", agentId: "subagent-test-id-1" },
         }),
       ],
     };
@@ -523,7 +594,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
 
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
-    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
   });
 
   it("two parallel subagents of the same type get distinct groups (grouped by agentId, not agentType), with disambiguated labels", () => {
@@ -579,5 +650,130 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     // subagent's own truncated id — no two chips share an accessible name.
     expect(screen.getByRole("button", { name: "code-reviewer (alpha-fa)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "code-reviewer (beta-fak)" })).toBeInTheDocument();
+  });
+});
+
+// Making notifications relevant/scannable.
+describe("SessionTimeline severity/pairing/persistence", () => {
+  it("suppressPairedAttentionRows: a permission_request row and its paired attention/permissionRequest row for the same occurrence collapse to ONE row (the specific-kind one)", () => {
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          ts: 1000,
+          kind: "permission_request",
+          payload: { tool: "Bash", summary: "rm -rf /tmp/x" },
+        }),
+        makeEvent({
+          seq: 2,
+          ts: 1200, // well within PAIRED_ROW_WINDOW_MS (5000ms) of seq 1
+          kind: "attention",
+          payload: {
+            attention: true,
+            signal: "permissionRequest",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    // Both events describe to the same text ("Needs permission: rm -rf
+    // /tmp/x") — without suppression this would render twice.
+    const rows = screen.getAllByText("Needs permission: rm -rf /tmp/x", {
+      selector: ".session-timeline-row-text",
+    });
+    expect(rows).toHaveLength(1);
+    // The SURVIVING row is the specific-kind one, not the generic
+    // attention one — same "the specific kind carries more information"
+    // reasoning as eventDescriptions.ts's SIGNAL_TO_EVENT_KIND doc comment.
+    // The kind class lives on the row's own pill span, not the outer row
+    // div (which carries `sev-${severity}` instead).
+    const row = rows[0].closest(".session-timeline-row");
+    expect(row?.querySelector(".session-timeline-row-kind")).toHaveClass("kind-permission_request");
+  });
+
+  it("suppressPairedAttentionRows does NOT collapse a permission_request and an unrelated attention event outside the pairing window", () => {
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          ts: 1000,
+          kind: "permission_request",
+          payload: { tool: "Bash", summary: "rm -rf /tmp/x" },
+        }),
+        makeEvent({
+          seq: 2,
+          ts: 1000 + 5001, // just outside PAIRED_ROW_WINDOW_MS
+          kind: "attention",
+          payload: {
+            attention: true,
+            signal: "permissionRequest",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    expect(
+      screen.getAllByText("Needs permission: rm -rf /tmp/x", {
+        selector: ".session-timeline-row-text",
+      }),
+    ).toHaveLength(2);
+  });
+
+  it("'Only attention' narrows to notify-worthy rows, layered on top of (not replacing) the kind-chip selection", async () => {
+    events = {
+      1: [
+        // Blocked severity — survives the "Only attention" filter.
+        makeEvent({
+          seq: 1,
+          kind: "attention",
+          payload: { attention: true, signal: "permissionRequest", tool: "Bash", summary: "x" },
+        }),
+        // A review_gate kind is on-by-default but "approved" isn't
+        // notify-worthy at all (notifyKind only counts "waiting") — a
+        // routine row that should disappear under the toggle.
+        makeEvent({ seq: 2, kind: "review_gate", payload: { state: "approved", prompt: "x" } }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    expect(screen.getByText("Needs permission: x")).toBeInTheDocument();
+    expect(screen.getByText("Review approved")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Only attention" }));
+    expect(screen.getByText("Needs permission: x")).toBeInTheDocument();
+    expect(screen.queryByText("Review approved")).not.toBeInTheDocument();
+
+    // Toggling back off restores the underlying kind-chip selection (which
+    // was never touched — "Review" was never unchecked), not a hard reset.
+    await userEvent.click(screen.getByRole("button", { name: "Only attention" }));
+    expect(screen.getByText("Review approved")).toBeInTheDocument();
+  });
+
+  it("activeKinds and 'Only attention' persist across a remount of the same panel", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const first = render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    await userEvent.click(screen.getByRole("button", { name: "Only attention" }));
+    expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Only attention" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    first.unmount();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Only attention" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });

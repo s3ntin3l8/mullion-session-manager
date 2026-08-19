@@ -1754,6 +1754,16 @@
   border-color: color-mix(in srgb, var(--accent-solid) 55%, transparent);
   background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
 }
+/* Making notifications relevant/scannable — the "Only attention" quick
+   toggle is visually a kind-chip (same base class) but a distinct filter
+   AXIS layered on top of the kind chips (see SessionTimeline.tsx's
+   onlyAttention state comment), so it gets a left margin to read as
+   separate from the chip ROW that follows it, plus a bold weight so it
+   doesn't get lost among 16 kind chips. */
+.session-timeline-only-attention {
+  font-weight: 700;
+  margin-right: 6px;
+}
 .session-timeline-list {
   flex: 1;
   min-height: 0;
@@ -1794,7 +1804,11 @@
   color: var(--g);
 }
 .session-timeline-row-kind.kind-permission_request {
-  color: #c084fc;
+  /* Making notifications relevant/scannable — was a hardcoded #c084fc;
+     matches the named --p token sidebar.css's own .session-dot-permission
+     already migrated to (see that rule's own comment), so this color has
+     one source of truth instead of two that could drift apart. */
+  color: var(--p);
 }
 .session-timeline-row-kind.kind-stop_failure,
 .session-timeline-row-kind.kind-tool_failure {
@@ -1812,6 +1826,25 @@
   color: var(--fg);
   overflow-wrap: break-word;
 }
+/* Making notifications relevant/scannable — a per-row severity accent
+   (notifySeverity(), eventDescriptions.ts), independent of the per-kind
+   pill coloring above: the pill still colors by the SPECIFIC kind/signal
+   (a permission_request pill stays --p regardless), while this stripe is
+   the coarser three-tier "does this need me right now" read a user scanning
+   the whole list quickly wants. inset box-shadow (not border-left) so it
+   doesn't shift the row's own padding/alignment — same technique
+   .task-card-is-blocked already uses elsewhere in this file. */
+.session-timeline-row.sev-blocked {
+  box-shadow: inset 2px 0 0 var(--p);
+}
+.session-timeline-row.sev-error {
+  box-shadow: inset 2px 0 0 var(--r);
+}
+.session-timeline-row.sev-done {
+  box-shadow: inset 2px 0 0 var(--g);
+}
+/* sev-none (routine chatter: title_change, file_change, ...) deliberately
+   gets no accent at all — the absence IS the signal that a row is routine. */
 /* Issue #213 (roadmap 4.7) — persisted-history additions: the search-scope
    and persistence-off hints (both flex-shrink: 0 banners between the
    controls and the list), the orphaned-row marker (a session_events row

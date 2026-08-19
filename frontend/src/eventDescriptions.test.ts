@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { describeEvent, describeLatestEvent, notifyKind } from "./eventDescriptions.js";
+import {
+  describeEvent,
+  describeLatestEvent,
+  notifyKind,
+  notifyLabel,
+  notifySeverity,
+} from "./eventDescriptions.js";
 import type { NotificationEvent } from "./api/index.js";
 
 function makeEvent(overrides: Partial<NotificationEvent>): NotificationEvent {
@@ -196,6 +202,29 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         payload: { attention: true, signal: "elicitation" },
       });
       expect(describeEvent(event)).toEqual({ text: "Needs input (MCP)", attention: true });
+    });
+
+    // Making notifications relevant/scannable — this case was simply
+    // missing from the `attention` signal switch (only the `question` KIND
+    // had one); an opencode question.asked hook raises this signal, and it
+    // fell through to the generic "Needs input" default before this fix.
+    it("describes an attention/question signal with its header", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "question", header: "Which approach?" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Needs answer: Which approach?",
+        attention: true,
+      });
+    });
+
+    it("describes an attention/question signal with no header generically", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "question" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Needs answer", attention: true });
     });
   });
 
@@ -516,20 +545,138 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       expect(notifyKind(event)).toBe("attention");
     });
 
-    // Rich statuses (issue: extend surfaced session statuses).
-    it("counts promote_request as notification-worthy (was missing entirely)", () => {
+    // Making notifications relevant/scannable — promote_request/elicitation
+    // (started)/question(started)/permission_request/stop_failure/
+    // tool_failure/plan_ready no longer count via their OWN NotificationEvent
+    // kind: every one of them is always accompanied by a paired `attention`
+    // event (see hook-handlers.ts's raise sites), which the very first check
+    // in notifyKind already matches — the bare-kind checks these tests used
+    // to exercise were counting the SAME notification twice.
+    it("does NOT count a bare promote_request event on its own kind (only its paired attention event counts)", () => {
       const event = makeEvent({ kind: "promote_request", payload: { summary: "x" } });
+      expect(notifyKind(event)).toBeNull();
+    });
+
+    it("counts promote_request via its paired attention event", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "promoteRequest", summary: "x" },
+      });
       expect(notifyKind(event)).toBe("attention");
     });
 
-    it("counts elicitation state started as notification-worthy", () => {
+    it("does NOT count a resolved promote (accepted/declined) as notification-worthy — Session.resolvePromote's own NotificationEvent carries no paired attention signal at all", () => {
+      expect(
+        notifyKind(makeEvent({ kind: "promote_request", payload: { state: "accepted" } })),
+      ).toBeNull();
+      expect(
+        notifyKind(makeEvent({ kind: "promote_request", payload: { state: "declined" } })),
+      ).toBeNull();
+    });
+
+    it("does NOT count a bare elicitation(started) event on its own kind (only its paired attention event counts)", () => {
       const event = makeEvent({ kind: "elicitation", payload: { state: "started" } });
+      expect(notifyKind(event)).toBeNull();
+    });
+
+    it("counts elicitation via its paired attention event", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "elicitation", server: "x" },
+      });
       expect(notifyKind(event)).toBe("attention");
     });
 
     it("does not count elicitation state finished as notification-worthy", () => {
       const event = makeEvent({ kind: "elicitation", payload: { state: "finished" } });
       expect(notifyKind(event)).toBeNull();
+    });
+  });
+
+  // Making notifications relevant/scannable.
+  describe("notifySeverity", () => {
+    it("classifies a permission-request attention event as blocked", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "permissionRequest", tool: "Bash", summary: "x" },
+      });
+      expect(notifySeverity(event)).toBe("blocked");
+    });
+
+    it("classifies a review_gate waiting event as blocked", () => {
+      const event = makeEvent({ kind: "review_gate", payload: { state: "waiting", prompt: "x" } });
+      expect(notifySeverity(event)).toBe("blocked");
+    });
+
+    it("classifies a pending dev_server_detected event as blocked", () => {
+      const event = makeEvent({
+        kind: "dev_server_detected",
+        payload: { port: "5173", projectId: 1 },
+      });
+      expect(notifySeverity(event)).toBe("blocked");
+    });
+
+    it("classifies a toolFailure attention event as error", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "toolFailure", title: "Tool failed: Bash", body: "x" },
+      });
+      expect(notifySeverity(event)).toBe("error");
+    });
+
+    it("classifies an apiError attention event as error", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "apiError", title: "API Error", body: "x" },
+      });
+      expect(notifySeverity(event)).toBe("error");
+    });
+
+    it("classifies an agentIdle attention event as done", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "agentIdle" },
+      });
+      expect(notifySeverity(event)).toBe("done");
+    });
+
+    it("classifies a byte-parsed bell attention event as done", () => {
+      const event = makeEvent({ kind: "attention", payload: { attention: true, signal: "bell" } });
+      expect(notifySeverity(event)).toBe("done");
+    });
+
+    it("classifies a session exit as done", () => {
+      const event = makeEvent({ kind: "status_change", payload: { reason: "exited" } });
+      expect(notifySeverity(event)).toBe("done");
+    });
+
+    it("returns null for anything notifyKind itself wouldn't count", () => {
+      const event = makeEvent({ kind: "title_change", payload: { title: "zsh" } });
+      expect(notifySeverity(event)).toBeNull();
+    });
+  });
+
+  // Making notifications relevant/scannable.
+  describe("notifyLabel", () => {
+    it("labels an attention event by its signal, not the generic 'Attention' kind label", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "permissionRequest", tool: "Bash", summary: "x" },
+      });
+      expect(notifyLabel(event)).toBe("Permission");
+    });
+
+    it("labels a non-attention event by its own kind", () => {
+      const event = makeEvent({ kind: "review_gate", payload: { state: "waiting", prompt: "x" } });
+      expect(notifyLabel(event)).toBe("Review");
+    });
+
+    it("falls back to 'Notification' for an attention event with no recognized signal", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "future" },
+      });
+      expect(notifyLabel(event)).toBe("Notification");
     });
   });
 });

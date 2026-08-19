@@ -579,14 +579,24 @@ describe("push-delivery (issue #95)", () => {
     { kind: "status_change", payload: { reason: "other" }, notifiable: false },
     { kind: "review_gate", payload: { state: "waiting" }, notifiable: true },
     { kind: "review_gate", payload: { state: "approved" }, notifiable: false },
-    { kind: "permission_request", payload: {}, notifiable: true },
-    { kind: "stop_failure", payload: {}, notifiable: true },
-    { kind: "tool_failure", payload: {}, notifiable: true },
-    { kind: "plan_ready", payload: {}, notifiable: true },
-    { kind: "promote_request", payload: {}, notifiable: true },
-    { kind: "elicitation", payload: { state: "started" }, notifiable: true },
+    // permission_request/stop_failure/tool_failure/plan_ready/
+    // promote_request/elicitation/question are all notifiable: false now —
+    // each is always accompanied by a paired `attention` event carrying the
+    // same information (see push-delivery.ts's own updated header comment),
+    // so keeping the NotificationEvent kind itself notifiable too meant a
+    // single agent action pushed the phone twice. `promote_request`
+    // specifically used to be doubly wrong: its OTHER raise site
+    // (pty-manager.ts's resolvePromote) fires with no paired attention
+    // signal at all, so it was pushing for the RESOLUTION of a promote
+    // request, not just the request.
+    { kind: "permission_request", payload: {}, notifiable: false },
+    { kind: "stop_failure", payload: {}, notifiable: false },
+    { kind: "tool_failure", payload: {}, notifiable: false },
+    { kind: "plan_ready", payload: {}, notifiable: false },
+    { kind: "promote_request", payload: {}, notifiable: false },
+    { kind: "elicitation", payload: { state: "started" }, notifiable: false },
     { kind: "elicitation", payload: { state: "finished" }, notifiable: false },
-    { kind: "question", payload: { state: "started" }, notifiable: true },
+    { kind: "question", payload: { state: "started" }, notifiable: false },
     { kind: "question", payload: { state: "finished" }, notifiable: false },
     { kind: "dev_server_detected", payload: {}, notifiable: false },
     { kind: "title_change", payload: { title: "x" }, notifiable: false },

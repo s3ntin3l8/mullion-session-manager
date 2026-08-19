@@ -270,7 +270,21 @@ describe("NotificationBell", () => {
   });
 
   it("per-event mark-read advances the cursor to that event's own seq, without touching newer unread events", async () => {
-    events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
+    // Making notifications relevant/scannable — two IDENTICAL bell events
+    // (the old default here) now fold into a single collapsed row (see
+    // buildFeedItems' foldConsecutiveRows), which would defeat this test's
+    // own premise of two independently mark-readable rows. Distinct
+    // signals (bell vs hookNotification) keep them from folding, same as
+    // any two genuinely different notifications would in practice.
+    events = {
+      1: [
+        makeEvent({ seq: 1 }),
+        makeEvent({
+          seq: 2,
+          payload: { attention: true, signal: "hookNotification", title: "heads up", body: "" },
+        }),
+      ],
+    };
     await openPanel();
     const markReadButtons = screen.getAllByRole("button", { name: "Mark read" });
     expect(markReadButtons).toHaveLength(2);
