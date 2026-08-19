@@ -456,6 +456,11 @@ export function TerminalPane(props: {
 
     let lastCols = term.cols;
     let lastRows = term.rows;
+    // Hermes review, PR #708 — mirrors the `paneTooSmall` state's own
+    // condition (see the geometry handler below) without needing a React-
+    // state read inside this mount effect's closure. Set alongside
+    // setPaneTooSmall on every geometry echo; read by refit() below.
+    let cappedBelowFloor = false;
     const sendResizeIfOpen = () => {
       if (ws?.readyState === WebSocket.OPEN) {
         const message: ResizeMessage = { type: "resize", cols: term.cols, rows: term.rows };
@@ -463,6 +468,23 @@ export function TerminalPane(props: {
       }
     };
     const refit = () => {
+      // Hermes review, PR #708 — once the server has floored this pane's
+      // geometry (cappedBelowFloor), calling fitAddon.fit() unconditionally
+      // on every subsequent layout event (any ResizeObserver delivery, not
+      // just a real resize of THIS pane) drags xterm's own grid back down to
+      // whatever the still-too-small container can currently hold — undoing
+      // the sync from the geometry handler below and sending a resize the
+      // server will just floor right back, over and over. Skip fit()/resize
+      // entirely while capped, UNLESS the container has actually grown
+      // enough to hold the known floor — proposeDimensions() is read-only
+      // (unlike fit()), so checking it first doesn't itself perturb the
+      // terminal.
+      if (cappedBelowFloor) {
+        const proposed = fitAddon.proposeDimensions();
+        if (proposed === undefined || proposed.cols < lastCols || proposed.rows < lastRows) {
+          return;
+        }
+      }
       fitAddon.fit();
       if (term.cols === lastCols && term.rows === lastRows) return;
       lastCols = term.cols;
@@ -860,10 +882,18 @@ export function TerminalPane(props: {
             lastCols = geo.cols;
             lastRows = geo.rows;
           }
+          // Hermes review, PR #708 — proposeDimensions() returns undefined
+          // when the container can't fit even one full character cell (a
+          // near-collapsed pane, or the brief zero-height layout state
+          // during a drag). Treating that as "not too small" hid the hint
+          // exactly when the pane was most unusable; undefined now counts
+          // as too small, same as a proposed size that's genuinely smaller
+          // than the applied geometry.
           const proposed = fitAddon.proposeDimensions();
-          setPaneTooSmall(
-            proposed !== undefined && (geo.cols > proposed.cols || geo.rows > proposed.rows),
-          );
+          const tooSmall =
+            proposed === undefined || geo.cols > proposed.cols || geo.rows > proposed.rows;
+          cappedBelowFloor = tooSmall;
+          setPaneTooSmall(tooSmall);
         }
       });
 

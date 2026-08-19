@@ -2247,6 +2247,26 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
   });
 
+  // Hermes review, PR #708 — proposeDimensions() returns undefined when the
+  // container can't fit even one character cell (a near-collapsed pane, or
+  // the brief zero-height layout state mid-drag). The naive `proposed !==
+  // undefined && (...)` check treats that as "not too small," hiding the
+  // hint exactly when the pane is least usable — undefined must count as
+  // too small.
+  it('shows "Pane too small" when the container is too small to propose any dimensions at all', () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    getLatestFitAddonInstance().proposeDimensions.mockReturnValue(undefined);
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+
+    expect(screen.getByText("Pane too small")).toBeInTheDocument();
+  });
+
   it("suppresses the next refit's resize frame once the server's applied geometry lands", () => {
     stubFakeWebSocket(true);
     const resizeObserver = stubManualResizeObserver();
@@ -2283,6 +2303,107 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     // lastRows captured at mount (20/8) and re-send an already-redundant
     // {cols:40,rows:10} frame right back to the server it just came from.
     expect(fakeWsSend.mock.calls.length).toBe(sendsAfterGeometry);
+  });
+
+  // Hermes review, PR #708 — the previous test above simulates the server's
+  // resize "taking effect" by manually overwriting term.cols/rows, which is
+  // accurate for the mock's own no-op fit() but hides a real interaction:
+  // on a genuinely too-small CONTAINER, the real fitAddon.fit() re-measures
+  // and shrinks xterm back down on every subsequent layout event, no matter
+  // what term.resize() just set it to — so without the refit()-side guard,
+  // every later ResizeObserver delivery (not just a real resize of this
+  // pane) would re-trigger fit() -> shrink -> mismatch -> a fresh resize
+  // send, forever bouncing between the container's real size and the
+  // server's floor. This test's fitCallbackQueue entry stands in for that
+  // real fit()-shrinks-back behavior; the guard's job is to never let it run
+  // at all while capped below the floor and the container hasn't grown.
+  it("does not re-fit (and re-shrink) a still-too-small container on a later layout event", () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    // The container can only ever fit 20x8 — unlike the previous test, this
+    // stays true for the rest of the test (nothing widens the container),
+    // so proposeDimensions() keeps reporting the same too-small size.
+    mockInitialTermSize.cols = 20;
+    mockInitialTermSize.rows = 8;
+
+    renderPane();
+    act(() => {
+      resizeObserver.fire(); // deferred initial connect (issue #676)
+    });
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+    const term = getLatestTermInstance();
+    expect(term.resize).toHaveBeenCalledWith(40, 10);
+    term.cols = 40;
+    term.rows = 10;
+
+    const fitAddon = getLatestFitAddonInstance();
+    const fitCallsAfterGeometry = fitAddon.fit.mock.calls.length;
+    const sendsAfterGeometry = fakeWsSend.mock.calls.length;
+    // Stands in for the real xterm.js FitAddon: if refit() ever calls
+    // fit() again while still capped, this callback fires and shrinks the
+    // terminal right back down to what the (unchanged) container reports.
+    fitCallbackQueue.push(() => {
+      term.cols = 20;
+      term.rows = 8;
+    });
+
+    act(() => {
+      resizeObserver.fire(); // e.g. an unrelated sibling pane's own resize
+    });
+
+    expect(fitAddon.fit.mock.calls.length).toBe(fitCallsAfterGeometry);
+    expect(term.cols).toBe(40);
+    expect(term.rows).toBe(10);
+    expect(fakeWsSend.mock.calls.length).toBe(sendsAfterGeometry);
+  });
+
+  // The counterpart to the test above — once the container genuinely grows
+  // past the floor, refit() must stop skipping and resume normal fit()/
+  // resize-send behavior.
+  it("resumes normal fit()/resize once the container grows past the floor", () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    mockInitialTermSize.cols = 20;
+    mockInitialTermSize.rows = 8;
+
+    renderPane();
+    act(() => {
+      resizeObserver.fire();
+    });
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+    const term = getLatestTermInstance();
+    term.cols = 40;
+    term.rows = 10;
+
+    // The container widens past the floor — proposeDimensions() (and the
+    // real fit() it stands in for) now reports 80x24.
+    mockInitialTermSize.cols = 80;
+    mockInitialTermSize.rows = 24;
+    fitCallbackQueue.push(() => {
+      term.cols = 80;
+      term.rows = 24;
+    });
+    const sendsBeforeGrow = fakeWsSend.mock.calls.length;
+
+    act(() => {
+      resizeObserver.fire();
+    });
+
+    expect(term.cols).toBe(80);
+    expect(term.rows).toBe(24);
+    const resizeMessages = fakeWsSend.mock.calls
+      .slice(sendsBeforeGrow)
+      .map(([data]) => JSON.parse(data as string) as { type?: string; cols?: number });
+    expect(resizeMessages.some((m) => m.type === "resize" && m.cols === 80)).toBe(true);
   });
 });
 
