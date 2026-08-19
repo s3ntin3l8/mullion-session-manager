@@ -94,10 +94,13 @@
    its own `.dv-scrollable` div, and `.dv-scrollable > .dv-tabs-container {
    overflow: hidden }` (dockview.css) wins on specificity, which suppresses
    user-agent touch panning regardless of any touch-action set on a
-   descendant. App.tsx now passes `scrollbars="native"` to <DockviewReact>
-   (independent code review, PR #723) so .dv-tabs-container is the outer
-   element directly, with no wrapper — its base overflow:auto genuinely
-   applies. With that fixed, .dv-tab and .dv-void-container still ship
+   descendant. App.tsx now passes `scrollbars="native"` to <DockviewReact>,
+   gated on `(pointer: coarse)` (independent code review + Hermes, PR #723
+   — unscoped, this also swaps desktop's on-hover custom overlay thumb for
+   an always-visible native one), so on a touch device .dv-tabs-container
+   is the outer element directly, with no wrapper — its base overflow:auto
+   genuinely applies. With that fixed, .dv-tab and .dv-void-container still
+   ship
    `touch-action: none` so PointerDragSource (dockview's touch
    drag-to-reorder) owns every gesture that starts on them, and multi-tab
    groups tile the strip with essentially no bare void surface left to
