@@ -121,7 +121,13 @@ export function AppearanceSection() {
           ]}
         />
       </Row>
-      {layoutTier === "tablet" && (
+      {/* Hermes review — shown whenever tablet is REACHABLE (the live tier
+          itself, per `layoutTier`, or "auto", which can resolve to tablet on
+          a later resize), not only while it's the tier live right now. A
+          desktop-width "auto" user can otherwise never pre-configure this
+          without first switching the override to Tablet, which itself
+          re-lays-out the workspace just to reach a settings row. */}
+      {(layoutTier === "tablet" || settings.layoutMode === "auto") && (
         <Row
           label="Tablet columns"
           desc="How many sessions tile side by side before a new one docks as a tab instead. 3 gives each column less width, which trips the narrow-pane font shrink sooner — 2 is the safer default unless your unfolded/tablet width is comfortably wide."

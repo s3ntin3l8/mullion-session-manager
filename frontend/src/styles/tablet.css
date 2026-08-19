@@ -46,8 +46,22 @@
      visibility — that fix needs either preferring the non-Dock
      registration specifically or keying by (sessionId, pane) and having
      the caller resolve the visible one, both larger changes than this
-     PR's own crash/positioning scope. Revisit if Dock-on-touch turns out
-     to matter in practice. */
+     PR's own crash/positioning scope.
+
+     Hermes review — this is a broader tradeoff than "tablet loses the
+     Dock": `(pointer: coarse)` applies at ANY width, so a touch-primary
+     desktop-width device loses the Dock too, not just the tablet range,
+     and the hazard this guards against is actually narrower than "any
+     Dock use on touch" — it only bites when a visible pane's key bar AND
+     an invisible Dock monitor for that SAME session coexist. A tighter
+     fix (suppress only the ambiguous registration, or hide the Dock only
+     while a key-bar session with a same-session Dock monitor is active)
+     is possible but needs Dock.tsx to know which session the key bar is
+     currently targeting — real, cross-cutting new state, not a rule
+     tweak. Consciously accepting the broader "no Dock on any coarse
+     pointer" behavior for now rather than partially narrowing it; revisit
+     if losing Docker management on touch hardware turns out to matter in
+     practice. */
   .dock {
     display: none !important;
   }
