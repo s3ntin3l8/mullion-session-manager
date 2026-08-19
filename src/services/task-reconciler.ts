@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -165,6 +165,80 @@ async function maybeOpenDraftPR(
     .where(eq(tasks.id, task.id))
     .run();
   app.log.info({ taskId: task.id, prUrl: result.prUrl }, "task reconcile: draft PR opened");
+}
+
+// Stranded draft-PR retry sweep (#722's investigation, task 213765) — a
+// "reviewing" task with no PR only ever gets ONE draft-open attempt today,
+// made inline at the "-> reviewing" transition (maybeOpenDraftPR above, both
+// call sites below). If that attempt fails — the tree was still dirty right
+// after the worker's last turn, the host was briefly unreachable, the push
+// itself failed transiently — nothing ever retries it: the main sweep below
+// only selects "claimed"/"in_progress" rows, and processReviewingTasks is
+// joined on the REVIEW session, not the worker, so a "reviewing" task with
+// no review agent (task 213765 had none) is invisible to it too. A worker
+// that later cleans up its own worktree and ends its turn again, believing
+// "Mullion pushes the branch and opens the PR" (task-prompt.ts's own
+// framing), has nothing left to trigger that — the transition already fired
+// once and never fires again. This sweep is the fix: keep retrying any
+// "reviewing" task with no PR until one opens.
+//
+// Per-task attempt timestamps are process-local (module state, not a DB
+// column) — same posture as task-watcher.ts's own parentTitleFetchAttempts:
+// losing this on a restart just costs one extra attempt, which is harmless.
+// A DB column would need a schema migration for what is, in effect, a rate
+// limiter with no durability requirement.
+const DRAFT_PR_RETRY_TTL_MS = 5 * 60 * 1000;
+// Global cap for the whole sweep (mirrors task-watcher.ts's own per-tick
+// caps, e.g. MAX_DEPENDENCY_CHECKS_PER_SWEEP) — a backstop against a
+// pathological install with many simultaneously-stranded "reviewing" tasks
+// all hitting the same host's git/GitHub calls in one tick.
+const MAX_DRAFT_PR_RETRIES_PER_SWEEP = 20;
+// Bounds the attempt-timestamp Map itself; nothing else would. Simple
+// oldest-inserted eviction (Map iteration order === insertion order) — this
+// map's entries self-expire via the TTL above far faster than 500 distinct
+// tasks could realistically accumulate, so eviction policy sophistication
+// (see the parentTitleFetchAttempts precedent) isn't worth it here.
+const MAX_DRAFT_PR_RETRY_ENTRIES = 500;
+const draftPrRetryAttemptedAt = new Map<number, number>();
+
+async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  // Same gate as the transition itself (Hermes review, PR #480) — a retry
+  // is still "real GitHub state," not a passive read.
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(and(eq(tasks.status, "reviewing"), isNull(tasks.prNumber)))
+    .all();
+  if (rows.length === 0) return;
+
+  const now = Date.now();
+  let attempted = 0;
+
+  for (const { task, project } of rows) {
+    if (attempted >= MAX_DRAFT_PR_RETRIES_PER_SWEEP) break;
+
+    const lastAttemptedAt = draftPrRetryAttemptedAt.get(task.id);
+    if (lastAttemptedAt !== undefined && now - lastAttemptedAt < DRAFT_PR_RETRY_TTL_MS) continue;
+
+    attempted++;
+    if (
+      !draftPrRetryAttemptedAt.has(task.id) &&
+      draftPrRetryAttemptedAt.size >= MAX_DRAFT_PR_RETRY_ENTRIES
+    ) {
+      const oldest = draftPrRetryAttemptedAt.keys().next().value;
+      if (oldest !== undefined) draftPrRetryAttemptedAt.delete(oldest);
+    }
+    draftPrRetryAttemptedAt.set(task.id, now);
+
+    // maybeOpenDraftPR already re-reads the task's current git status and
+    // is idempotent/best-effort (it's the exact same call the "-> reviewing"
+    // transition makes) — nothing here duplicates that logic.
+    await maybeOpenDraftPR(app, task, project);
+  }
 }
 
 /**
@@ -507,6 +581,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // findings would never be processed on a tick with no claimed/in_progress
   // work at all.
   await processReviewingTasks(app);
+  // Same independence reasoning — a stranded "reviewing" task with no PR
+  // needs to keep being retried regardless of whether anything is currently
+  // claimed/in_progress.
+  await retryStrandedDraftPRs(app);
 
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })

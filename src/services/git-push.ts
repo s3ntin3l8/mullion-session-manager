@@ -25,11 +25,25 @@
 // never appears in anything this module logs, throws, or returns — every
 // error message is built from git's own stderr with the token string
 // stripped out first.
-
+//
+// `--no-verify`: a plain `git push` runs the TARGET repo's own `pre-push`
+// hook synchronously inside this Fastify request handler. Observed in
+// production (task 213765/#722's investigation): a repo whose pre-push hook
+// runs `go test -race` plus a networked `go install .../govulncheck` takes
+// minutes, not the `GIT_TIMEOUT_MS` below — every promotion push into that
+// repo timed out, permanently. The commit being pushed already passed its
+// own pre-COMMIT hooks in the agent's worktree before this ever runs; CI on
+// the resulting PR is the real gate. A repo's arbitrary, potentially
+// multi-minute pre-push suite is not something a synchronous HTTP handler
+// can support running, so this skips it unconditionally rather than trying
+// to bound it.
 import { spawn as spawnChild } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 
-const GIT_TIMEOUT_MS = 30_000;
+// 120s, not 30s: sized for a real push over a slow link now that
+// `--no-verify` means the timeout is no longer also budget for an arbitrary
+// repo's pre-push hook.
+const GIT_TIMEOUT_MS = 120_000;
 
 export interface PushResult {
   ok: boolean;
@@ -70,8 +84,22 @@ export function pushBranch(cwd: string, branch: string, token: string): Promise<
 
     const child = spawnChild(
       "git",
-      ["-C", cwd, "-c", `http.extraHeader=${headerValue}`, "push", "-u", "origin", branch],
-      { stdio: ["ignore", "ignore", "pipe"], env: gitEnv() },
+      [
+        "-C",
+        cwd,
+        "-c",
+        `http.extraHeader=${headerValue}`,
+        "push",
+        "--no-verify",
+        "-u",
+        "origin",
+        branch,
+      ],
+      // `detached: true` puts `child` in its own process group so the
+      // timeout handler below can kill the whole group, not just the `git`
+      // process itself — a pre-push hook's own children (e.g. `go test`,
+      // `go install`) are otherwise left running past `child.kill()`.
+      { stdio: ["ignore", "ignore", "pipe"], env: gitEnv(), detached: true },
     );
 
     const finish = (result: PushResult) => {
@@ -82,7 +110,12 @@ export function pushBranch(cwd: string, branch: string, token: string): Promise<
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        // Process (group) may already be gone — nothing more to do.
+      }
       finish({ ok: false, detail: "git push timed out" });
     }, GIT_TIMEOUT_MS);
 

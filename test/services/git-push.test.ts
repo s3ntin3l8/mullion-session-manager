@@ -91,6 +91,25 @@ describe("git-push", () => {
     expect(result.detail).toContain("[redacted]");
   });
 
+  it("skips the target repo's own local pre-push hook (--no-verify)", async () => {
+    // A hook that would fail the push if it ran at all — a stronger, more
+    // direct signal that --no-verify took effect than inspecting argv would
+    // be, and it's exactly the failure mode observed in production (#722's
+    // investigation): a repo's pre-push hook running unbounded work
+    // synchronously inside the promotion push.
+    const hookPath = path.join(workdir, ".git", "hooks", "pre-push");
+    fs.writeFileSync(hookPath, `#!/bin/sh\necho "pre-push hook ran" >&2\nexit 1\n`, {
+      mode: 0o755,
+    });
+
+    git(workdir, ["checkout", "-b", "mullion/task-5"]);
+    const result = await pushBranch(workdir, "mullion/task-5", TOKEN);
+
+    expect(result).toEqual({ ok: true });
+    const branches = git(bareRemote, ["branch", "--list", "mullion/task-5"]);
+    expect(branches).toContain("mullion/task-5");
+  });
+
   it("also redacts the base64-encoded http.extraHeader form of the credential, not just the raw token", async () => {
     // The encoded form is the same credential in a different shape — a
     // hook that leaks THIS instead of the raw token string is just as

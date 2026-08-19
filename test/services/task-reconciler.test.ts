@@ -70,10 +70,10 @@ vi.mock("../../src/services/task-reseed.js", async (importOriginal) => {
 });
 
 const { buildApp } = await import("../../src/app.js");
-const { closeDb } = await import("../../src/db/client.js");
+const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
-const { eq } = await import("drizzle-orm");
+const { and, eq, isNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
@@ -133,6 +133,26 @@ describe("reconcileTasks", () => {
     // reviewing-transition tests below rely on the draft-PR attempt being a
     // harmless no-op, same as before this was mocked.
     mockOpenDraftPRForTask.mockReset().mockResolvedValue({ ok: false, reason: "no-token" });
+    // A "reviewing" task with no PR is exactly what retryStrandedDraftPRs
+    // sweeps on every reconcileTasks() call, and plenty of tests in this
+    // file legitimately land a task there (the default mock resolves
+    // "no-token", so its own draft-PR attempt never sets prNumber) without
+    // ever cleaning it up — this file shares one DB across all its tests.
+    // Without this, a stray leftover row from an earlier test gets swept
+    // (and calls mockOpenDraftPRForTask) on a LATER, unrelated test's very
+    // first reconcileTasks() call, corrupting that test's own call-count
+    // assertions. Scoped to exactly the rows the sweep itself selects.
+    // Wrapped: the very first beforeEach of the whole file runs before any
+    // buildApp() call has migrated the (freshly created) tmpDb, so the
+    // table doesn't exist yet — nothing to clean up in that case.
+    try {
+      getDb()
+        .delete(tasks)
+        .where(and(eq(tasks.status, "reviewing"), isNull(tasks.prNumber)))
+        .run();
+    } catch {
+      // no such table yet — fine, see above.
+    }
   });
 
   afterEach(() => {
@@ -872,6 +892,106 @@ describe("reconcileTasks", () => {
       expect(row.prNumber).toBeNull();
 
       await app.close();
+    });
+  });
+
+  // RC2/#722's investigation (task 213765) — a "reviewing" task whose ONE
+  // draft-PR attempt (above) failed (dirty tree right after the worker's
+  // last turn, a transient host/push failure) previously had no way back
+  // into promotion: the claimed/in_progress SELECT excludes it, and
+  // processReviewingTasks is joined on the review session, not the worker,
+  // so a task with no review agent is invisible to it too. This sweep
+  // (retryStrandedDraftPRs) is the fix.
+  describe("stranded draft-PR retry sweep", () => {
+    async function createReviewingTaskWithNoPR(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      prNumber: number | null = null,
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-stranded-${Math.random()}`, cwd: "/tmp" },
+      });
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "stranded",
+          status: "reviewing",
+          claimedAt: new Date(),
+          reviewingAt: new Date(),
+          prNumber,
+        })
+        .returning()
+        .all();
+      return { taskId: row.id };
+    }
+
+    it("retries a reviewing task with no PR and persists the result once it succeeds", async () => {
+      const app = await buildApp();
+      const { taskId } = await createReviewingTaskWithNoPR(app);
+      mockOpenDraftPRForTask.mockResolvedValue({
+        ok: true,
+        prUrl: "https://github.com/test-owner/test-repo/pull/42",
+        prNumber: 42,
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      expect(mockOpenDraftPRForTask.mock.calls[0][1]).toMatchObject({ id: taskId });
+      expect(row.status).toBe("reviewing");
+      expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/42");
+      expect(row.prNumber).toBe(42);
+
+      await app.close();
+    });
+
+    it("does not touch a reviewing task that already has a PR", async () => {
+      const app = await buildApp();
+      await createReviewingTaskWithNoPR(app, 7);
+
+      await reconcileTasks(app);
+
+      expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("backs off after an attempt instead of retrying on every tick", async () => {
+      const app = await buildApp();
+      await createReviewingTaskWithNoPR(app);
+      mockOpenDraftPRForTask.mockResolvedValue({ ok: false, reason: "dirty-tree" });
+
+      await reconcileTasks(app);
+      await reconcileTasks(app);
+
+      // Second tick lands well inside the 5-minute TTL — no second attempt.
+      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("does not retry while Task Master is disabled", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        await createReviewingTaskWithNoPR(app);
+
+        await reconcileTasks(app);
+
+        expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
     });
   });
 
