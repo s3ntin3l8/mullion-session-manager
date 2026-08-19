@@ -7,6 +7,7 @@ import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
   cleanupPreviewWorktree,
+  commitWipChanges,
   createWorktree,
   deletePreviewWorktree,
   deriveWorktreePath,
@@ -877,6 +878,182 @@ describe("removeWorktreeIfClean (issue #283)", () => {
   it("returns not-a-repo for a nonexistent path", async () => {
     const result = await removeWorktreeIfClean(path.join(tmpDir, "does-not-exist"), tmpDir);
     expect(result).toEqual({ removed: false, reason: "not-a-repo" });
+  });
+});
+
+// #722's investigation (task 213765) — the salvage commit task-reconciler.ts
+// makes before failing a task whose worker ended its turn with no commits at
+// all, so Retry can actually resume the work instead of finding a dirty
+// worktree permanently blocking resumeTaskWorktree's `git worktree add`.
+describe("commitWipChanges (#722)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-wip-commit-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("commits tracked modifications and untracked-not-ignored files", async () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
+    fs.writeFileSync(path.join(tmpDir, "new.txt"), "new file");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: true });
+    const status = execFileSync("git", ["status", "--porcelain"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(status.trim()).toBe("");
+    const log = execFileSync("git", ["log", "-1", "--pretty=%s"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    })
+      .toString()
+      .trim();
+    expect(log).toBe("wip: agent turn ended with uncommitted changes");
+    const committedFiles = execFileSync("git", ["show", "--stat", "--pretty=", "HEAD"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(committedFiles).toContain("a.txt");
+    expect(committedFiles).toContain("new.txt");
+  });
+
+  it("does not stage a gitignored file (e.g. a build/test artifact)", async () => {
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "coverage.txt\n");
+    commitAll(tmpDir, "add gitignore");
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
+    fs.writeFileSync(path.join(tmpDir, "coverage.txt"), "should not be committed");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: true });
+    const committedFiles = execFileSync("git", ["show", "--stat", "--pretty=", "HEAD"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(committedFiles).toContain("a.txt");
+    expect(committedFiles).not.toContain("coverage.txt");
+    // Still on disk, still untracked — just never committed.
+    expect(fs.existsSync(path.join(tmpDir, "coverage.txt"))).toBe(true);
+  });
+
+  it("stages an untracked file whose name contains a tab (Hermes review, PR #726 — ls-files -z, not the C-quoted default form)", async () => {
+    fs.writeFileSync(path.join(tmpDir, "tab\tfile.txt"), "content");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: true });
+    // `git ls-tree -z` (not `git show --stat`, whose summary line is always
+    // C-quoted for humans regardless of `-z`) gives the raw, unquoted name.
+    const committedFiles = execFileSync("git", ["ls-tree", "-z", "-r", "--name-only", "HEAD"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(committedFiles.split("\0")).toContain("tab\tfile.txt");
+  });
+
+  it("stages an untracked file whose name starts with a pathspec magic character (independent review, PR #726 — :(literal) prefix)", async () => {
+    // `:` is pathspec magic syntax — `--` ends OPTION parsing but does not
+    // disable it, so `git add -- ':magic.txt'` fails with "did not match
+    // any files" unless the entry is wrapped in `:(literal)`.
+    fs.writeFileSync(path.join(tmpDir, ":magic.txt"), "content");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: true });
+    const committedFiles = execFileSync("git", ["ls-tree", "-z", "-r", "--name-only", "HEAD"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(committedFiles.split("\0")).toContain(":magic.txt");
+  });
+
+  it("stages an untracked file with a non-ASCII name", async () => {
+    fs.writeFileSync(path.join(tmpDir, "café.txt"), "content");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: true });
+    const committedFiles = execFileSync("git", ["ls-tree", "-z", "-r", "--name-only", "HEAD"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(committedFiles.split("\0")).toContain("café.txt");
+  });
+
+  it("skips the target repo's own pre-commit hook (--no-verify)", async () => {
+    const hookPath = path.join(tmpDir, ".git", "hooks", "pre-commit");
+    fs.writeFileSync(hookPath, `#!/bin/sh\necho "pre-commit hook ran" >&2\nexit 1\n`, {
+      mode: 0o755,
+    });
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: true });
+  });
+
+  it("no-ops cleanly (no empty commit) when there is nothing to stage", async () => {
+    const before = revParse(tmpDir, "HEAD");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result).toEqual({ committed: false });
+    expect(revParse(tmpDir, "HEAD")).toBe(before);
+  });
+
+  it("uses a custom commit message when given one", async () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
+
+    await commitWipChanges(tmpDir, "custom salvage message");
+
+    const log = execFileSync("git", ["log", "-1", "--pretty=%s"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    })
+      .toString()
+      .trim();
+    expect(log).toBe("custom salvage message");
+  });
+
+  it("returns an error, not committed, for an unsafe (non-absolute) path", async () => {
+    const result = await commitWipChanges("relative/path");
+    expect(result).toEqual({ committed: false, error: "unsafe path" });
+  });
+
+  it("surfaces a real `git add` failure (index locked) as an error, not a silent no-op", async () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
+    const lockPath = path.join(tmpDir, ".git", "index.lock");
+    fs.writeFileSync(lockPath, "");
+
+    try {
+      const result = await commitWipChanges(tmpDir);
+      expect(result.committed).toBe(false);
+      expect(result.error).toBeTruthy();
+      expect(result.error).toMatch(/index\.lock/i);
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+    }
+  });
+
+  it("surfaces a real `git commit` failure (bad gpg signing key) as an error, not a silent no-op", async () => {
+    git(tmpDir, ["config", "commit.gpgsign", "true"]);
+    git(tmpDir, ["config", "user.signingkey", "0000000000000000000000000000000000000f"]);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
+
+    const result = await commitWipChanges(tmpDir);
+
+    expect(result.committed).toBe(false);
+    expect(result.error).toBeTruthy();
+    expect(result.error).not.toMatch(/nothing to commit/i);
   });
 });
 

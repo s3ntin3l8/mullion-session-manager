@@ -7,7 +7,7 @@ import type { SessionInfo } from "./pty-manager.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord } from "./session-lifecycle.js";
-import { resolveBackend } from "./session-backend.js";
+import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
@@ -30,6 +30,8 @@ import {
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
+import { resolveHostGitStatus } from "./host-git.js";
+import { commitWipChanges } from "./git-worktree.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -126,6 +128,199 @@ async function maybeSpawnReviewAgent(
     );
   } catch (err) {
     app.log.warn({ err, taskId: task.id, reviewCommand }, "task reconcile: review agent threw");
+  }
+}
+
+// #722's investigation, RC5 — session-status.ts's `derived.status ===
+// "finished"` is a LATCH on `lastTurnEndedAt`, not an edge: once set, it
+// stays true until the NEXT turn starts (hook-handlers.ts's `turn_start`) or
+// a genuine keystroke clears it (pty-manager.ts's `isGenuineUserInput`).
+// Reject (`reviewing -> in_progress`, routes/tasks.ts) deliberately leaves a
+// still-active session's latch untouched so a human can type feedback into
+// it themselves (task-reseed.ts's own `force: false` doc comment) — but
+// that means the very next reconcile tick re-derives "finished" from that
+// SAME stale latch and flips the task straight back to "reviewing" before
+// the human ever gets a chance to type, pushing again and spawning a second
+// review agent that clobbers `reviewSessionId`.
+//
+// Fixed by requiring the finish signal to postdate this specific
+// claimed/in_progress spell, anchored on `claimedAt`: it's already reset to
+// `now` on every fresh entry into that pool — a new claim, Retry, AND Reject
+// (routes/tasks.ts's own reject handler, already documented there as the
+// budget-deadline anchor) — so one comparison covers all three without a new
+// column. A small tolerance guards against clock skew between this process
+// and a remote-hosted project's own host (#484) — both are NTP-synced in
+// practice, but a bare `>` would let a few hundred ms of skew wrongly stick
+// a task in "in_progress" forever.
+const CLOCK_SKEW_TOLERANCE_MS = 5_000;
+
+function turnFinishedSinceClaim(
+  info: SessionInfo | null,
+  task: { claimedAt: Date | null },
+): boolean {
+  if (info === null || info.lastTurnEndedAt === null || task.claimedAt === null) return false;
+  return info.lastTurnEndedAt >= task.claimedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+}
+
+/**
+ * #722's fix — decides whether a "-> reviewing" transition (both call sites
+ * below) may actually fire. `derived.status === "finished"` alone isn't
+ * enough: a `stop_failure` (e.g. a rate-limit) produces the exact same
+ * "phase: done" signal as a real completion, and both call sites used to
+ * advance to "reviewing" either way — the task 213765 incident this fixes,
+ * where the transition fired with 8 modified files, 1 untracked file, and
+ * zero commits on the branch.
+ *
+ * The discriminating signal is deliberately "commits ahead of `baseSha`",
+ * NOT dirtiness: a task barely out of its worker's last turn very often has
+ * an untracked scratch file (see maybeOpenDraftPR's own doc comment above)
+ * even when its real work IS committed — failing on dirtiness alone would
+ * turn every such stray file into a hard failure, a far bigger blast radius
+ * than the bug this fixes. Only "HEAD is still at baseSha" — genuinely no
+ * commits at all — blocks the transition; a dirty-but-committed tree still
+ * advances normally, exactly as before, and picks up its draft PR via
+ * `maybeOpenDraftPR`/the stranded-task retry sweep once the tree is clean.
+ *
+ * Fails OPEN (`{ ok: true }`, advances normally) whenever this can't be
+ * determined — no `baseSha` recorded (an older task row), the worktree
+ * isn't reachable, or the host doesn't support the git-status proxy yet
+ * (#484) — this check must never itself be the reason a healthy task gets
+ * stuck.
+ *
+ * LOCAL_HOST_ID only (independent review, PR #726) — `resolveHostGitStatus`
+ * itself is fully proxied for a #484-capable remote host, so this gate
+ * WOULD fire there too, but `failReviewingGate` below only salvages a WIP
+ * commit on the local host (no proxied git-commit route exists yet — see
+ * that function's own doc comment). Firing the gate without the salvage
+ * would fail the task, terminate its session, and leave the tree dirty —
+ * `removeWorktreeIfClean` then refuses (dirty is its one real refusal
+ * condition), permanently blocking Retry's `resumeTaskWorktree` at the
+ * deterministic path. That's strictly worse than the pre-#722 behavior for
+ * a remote-hosted task, which at least reached "reviewing" with a live
+ * session and its uncommitted work still in place. Stays fail-open for
+ * remote hosts until a remote salvage-commit proxy exists.
+ */
+async function checkReviewingGate(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  info: SessionInfo | null,
+): Promise<{ ok: true } | { ok: false; failureReason: string }> {
+  if (project.hostId !== LOCAL_HOST_ID) return { ok: true };
+  if (!task.baseSha || !task.worktreePath) return { ok: true };
+
+  const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
+  if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
+    return { ok: true };
+  }
+  const { hash } = statusResult.value.status;
+  if (hash === null || !task.baseSha.startsWith(hash)) return { ok: true };
+
+  // Best-effort enrichment only — errorState is TTL-backed and often
+  // already cleared by the time a human has resumed and re-finished the
+  // session, so this is omitted rather than guessed at when stale.
+  //
+  // Truncated (independent review, PR #726) — errorDetail is unbounded
+  // agent-controlled free text (the stop_failure hook payload), and
+  // failureReason is posted verbatim to a public GitHub issue comment
+  // (task-github-sync.ts). Every other place this kind of detail reaches a
+  // human trims it to the same length (session-status.ts's own
+  // STATUS_DETAIL_MAX_CHARS) — this path shouldn't be the one exception.
+  const ERROR_DETAIL_MAX_CHARS = 48;
+  const rawDetail = info?.errorState === "api_error" ? info.errorDetail : null;
+  const truncatedDetail =
+    rawDetail === null
+      ? null
+      : rawDetail.length <= ERROR_DETAIL_MAX_CHARS
+        ? rawDetail
+        : `${rawDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}…`;
+  const detail = truncatedDetail !== null ? ` (${truncatedDetail})` : "";
+  return {
+    ok: false,
+    failureReason: `agent ended its turn with no commits on ${task.branchName}${detail}`,
+  };
+}
+
+/**
+ * Executes the #722 "no commits ahead of base" failure found by
+ * `checkReviewingGate`: claims the task via the same CAS `.where(status =
+ * fromStatus)` every other automatic transition in this file uses, THEN
+ * attempts a machine-made salvage commit, then cleans up exactly like the
+ * budget-exceeded branch above: terminate the session, sync the failure to
+ * GitHub, remove the worktree if (now) clean. This is what makes Retry able
+ * to recover the work — before this, a dirty leftover worktree at the
+ * deterministic path permanently blocked `resumeTaskWorktree`'s own
+ * `git worktree add`.
+ *
+ * The `LOCAL_HOST_ID` guard on the salvage commit below is redundant in
+ * practice — `checkReviewingGate` itself is scoped to local hosts, so this
+ * function is never called for a remote-hosted task at all — but kept as
+ * defense in depth rather than trusted to that caller alone.
+ *
+ * CAS BEFORE the salvage commit, not after (Hermes review, PR #726) — a
+ * git commit is a real, visible mutation of the branch. Committing first and
+ * checking the CAS second meant a task that lost a race with a concurrent
+ * transition (e.g. a human Reject landing mid-flight) still got a stray wip
+ * commit pushed onto a branch this function no longer owned. Claiming the
+ * transition first means the commit only ever happens once this call is the
+ * sole owner of what happens to the task next.
+ */
+async function failReviewingGate(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  session: typeof sessions.$inferSelect,
+  project: typeof projects.$inferSelect,
+  backend: SessionBackend,
+  fromStatus: "claimed" | "in_progress",
+  failureReason: string,
+  now: Date,
+): Promise<void> {
+  const updated = app.db
+    .update(tasks)
+    .set({ status: "failed", failureReason, completedAt: now })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, fromStatus)))
+    .run();
+  if (updated.changes === 0) return;
+
+  if (project.hostId === LOCAL_HOST_ID && task.worktreePath) {
+    const commitResult = await commitWipChanges(task.worktreePath);
+    if (commitResult.error) {
+      app.log.warn(
+        { taskId: task.id, worktreePath: task.worktreePath, error: commitResult.error },
+        "task reconcile: WIP salvage commit failed",
+      );
+    } else if (commitResult.committed) {
+      app.log.info({ taskId: task.id }, "task reconcile: committed a WIP salvage commit");
+    }
+  }
+
+  recordTaskTransition(app, {
+    taskId: task.id,
+    projectId: project.id,
+    from: fromStatus,
+    to: "failed",
+    via: "reconcile",
+    context: { sessionId: session.id, reason: failureReason },
+  });
+  await backend.terminate(String(session.id)).catch((err) => {
+    app.log.warn(
+      { err, taskId: task.id, sessionId: session.id },
+      "task reconcile: failed to terminate session after the no-commits gate failure",
+    );
+  });
+  await syncTaskTransition(
+    app,
+    { ...task, status: "failed", failureReason, completedAt: now },
+    project,
+    "failed",
+  );
+  if (task.worktreePath) {
+    await backend.removeWorktreeIfClean(task.worktreePath, project.cwd).catch((err) => {
+      app.log.warn(
+        { err, taskId: task.id, worktreePath: task.worktreePath },
+        "task reconcile: removeWorktreeIfClean threw after the no-commits gate failure",
+      );
+    });
   }
 }
 
@@ -785,7 +980,25 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // it in claimed/in_progress instead keeps it reachable by the
           // still-ungated budget force-fail below, and it picks up the
           // normal reviewing transition on the next tick once re-enabled.
-          if (derived.status === "finished" && resolvedTaskMaster.enabled) {
+          if (
+            derived.status === "finished" &&
+            resolvedTaskMaster.enabled &&
+            turnFinishedSinceClaim(info, task)
+          ) {
+            const gate = await checkReviewingGate(app, task, project, info);
+            if (!gate.ok) {
+              await failReviewingGate(
+                app,
+                task,
+                session,
+                project,
+                backend,
+                "claimed",
+                gate.failureReason,
+                now,
+              );
+              continue;
+            }
             const updated = app.db
               .update(tasks)
               .set({ status: "reviewing", startedAt: task.startedAt ?? now, reviewingAt: now })
@@ -839,10 +1052,25 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
         } else if (
           task.status === "in_progress" &&
           derived.status === "finished" &&
-          resolvedTaskMaster.enabled
+          resolvedTaskMaster.enabled &&
+          turnFinishedSinceClaim(info, task)
         ) {
           // See the matching gate/comment on the claimed -> reviewing
           // branch above — same "don't strand it in reviewing" reasoning.
+          const gate = await checkReviewingGate(app, task, project, info);
+          if (!gate.ok) {
+            await failReviewingGate(
+              app,
+              task,
+              session,
+              project,
+              backend,
+              "in_progress",
+              gate.failureReason,
+              now,
+            );
+            continue;
+          }
           const updated = app.db
             .update(tasks)
             .set({ status: "reviewing", reviewingAt: now })

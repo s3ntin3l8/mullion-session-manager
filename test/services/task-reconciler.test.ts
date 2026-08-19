@@ -69,6 +69,47 @@ vi.mock("../../src/services/task-reseed.js", async (importOriginal) => {
   };
 });
 
+// #722 — checkReviewingGate (task-reconciler.ts) reads real git status via
+// host-git.ts's resolveHostGitStatus, which on the local path shells out to
+// `git status` — impossible to exercise for real in this file, since the
+// node:child_process mock above replaces every spawn with an
+// immediately-exiting fake. Mocked the same importOriginal-preserving way as
+// task-promote.js/task-reseed.js above so the new tests below can drive the
+// gate directly; every existing test's tasks have no baseSha set, so
+// checkReviewingGate's own first fail-open check short-circuits before ever
+// calling this mock, leaving their behavior unaffected regardless of its
+// default return value.
+//
+// `vi.hoisted()`, not a plain top-level `const` (matching
+// event-store.test.ts/github-pr-poller.test.ts's own precedent, and
+// test/helpers/mock-pty.ts's doc comment on exactly this failure mode) —
+// the task-reseed.js mock above's `importOriginal()` transitively imports
+// session-backend.js -> git-worktree.js during file evaluation, which
+// triggers THIS mock's own factory before a plain `const` below it would
+// have run yet, throwing "Cannot access before initialization".
+const { mockResolveHostGitStatus, mockCommitWipChanges } = vi.hoisted(() => ({
+  mockResolveHostGitStatus: vi.fn(),
+  mockCommitWipChanges: vi.fn(),
+}));
+vi.mock("../../src/services/host-git.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    resolveHostGitStatus: mockResolveHostGitStatus,
+  };
+});
+
+// Same reasoning — the #722 "no commits ahead of base" failure path's WIP
+// salvage commit also shells out to real git, mocked here so tests can
+// assert it was (or wasn't) invoked without needing a real worktree.
+vi.mock("../../src/services/git-worktree.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    commitWipChanges: mockCommitWipChanges,
+  };
+});
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
@@ -153,6 +194,11 @@ describe("reconcileTasks", () => {
     } catch {
       // no such table yet — fine, see above.
     }
+    // #722 — every existing test's tasks have no baseSha, so
+    // checkReviewingGate never actually calls this; reset only so a leaked
+    // .mockResolvedValueOnce from one #722 test can't bleed into the next.
+    mockResolveHostGitStatus.mockReset();
+    mockCommitWipChanges.mockReset().mockResolvedValue({ committed: false });
   });
 
   afterEach(() => {
@@ -1017,6 +1063,289 @@ describe("reconcileTasks", () => {
         });
         await app.close();
       }
+    });
+  });
+
+  // #722's investigation (task 213765) — a `stop_failure` (rate-limit,
+  // quota) produces the exact same "phase: done" -> derived.status:
+  // "finished" signal as a real completion. These prove the "-> reviewing"
+  // transition now verifies the branch actually has commits before firing,
+  // and that a stale finish latch (the reject snap-back, RC5) can't fire it
+  // either.
+  describe("reviewing gate — commits ahead of base and finish-since-claim (#722)", () => {
+    // Low-entropy on purpose (not a real commit hash) — a realistic-looking
+    // 40-char hex string trips detect-secrets' hex-high-entropy heuristic.
+    const BASE_SHA = "0000000111122223333444455556666777788889";
+
+    async function createSessionAndTaskWithBase(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      status: "claimed" | "in_progress",
+      claimedAt: Date = new Date(),
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-gate-${Math.random()}`, cwd: "/tmp" },
+      });
+      const session = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const sessionId = session.json().id as number;
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "t",
+          status,
+          sessionId,
+          claimedAt,
+          startedAt: status === "in_progress" ? claimedAt : null,
+          worktreePath: "/tmp/mullion-task-worktree",
+          branchName: "mullion/task-999",
+          baseSha: BASE_SHA,
+        })
+        .returning()
+        .all();
+      return { taskId: row.id, sessionId };
+    }
+
+    function gitStatus(hash: string | null, isClean: boolean, files: unknown[] = []) {
+      return {
+        ok: true,
+        value: {
+          isRepo: true,
+          status: { branch: "mullion/task-999", hash, ahead: 0, behind: 0, files, isClean },
+        },
+      };
+    }
+
+    it("fails the task, salvages a WIP commit, and terminates the session when HEAD is still at baseSha", async () => {
+      const app = await buildApp();
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId, sessionId } = await createSessionAndTaskWithBase(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      // "0000000" is a prefix of BASE_SHA — HEAD hasn't moved since claim.
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+      mockCommitWipChanges.mockResolvedValue({ committed: true });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("no commits");
+      expect(row.failureReason).toContain("mullion/task-999");
+      expect(mockCommitWipChanges).toHaveBeenCalledWith("/tmp/mullion-task-worktree");
+      expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+
+      await app.close();
+    });
+
+    it("still fails the task (best-effort posture) when the WIP salvage commit itself fails", async () => {
+      const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+      mockCommitWipChanges.mockResolvedValue({ committed: false, error: "git add -u failed" });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("no commits");
+
+      await app.close();
+    });
+
+    it("still advances to reviewing when the tree is dirty but the branch has commits ahead of base (blast-radius regression)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      // Different hash from BASE_SHA — real commits exist, tree just has a
+      // stray scratch file (files.length > 0 -> isClean: false).
+      mockResolveHostGitStatus.mockResolvedValue(
+        gitStatus("abcdef1", false, [{ path: "scratch.txt" }]),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(mockCommitWipChanges).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("advances to reviewing when clean and ahead of base (unchanged happy path)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+      await reconcileTasks(app);
+
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    it("fails open (advances to reviewing) when the git-status check itself is unresolvable", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue({ ok: false, reason: "unsupported" });
+
+      await reconcileTasks(app);
+
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    // Independent review, PR #726 — checkReviewingGate itself IS proxied for
+    // a #484-capable remote host (resolveHostGitStatus works there), but
+    // failReviewingGate's salvage commit is local-only. Firing the gate
+    // without the salvage would fail the task, terminate its session, and
+    // leave the tree dirty — worse than pre-#722 behavior for a
+    // remote-hosted task. The whole gate stays fail-open for remote hosts
+    // until a remote salvage-commit proxy exists.
+    it("fails open (advances to reviewing) for a remote-hosted task, without even checking git status", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-remote-gate", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      // Inserted directly, not via POST /api/sessions (same reasoning as
+      // the "does not trust reviewSeedDelivered:true..." test above — this
+      // fake host isn't actually reachable, so a real spawn attempt 502s).
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "t",
+          status: "in_progress",
+          sessionId: workerSession.id,
+          claimedAt: new Date(),
+          startedAt: new Date(),
+          worktreePath: "/remote/project",
+          branchName: "mullion/task-999",
+          baseSha: BASE_SHA,
+        })
+        .returning()
+        .all();
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = {
+        spawn: vi.fn().mockResolvedValue({}),
+        liveStatus: vi.fn().mockResolvedValue({
+          [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
+        }),
+        isMasterAlive: vi.fn().mockResolvedValue({}),
+        terminate: vi.fn().mockResolvedValue(undefined),
+        getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+        uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+        resolveReviewGate: vi.fn().mockResolvedValue(false),
+        createWorktree: vi.fn().mockResolvedValue(null),
+        checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+        resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+        stashSeed: vi.fn().mockResolvedValue(undefined),
+        resolvePendingPromote: vi.fn().mockResolvedValue(false),
+        removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+        pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+        clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+      };
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeBackend);
+      // Would trigger the no-commits failure if the gate actually ran.
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
+
+      await reconcileTasks(app);
+
+      const updated = await getTask(app, row.id);
+      expect(updated.status).toBe("reviewing");
+      expect(mockResolveHostGitStatus).not.toHaveBeenCalled();
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
+    it("applies the same no-commits gate on the claimed -> reviewing edge", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(app, "claimed");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("no commits");
+      await app.close();
+    });
+
+    // RC5 — the reject snap-back: derived.status === "finished" is a LATCH
+    // on lastTurnEndedAt, not an edge. A task rejected back to "in_progress"
+    // whose worker session is still alive keeps its OLD, pre-reject latch —
+    // without this guard, the very next tick would re-derive "finished" and
+    // snap it straight back to "reviewing" before a human ever gets a
+    // chance to type feedback into the terminal.
+    it("does not snap an in_progress task back to reviewing when the finish latch predates this claim spell (reject snap-back)", async () => {
+      const app = await buildApp();
+      const claimedAt = new Date();
+      const { taskId } = await createSessionAndTask(app, "in_progress", claimedAt);
+      const staleLastTurnEndedAt = claimedAt.getTime() - 60_000;
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: staleLastTurnEndedAt }),
+      } as never);
+
+      await reconcileTasks(app);
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("advances normally once the finish signal postdates the claim spell", async () => {
+      const app = await buildApp();
+      const claimedAt = new Date();
+      const { taskId } = await createSessionAndTask(app, "in_progress", claimedAt);
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
     });
   });
 

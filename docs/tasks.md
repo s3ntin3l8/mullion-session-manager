@@ -94,11 +94,49 @@ failed      → backlog, ready
   specifically "real activity": a session merely blocked on a permission
   prompt, or mid-compaction, also flips the task to `in_progress`.
 - **`* → reviewing`** fires when the worker session reaches
-  `sessionStatus === "finished"` — its last turn ended and no background
-  tasks are still running. `claimed → reviewing` directly (skipping
+  `sessionStatus === "finished"` (its last turn ended and no background
+  tasks are still running) **and** that finish postdates this
+  `claimed`/`in_progress` spell (`task.claimedAt`) **and** the branch has at
+  least one commit past its recorded `baseSha` (`task-reconciler.ts`'s
+  `checkReviewingGate`, `#722`). `claimed → reviewing` directly (skipping
   `in_progress`) is a real, reachable edge: the reconciler polls on an
   interval, and a task whose agent finishes its very first turn between two
   polls is legitimately never observed `in_progress` in between.
+
+  Both extra conditions close real gaps a plain "finished" signal left open:
+  - **The commits check is deliberately keyed on "any commits past
+    `baseSha`", not tree cleanliness.** A `stop_failure` (a rate-limit, a
+    quota exhaustion) produces the identical "phase: done" signal a real
+    completion does — without this check, a task could reach `reviewing`
+    with zero commits and a dirty tree (observed in production: task
+    213765/branchDAM issue #201). A **dirty-but-committed** tree still
+    advances normally, exactly as before — only "HEAD is still at
+    `baseSha`" (genuinely no commits at all) blocks the transition, since an
+    untracked scratch file after a real turn is the ordinary case (see Task
+    → PR promotion below), not the failure this exists to catch. When it
+    does block, the task fails instead (see `* → failed` below), and this
+    check fails OPEN — advances normally — whenever it can't be determined
+    (no `baseSha` recorded, an unreachable worktree), and **unconditionally
+    for every remote-hosted project**, not just one whose host predates the
+    git-status proxy (`#484`): the salvage commit `* → failed` below relies
+    on is local-only, and firing this check without it would fail a
+    remote-hosted task, terminate its session, and leave the tree dirty —
+    worse than not having this check at all. So it can never itself strand
+    a healthy task.
+  - **The finished-since-claim check closes the reject snap-back.**
+    `sessionStatus === "finished"` is a level, not an edge — once a
+    session's last-turn-ended latch is set, it stays set until that
+    session's NEXT turn starts or a genuine keystroke clears it. Reject
+    (below) deliberately leaves a still-alive session's latch untouched so a
+    human can type feedback into it themselves; without this check, the
+    very next reconcile tick would re-derive "finished" from that SAME
+    stale latch and snap the task straight back to `reviewing` before the
+    human ever got a chance to type — pushing again and spawning a second
+    review agent that clobbers `reviewSessionId`. `claimedAt` is reset on
+    every fresh entry into `claimed`/`in_progress` (a new claim, Retry, and
+    Reject alike), so requiring the finish signal to postdate it covers all
+    three without a new column.
+
 - **`reviewing → in_progress`** has two triggers, one human and one
   automatic. The human one is Reject (see below). The automatic one is the
   review-findings loop's own auto-return (`#569`'s follow-up — see Agent
@@ -109,11 +147,18 @@ failed      → backlog, ready
   the `/ws/tasks` stream.
 - **`* → failed`** fires automatically on session exit (a `claimed`/
   `in_progress` task whose session dies is failed, not left pointing at a
-  dead session forever) or on exceeding the per-task time budget (see
-  Safety envelope below). `reviewing → failed` is **not** automatic on
-  session exit — the worker's turn is already over and the work is
-  committed on its branch, still promotable regardless of whether that
-  session is still alive.
+  dead session forever), on exceeding the per-task time budget (see Safety
+  envelope below), or on the no-commits case the `* → reviewing` bullet
+  above describes — `failureReason: "agent ended its turn with no commits on
+<branch>"`. That last one first attempts a machine-made salvage commit
+  (`commitWipChanges`, `git-worktree.ts`, local hosts only for now) —
+  `git add -u` plus untracked-and-not-gitignored files, `git commit
+--no-verify` — so the branch isn't left truly empty and Retry (below) can
+  actually resume the work; the worktree is then removed if (now) clean,
+  same as every other automatic failure. `reviewing → failed` is **not**
+  automatic on session exit — the worker's turn is already over and the
+  work is committed on its branch, still promotable regardless of whether
+  that session is still alive.
 - **`failed → claimed`** (`#483`) — **Retry**, on a `failed` task, resumes
   work rather than restarting it: it checks out the task's preserved
   `mullion/task-<id>` branch (see Worktree lifecycle below for why that
@@ -914,7 +959,15 @@ extensive design comments.
   orphan-clearing (`clearOrphanedTaskWorktree`) would refuse a dirty
   leftover — but retry doesn't run that clearing step first, since it would
   delete exactly the branch retry exists to preserve. A human needs to
-  resolve it manually today.
+  resolve it manually today. This no longer includes the `* → reviewing`
+  gate's own no-commits failure (`#722`, local hosts only — see that
+  section): it salvages a WIP commit before failing, which is what lets
+  `removeWorktreeIfClean` actually remove the worktree (it refuses on
+  dirty, not on committed-but-unpushed). Every OTHER automatic failure that
+  can leave a worktree dirty still has no salvage step — the budget-exceeded
+  force-fail above, and session death (owned by `session-reconciler.ts`,
+  outside this file) both go straight to `removeWorktreeIfClean` with
+  whatever was on disk at the moment they fired, same as before `#722`.
 - **GitHub App scoping is opt-in and repo-level, not per-task.** A GitHub
   App configured via `PUT /api/integrations/github/app` (see
   [`github-integration.md`](github-integration.md#github-app-opt-in-layers-on-top-of-the-patoauth-token))
