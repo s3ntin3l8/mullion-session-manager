@@ -1416,6 +1416,16 @@ export function App() {
                 // — full-width mode stretches a single tab to fill the
                 // group instead.
                 singleTabMode="fullwidth"
+                // Independent code review + Hermes, PR #723 — see
+                // xterm.css's own `@media (pointer: coarse)` block for the
+                // full root-cause writeup (dockview's default 'custom' mode
+                // wraps the strip in `.dv-scrollable`, whose `overflow:
+                // hidden` blocked touch panning). Scoped to coarse pointers
+                // only — Hermes review: unscoped, this also swaps desktop's
+                // subtle on-hover custom overlay thumb for an always-visible
+                // native scrollbar, a needless mouse-facing side effect for
+                // a touch-only fix.
+                scrollbars={window.matchMedia("(pointer: coarse)").matches ? "native" : "custom"}
               />
               {/* Empty tiled grid (design States doc §1D) — an overlay, not a
                   conditionally-mounted replacement, so dockview's own API

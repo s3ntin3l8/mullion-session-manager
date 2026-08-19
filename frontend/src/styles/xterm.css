@@ -84,3 +84,70 @@
 .cmux-root .dv-default-tab-content {
   padding-left: 11px;
 }
+
+/* Touch panning of the tab strip — with more than ~2 tabs open the strip
+   overflows and the only way to reach the rest was a mouse wheel or dragging
+   dockview's own thumb; a finger did nothing. dockview's own
+   .dv-tabs-container is `overflow: auto; touch-action: pan-x` (dockview.css)
+   in its base rule — but that rule was previously being overridden: with
+   `scrollbars` left at its default ('custom'), dockview wraps the strip in
+   its own `.dv-scrollable` div, and `.dv-scrollable > .dv-tabs-container {
+   overflow: hidden }` (dockview.css) wins on specificity, which suppresses
+   user-agent touch panning regardless of any touch-action set on a
+   descendant. App.tsx now passes `scrollbars="native"` to <DockviewReact>,
+   gated on `(pointer: coarse)` (independent code review + Hermes, PR #723
+   — unscoped, this also swaps desktop's on-hover custom overlay thumb for
+   an always-visible native one), so on a touch device .dv-tabs-container
+   is the outer element directly, with no wrapper — its base overflow:auto
+   genuinely applies. With that fixed, .dv-tab and .dv-void-container still
+   ship
+   `touch-action: none` so PointerDragSource (dockview's touch
+   drag-to-reorder) owns every gesture that starts on them, and multi-tab
+   groups tile the strip with essentially no bare void surface left to
+   flick — the overrides below are what actually let a flick become a pan.
+   Scoped to `pointer: coarse` so mouse-driven drag-to-reorder is untouched
+   — this only changes touch input.
+
+   Accepted trade-off (Hermes review, PR #723) — `touch-action: pan-x`
+   reserves the horizontal axis for the browser's own panning, which claims
+   any predominantly-horizontal drag (firing `pointercancel`) before
+   PointerDragSource's own movement threshold can promote it to a drag. So
+   a touch drag-out to reorder/split now effectively needs a
+   predominantly-VERTICAL initial movement — pan-x doesn't reserve that
+   axis, so PointerDragSource can still win it — rather than "any
+   direction," as an earlier version of this comment claimed. Only
+   within-strip horizontal reorder-by-touch is fully lost; a vertical-led
+   drag-out still works. No JS change needed either way — once the browser
+   claims a gesture it fires `pointercancel`, which PointerDragSource
+   already handles. */
+@media (pointer: coarse) {
+  .cmux-root .dv-tab {
+    touch-action: pan-x;
+  }
+  .cmux-root .dv-tabs-container-vertical .dv-tab {
+    touch-action: pan-y;
+  }
+  .cmux-root .dv-tabs-and-actions-container .dv-void-container {
+    touch-action: pan-x;
+  }
+  /* Hermes review, PR #723 — the vertical-header strip's own void area
+     otherwise still inherits dockview's `touch-action: none` above, since
+     the horizontal rule's specificity doesn't cover it: a flick in the
+     empty area of an edge-group (vertical) header wouldn't pan.
+     `.dv-tabs-container-vertical` is a modifier on `.dv-tabs-container`
+     itself (dockview.css), a SIBLING of `.dv-void-container` under the same
+     `.dv-tabs-and-actions-container` — not an ancestor of it — so `:has()`
+     is what actually reaches the sibling void area from that modifier. */
+  .cmux-root .dv-tabs-and-actions-container:has(.dv-tabs-container-vertical) .dv-void-container {
+    touch-action: pan-y;
+  }
+  /* With `scrollbars="native"` (App.tsx) this is now the browser's own
+     scrollbar, not dockview's custom thumb — not a usable touch target
+     either way, and it only eats height out of the ~35px strip. */
+  .cmux-root .dv-tabs-container {
+    scrollbar-width: none;
+  }
+  .cmux-root .dv-tabs-container::-webkit-scrollbar {
+    display: none;
+  }
+}
