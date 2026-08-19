@@ -248,3 +248,35 @@ describe("dismissEvent / dismissedEventKeys (issue #169)", () => {
     expect(Object.keys(useDashboardStore.getState().dismissedEventKeys)).toHaveLength(1);
   });
 });
+
+describe("dismissEvents (batched, PR #717 — NotificationBell.tsx's folded-row dismiss)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
+  });
+
+  it("flags every seq in the array as dismissed in a single call", () => {
+    useDashboardStore.getState().dismissEvents(5, [3, 2, 1]);
+    const dismissed = useDashboardStore.getState().dismissedEventKeys;
+    expect(dismissed[eventKey(5, 3)]).toBe(true);
+    expect(dismissed[eventKey(5, 2)]).toBe(true);
+    expect(dismissed[eventKey(5, 1)]).toBe(true);
+  });
+
+  it("is a no-op for an empty array", () => {
+    const before = useDashboardStore.getState().dismissedEventKeys;
+    useDashboardStore.getState().dismissEvents(5, []);
+    expect(useDashboardStore.getState().dismissedEventKeys).toBe(before);
+  });
+
+  it("matches dismissEvent's per-key result — batching is an optimization, not a behavior change", () => {
+    useDashboardStore.getState().dismissEvents(5, [1, 2]);
+    const batched = useDashboardStore.getState().dismissedEventKeys;
+
+    useDashboardStore.setState({ dismissedEventKeys: {} });
+    useDashboardStore.getState().dismissEvent(5, 1);
+    useDashboardStore.getState().dismissEvent(5, 2);
+    const sequential = useDashboardStore.getState().dismissedEventKeys;
+
+    expect(batched).toEqual(sequential);
+  });
+});

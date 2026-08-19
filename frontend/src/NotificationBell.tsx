@@ -276,7 +276,7 @@ export function NotificationBell({
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq);
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   const markEventSeen = useDashboardStore((s) => s.markEventSeen);
-  const dismissEvent = useDashboardStore((s) => s.dismissEvent);
+  const dismissEvents = useDashboardStore((s) => s.dismissEvents);
   const openRequest = useDashboardStore((s) => s.notificationsPanelOpenRequest);
 
   const [open, setOpen] = useState(false);
@@ -514,7 +514,7 @@ export function NotificationBell({
                             // would resurrect the older folded rows on the
                             // very next render.
                             onDismiss={() => {
-                              for (const seq of item.foldedSeqs) dismissEvent(item.sessionId, seq);
+                              dismissEvents(item.sessionId, item.foldedSeqs);
                             }}
                           />
                         )}

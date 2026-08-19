@@ -332,6 +332,12 @@ export interface EventsSlice {
   // is deliberately separate from markEventSeen/lastSeenSeq). Idempotent;
   // dismissing an already-dismissed (sessionId, seq) is a no-op re-set.
   dismissEvent: (sessionId: number, seq: number) => void;
+  // Hermes review, PR #717 — batched sibling of dismissEvent() for
+  // NotificationBell.tsx's folded-row dismiss (a collapsed ×N row shares one
+  // dismiss action across all its seqs). A single `set()` call instead of N
+  // sequential ones, each of which would otherwise re-spread the whole
+  // `dismissedEventKeys` map.
+  dismissEvents: (sessionId: number, seqs: number[]) => void;
 }
 
 export interface WorkspacesSlice {

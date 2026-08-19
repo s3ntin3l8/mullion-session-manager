@@ -101,19 +101,32 @@ const PAIRED_ROW_WINDOW_MS = 5_000;
  * rows' text comes from different describeEvent branches and rarely
  * matches verbatim (e.g. tool_failure's own case vs. attention/toolFailure's
  * case format the same error differently). */
+// Hermes review, PR #717 — the naive version re-scanned the FULL merged
+// event list (events.some(...)) for every single `attention` row, so a
+// long-lived session with thousands of routine rows (title_change alone is
+// ~86% of every row ever persisted, per eventHistory.ts) turned into
+// millions of comparisons per live tick. Indexing by `sessionId|kind` first
+// means each attention row's lookup only scans events of its OWN paired
+// kind (e.g. permission_request occurrences — typically a tiny fraction of
+// the total) instead of the entire history.
 function suppressPairedAttentionRows(events: TimelineEvent[]): TimelineEvent[] {
+  const byKey = new Map<string, TimelineEvent[]>();
+  for (const event of events) {
+    const key = `${event.sessionId}|${event.kind}`;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(event);
+    else byKey.set(key, [event]);
+  }
   return events.filter((event) => {
     if (event.kind !== "attention") return true;
     const signal = typeof event.payload.signal === "string" ? event.payload.signal : null;
     if (signal === null) return true;
     const pairedKind = SIGNAL_TO_EVENT_KIND[signal];
     if (pairedKind === undefined) return true;
-    return !events.some(
-      (other) =>
-        other !== event &&
-        other.kind === pairedKind &&
-        other.sessionId === event.sessionId &&
-        Math.abs(other.ts - event.ts) <= PAIRED_ROW_WINDOW_MS,
+    const bucket = byKey.get(`${event.sessionId}|${pairedKind}`);
+    if (bucket === undefined) return true;
+    return !bucket.some(
+      (other) => other !== event && Math.abs(other.ts - event.ts) <= PAIRED_ROW_WINDOW_MS,
     );
   });
 }
