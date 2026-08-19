@@ -12,4 +12,5 @@ data/
 !.claude/hooks/
 !.claude/settings.json
 !.claude/skills/
+!.claude/agents/
 .wt/
