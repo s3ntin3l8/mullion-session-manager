@@ -398,6 +398,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     reviewRounds: 0,
     worktreePath: null,
     branchName: null,
+    agent: null,
+    reviewAgent: null,
     agentCommand: null,
     prUrl: null,
     prNumber: null,

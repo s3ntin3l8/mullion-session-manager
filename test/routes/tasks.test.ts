@@ -785,6 +785,31 @@ describe("tasks route", () => {
         process.env.MULLION_TASK_MASTER_ENABLED = "true";
       }
     });
+
+    it("applies agent override from request body", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 82);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/retry`,
+        payload: { agent: "codex", reviewAgent: "none" },
+      });
+      expect(res.statusCode).toBe(201);
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json()).toMatchObject({
+        status: "claimed",
+        agent: "codex",
+        reviewAgent: "none",
+        agentCommand: "codex",
+      });
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
   });
 
   describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
@@ -1859,6 +1884,143 @@ describe("tasks route", () => {
         payload: { status: "backlog" },
       });
       expect(res.statusCode).toBe(409);
+      await app.close();
+    });
+
+    it("POST /api/tasks creates a task with explicit agent and reviewAgent", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-agent-1");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/tasks",
+        payload: {
+          projectId,
+          title: "Task with agents",
+          agent: "codex",
+          reviewAgent: "agy",
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({
+        projectId,
+        title: "Task with agents",
+        agent: "codex",
+        reviewAgent: "agy",
+      });
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id updates agent and reviewAgent on backlog/ready tasks", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-agent-2");
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: "/api/tasks",
+          payload: { projectId, title: "Task to patch agent" },
+        })
+      ).json();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${created.id}`,
+        payload: { agent: "opencode", reviewAgent: "none" },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(patched.json()).toMatchObject({
+        agent: "opencode",
+        reviewAgent: "none",
+      });
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id 400s on invalid agent name", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-agent-3");
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: "/api/tasks",
+          payload: { projectId, title: "Task to test bad agent" },
+        })
+      ).json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${created.id}`,
+        payload: { agent: "not-a-real-agent" },
+      });
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id 409s attempting to edit agent once past backlog/ready", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-agent-4");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "in progress task", status: "in_progress" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { agent: "codex" },
+      });
+      expect(res.statusCode).toBe(409);
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id allows editing agent and reviewAgent on a failed task", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-agent-failed");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "failed task", status: "failed", agent: "claude" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { agent: "codex", reviewAgent: "none" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ agent: "codex", reviewAgent: "none" });
+
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/claim applies agent override from request body", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const [task] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "Claim with override", status: "ready" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/claim`,
+        payload: { agent: "codex", reviewAgent: "none" },
+      });
+      expect(res.statusCode).toBe(201);
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json()).toMatchObject({
+        agent: "codex",
+        reviewAgent: "none",
+        agentCommand: "codex",
+      });
+
       await app.close();
     });
 

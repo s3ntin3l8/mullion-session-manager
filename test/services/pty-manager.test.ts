@@ -4394,9 +4394,9 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
-        const now = Date.now();
 
         session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+        const now = Date.now();
         expect(session.toInfo().planState).toBe("pending");
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
@@ -4419,9 +4419,9 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
-        const now = Date.now();
 
         session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+        const now = Date.now();
         expect(session.toInfo().gateState).toBe("waiting");
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
@@ -4441,9 +4441,9 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
-        const now = Date.now();
 
         session.emitHookEvent({ kind: "promote_request", summary: "Refactor widget" });
+        const now = Date.now();
         expect(session.toInfo().promoteState).toBe("pending");
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
@@ -4463,9 +4463,9 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
-        const now = Date.now();
 
         session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+        const now = Date.now();
         expect(session.toInfo().elicitationState).toBe("pending");
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);

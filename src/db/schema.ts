@@ -417,8 +417,14 @@ export const tasks = sqliteTable(
     // from. Preserved (not cleared) across retry, since retry resumes the
     // same branch from the same original base.
     baseSha: text("base_sha"),
+    // Explicit per-task implementation agent override (nullable: falls back to
+    // issue directive -> project.defaultAgent -> global settings).
+    agent: text("agent"),
+    // Explicit per-task review agent override (nullable: falls back to
+    // issue directive -> project.defaultReviewAgent; "none" disables review).
+    reviewAgent: text("review_agent"),
     // 6.2/6.7 — the resolved launch command actually used for the worker
-    // session (issue `Agent:` line -> projects.defaultAgent ->
+    // session (task.agent -> issue `Agent:` line -> projects.defaultAgent ->
     // settings.launchers.defaultAgent), recorded once at claim time so the
     // panel can show which agent a task ran under without re-deriving
     // precedence after any of those inputs later change.

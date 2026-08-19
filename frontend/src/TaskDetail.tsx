@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
-import { ApiError } from "./api/index.js";
-import type { GitHubCiStatus, Session, Task, TaskBlocker } from "./api/index.js";
+import { api, ApiError, normalizeAgentId } from "./api/index.js";
+import type { GitHubCiStatus, Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
+import { useAsyncData } from "./hooks/useAsyncData.js";
+import { Dropdown } from "./ui/primitives.js";
 import {
   BlockedIcon,
   BotIcon,
@@ -14,6 +16,8 @@ import {
 } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+
+const UNSET_AGENT = "";
 
 export interface TaskDetailParams {
   taskId: number;
@@ -59,11 +63,23 @@ export function TaskDetail({
   // here, before the not-found guard.
   const allTasks = useDashboardStore((s) => s.tasks);
   const sessions = useDashboardStore((s) => s.sessions);
+  const projects = useDashboardStore((s) => s.projects);
+  const settings = useDashboardStore((s) => s.settings);
+  const updateTask = useDashboardStore((s) => s.updateTask);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
   // Selected unconditionally (task may still be undefined here, before the
   // not-found guard below) — same posture as UnifiedBoard.tsx's TaskCard,
   // joined on task.branchName once `task` is known to exist.
   const prsByProject = useDashboardStore((s) => s.prsByProject);
+
+  const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
+  useAsyncData(
+    () => (task ? api.listProjectActions(task.projectId) : Promise.resolve([])),
+    (launchers) => setAgentLaunchers(launchers.filter((l) => l.kind === "agent")),
+    () => {},
+    [task?.projectId],
+    { enabled: task !== undefined },
+  );
 
   // A workspace layout can restore this panel (by taskId), or the unified
   // board's drawer can open it, before the store's own task list has loaded
@@ -78,6 +94,27 @@ export function TaskDetail({
   if (!task) {
     return <EmptyStateNote>Task not found.</EmptyStateNote>;
   }
+
+  const agentOptions = Array.from(
+    new Map(agentLaunchers.map((l) => [normalizeAgentId(l.id), l.title])).entries(),
+  ).map(([value, label]) => ({ value, label }));
+
+  function optionsWithCurrentValue(
+    options: { value: string; label: string }[],
+    current: string,
+  ): { value: string; label: string }[] {
+    if (current === UNSET_AGENT || options.some((o) => o.value === current)) return options;
+    return [...options, { value: current, label: `${current} (not detected)` }];
+  }
+
+  const project = projects?.find((p) => p.id === task.projectId);
+  const projectDefaultAgent =
+    project?.defaultAgent || settings?.launchers?.defaultAgent || "claude";
+  const projectDefaultReviewAgent = project?.defaultReviewAgent || "None";
+  const isEditableStatus =
+    task.status === "backlog" ||
+    (task.status === "ready" && task.agentCommand === null) ||
+    task.status === "failed";
 
   const workerSession =
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
@@ -177,10 +214,69 @@ export function TaskDetail({
             )}
           </a>
         )}
-        {agentName && (
-          <span className="task-detail-meta-row">
-            <BotIcon size={12} /> Agent: {agentName}
-          </span>
+        {isEditableStatus ? (
+          <div className="task-detail-agents-config">
+            <div className="task-detail-agent-select">
+              <span className="task-detail-agent-label">
+                <BotIcon size={12} /> Agent:
+              </span>
+              <Dropdown
+                value={task.agent ?? UNSET_AGENT}
+                onChange={async (val) => {
+                  await updateTask(task.id, { agent: val === UNSET_AGENT ? null : val });
+                }}
+                options={optionsWithCurrentValue(
+                  [
+                    {
+                      value: UNSET_AGENT,
+                      label: `Project default (${projectDefaultAgent})`,
+                    },
+                    ...agentOptions,
+                  ],
+                  task.agent ?? UNSET_AGENT,
+                )}
+              />
+            </div>
+            <div className="task-detail-agent-select">
+              <span className="task-detail-agent-label">
+                <BotIcon size={12} /> Review agent:
+              </span>
+              <Dropdown
+                value={task.reviewAgent ?? UNSET_AGENT}
+                onChange={async (val) => {
+                  await updateTask(task.id, { reviewAgent: val === UNSET_AGENT ? null : val });
+                }}
+                options={optionsWithCurrentValue(
+                  [
+                    {
+                      value: UNSET_AGENT,
+                      label: `Project default (${projectDefaultReviewAgent})`,
+                    },
+                    { value: "none", label: "None (disabled)" },
+                    ...agentOptions,
+                  ],
+                  task.reviewAgent ?? UNSET_AGENT,
+                )}
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+            {agentName ? (
+              <span className="task-detail-meta-row">
+                <BotIcon size={12} /> Agent: {agentName}
+              </span>
+            ) : task.agent ? (
+              <span className="task-detail-meta-row">
+                <BotIcon size={12} /> Agent: {task.agent}
+              </span>
+            ) : null}
+            {task.reviewAgent && task.reviewAgent !== "none" && (
+              <span className="task-detail-meta-row">
+                <BotIcon size={12} /> Review agent: {task.reviewAgent}
+              </span>
+            )}
+          </>
         )}
         {task.assignee && <span className="task-detail-meta-row">Assignee: {task.assignee}</span>}
         {workerSession && (

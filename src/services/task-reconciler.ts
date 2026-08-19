@@ -63,6 +63,7 @@ async function maybeSpawnReviewAgent(
 ): Promise<void> {
   if (!task.worktreePath) return;
   const reviewCommand = resolveReviewAgentCommand(app, {
+    taskReviewAgent: task.reviewAgent,
     issueBody: task.body,
     projectDefaultReviewAgent: project.defaultReviewAgent,
   });

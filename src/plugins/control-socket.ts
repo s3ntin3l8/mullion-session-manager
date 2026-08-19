@@ -1368,10 +1368,12 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
 
   app.decorate("controlServer", server);
 
-  app.addHook("onClose", () => {
-    server.close();
+  app.addHook("onClose", async () => {
     for (const socket of openSockets) socket.destroy();
     openSockets.clear();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     try {
       unlinkSync(socketPath);
     } catch {
