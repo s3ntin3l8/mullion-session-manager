@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.35](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.34...v0.2.35) (2026-08-19)
+
+
+### Features
+
+* add a review sub-agent and invariants skill for Claude Code sessions ([#714](https://github.com/s3ntin3l8/mullion-session-manager/issues/714)) ([87de68c](https://github.com/s3ntin3l8/mullion-session-manager/commit/87de68c8a410f27058e6559696674e1d9f2e92ab))
+* add AGENTS.md/GEMINI.md briefing so agents don't need a repeated preamble ([#711](https://github.com/s3ntin3l8/mullion-session-manager/issues/711)) ([5659e79](https://github.com/s3ntin3l8/mullion-session-manager/commit/5659e79279aaa9888d463f830289c401bf43bdc8))
+* carry a project's own briefing and the agent guide's excerpt into session context ([#713](https://github.com/s3ntin3l8/mullion-session-manager/issues/713)) ([36b7160](https://github.com/s3ntin3l8/mullion-session-manager/commit/36b716011e22f22779a126ab7df98c1e6d2401e5))
+* enforce and automate the repo's own worktree/branch/review workflow ([#712](https://github.com/s3ntin3l8/mullion-session-manager/issues/712)) ([bbdc248](https://github.com/s3ntin3l8/mullion-session-manager/commit/bbdc2487e3beb558b0fe1732edd215338a8148ad))
+* **tasks:** allow manual selection of implementation and review agent per task ([#721](https://github.com/s3ntin3l8/mullion-session-manager/issues/721)) ([5eb9879](https://github.com/s3ntin3l8/mullion-session-manager/commit/5eb9879f3f8de3e21678e8d0a9b5560afdd63281))
+
+
+### Bug Fixes
+
+* fit the terminal font to a narrow pane instead of clipping the grid ([#724](https://github.com/s3ntin3l8/mullion-session-manager/issues/724)) ([7a20fc4](https://github.com/s3ntin3l8/mullion-session-manager/commit/7a20fc4dcd52998eea313251d341901173bb9b4c))
+* harden mobile/desktop breakpoint transitions against floating-panel crashes ([#727](https://github.com/s3ntin3l8/mullion-session-manager/issues/727)) ([0187499](https://github.com/s3ntin3l8/mullion-session-manager/commit/0187499f9daf005be7043a1864fc6d9cfcc2d806))
+* make the dockview tab strip pannable by touch ([#723](https://github.com/s3ntin3l8/mullion-session-manager/issues/723)) ([151c178](https://github.com/s3ntin3l8/mullion-session-manager/commit/151c17835f6be9e10c3c8266880fe0c3ced60964))
+* reduce notification noise with a settle window and improve at-a-glance scannability ([#717](https://github.com/s3ntin3l8/mullion-session-manager/issues/717)) ([f1e3825](https://github.com/s3ntin3l8/mullion-session-manager/commit/f1e38253ff5c32eec081b3f40d22fc5f5f7ba8e2))
+* **tasks:** gate the -&gt; reviewing transition on real commits and a fresh finish signal ([#726](https://github.com/s3ntin3l8/mullion-session-manager/issues/726)) ([dd3b26c](https://github.com/s3ntin3l8/mullion-session-manager/commit/dd3b26c8beba37b9e5a3691eb7cf4ae1ecfb32b6))
+* **tasks:** unblock promotion push and retry a stranded draft PR ([#725](https://github.com/s3ntin3l8/mullion-session-manager/issues/725)) ([80a6bcb](https://github.com/s3ntin3l8/mullion-session-manager/commit/80a6bcbd0bd418ef5bb090ffc2fba9fa6f1cc4b1))
+
 ## [0.2.34](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.33...v0.2.34) (2026-08-19)
 
 
