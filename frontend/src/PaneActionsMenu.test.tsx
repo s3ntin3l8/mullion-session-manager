@@ -34,6 +34,10 @@ vi.mock("./api/index.js", () => ({
 let session: Session;
 let projects: Project[];
 let promoteSessionMock: ReturnType<typeof vi.fn>;
+// Issue: narrow headers overflow — "Split right"/"Split down" (a fallback
+// for PaneHeaderActions.tsx's own header-level buttons, which hide entirely
+// below a certain group width) read this off the store.
+const requestSplit = vi.fn();
 
 function storeState() {
   return {
@@ -44,6 +48,7 @@ function storeState() {
     settings: { sessions: { confirmBeforeKill: false } },
     promoteSession: promoteSessionMock,
     declinePromote: vi.fn().mockResolvedValue(undefined),
+    requestSplit,
   };
 }
 
@@ -108,6 +113,7 @@ const BASE_SESSION: Session = {
 
 function makeApi(overrides: Partial<DockviewPanelApi> = {}): DockviewPanelApi {
   return {
+    id: "session-1",
     title: "claude code",
     close: vi.fn(),
     ...overrides,
@@ -120,6 +126,7 @@ beforeEach(() => {
   session = { ...BASE_SESSION };
   projects = [];
   promoteSessionMock = vi.fn();
+  requestSplit.mockClear();
 });
 
 describe("PaneActionsMenu", () => {
@@ -199,6 +206,49 @@ describe("PaneActionsMenu", () => {
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
+  // Issue: narrow headers overflow — fallback for PaneHeaderActions.tsx's
+  // own split-right/split-down buttons, which hide entirely below a certain
+  // group width; this menu item is what keeps split reachable from a pane
+  // that's narrow enough to need it.
+  describe("Split right/down", () => {
+    it("calls requestSplit with the passed-in api.id and 'right', closing the menu", async () => {
+      const user = userEvent.setup();
+      render(
+        <PaneActionsMenu
+          api={makeApi({ id: "session-42" })}
+          params={{ sessionId: session.id }}
+          containerApi={CONTAINER_API}
+          onRename={vi.fn()}
+          triggerClassName="pane-tab-btn"
+        />,
+      );
+
+      await user.click(screen.getByTitle("More…"));
+      await user.click(screen.getByText("Split right"));
+
+      expect(requestSplit).toHaveBeenCalledWith("session-42", "right");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("calls requestSplit with the passed-in api.id and 'below'", async () => {
+      const user = userEvent.setup();
+      render(
+        <PaneActionsMenu
+          api={makeApi({ id: "session-42" })}
+          params={{ sessionId: session.id }}
+          containerApi={CONTAINER_API}
+          onRename={vi.fn()}
+          triggerClassName="pane-tab-btn"
+        />,
+      );
+
+      await user.click(screen.getByTitle("More…"));
+      await user.click(screen.getByText("Split down"));
+
+      expect(requestSplit).toHaveBeenCalledWith("session-42", "below");
+    });
+  });
+
   // The mobile bar renders this for every panel in dockviewApi.panels, not
   // just terminal ones — a github/git/timeline/browser panel has no plain
   // `sessionId` at all (timeline's params carry `sessionIds`, plural).
@@ -224,6 +274,10 @@ describe("PaneActionsMenu", () => {
 
       expect(screen.queryByText("Rename")).not.toBeInTheDocument();
       expect(screen.queryByText("Kill session")).not.toBeInTheDocument();
+      // Split is meaningless without a resolvable session — same gate as
+      // Rename/Kill above.
+      expect(screen.queryByText("Split right")).not.toBeInTheDocument();
+      expect(screen.queryByText("Split down")).not.toBeInTheDocument();
       expect(screen.getByText("Move (drag tab)").closest("button")).toBeDisabled();
     });
 

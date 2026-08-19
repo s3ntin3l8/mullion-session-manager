@@ -57,6 +57,10 @@ const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   const current = lastSeenSeq[sessionId] ?? 0;
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
 });
+// Issue: narrow headers overflow — PaneActionsMenu.tsx's own "Split right"/
+// "Split down" items (a fallback for PaneHeaderActions.tsx's header-level
+// buttons, which hide entirely below a certain group width) read this.
+const requestSplit = vi.fn();
 
 function storeState() {
   return {
@@ -72,6 +76,7 @@ function storeState() {
     theme: "dark",
     settings: { sessions: { confirmBeforeKill: false } },
     markEventSeen,
+    requestSplit,
   };
 }
 
@@ -99,6 +104,11 @@ function makeProps(
   activeChangeHandler = null;
   return {
     api: {
+      // Split (PaneActionsMenu.tsx's "Split right"/"Split down" items)
+      // passes this straight through to requestSplit as the reference
+      // panel — a real value here (not left undefined) is what lets those
+      // tests actually prove it's THIS tab's own id being forwarded.
+      id: `session-${session.id}`,
       title: "claude code",
       setTitle: vi.fn(),
       close: vi.fn(),
@@ -200,6 +210,7 @@ beforeEach(() => {
   lastSeenSeq = {};
   dismissedEventKeys = {};
   markEventSeen.mockClear();
+  requestSplit.mockClear();
   vi.stubGlobal(
     "ResizeObserver",
     vi.fn(function () {
@@ -508,6 +519,69 @@ describe("PaneTab", () => {
     });
   });
 
+  describe("narrow headers overflow — tight mode", () => {
+    it("still shows the agent logo and full unread badge above the tight threshold", () => {
+      // 170px is below NARROW_TAB_BADGE_THRESHOLD_PX (190, hides branch/
+      // status badge) but above TIGHT_TAB_THRESHOLD_PX (150) — only the
+      // narrow-mode drops should have kicked in yet.
+      vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect").mockReturnValue({
+        width: 170,
+      } as DOMRect);
+      events = {
+        [session.id]: [makeEvent({ seq: 1, kind: "attention", payload: { attention: true } })],
+      };
+
+      const { container } = render(<PaneTab {...makeProps()} />);
+
+      expect(container.querySelector(".pane-tab-agent-logo")).toBeInTheDocument();
+      const badge = container.querySelector(".pane-tab-unread-badge");
+      expect(badge).not.toHaveClass("compact");
+      expect(screen.getByText("1")).toBeInTheDocument();
+    });
+
+    it("drops the agent logo and collapses the unread badge to a bare dot below the tight threshold", () => {
+      vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect").mockReturnValue({
+        width: 120,
+      } as DOMRect);
+      events = {
+        [session.id]: [makeEvent({ seq: 1, kind: "attention", payload: { attention: true } })],
+      };
+
+      const { container } = render(<PaneTab {...makeProps()} />);
+
+      expect(container.querySelector(".pane-tab-agent-logo")).not.toBeInTheDocument();
+      const badge = container.querySelector(".pane-tab-unread-badge");
+      expect(badge).toHaveClass("compact");
+      // The count digit is dropped — the icon's title attribute still
+      // carries the actual count for anyone who hovers.
+      expect(screen.queryByText("1")).not.toBeInTheDocument();
+      expect(badge).toHaveAttribute("title", expect.stringContaining("1 unread"));
+    });
+
+    it("reacts to a live resize crossing the tight threshold, same as the narrow one already does", () => {
+      let resizeCallback: ResizeObserverCallback = () => {};
+      vi.stubGlobal(
+        "ResizeObserver",
+        vi.fn(function (this: unknown, callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+          return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+        }),
+      );
+
+      const { container } = render(<PaneTab {...makeProps()} />);
+      expect(container.querySelector(".pane-tab-agent-logo")).toBeInTheDocument();
+
+      act(() => {
+        resizeCallback(
+          [{ contentRect: { width: 120 } } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+
+      expect(container.querySelector(".pane-tab-agent-logo")).not.toBeInTheDocument();
+    });
+  });
+
   describe("tab-group attention accent (#98 item 1)", () => {
     it("adds the group-attention class when a sibling panel's session has attention", () => {
       const sibling: Session = {
@@ -612,6 +686,31 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByText("View timeline"));
 
       expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session);
+    });
+  });
+
+  describe("Split right/down from the overflow menu (issue: narrow headers overflow)", () => {
+    // Fallback for PaneHeaderActions.tsx's own split buttons, which hide
+    // entirely below a certain group width — this menu item is what keeps
+    // split reachable from a pane that's narrow enough to need it.
+    it("calls requestSplit with this tab's own api.id and 'right'", async () => {
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      await userEvent.click(screen.getByTitle("More…"));
+      await userEvent.click(screen.getByText("Split right"));
+
+      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "right");
+    });
+
+    it("calls requestSplit with this tab's own api.id and 'below'", async () => {
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      await userEvent.click(screen.getByTitle("More…"));
+      await userEvent.click(screen.getByText("Split down"));
+
+      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "below");
     });
   });
 
@@ -752,8 +851,11 @@ describe("PaneTab overflow menu — focus management (P11)", () => {
     const killItem = items[items.length - 1]!;
     expect(rename).toHaveFocus();
 
+    // Issue: narrow headers overflow — "Split right"/"Split down" now sit
+    // between Rename and Move/View timeline (PaneActionsMenu.tsx), so
+    // that's the next item ArrowDown reaches from Rename.
     await userEvent.keyboard("{ArrowDown}");
-    expect(screen.getByText("View timeline").closest("button")).toHaveFocus();
+    expect(screen.getByText("Split right").closest("button")).toHaveFocus();
 
     await userEvent.keyboard("{ArrowUp}");
     expect(rename).toHaveFocus();

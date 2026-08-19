@@ -12,6 +12,8 @@ import {
   OverflowIcon,
   RenameIcon,
   BotIcon,
+  SplitDownIcon,
+  SplitRightIcon,
 } from "./ui/icons.js";
 import { openTimelinePanel, openBrowserPanePanel, openOrFocusSessionPanel } from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
@@ -85,6 +87,12 @@ export function PaneActionsMenu({
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
   const projects = useDashboardStore((s) => s.projects);
+  // Issue: narrow headers overflow — PaneHeaderActions.tsx's own
+  // split-right/split-down buttons hide below a certain group width, and
+  // this is where they're still reachable from once they do (same
+  // `requestSplit(referencePanelId, direction)` store action, this tab's own
+  // `api.id` as the reference panel rather than the group's active one).
+  const requestSplit = useDashboardStore((s) => s.requestSplit);
 
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
@@ -324,6 +332,42 @@ export function PaneActionsMenu({
                 <RenameIcon size={14} style={{ color: "var(--muted)" }} />
                 <span style={{ flex: 1 }}>Rename</span>
                 <span className="pane-tab-overflow-hint">↵</span>
+              </button>
+            )}
+            {/* Issue: narrow headers overflow — PaneHeaderActions.tsx's
+                header-level split buttons hide once their group gets too
+                narrow; this is the fallback entry point for a TERMINAL
+                pane that's cramped enough to need it (independent code
+                review, PR #709 — this menu only ever renders for terminal
+                panels, tabComponents in panels/registry.tsx, so a narrow
+                group made up of non-terminal panels — github/git/timeline/
+                browser — has no such fallback once its header buttons
+                hide; that's a pre-existing gap in this menu's own
+                coverage, not something this change introduces or closes).
+                Gated on `session`, same as Rename above: splitting is
+                meaningless for a pane whose session hasn't loaded yet.
+                Reference panel is THIS tab's own `api.id`, not the group's
+                active one — this menu is opened from a specific tab, so
+                split acts relative to that tab regardless of which one in
+                the group happens to be active. */}
+            {session && (
+              <button
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() => closeMenuAfterAction(() => requestSplit(api.id, "right"))}
+              >
+                <SplitRightIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Split right</span>
+              </button>
+            )}
+            {session && (
+              <button
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() => closeMenuAfterAction(() => requestSplit(api.id, "below"))}
+              >
+                <SplitDownIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Split down</span>
               </button>
             )}
             <button

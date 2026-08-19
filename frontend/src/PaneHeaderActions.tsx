@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewHeaderActionsProps } from "dockview";
 import { useDashboardStore } from "./store/index.js";
 import { SplitDownIcon, SplitRightIcon } from "./ui/icons.js";
@@ -16,8 +17,81 @@ import { SplitDownIcon, SplitRightIcon } from "./ui/icons.js";
 // (dockview owns the render), so — same as PaneTab.tsx already does for the
 // same reason — this reads/writes the store directly rather than needing a
 // prop channel from App.tsx.
+
+// Issue: narrow headers overflow — below this GROUP width, these two
+// buttons are hidden entirely, giving the tab strip's own more essential
+// content (title, close, kebab) the room they were otherwise fighting it
+// for. Split remains reachable via each tab's own kebab menu
+// (PaneActionsMenu.tsx's "Split right"/"Split down" items). Roughly this
+// component's own rendered footprint (two 24px `.pane-tab-btn`s + 6px gap +
+// 4px right padding, ~58px) plus enough of the remainder for a single tab to
+// sit at its own min-width (xterm.css's `.dv-tab`) without the two
+// competing for the same space — not exact to the pixel, just a threshold
+// comfortably clear of both.
+const HIDE_SPLIT_ACTIONS_BELOW_GROUP_WIDTH_PX = 220;
+
 export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
   const requestSplit = useDashboardStore((s) => s.requestSplit);
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const [hidden, setHidden] = useState(false);
+
+  // Measures .dv-tabs-and-actions-container — the whole header row this
+  // span ultimately sits inside, alongside the tab strip — NOT this span's
+  // own width (hiding this span's own children would shrink ITS width
+  // toward zero the instant they hide, which would immediately observe
+  // itself as "no longer too narrow" and un-hide again, a feedback loop).
+  //
+  // Independent code review (PR #709) — the first version of this used
+  // `spanRef.current?.parentElement`, on the assumption that dockview
+  // mounts this span as a direct child of the header row. It doesn't:
+  // dockview-react wraps every framework-rendered slot in its own
+  // `.dv-react-part` div (`setRightActionsElement`, dockview-core), which
+  // dockview then appends into `.dv-right-actions-container` — a plain,
+  // un-styled flex child with no `flex-grow` of its own
+  // (`.dv-right-actions-container { display: flex }`, dockview.css). Both
+  // of those wrapper levels are therefore shrink-to-fit around this span's
+  // own two buttons, same as the span itself — `parentElement` measured
+  // one of those wrappers, not the header row, so `hidden` flipped `true`
+  // on this component's very first observation (~58px, the buttons' own
+  // footprint) regardless of the header's real width, and could never
+  // recover since nothing ever grows a shrink-to-fit element back out.
+  // `closest()` walks up through however many wrapper levels dockview's
+  // internals happen to use and finds the actual header row by its stable,
+  // public class name instead of relying on a specific nesting depth.
+  //
+  // Hermes review, PR #709 — a callback ref (not a plain ref + `useEffect(
+  // ..., [])`), for the same "measure at actual mount time" reason
+  // PaneTab.tsx's own setTabRef uses one: this component's own
+  // `!props.activePanel` early return below means the span isn't
+  // guaranteed to exist yet on whichever render this component's hooks
+  // first run for. A plain ref + an effect with an empty dependency array
+  // only ever gets ONE chance to attach an observer, at that first run — if
+  // the span didn't exist yet (activePanel was still undefined then), it
+  // never gets a second chance once activePanel later arrives and the span
+  // finally mounts; `hidden` would stay `false` forever regardless of
+  // actual width. A callback ref fires exactly when this DOM node itself
+  // is created, independent of how many prior renders returned null.
+  const setSpanRef = useCallback((el: HTMLSpanElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    const header = el?.closest<HTMLElement>(".dv-tabs-and-actions-container");
+    if (!header) return;
+    // Hermes review, PR #709 — the synchronous getBoundingClientRect() read
+    // here (before the ResizeObserver's own first delivery, which is async)
+    // is the same one-frame-flash fix PaneTab.tsx's own setTabRef already
+    // applies for its narrow-tab threshold: without it, a group that mounts
+    // already narrower than the threshold would render the split buttons
+    // for one frame (hidden starts false) before the observer's initial
+    // callback ever gets a chance to correct it.
+    setHidden(header.getBoundingClientRect().width < HIDE_SPLIT_ACTIONS_BELOW_GROUP_WIDTH_PX);
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width !== undefined) setHidden(width < HIDE_SPLIT_ACTIONS_BELOW_GROUP_WIDTH_PX);
+    });
+    observer.observe(header);
+    observerRef.current = observer;
+  }, []);
+  useEffect(() => () => observerRef.current?.disconnect(), []);
 
   if (!props.activePanel) return null;
 
@@ -31,6 +105,7 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
     // height, so a content-height span top-aligns instead of centering
     // (issue #104). Mirrors .pane-tab's height:100%+align-items:center.
     <span
+      ref={setSpanRef}
       style={{
         display: "flex",
         gap: 6,
@@ -40,12 +115,16 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
         paddingRight: 4,
       }}
     >
-      <button className="pane-tab-btn" title="Split right" onClick={() => split("right")}>
-        <SplitRightIcon size={15} />
-      </button>
-      <button className="pane-tab-btn" title="Split down" onClick={() => split("below")}>
-        <SplitDownIcon size={15} />
-      </button>
+      {!hidden && (
+        <>
+          <button className="pane-tab-btn" title="Split right" onClick={() => split("right")}>
+            <SplitRightIcon size={15} />
+          </button>
+          <button className="pane-tab-btn" title="Split down" onClick={() => split("below")}>
+            <SplitDownIcon size={15} />
+          </button>
+        </>
+      )}
     </span>
   );
 }
