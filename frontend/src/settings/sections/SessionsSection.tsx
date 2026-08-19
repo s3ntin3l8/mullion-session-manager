@@ -205,8 +205,10 @@ export function SessionsSection() {
           "On SessionStart, carry a project-authored block into every" +
           " session's starting context: a <!-- mullion:briefing:start -->" +
           " region in the project's AGENTS.md or CLAUDE.md, or a" +
-          " .agents/briefing.md file. Capped at 4 KB. Projects with no such" +
-          " region are unaffected — nothing is injected."
+          " .agents/briefing.md file. The extracted region is capped at 4 KB" +
+          " (a short header and, if truncated, a truncation note add a" +
+          " little on top). Projects with no such region are unaffected —" +
+          " nothing is injected."
         }
       >
         <Toggle

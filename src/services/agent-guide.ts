@@ -62,10 +62,10 @@ export function agentGuideSourceExists(): boolean {
 const GUIDE_TIER1_START = "<!-- mullion:tier1:start -->";
 const GUIDE_TIER1_END = "<!-- mullion:tier1:end -->";
 
-/** Injected-context budget for the excerpt below — half of
- * MAX_BRIEFING_BYTES (project-briefing.ts): Mullion's own doc is a
- * supporting fact here, the project's briefing (when present) is the
- * operative one. */
+/** Cap on the excerpt itself, before buildAgentGuideBlock appends the
+ * pointer sentence on top — half of MAX_BRIEFING_BYTES
+ * (project-briefing.ts): Mullion's own doc is a supporting fact here, the
+ * project's briefing (when present) is the operative one. */
 export const MAX_GUIDE_EXCERPT_BYTES = 2048;
 
 /**

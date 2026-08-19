@@ -32,12 +32,14 @@ import { clampToBytes, extractMarkedRegion } from "./marked-region.js";
 export const MARKER_START = "<!-- mullion:briefing:start -->";
 export const MARKER_END = "<!-- mullion:briefing:end -->";
 
-/** Injected-context budget, after extraction/clamping. ~1,000 tokens —
- * comfortably above a short bulleted block, far below anything that would
- * meaningfully displace task context. An order of magnitude under
- * MAX_SOURCE_BYTES below so "the source is too big to even look at" and
- * "the extracted region is too big to inject" stay distinguishable
- * failure modes. */
+/** Cap on the EXTRACTED REGION only, before buildSessionBriefingContent's
+ * header (and, if this cap was hit, clampToBytes's own truncation note) are
+ * added on top — actual injected bytes run a little over 4096, not under.
+ * ~1,000 tokens for the region itself — comfortably above a short bulleted
+ * block, far below anything that would meaningfully displace task context.
+ * An order of magnitude under MAX_SOURCE_BYTES below so "the source is too
+ * big to even look at" and "the extracted region is too big to inject" stay
+ * distinguishable failure modes. */
 export const MAX_BRIEFING_BYTES = 4096;
 
 // How far we'll read into a candidate file looking for a marked region.
