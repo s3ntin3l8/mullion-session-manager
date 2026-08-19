@@ -182,24 +182,39 @@ async function maybeOpenDraftPR(
 // once and never fires again. This sweep is the fix: keep retrying any
 // "reviewing" task with no PR until one opens.
 //
-// Per-task attempt timestamps are process-local (module state, not a DB
-// column) — same posture as task-watcher.ts's own parentTitleFetchAttempts:
-// losing this on a restart just costs one extra attempt, which is harmless.
-// A DB column would need a schema migration for what is, in effect, a rate
+// Per-task attempt state is process-local (module state, not a DB column) —
+// same posture as task-watcher.ts's own parentTitleFetchAttempts: losing
+// this on a restart just costs one extra attempt, which is harmless. A DB
+// column would need a schema migration for what is, in effect, a rate
 // limiter with no durability requirement.
 const DRAFT_PR_RETRY_TTL_MS = 5 * 60 * 1000;
+// Hermes review, PR #725 — a permanently-stuck reason (remote-not-supported,
+// a worktree deleted out from under the task) would otherwise retry every
+// 5 minutes forever. Deliberately NOT a give-up cap: a hard cap would mean a
+// task that becomes resolvable again after a long time (a host comes back
+// after an extended outage, a human finally cleans up a dirty tree) never
+// gets picked up again short of a process restart — exactly the "stranded
+// forever" failure mode this sweep exists to fix. Doubling the backoff each
+// consecutive failed attempt, capped at this ceiling, keeps retrying
+// indefinitely while cutting steady-state noise/git-status calls roughly
+// 12x for a task that's been stuck a while.
+const DRAFT_PR_RETRY_MAX_TTL_MS = 60 * 60 * 1000;
 // Global cap for the whole sweep (mirrors task-watcher.ts's own per-tick
 // caps, e.g. MAX_DEPENDENCY_CHECKS_PER_SWEEP) — a backstop against a
 // pathological install with many simultaneously-stranded "reviewing" tasks
 // all hitting the same host's git/GitHub calls in one tick.
 const MAX_DRAFT_PR_RETRIES_PER_SWEEP = 20;
-// Bounds the attempt-timestamp Map itself; nothing else would. Simple
+// Bounds the attempt-state Map itself; nothing else would. Simple
 // oldest-inserted eviction (Map iteration order === insertion order) — this
 // map's entries self-expire via the TTL above far faster than 500 distinct
 // tasks could realistically accumulate, so eviction policy sophistication
 // (see the parentTitleFetchAttempts precedent) isn't worth it here.
 const MAX_DRAFT_PR_RETRY_ENTRIES = 500;
-const draftPrRetryAttemptedAt = new Map<number, number>();
+const draftPrRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+
+function draftPrRetryBackoffMs(attempts: number): number {
+  return Math.min(DRAFT_PR_RETRY_TTL_MS * 2 ** attempts, DRAFT_PR_RETRY_MAX_TTL_MS);
+}
 
 async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
@@ -221,22 +236,23 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   for (const { task, project } of rows) {
     if (attempted >= MAX_DRAFT_PR_RETRIES_PER_SWEEP) break;
 
-    const lastAttemptedAt = draftPrRetryAttemptedAt.get(task.id);
-    if (lastAttemptedAt !== undefined && now - lastAttemptedAt < DRAFT_PR_RETRY_TTL_MS) continue;
+    const state = draftPrRetryState.get(task.id);
+    if (state !== undefined && now - state.lastAttemptedAt < draftPrRetryBackoffMs(state.attempts))
+      continue;
 
     attempted++;
-    if (
-      !draftPrRetryAttemptedAt.has(task.id) &&
-      draftPrRetryAttemptedAt.size >= MAX_DRAFT_PR_RETRY_ENTRIES
-    ) {
-      const oldest = draftPrRetryAttemptedAt.keys().next().value;
-      if (oldest !== undefined) draftPrRetryAttemptedAt.delete(oldest);
+    if (!draftPrRetryState.has(task.id) && draftPrRetryState.size >= MAX_DRAFT_PR_RETRY_ENTRIES) {
+      const oldest = draftPrRetryState.keys().next().value;
+      if (oldest !== undefined) draftPrRetryState.delete(oldest);
     }
-    draftPrRetryAttemptedAt.set(task.id, now);
+    draftPrRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
 
     // maybeOpenDraftPR already re-reads the task's current git status and
     // is idempotent/best-effort (it's the exact same call the "-> reviewing"
-    // transition makes) — nothing here duplicates that logic.
+    // transition makes) — nothing here duplicates that logic. A successful
+    // open sets tasks.prNumber, which drops the task out of this sweep's own
+    // WHERE clause on the next tick, so there's no need to reset `attempts`
+    // back to 0 here on success — it simply never gets read again.
     await maybeOpenDraftPR(app, task, project);
   }
 }
