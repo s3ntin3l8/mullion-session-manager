@@ -27,6 +27,8 @@ import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
   taskReviewFindingsPath,
+  parseReviewFindings,
+  renderReviewFindingsMarkdown,
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
@@ -524,19 +526,24 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
  * forever):
  *
  *  - reads the round-suffixed findings file the review prompt told the
- *    agent to write to (`taskReviewFindingsPath`, task-prompt.ts) — a
- *    missing file means no findings, not an error; the prompt tells the
- *    agent not to create one when it has none.
- *  - posts what it found (or a "no findings" note either way — this is
- *    exactly the visibility gap the review-findings loop exists to close:
- *    previously a finished review was invisible outside the session's own
- *    terminal) as one comment on the task's PR, falling back to its linked
- *    issue (`postReviewFindingsComment`, task-github-sync.ts).
+ *    agent to write to (`taskReviewFindingsPath`, task-prompt.ts) and
+ *    parses it (`parseReviewFindings`) into a verdict — a missing or empty
+ *    file is NOT read as "clean": `buildReviewPrompt` tells the agent to
+ *    ALWAYS write the file, so an absent one means the review never really
+ *    happened (crash, killed session, an agent that ignored the contract),
+ *    and is posted as inconclusive instead. See `parseReviewFindings`'s own
+ *    doc comment for the full contract, including its tolerant fallback for
+ *    an agent that writes freeform text instead of JSON.
+ *  - posts what it found (a rendered verdict either way — this is exactly
+ *    the visibility gap the review-findings loop exists to close: previously
+ *    a finished review was invisible outside the session's own terminal) as
+ *    one comment on the task's PR, falling back to its linked issue
+ *    (`postReviewFindingsComment`, task-github-sync.ts).
  *  - appends it to `tasks.reviewFindings` under a "## Round N" header —
  *    never replaces, so an earlier round survives a later one.
- *  - if the findings are non-empty AND this task hasn't already used its
- *    one auto-return (`reviewRounds < 1`) AND Task Master is enabled: flips
- *    the task back to "in_progress", increments `reviewRounds` (a
+ *  - if the verdict is "changes-requested" AND this task hasn't already used
+ *    its one auto-return (`reviewRounds < 1`) AND Task Master is enabled:
+ *    flips the task back to "in_progress", increments `reviewRounds` (a
  *    compare-and-swap write, same as every other transition in this file —
  *    a concurrent approve/reject/give-up simply wins the race and this
  *    loop no-ops), and re-seeds the worker
@@ -544,7 +551,9 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
  *    re-seed but called with `force: true` here — see that function's own
  *    doc comment on why: nobody is watching to type into a still-alive
  *    worker session the way a human reviewing a reject is) with the
- *    findings as its prompt.
+ *    findings as its prompt. A "clean" verdict never auto-returns — that's
+ *    the whole reason file-existence stopped being the signal (see
+ *    `parseReviewFindings`'s doc comment).
  *
  * Gated on `resolveTaskMasterConfig(app).enabled` for the auto-return step
  * only (same reasoning as the claimed/in_progress loop's own "enabled"
@@ -588,7 +597,8 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
     // below; a remote-hosted review agent's file lands on the REMOTE host's
     // filesystem instead, which SessionBackend has no generic file-read for.
     // Reading local-only wouldn't error — it would just find nothing and
-    // falsely conclude "no findings", ingesting and commenting a lie. Skip
+    // falsely conclude the review was inconclusive, ingesting and commenting
+    // a lie about a review that may have found real, unreported issues. Skip
     // entirely rather than mis-ingest. Unlike #484's other remote-hosted
     // gaps (promotion/ingest/orphan-sweep/retry, all now proxied), this one
     // stays local-only — it needs a generic remote file-read on
@@ -648,6 +658,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             "task reconcile: failed to read review findings file",
           );
         }
+        // `parseReviewFindings`'s own doc comment: file-existence stopped
+        // being a safe signal the moment `buildReviewPrompt` started asking
+        // for an explicit verdict — `parsed` (not `findings`) is now what
+        // both gates below key off. `parsed === null` covers a missing OR
+        // empty file, i.e. "wrote nothing", never a real "clean" verdict.
+        const parsed = findings !== null ? parseReviewFindings(findings) : null;
 
         // Hermes review, PR #576 — a review agent that never derives
         // "finished" (exits right after its turn instead of staying running,
@@ -657,16 +673,21 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // Accept "exited" too, but ONLY when a findings file actually
         // exists — a session killed by a human, or one that crashed
         // mid-review, also derives "exited", and would otherwise get
-        // ingested as a false "Review complete — no findings." permanently
-        // marked processed.
+        // ingested as a false "inconclusive" result permanently marked
+        // processed. (A crash BEFORE writing anything still isn't ingested
+        // at all here — `parsed === null` — and the task just stalls in
+        // "reviewing" with no comment; a pre-existing gap, not something
+        // this ingestion pass can distinguish from "the reviewer is still
+        // running".)
         const isUsableSignal =
-          derived.status === "finished" || (derived.status === "exited" && findings !== null);
+          derived.status === "finished" || (derived.status === "exited" && parsed !== null);
         if (!isUsableSignal) continue;
 
         const roundLabel = `## Round ${task.reviewRounds + 1}`;
-        const commentBody = findings
-          ? `${roundLabel}\n\n${findings}`
-          : `${roundLabel}\n\nReview complete — no findings.`;
+        const commentBody = parsed
+          ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
+          : `${roundLabel}\n\nReview agent finished but wrote no findings file — treat this` +
+            " review as inconclusive.";
 
         const appendedFindings = task.reviewFindings
           ? `${task.reviewFindings}\n\n${commentBody}`
@@ -690,9 +711,19 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // complete turn end) is trustworthy enough to act on automatically
         // — "exited" findings are still ingested and commented, just not
         // auto-returned.
+        //
+        // `parsed?.verdict === "changes-requested"` (not `findings !== null`)
+        // is the regression guard this verdict contract exists for: a
+        // reviewer that writes JSON with `verdict: "clean"` must NOT
+        // auto-return. Under the old "findings !== null means act on it"
+        // rule, always writing a file (this PR's whole point — see
+        // buildReviewPrompt) would have made a clean review indistinguishable
+        // from one requesting changes, spending the task's one auto-return
+        // round respawning the worker with nothing to do.
         const shouldAutoReturn =
           derived.status === "finished" &&
-          findings !== null &&
+          parsed !== null &&
+          parsed.verdict === "changes-requested" &&
           task.reviewRounds < 1 &&
           resolvedTaskMaster.enabled &&
           task.worktreePath !== null &&
@@ -756,7 +787,10 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           budgetMinutes: resolvedTaskMaster.budgetMinutes,
           // Nobody is watching an automated review-feedback round.
           auto: true,
-          findings: findings!,
+          // Rendered, not the raw findings-file content — `shouldAutoReturn`
+          // guarantees `parsed !== null` here, but `parsed` may be JSON; the
+          // worker should read prose, not the wire format Mullion parses.
+          findings: renderReviewFindingsMarkdown(parsed!),
         });
         // force: true — unlike reject's own re-seed, nobody is watching to
         // type into a still-alive worker (the worker's own instructions

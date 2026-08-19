@@ -6,6 +6,8 @@ import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
   taskReviewFindingsPath,
+  parseReviewFindings,
+  renderReviewFindingsMarkdown,
   type TaskPromptTask,
 } from "../../src/services/task-prompt.js";
 
@@ -186,16 +188,138 @@ describe("buildReviewPrompt", () => {
       findingsPath: FINDINGS_PATH,
     });
     expect(out).toContain(FINDINGS_PATH);
-    expect(out).toContain("If you have no findings, do not create\nthat file at all");
+    expect(out).toContain("Always write your findings");
   });
 
-  it("warns findings may be sent back to the worker automatically", () => {
+  // The regression this contract exists to prevent: file-existence alone
+  // used to mean "no findings" — see task-reconciler.test.ts's own
+  // regression tests for the reconciler side of this guard.
+  it("requires an explicit verdict and tells the agent a missing file is inconclusive, not clean", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain('"verdict": "clean" | "changes-requested"');
+    expect(out).toMatch(/missing or unparseable[\s\S]*inconclusive/);
+    expect(out).not.toContain("do not create\nthat file at all");
+  });
+
+  it("tells the agent every finding needs a real file:line, not prose in the summary", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain("autonomous-pr-review skill");
+    expect(out).toContain("inline");
+  });
+
+  it("warns a changes-requested verdict may be sent back to the worker automatically", () => {
     const out = buildReviewPrompt({
       task: TASK,
       worktreePath: BASE.worktreePath,
       findingsPath: FINDINGS_PATH,
     });
     expect(out).toContain("may be sent back to the worker automatically");
+  });
+});
+
+const CLEAN_JSON = JSON.stringify({
+  verdict: "clean",
+  summary: "Reviewed the diff and ran `go test ./...`; no issues found.",
+});
+
+const CHANGES_REQUESTED_JSON = JSON.stringify({
+  verdict: "changes-requested",
+  summary: "One errcheck failure golangci-lint would catch.",
+  findings: [
+    {
+      path: "cmd/branchdam/main_test.go",
+      line: 669,
+      side: "RIGHT",
+      severity: "major",
+      body: "`defer occupied.Close()` ignores its error return — wrap it or assign to `_` explicitly.",
+    },
+  ],
+});
+
+describe("parseReviewFindings", () => {
+  it("parses a well-formed clean verdict with no findings array", () => {
+    const parsed = parseReviewFindings(CLEAN_JSON);
+    expect(parsed.verdict).toBe("clean");
+    expect(parsed.summary).toContain("go test");
+    expect(parsed.findings).toEqual([]);
+  });
+
+  it("parses a well-formed changes-requested verdict with anchored findings", () => {
+    const parsed = parseReviewFindings(CHANGES_REQUESTED_JSON);
+    expect(parsed.verdict).toBe("changes-requested");
+    expect(parsed.findings).toHaveLength(1);
+    expect(parsed.findings[0]).toMatchObject({
+      path: "cmd/branchdam/main_test.go",
+      line: 669,
+      side: "RIGHT",
+      severity: "major",
+    });
+  });
+
+  it("defaults an omitted side to RIGHT and an unrecognized severity to null", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "changes-requested",
+        summary: "s",
+        findings: [{ path: "a.go", line: 1, body: "b", severity: "catastrophic" }],
+      }),
+    );
+    expect(parsed.findings[0].side).toBe("RIGHT");
+    expect(parsed.findings[0].severity).toBeNull();
+  });
+
+  it("drops a findings-array entry missing a required field rather than throwing", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "changes-requested",
+        summary: "s",
+        findings: [{ path: "a.go", body: "no line number" }],
+      }),
+    );
+    expect(parsed.findings).toEqual([]);
+  });
+
+  // The safety property Change 1 exists for: an agent that ignores the JSON
+  // contract must never silently read as "clean" — it must default to the
+  // verdict that keeps a human in the loop.
+  it("treats freeform/legacy text as changes-requested with the raw text as the summary", () => {
+    const parsed = parseReviewFindings("Fix the null check on line 42.");
+    expect(parsed.verdict).toBe("changes-requested");
+    expect(parsed.summary).toBe("Fix the null check on line 42.");
+    expect(parsed.findings).toEqual([]);
+  });
+
+  it("treats malformed JSON the same as freeform text, not as a crash", () => {
+    const parsed = parseReviewFindings('{"verdict": "clean", "summary": ');
+    expect(parsed.verdict).toBe("changes-requested");
+    expect(parsed.findings).toEqual([]);
+  });
+
+  it("treats valid JSON with an unrecognized verdict value as freeform text", () => {
+    const parsed = parseReviewFindings(JSON.stringify({ verdict: "looks fine", summary: "s" }));
+    expect(parsed.verdict).toBe("changes-requested");
+  });
+});
+
+describe("renderReviewFindingsMarkdown", () => {
+  it("renders just the summary when there are no anchored findings", () => {
+    const out = renderReviewFindingsMarkdown(parseReviewFindings(CLEAN_JSON));
+    expect(out).toBe("Reviewed the diff and ran `go test ./...`; no issues found.");
+  });
+
+  it("renders the summary followed by a path:line bullet per finding", () => {
+    const out = renderReviewFindingsMarkdown(parseReviewFindings(CHANGES_REQUESTED_JSON));
+    expect(out).toContain("One errcheck failure golangci-lint would catch.");
+    expect(out).toContain("**cmd/branchdam/main_test.go:669**");
+    expect(out).toContain("wrap it or assign to `_` explicitly");
   });
 });
 
