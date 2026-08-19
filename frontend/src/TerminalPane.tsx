@@ -28,6 +28,7 @@ import {
   SEARCH_HIGHLIGHT_LIMIT,
 } from "./lib/terminalKeys.js";
 import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
+import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
@@ -136,6 +137,25 @@ export function TerminalPane(props: {
   // floor here — this stays correct regardless of what the backend's floor
   // constants are.
   const [paneTooSmall, setPaneTooSmall] = useState(false);
+  // Narrow-pane font auto-fit — the last known server-applied floor this
+  // pane needs to show, so a smaller font can be tried instead of clipping
+  // the grid (issue: prompt runs off the edge of a pane narrower than the
+  // PTY's MIN_TERMINAL_COLS/ROWS floor). A ref, not state: it's written by
+  // the mount effect's GeometryMessage handler and read by that same
+  // effect's `refit()` — both live inside a `[props.params.sessionId]`
+  // effect whose closures are fixed at mount, so a plain state read there
+  // would always see the value from the render that scheduled the effect,
+  // never a later update. `fitFitRetryTick` below is the actual trigger for
+  // the settings-sync effect (a *separate* effect, which — unlike the mount
+  // effect's own closures — re-reads fresh values on every run) to
+  // re-evaluate the shrink; this ref only carries the *data* that
+  // re-evaluation reads.
+  const fitTargetRef = useRef<{ cols: number; rows: number } | null>(null);
+  // Bumped whenever there's a reason to re-run the settings-sync effect's
+  // font-fit check without any real settings/theme change — see
+  // fitTargetRef's own comment. Value is never read, only its identity
+  // (React re-runs a dependent effect on any change to a primitive dep).
+  const [fitRetryTick, setFitRetryTick] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
@@ -526,6 +546,17 @@ export function TerminalPane(props: {
       lastCols = term.cols;
       lastRows = term.rows;
       sendResizeIfOpen();
+      // Narrow-pane font auto-fit — a genuine grid-size change (this line is
+      // only reached once the two checks above have ruled out a no-op) is
+      // the one signal that can mean "the pane grew enough that the settings-
+      // sync effect's font-fit check (fitTargetRef) should run again," not
+      // just "the server floored something new" (the geometry handler below
+      // covers that case directly). Without this, a pane that grows via a
+      // pure resize — no settings/theme change involved — would stay stuck
+      // at a previously-shrunk font forever, since nothing else re-triggers
+      // that effect. Gated on fitTargetRef so this is a no-op for the
+      // (overwhelmingly common) pane that has never been floored.
+      if (fitTargetRef.current) setFitRetryTick((tick) => tick + 1);
     };
     refitRef.current = refit;
 
@@ -917,6 +948,18 @@ export function TerminalPane(props: {
             term.resize(geo.cols, geo.rows);
             lastCols = geo.cols;
             lastRows = geo.rows;
+            // Narrow-pane font auto-fit — this branch only runs when the
+            // server's applied geometry actually differs from what this
+            // client itself last asked for, i.e. a genuine floor override
+            // (as opposed to an echo merely confirming a resize this client
+            // initiated) — see fitTargetRef's own comment for why that
+            // distinction is what keeps this from oscillating: recording the
+            // floor here, unconditionally, on every ordinary echo (including
+            // ones that just confirm what was already sent) would re-arm the
+            // font-fit check every reconnect even on a pane that was never
+            // actually too small.
+            fitTargetRef.current = { cols: geo.cols, rows: geo.rows };
+            setFitRetryTick((tick) => tick + 1);
           }
           // Hermes review, PR #708 — proposeDimensions() returns undefined
           // when the container can't fit even one full character cell (a
@@ -1243,10 +1286,56 @@ export function TerminalPane(props: {
     // there's nothing for any terminal to repaint (this also means a
     // fresh mount, where there's no previous key to differ from, never
     // triggers a repaint storm here).
+    // Narrow-pane font auto-fit (issue: prompt clipped on a pane under the
+    // PTY's MIN_TERMINAL_COLS/ROWS floor) — fitTargetRef holds the last
+    // known server-applied floor this pane needs to show (set by the mount
+    // effect's GeometryMessage handler). `term.options.fontSize` was just
+    // reset to the user's configured size above, unconditionally, on every
+    // run of this effect — that reset is what makes computeFitFontSize's
+    // measurement a fixpoint rather than a ratchet: it always measures from
+    // that same stable baseline, so a pane that's grown back to a
+    // comfortable size restores to the configured font for free (this
+    // becomes a no-op below) with no separate "un-shrink" path needed.
+    // Deliberately called from inside the same font-load-deferred callback
+    // `refitRef.current()` already goes through below, not synchronously
+    // above — proposeDimensions() needs the real, loaded font's metrics for
+    // the ratio math to be accurate, not fallback ones.
+    const applyFontFit = () => {
+      const fitTarget = fitTargetRef.current;
+      if (!fitTarget) return;
+      const fitAddon = fitAddonRef.current;
+      if (!fitAddon) return;
+      const proposed = fitAddon.proposeDimensions();
+      // Hermes review, PR #708 — proposeDimensions() returns undefined for a
+      // near-collapsed pane or a mid-drag zero-height layout. Skip the
+      // shrink for this pass rather than falling through to the render
+      // floor — an 8px font because a ResizeObserver fired mid-drag would be
+      // a visible regression the pane's actual size never actually asked
+      // for; the next real resize/geometry event will retry.
+      if (!proposed) return;
+      const { fontSize } = computeFitFontSize(
+        terminalSettings.fontSize,
+        proposed.cols,
+        proposed.rows,
+        fitTarget.cols,
+        fitTarget.rows,
+      );
+      if (fontSize === term.options.fontSize) return;
+      term.options.fontSize = fontSize;
+      // Same atlas invalidation the block above performs for a settings-
+      // driven font change (issue #107) — this one is geometry-driven, so it
+      // needs its own trigger; `atlasKeyChanged` above never sees it, since
+      // its key is built from `terminalSettings.fontSize` (the user's
+      // configured value), not this shrink.
+      webglAddonRef.current?.clearTextureAtlas();
+      repaintAllTerminals();
+    };
+
     if (typeof document !== "undefined" && document.fonts) {
       document.fonts
         .load(`${terminalSettings.fontSize}px "${terminalSettings.fontFamily}"`)
         .then(() => {
+          applyFontFit();
           refitRef.current();
           if (atlasKeyChanged) repaintAllTerminals();
         })
@@ -1259,6 +1348,7 @@ export function TerminalPane(props: {
           console.warn("[terminal] font load failed", err);
         });
     } else {
+      applyFontFit();
       refitRef.current();
       if (atlasKeyChanged) repaintAllTerminals();
     }
@@ -1267,8 +1357,12 @@ export function TerminalPane(props: {
     // setState identities — same as before PR 35's extraction, just now
     // opaque to the linter across the custom-hook boundary. See the
     // captureCtrlC-sync effect's own comment above for the full rationale.
+    // `fitRetryTick` (see its own comment) has no value this effect reads
+    // directly — it exists purely so a resize that grows/shrinks the pane
+    // without any terminalSettings/theme change still re-runs this effect's
+    // font-fit check above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalSettings, theme]);
+  }, [terminalSettings, theme, fitRetryTick]);
 
   // U7 fix — clicking a pane's tab (or activating it via keyboard pane-
   // switching, a deep link, a push-notification open, or auto-focus-on-

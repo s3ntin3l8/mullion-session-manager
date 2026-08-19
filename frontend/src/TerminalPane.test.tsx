@@ -327,6 +327,7 @@ function getLatestTermInstance() {
     input: ReturnType<typeof vi.fn>;
     modes: { applicationCursorKeysMode: boolean };
     resize: ReturnType<typeof vi.fn>;
+    options: Record<string, unknown>;
     // Mutable, unlike every other field here — the deferred-connect tests
     // (issue #676's frontend follow-up) mutate these directly to simulate
     // fitCallbackQueue's own re-measure mutating them via a real fit(), and
@@ -2229,6 +2230,62 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     const term = getLatestTermInstance();
     expect(term.resize).toHaveBeenCalledWith(40, 10);
     expect(screen.getByText("Pane too small")).toBeInTheDocument();
+  });
+
+  // Narrow-pane font auto-fit — when the container is too small for the
+  // server's floor at the configured font size but WOULD fit it at a
+  // smaller one, TerminalPane should shrink the font (rather than leave the
+  // grid clipped past the pane's own edge), and the "Pane too small" hint
+  // should clear once that shrink actually resolves things. Unlike every
+  // other test in this file — which treats proposeDimensions() as a flat
+  // container-size knob (`mockInitialTermSize`) — this test makes it
+  // font-size-aware, because that's the one dimension this feature actually
+  // depends on: a smaller font must report more achievable columns for the
+  // same physical container.
+  it("shrinks the font instead of leaving the grid clipped, and clears the hint once it fits", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const baseCols = 25;
+    const baseRows = 9;
+    const proposedAt = (fontSize: number) => ({
+      cols: Math.floor(baseCols * (14 / fontSize)),
+      rows: Math.floor(baseRows * (14 / fontSize)),
+    });
+    getLatestFitAddonInstance().proposeDimensions.mockImplementation(() => {
+      const fontSize = (getLatestTermInstance().options.fontSize as number | undefined) ?? 14;
+      // Cell width scales ~linearly with font size — the same assumption
+      // computeFitFontSize's own ratio math makes, mirrored here so this
+      // stand-in behaves like a real container would.
+      return proposedAt(fontSize);
+    });
+    // Stands in for the real FitAddon.fit(): applies whatever
+    // proposeDimensions() would report at the font size current when it
+    // fires — same "queue one callback to model the real resize side
+    // effect" pattern every other geometry test in this file uses.
+    fitCallbackQueue.push(() => {
+      const term = getLatestTermInstance();
+      const fontSize = (term.options.fontSize as number | undefined) ?? 14;
+      const proposed = proposedAt(fontSize);
+      term.cols = proposed.cols;
+      term.rows = proposed.rows;
+    });
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+      }
+    });
+
+    const term = getLatestTermInstance();
+    // 25/40 = 0.625 cols ratio (the binding constraint over 9/10 = 0.9);
+    // 14 * 0.625 = 8.75, floored to 8 — at MIN_RENDER_FONT_SIZE, not below
+    // it, so still achievable.
+    expect(term.options.fontSize).toBe(8);
+    // At fontSize 8 the container now proposes floor(25 * 14/8) = 43 cols,
+    // clearing the 40-col floor — refit()'s own pre-existing capped-branch
+    // re-check (unmodified by this feature) is what clears the hint here.
+    expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
   });
 
   it("is a no-op when the server's geometry already matches the fitted grid", () => {
