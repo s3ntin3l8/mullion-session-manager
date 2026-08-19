@@ -34,7 +34,11 @@ import {
   setAssignees,
   closeIssue,
   getIssueState,
+  getPullRequestByNumber,
+  createPullRequestReview,
 } from "./github-write.js";
+import { GitHubApiError } from "./github.js";
+import type { ReviewFinding } from "./task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
@@ -463,15 +467,23 @@ export async function syncUnlabeledIssueToLocal(
 }
 
 /**
- * Posts the review agent's findings as a single comment — on the task's
- * PR (`task.prNumber`) when one exists, falling back to the linked issue
- * otherwise. Deliberately NOT folded into `syncTaskTransition`/`runSync`
- * above: those are issue-only and gated on `task.issueNumber !== null`, so
- * a local-only task (no linked issue, but very much has a PR once
- * `task-promote.ts` opens one) would silently lose this comment if it rode
- * that path instead. No-ops when the task has neither a PR nor an issue —
- * genuinely nothing to comment on (an unclaimed remote-hosted task, or one
- * whose draft-PR-open attempt hasn't succeeded yet).
+ * Posts the review agent's findings — as an actual PR review (`task.prNumber`,
+ * the common case once a task has entered "reviewing") with each finding as
+ * an inline anchored comment, falling back to an ordinary issue comment when
+ * the task has no PR yet. Deliberately NOT folded into
+ * `syncTaskTransition`/`runSync` above: those are issue-only and gated on
+ * `task.issueNumber !== null`, so a local-only task (no linked issue, but
+ * very much has a PR once `task-promote.ts` opens one) would silently lose
+ * this comment if it rode that path instead. No-ops when the task has
+ * neither a PR nor an issue — genuinely nothing to comment on (an unclaimed
+ * remote-hosted task, or one whose draft-PR-open attempt hasn't succeeded
+ * yet).
+ *
+ * `event: "COMMENT"` only — see `createPullRequestReview`'s own doc comment
+ * for why: the PR is authored by this same GitHub App installation, and
+ * GitHub 422s both APPROVE and REQUEST_CHANGES from a PR's own author. This
+ * review has no merge-gating state; it exists for visibility in the Reviews
+ * timeline with real inline comments, not prose citing `file:42`.
  *
  * Same best-effort posture as every other write in this file: never
  * throws, logs and records `githubSyncError` on failure, clears it on
@@ -481,18 +493,83 @@ export async function postReviewFindingsComment(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRef,
-  body: string,
+  params: {
+    /** Full rendered text — round header, summary, and any findings as
+     * `path:line` bullets. Used verbatim for the issue-comment fallback,
+     * and as the PR review's own body when there's nothing to anchor (no
+     * `findings`) or GitHub rejects the anchored attempt (see below). */
+    body: string;
+    /** Round header + summary only, no bullets — the PR review's body when
+     * `findings` below ARE posted as inline anchors instead, so the same
+     * content doesn't appear twice (once as an anchor, once as a bullet).
+     * Falls back to `body` when omitted. */
+    reviewSummary?: string;
+    /** Anchored findings for a PR review's inline comments. Every entry
+     * already carries a real `path`/`line` — `parseReviewFindings` drops
+     * anything missing one, so no filtering is needed here. */
+    findings?: ReviewFinding[];
+  },
 ): Promise<void> {
-  const commentTarget = task.prNumber ?? task.issueNumber;
-  if (commentTarget === null) return;
+  // Cheap short-circuit before any GitHub call: genuinely nothing to post
+  // to (an unclaimed remote-hosted task, or one whose draft-PR-open attempt
+  // hasn't succeeded yet and has no linked issue either).
+  if (task.prNumber === null && task.issueNumber === null) return;
 
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) return;
   const token = await resolveGitHubToken(app, repoRef);
   if (!token) return;
 
+  if (task.prNumber !== null) {
+    try {
+      const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+      const anchored = (params.findings ?? []).map((f) => ({
+        path: f.path,
+        line: f.line,
+        side: f.side,
+        body: f.severity ? `**[${f.severity}]** ${f.body}` : f.body,
+      }));
+      try {
+        await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
+          body: anchored.length > 0 ? (params.reviewSummary ?? params.body) : params.body,
+          commitId: pr.headSha,
+          comments: anchored.length > 0 ? anchored : undefined,
+        });
+      } catch (err) {
+        // GitHub rejects the WHOLE review if even one comment's line isn't
+        // part of the diff it has for this commit, and its 422 doesn't
+        // reliably name the offender — retrying per-comment would mean up
+        // to N extra round-trips to find it. Deliberately coarse for v1:
+        // drop every anchor and fall back to `params.body`, which already
+        // has the findings folded in as plain bullets.
+        if (err instanceof GitHubApiError && err.statusCode === 422 && anchored.length > 0) {
+          app.log.warn(
+            { taskId: task.id, prNumber: task.prNumber, err },
+            "[task-github-sync] PR review rejected with inline anchors (422) — retrying with findings folded into the body",
+          );
+          await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
+            body: params.body,
+            commitId: pr.headSha,
+          });
+        } else {
+          throw err;
+        }
+      }
+      clearGithubSyncError(app, task.id);
+    } catch (err) {
+      app.log.warn(
+        { taskId: task.id, prNumber: task.prNumber, err },
+        "[task-github-sync] failed to post review findings as a PR review",
+      );
+      recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
+    }
+    return;
+  }
+
+  const commentTarget = task.issueNumber;
+  if (commentTarget === null) return;
   try {
-    await createComment(token, repoRef.owner, repoRef.repo, commentTarget, body);
+    await createComment(token, repoRef.owner, repoRef.repo, commentTarget, params.body);
     clearGithubSyncError(app, task.id);
   } catch (err) {
     app.log.warn(

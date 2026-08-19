@@ -768,7 +768,11 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // what would cause a same-round re-review (reject keeps reviewRounds
         // unchanged) to re-ingest THIS round's content as if it were fresh.
         unlinkFindingsFileIfPresent(app, task.id, findingsPath);
-        await postReviewFindingsComment(app, task, project, commentBody);
+        await postReviewFindingsComment(app, task, project, {
+          body: commentBody,
+          reviewSummary: parsed ? `${roundLabel}\n\n${parsed.summary}` : undefined,
+          findings: parsed?.findings,
+        });
 
         if (!shouldAutoReturn) continue;
 
