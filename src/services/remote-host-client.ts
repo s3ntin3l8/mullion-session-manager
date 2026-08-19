@@ -128,8 +128,14 @@ const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
 // Each constant below is the agent-side budget plus headroom, following the
 // same "real, non-error delay this proxy must not preempt" reasoning as
 // PREVIEW_REQUEST_TIMEOUT_MS/UPLOAD_REQUEST_TIMEOUT_MS above.
-/** git-push.ts's GIT_TIMEOUT_MS is 30s (one `git push`). */
-const GIT_PUSH_REQUEST_TIMEOUT_MS = 35_000;
+/** git-push.ts's GIT_TIMEOUT_MS is 120s (one `git push`, raised from 30s so
+ * `--no-verify` doesn't have to also budget for a target repo's own
+ * pre-push hook — see that file's header comment). Kept in lockstep with
+ * that constant on purpose: falling behind it here is exactly the failure
+ * mode this whole block's own comment warns against — reporting
+ * push-failed/host-unreachable on a remote push that's still legitimately
+ * running. */
+const GIT_PUSH_REQUEST_TIMEOUT_MS = 140_000;
 /** git-refs.ts's GIT_TIMEOUT_MS is 10s, and resolveDefaultBaseRef can run up
  * to 4 sequential git calls (fetch, symbolic-ref, 2x rev-parse candidates)
  * before this route's own resolveCommitSha adds a 5th. */

@@ -510,10 +510,15 @@ describe("RemoteHostClient", () => {
       expect(baseRefTimeout).toBeGreaterThan(defaultTimeout);
       expect(resumeTimeout).toBeGreaterThan(defaultTimeout);
       expect(freshStatusTimeout).toBeGreaterThan(defaultTimeout);
-      // git-refs.ts's resolveDefaultBaseRef chains up to 5 sequential git
-      // calls (fetch, symbolic-ref, 2x rev-parse candidates, plus this
-      // route's own resolveCommitSha) — the longest budget of the four.
-      expect(baseRefTimeout).toBeGreaterThan(pushTimeout);
+      // No fixed ordering asserted between the four — each is sized off its
+      // own agent-side budget (git-push.ts/git-refs.ts/git-worktree.ts/
+      // git-status.ts's own GIT_TIMEOUT_MS constants), which move
+      // independently of each other. Push is now the largest of the four
+      // (#722/#725 — its 120s single-op budget was raised so `--no-verify`
+      // doesn't also have to cover a slow target-repo pre-push hook), having
+      // previously been smaller than base-ref's ~50s chained-calls budget —
+      // asserting one specific ordering here just makes this test brittle
+      // against either budget changing for an unrelated reason.
 
       timeoutSpy.mockRestore();
     });

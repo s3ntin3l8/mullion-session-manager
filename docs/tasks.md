@@ -799,6 +799,30 @@ opens yet; none of those block the `→ reviewing` transition itself, and
 approve's own checks below still apply regardless of whether a draft
 exists.
 
+**A stranded `reviewing` task with no PR is retried, not left for dead**
+(`retryStrandedDraftPRs`, `src/services/task-reconciler.ts`, its own sweep
+inside `reconcileTasks`, separate from `processReviewingTasks` — that one is
+joined on the _review_ session and can't see a task with no review agent
+configured). Every reconcile tick, any `reviewing` task with `prNumber IS
+NULL` gets another `openDraftPRForTask` attempt — starting at 5 minutes after
+the last one and doubling on every further consecutive failure, capped at 1
+hour, so a permanently-stuck reason doesn't retry forever at full frequency
+(process-local, in-memory backoff — not durable, and deliberately so: losing
+it on a restart just costs one harmless extra attempt; deliberately not a
+give-up cap either — see the constant's own comment). This is
+what makes "the worker cleaned up its worktree and ended its turn again,
+trusting Mullion to push and open the PR" (task-prompt.ts's own framing)
+actually work when the first, inline attempt at `→ reviewing` failed —
+before this existed, that inline attempt was the task's only chance, ever.
+
+The push itself (`pushBranch`, `src/services/git-push.ts`) always passes
+**`--no-verify`** — it deliberately skips the _target_ repo's own local
+`pre-push` hook. A promotion push is a machine action on a commit whose
+pre-**commit** hooks already ran in the agent's own worktree; CI on the
+resulting PR is the real gate, and an arbitrary repo's pre-push suite (which
+can run a full test suite, install tooling, etc.) is not something this
+synchronous push can afford to wait on.
+
 On approve (`reviewing → done`): the worktree's tree must be clean (a dirty
 tree 409s the approve request rather than silently excluding uncommitted
 work from the PR), the branch is pushed if it has unpushed commits or no
