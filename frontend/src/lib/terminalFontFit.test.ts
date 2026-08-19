@@ -66,4 +66,24 @@ describe("computeFitFontSize", () => {
       achievable: false,
     });
   });
+
+  it("falls back to the configured size instead of NaN/Infinity when a dimension isn't finite", () => {
+    // A near-collapsed or `display:none` container can make
+    // FitAddon.proposeDimensions()'s own parseInt(getComputedStyle(...))
+    // resolve to NaN — the `<= 0` guard above doesn't catch NaN (every
+    // comparison against NaN is false), so without this guard NaN would
+    // flow through the ratio math and back out as the result, which the
+    // caller's `fontSize === term.options.fontSize` no-op guard can never
+    // match (NaN !== NaN), re-applying forever.
+    expect(computeFitFontSize(14, NaN, 8, 40, 10)).toEqual({ fontSize: 14, achievable: false });
+    expect(computeFitFontSize(14, 20, NaN, 40, 10)).toEqual({ fontSize: 14, achievable: false });
+    expect(computeFitFontSize(14, Infinity, 8, 40, 10)).toEqual({
+      fontSize: 14,
+      achievable: false,
+    });
+    expect(computeFitFontSize(NaN, 20, 8, 40, 10)).toEqual({
+      fontSize: NaN,
+      achievable: false,
+    });
+  });
 });

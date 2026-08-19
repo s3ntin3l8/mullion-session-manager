@@ -44,6 +44,26 @@ export function computeFitFontSize(
   targetRows: number,
   minFontSize: number = MIN_RENDER_FONT_SIZE,
 ): FitFontSizeResult {
+  // A near-collapsed or `display:none` container can make
+  // FitAddon.proposeDimensions()'s own `parseInt(getComputedStyle(...))`
+  // resolve to `NaN` (e.g. a `"auto"` computed height) rather than throwing
+  // or returning `undefined` — the `<= 0` check below doesn't catch NaN
+  // (every comparison against NaN is false). Falling through would let NaN
+  // flow into `Math.floor`/`Math.max` below and back out as the result,
+  // which the caller's `fontSize === term.options.fontSize` no-op guard can
+  // never match (NaN !== NaN), so it would keep re-applying forever. Bail to
+  // the configured size instead — same "give up, don't shrink" posture as
+  // the non-finite guard on `proposeDimensions()`'s own return at the call
+  // site.
+  if (
+    !Number.isFinite(configuredFontSize) ||
+    !Number.isFinite(proposedCols) ||
+    !Number.isFinite(proposedRows) ||
+    !Number.isFinite(targetCols) ||
+    !Number.isFinite(targetRows)
+  ) {
+    return { fontSize: configuredFontSize, achievable: false };
+  }
   if (proposedCols >= targetCols && proposedRows >= targetRows) {
     return { fontSize: configuredFontSize, achievable: true };
   }

@@ -282,6 +282,8 @@ describe("terminal route (/ws/terminal)", () => {
       type: "geometry",
       cols: 80,
       rows: 24,
+      minCols: 40,
+      minRows: 10,
     });
 
     pty.emitData("hello from pty");
@@ -346,6 +348,8 @@ describe("terminal route (/ws/terminal)", () => {
       type: "geometry",
       cols: 80,
       rows: 24,
+      minCols: 40,
+      minRows: 10,
     });
 
     ws.close();
@@ -377,6 +381,8 @@ describe("terminal route (/ws/terminal)", () => {
       type: "geometry",
       cols: 40,
       rows: 10,
+      minCols: 40,
+      minRows: 10,
     });
 
     ws.close();

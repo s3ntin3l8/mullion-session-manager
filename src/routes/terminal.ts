@@ -4,6 +4,7 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import type { SocketLike } from "../services/socket-channel.js";
+import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../services/pty-manager.js";
 // ResizeMessage/ExitedMessage physically live in src/shared/ws-protocol.ts
 // (imported by the frontend from the same file too — see TerminalPane.tsx's
 // own import) as TerminalWSMessage's two arms. ResizeMessage used to be a
@@ -76,7 +77,16 @@ export function attachSocketToSession(
   // resize() below.
   const sendGeometry = () => {
     if (socket.readyState !== socket.OPEN) return;
-    const geometryMessage: GeometryMessage = { type: "geometry", ...session.size };
+    // minCols/minRows: the constant floor every session's geometry is
+    // clamped to (see GeometryMessage's own doc comment for why the
+    // frontend needs this as a stable narrow-pane font-fit target, distinct
+    // from `session.size` above which changes on every resize).
+    const geometryMessage: GeometryMessage = {
+      type: "geometry",
+      ...session.size,
+      minCols: MIN_TERMINAL_COLS,
+      minRows: MIN_TERMINAL_ROWS,
+    };
     socket.send(JSON.stringify(geometryMessage));
   };
 
