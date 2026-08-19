@@ -85,6 +85,14 @@ export interface WorkerPreambleOptions {
  * spawn. Kept to the things an agent cannot discover from inside the
  * worktree — deliberately NOT a restatement of CLAUDE.md, which the agent
  * already reads (the worktree is a checkout of the same repo).
+ *
+ * The verification-gate bullet below doesn't break that rule even though it
+ * points at CLAUDE.md/AGENTS.md/README: it names no commands, so it stays
+ * correct across the arbitrary target repos Task Master runs against (a Go
+ * repo's gate looks nothing like this one's `make lint`). It establishes an
+ * obligation this repo's own docs can't — Mullion opens the pull request
+ * only AFTER the worker's turn ends, so nothing already in a target repo's
+ * docs tells the agent it will never see CI's result.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   const { task, branchName, worktreePath, budgetMinutes, auto } = opts;
