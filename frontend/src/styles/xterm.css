@@ -96,12 +96,18 @@
    flick. Scoped to `pointer: coarse` so mouse-driven drag-to-reorder is
    untouched — this only changes touch input.
 
-   Accepted trade-off: a horizontal finger drag on a tab now pans the strip
-   instead of reordering that tab. Vertical drags are unaffected, so
-   dragging a tab out to another group or splitting still works by touch;
-   only within-strip reorder-by-touch is lost. No JS change needed — once
-   the browser owns the pan it fires `pointercancel`, which
-   PointerDragSource already handles. */
+   Accepted trade-off (Hermes review, PR #723) — `touch-action: pan-x`
+   reserves the horizontal axis for the browser's own panning, which claims
+   any predominantly-horizontal drag (firing `pointercancel`) before
+   PointerDragSource's own movement threshold can promote it to a drag. So
+   a touch drag-out to reorder/split now effectively needs a
+   predominantly-VERTICAL initial movement — pan-x doesn't reserve that
+   axis, so PointerDragSource can still win it — rather than "any
+   direction," as an earlier version of this comment claimed. Only
+   within-strip horizontal reorder-by-touch is fully lost; a vertical-led
+   drag-out still works. No JS change needed either way — once the browser
+   claims a gesture it fires `pointercancel`, which PointerDragSource
+   already handles. */
 @media (pointer: coarse) {
   .cmux-root .dv-tab {
     touch-action: pan-x;
@@ -111,6 +117,17 @@
   }
   .cmux-root .dv-tabs-and-actions-container .dv-void-container {
     touch-action: pan-x;
+  }
+  /* Hermes review, PR #723 — the vertical-header strip's own void area
+     otherwise still inherits dockview's `touch-action: none` above, since
+     the horizontal rule's specificity doesn't cover it: a flick in the
+     empty area of an edge-group (vertical) header wouldn't pan.
+     `.dv-tabs-container-vertical` is a modifier on `.dv-tabs-container`
+     itself (dockview.css), a SIBLING of `.dv-void-container` under the same
+     `.dv-tabs-and-actions-container` — not an ancestor of it — so `:has()`
+     is what actually reaches the sibling void area from that modifier. */
+  .cmux-root .dv-tabs-and-actions-container:has(.dv-tabs-container-vertical) .dv-void-container {
+    touch-action: pan-y;
   }
   /* dockview's own 3px scrollbar (dockview.css) isn't a usable touch
      target and only eats height out of the ~35px strip. */
