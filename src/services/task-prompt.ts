@@ -294,12 +294,16 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
 
 /** Renders a parsed verdict back into the plain-text form the review
  * comment and the review-feedback re-seed prompt both already expect —
- * summary prose, then each anchored finding as a `path:line` bullet.
- * `task-github-sync.ts`'s own PR-review posting (structured, not this
- * text) consumes `ParsedReviewFindings.findings` directly instead. */
+ * summary prose, then each anchored finding as a `path:line` bullet,
+ * severity-prefixed when the reviewer gave one. `task-github-sync.ts`'s own
+ * PR-review posting (structured, not this text) consumes
+ * `ParsedReviewFindings.findings` directly instead. */
 export function renderReviewFindingsMarkdown(parsed: ParsedReviewFindings): string {
   if (parsed.findings.length === 0) return parsed.summary;
-  const bullets = parsed.findings.map((f) => `- **${f.path}:${f.line}** — ${f.body}`);
+  const bullets = parsed.findings.map((f) => {
+    const prefix = f.severity ? `[${f.severity}] ` : "";
+    return `- ${prefix}**${f.path}:${f.line}** — ${f.body}`;
+  });
   return [parsed.summary, "", ...bullets].join("\n");
 }
 

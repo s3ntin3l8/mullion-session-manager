@@ -1414,7 +1414,14 @@ describe("reconcileTasks", () => {
       fs.writeFileSync(findingsPath, content);
     }
 
-    it("ingests non-empty findings, appends them, and auto-returns to in_progress exactly once", async () => {
+    // Doubles as the freeform/legacy-text regression test: this findings
+    // file is plain text, not JSON, so it only reaches this behavior via
+    // parseReviewFindings's tolerant fallback to `changes-requested` (see
+    // that function's own doc comment in task-prompt.ts). If a future
+    // change ever narrowed the fallback verdict, this is the test that
+    // would catch it — tied here explicitly so a failure points at the
+    // right place.
+    it("ingests non-empty freeform findings (parsed as changes-requested via the tolerant fallback), appends them, and auto-returns to in_progress exactly once", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(app, taskId, 0, "Fix the null check on line 42.");
@@ -1816,6 +1823,49 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
       expect(row.reviewRounds).toBe(0);
       expect(row.reviewFindings).toContain("Possibly a partial review");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // Coverage gap flagged in this PR's own review: every other "exited"
+    // test above uses freeform text, which the tolerant fallback always
+    // parses as changes-requested — none of them actually exercise a
+    // genuine JSON `verdict: "clean"` on a non-"finished" session. Auto-
+    // return is already gated on `derived.status === "finished"`
+    // independent of the verdict, so this can't currently misfire — this
+    // test pins that guarantee explicitly rather than leaving it implicit.
+    it("ingests and comments a JSON 'clean' verdict from an exited review session, and does not auto-return", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({ verdict: "clean", summary: "Looked clean right before the crash." }),
+      );
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ endedReason: "process-exit", exitCode: 0 })
+                : fakeInfo(),
+          }) as never,
+      );
+      app.db
+        .update(sessions)
+        .set({ status: "exited" })
+        .where(eq(sessions.id, reviewSessionId))
+        .run();
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("Looked clean right before the crash.");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
 
