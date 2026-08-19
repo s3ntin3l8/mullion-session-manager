@@ -162,16 +162,21 @@
    Fix: repaint it as an ::after overlay so it sits ABOVE those opaque tab
    backgrounds. Exactly the trick .panel-body-highlight::after below uses,
    for the identical reason (PR #313's bug — see its comment).
-   `position: absolute` is load-bearing beyond anchoring: this header is a
-   flex container, so an in-flow ::after would become a flex item and shift
-   the right-actions strip.
+   `position: absolute` is load-bearing beyond anchoring: `inset: 0` only
+   has an effect on an out-of-flow element, so without it this ::after
+   couldn't become a full-header overlay at all.
    z-index 6: .dv-tabs-container's own `transform: translate3d(0,0,0)` (a GPU
    hack, dockview.css) already makes it a stacking context, so dockview's
    z-index:5 inter-tab dividers/focus outlines and its z-index:2 sticky
    pinned tabs are sealed inside it and any positive value would clear them —
-   6 is chosen so this stays correct if dockview ever drops that transform,
-   and stays BELOW the z-index:10/20 tier (panel overlays, the portaled
-   kebab menu) that must remain untinted.
+   6 is chosen so this stays correct if dockview ever drops that transform.
+   It only has to clear elements genuinely inside .dockview-container's own
+   stacking order (e.g. .panel-body-highlight::after's z-index: 10, a
+   different pane's subtree, below); .pane-tab-overflow-menu (z-index: 20)
+   is portaled to document.body (PaneActionsMenu.tsx/KebabMenu.tsx) and is
+   kept untinted by .dockview-container's `isolation: isolate` (sidebar.css)
+   sealing dockview's internal z-indexes into their own context, not by any
+   numeric comparison with this ::after's z-index.
    The `position: relative` and the ::after are deliberately scoped to the
    same `:has()` state rather than applied to every header: outside attention
    there is nothing to anchor, and the header keeps dockview's own (static)
@@ -187,7 +192,7 @@
    the old per-tab pair had; the keyframes themselves are reused verbatim —
    an inset shadow on an `inset: 0` overlay is geometrically identical to one
    on the header itself. `.cmux-root` anchors these for the same reasons as
-   this file's own .dv-tab overrides above. */
+   xterm.css's own .dv-tab overrides. */
 .cmux-root .dv-tabs-and-actions-container:has(.pane-tab.attention-ring) {
   position: relative;
 }
