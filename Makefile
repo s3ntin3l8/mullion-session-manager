@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev test test-backend test-coverage test-e2e lint typecheck format format-check build clean
+.PHONY: help install install-hooks dev test test-backend test-coverage test-e2e lint typecheck format format-check build clean wt review
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -44,3 +44,12 @@ build: ## Production build
 
 clean: ## Remove node_modules and caches
 	rm -rf node_modules dist coverage .vitest-cache
+
+wt: ## Create a developer worktree off origin/main: make wt name=<slug>
+	@if [ -z "$(name)" ]; then echo "Usage: make wt name=<slug>"; exit 1; fi
+	git fetch origin
+	git worktree add .wt/$(name) -b $(name) origin/main
+	cd .wt/$(name) && npm ci && npm --prefix frontend ci
+
+review: ## Request a Hermes review on the current branch's PR
+	gh pr comment --body "@s3ntin3l8-hermes Review"
