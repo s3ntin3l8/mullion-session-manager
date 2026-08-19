@@ -41,8 +41,8 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 // A minimal fake DockviewApi covering exactly the surface the restore/
 // autosave effects touch: clear/fromJSON/toJSON/getPanel/panels for the
 // restore path, groups/hasMaximizedGroup/exitMaximizedGroup/maximizeGroup/
-// activePanel for applyMobilePresentation (panelUtils.ts, exercised with
-// isMobile: false below so it's a same-state no-op), and onDidLayoutChange
+// activePanel for applyLayoutPresentation (panelUtils.ts, exercised with
+// layoutTier: "desktop" below so it's a same-state no-op), and onDidLayoutChange
 // for the autosave path — `fireLayoutChange` lets a test simulate dockview
 // firing that event, the same way fromJSON()'s own panel-mount events or a
 // real user edit would.
@@ -117,7 +117,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: 1,
         workspaces: [workspace],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -146,7 +146,7 @@ describe("useWorkspacePersistence", () => {
           dockviewApi: api,
           activeWorkspaceId: 1,
           workspaces,
-          isMobile: false,
+          layoutTier: "desktop",
           setPanelsVersion,
         }),
       { initialProps: { workspaces: [workspace] } },
@@ -173,7 +173,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: 1,
         workspaces: [workspace],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -210,7 +210,7 @@ describe("useWorkspacePersistence", () => {
           dockviewApi: api,
           activeWorkspaceId,
           workspaces,
-          isMobile: false,
+          layoutTier: "desktop",
           setPanelsVersion,
         }),
       { initialProps: { activeWorkspaceId: 1, workspaces: [ws1] } },
@@ -255,7 +255,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: 99,
         workspaces: [makeWorkspace({ id: 1 })],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -278,7 +278,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: 1,
         workspaces: [workspace],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -320,7 +320,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: 1,
         workspaces: [workspace],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -358,7 +358,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: 1,
         workspaces: [workspace],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -385,7 +385,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: null,
         activeWorkspaceId: 1,
         workspaces: [makeWorkspace()],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );
@@ -396,7 +396,7 @@ describe("useWorkspacePersistence", () => {
         dockviewApi: api,
         activeWorkspaceId: null,
         workspaces: [makeWorkspace()],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       }),
     );

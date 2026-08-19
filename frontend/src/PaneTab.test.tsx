@@ -74,7 +74,11 @@ function storeState() {
     renameSession: vi.fn(),
     deleteSession: vi.fn().mockResolvedValue(undefined),
     theme: "dark",
-    settings: { sessions: { confirmBeforeKill: false } },
+    settings: {
+      sessions: { confirmBeforeKill: false },
+      layoutMode: "desktop",
+      tabletPaneCap: 2,
+    },
     markEventSeen,
     requestSplit,
   };
@@ -685,7 +689,10 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("View timeline"));
 
-      expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session);
+      expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session, {
+        tier: "desktop",
+        tabletPaneCap: 2,
+      });
     });
   });
 

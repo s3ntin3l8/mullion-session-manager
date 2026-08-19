@@ -12,6 +12,7 @@ import {
   openTimelinePanel,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
+import type { LayoutContext } from "../lib/layoutTier.js";
 
 // The six near-identical project-scoped panel kinds (GitHub, Git, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
@@ -19,7 +20,7 @@ import type { ProjectPanelKindConfig } from "../panelUtils.js";
 // configs drive. Module-level (not created per-render) so each is a stable
 // object identity, same as any other constant App.tsx or its hooks close
 // over — this is what lets onOpenGitHub/onOpenGit/etc. below list only the
-// values that can actually change (dockviewApi/projects/isMobile/
+// values that can actually change (dockviewApi/projects/layout/
 // setSidebarOpen) in their own useCallback dependency arrays, with no need
 // to also list the config object itself.
 const GITHUB_CONFIG: ProjectPanelKindConfig = {
@@ -62,7 +63,7 @@ const BROWSER_CONFIG: ProjectPanelKindConfig = {
 
 export interface UsePanelOpenerParams {
   dockviewApi: DockviewApi | null;
-  isMobile: boolean;
+  layout: LayoutContext;
   projects: Project[];
   // Only onOpenSession's cross-workspace branch reads this (findSessionWorkspace) —
   // every other opener below is workspace-agnostic (it only ever acts within
@@ -80,8 +81,8 @@ export interface UsePanelOpenerParams {
   // would silently break that.
   // Must be the raw `useState` setter (stable identity forever) — same
   // requirement as useDockviewDrop's `setSidebarOpen`/useWorkspacePersistence's
-  // `setPanelsVersion`/useMobileLayout's `setIsMobile` (see those hooks' own
-  // param comments). Listed in every callback below's own dependency array
+  // `setPanelsVersion`/useLayoutPresentation's `setLayoutTier` (see those
+  // hooks' own param comments). Listed in every callback below's own dependency array
   // purely because eslint's exhaustive-deps rule can no longer statically
   // prove a function-parameter's identity is stable the way it can for a
   // bare `useState` call in this same file — not because it ever actually
@@ -100,7 +101,7 @@ export interface UsePanelOpenerResult {
   // array, App.tsx's handleLaunched lists it in its useCallback dependency
   // array, and App.tsx's onOpenSessionRef mirrors it into a ref on every
   // change — all three rely on this only changing identity when
-  // dockviewApi/isMobile/projects/workspaces/activeWorkspaceId actually
+  // dockviewApi/layout/projects/workspaces/activeWorkspaceId actually
   // change (see this hook's own onOpenSession dependency array), not on
   // every render.
   onOpenSession: (session: Session) => void;
@@ -150,7 +151,7 @@ export interface UsePanelOpenerResult {
 // Unlike every other hook in this extraction series (34a-34g), this one
 // registers no effects at all — every value it returns is a `useCallback`.
 // That means its call-site position in App.tsx is NOT constrained by effect
-// ordering the way useWorkspacePersistence/useMobileLayout/useSessionDeepLink
+// ordering the way useWorkspacePersistence/useLayoutPresentation/useSessionDeepLink
 // are. It IS constrained by closure order, though: `onOpenSession` must be
 // defined before useSessionDeepLink's own call and before the
 // onOpenSessionRef mirroring effect both read it — so App.tsx calls this
@@ -171,7 +172,7 @@ export interface UsePanelOpenerResult {
 // helper that doesn't actually fit their shape.
 export function usePanelOpener({
   dockviewApi,
-  isMobile,
+  layout,
   projects,
   workspaces,
   activeWorkspaceId,
@@ -208,92 +209,92 @@ export function usePanelOpener({
           useDashboardStore.getState().triggerPanelHighlight(panelId);
           useDashboardStore.getState().setActiveWorkspaceId(wsId);
         } else {
-          openSessionPanel(dockviewApi, session, isMobile, projects);
+          openSessionPanel(dockviewApi, session, layout, projects);
         }
       }
       setSidebarOpen(false);
     },
-    [dockviewApi, isMobile, projects, workspaces, activeWorkspaceId, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, projects, workspaces, activeWorkspaceId, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenSessionAsFloat = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openSessionPanel(dockviewApi, session, isMobile, projects);
+      openSessionPanel(dockviewApi, session, layout, projects);
       setSidebarOpen(false);
     },
-    [dockviewApi, isMobile, projects, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, projects, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenTimeline = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openTimelinePanel(dockviewApi, session);
+      openTimelinePanel(dockviewApi, session, layout);
       setSidebarOpen(false);
     },
-    [dockviewApi, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenGitHub = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, GITHUB_CONFIG);
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, GITHUB_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenGit = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, GIT_CONFIG);
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, GIT_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenAgentRules = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, AGENT_RULES_CONFIG);
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, AGENT_RULES_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenDockConfig = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, DOCK_CONFIG_CONFIG);
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, DOCK_CONFIG_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenSkills = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, SKILLS_CONFIG);
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, SKILLS_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenBrowser = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, isMobile, BROWSER_CONFIG);
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, BROWSER_CONFIG);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenTasks = useCallback(() => {
@@ -317,10 +318,10 @@ export function usePanelOpener({
       // a workspace with no tiled panels), making a bare `maximizeGroup`
       // throw the same way applyMobilePresentation's own fix (panelUtils.ts)
       // prevents elsewhere.
-      if (isMobile) maximizeIfTiled(dockviewApi, panel);
+      if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
       setSidebarOpen(false);
     },
-    [dockviewApi, isMobile, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
   );
 
   const onOpenBlankBrowser = useCallback(() => {
@@ -333,9 +334,9 @@ export function usePanelOpener({
       params: { kind: "external" },
     });
     // Same guard as onOpenBrowserUrl above — see its own comment.
-    if (isMobile) maximizeIfTiled(dockviewApi, panel);
+    if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
     setSidebarOpen(false);
-  }, [dockviewApi, isMobile, setSidebarOpen, leaveTaskView]);
+  }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
 
   return {
     onOpenSession,

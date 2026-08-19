@@ -3,7 +3,8 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
 import { useDashboardStore } from "../store/index.js";
 import type { Workspace } from "../api/index.js";
-import { serializeForPersist, applyMobilePresentation, closeLegacyPanels } from "../panelUtils.js";
+import { serializeForPersist, applyLayoutPresentation, closeLegacyPanels } from "../panelUtils.js";
+import type { LayoutTier } from "../lib/layoutTier.js";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -20,7 +21,7 @@ export interface UseWorkspacePersistenceParams {
   dockviewApi: DockviewApi | null;
   activeWorkspaceId: number | null;
   workspaces: Workspace[];
-  isMobile: boolean;
+  layoutTier: LayoutTier;
   // App.tsx owns this state (it's also bumped/read by unrelated effects and
   // rendering elsewhere in that component) — passed in rather than owned
   // here so there's still exactly one `panelsVersion` in the tree. Must be
@@ -69,7 +70,7 @@ export function useWorkspacePersistence({
   dockviewApi,
   activeWorkspaceId,
   workspaces,
-  isMobile,
+  layoutTier,
   setPanelsVersion,
 }: UseWorkspacePersistenceParams): UseWorkspacePersistenceResult {
   const restoringRef = useRef(false);
@@ -198,13 +199,13 @@ export function useWorkspacePersistence({
     // try/catch above: if this ever threw, landing in the catch would
     // dockviewApi.clear() and wipe a layout that had just restored
     // successfully. Placed here it's also safe on the error path — clear()
-    // leaves an empty grid, and applyMobilePresentation no-ops on that.
+    // leaves an empty grid, and applyLayoutPresentation no-ops on that.
     // Safe regardless of whether restoringRef suppresses this call's own
     // onDidLayoutChange echo, since serializeForPersist strips
     // maximizedNode unconditionally on every future save.
-    applyMobilePresentation(dockviewApi, isMobile);
+    applyLayoutPresentation(dockviewApi, layoutTier);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
-  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, isMobile]);
+  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, layoutTier]);
 
   // Any real layout change (add/remove/move panel, or a splitter-drag
   // resize) schedules a debounced autosave, unless it's the restore

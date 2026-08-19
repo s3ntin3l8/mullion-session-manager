@@ -6,6 +6,7 @@ import { useDashboardStore } from "./store/index.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./ui/icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
+import { useLayoutTier } from "./lib/layoutTier.js";
 
 export interface BrowserPanelParams {
   projectId?: number;
@@ -21,11 +22,6 @@ type BrowserPanelState =
   | { status: "loading" }
   | { status: "unavailable"; message: string }
   | { status: "ready"; src: string };
-
-// Mirrors App.tsx's/panelUtils.ts's own private MOBILE_BREAKPOINT_QUERY —
-// see panelUtils.ts's comment on why this stays a small per-file duplicate
-// rather than a shared export.
-const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
 
 function isDangerousIframeSrc(url: string): boolean {
   try {
@@ -103,7 +99,8 @@ export function BrowserPanel({
   api?: DockviewPanelApi;
 }) {
   const isExternal = params.kind === "external";
-  const { projects, projectUrls, refreshProjectUrls } = useDashboardStore();
+  const { projects, projectUrls, refreshProjectUrls, settings } = useDashboardStore();
+  const layoutTier = useLayoutTier(settings.layoutMode);
   const project = isExternal ? undefined : projects.find((p) => p.id === params.projectId);
   const projectId = project?.id;
   const devServerUrl = project?.devServerUrl;
@@ -563,10 +560,10 @@ export function BrowserPanel({
           // explicit user action (clicking Rename/Create/Add/Deny, or the
           // login screen itself) — this one fires the instant an empty
           // browser panel mounts, with no click involved, popping the
-          // keyboard on mobile before the user has asked to type a URL.
-          autoFocus={
-            state.status === "empty" && !window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
-          }
+          // keyboard before the user has asked to type a URL. Tablet tier
+          // plan, PR 4 — extended from phone-only to phone-or-tablet: the
+          // same soft-keyboard concern applies on a touch-primary tablet.
+          autoFocus={state.status === "empty" && layoutTier === "desktop"}
           onKeyDown={(e) => {
             if (e.key === "Enter") navigate();
           }}

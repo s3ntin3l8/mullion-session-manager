@@ -5,19 +5,11 @@ import type {
   Position,
   SerializedDockview,
 } from "dockview";
-import type { Task, Workspace } from "./api/index.js";
+import type { Task, Workspace, TabletPaneCap } from "./api/index.js";
 import { positionToDirection } from "dockview";
 import type { Session } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
-
-// Mirrors App.tsx's own MOBILE_BREAKPOINT_QUERY (kept private there) —
-// openTimelinePanel below is called from PaneTab.tsx's overflow menu, which
-// has no access to App.tsx's live `isMobile` React state (it isn't threaded
-// through dockview's tab `params`, which must stay JSON-serializable for
-// workspace layout persistence — a callback/boolean prop can't survive
-// that). A live matchMedia() check at call time is just as correct as a
-// stale-by-one-render boolean would be, without new plumbing.
-const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
+import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 
 // U9 — App.tsx's global Escape handler's own action list, extracted here
 // (App.tsx itself can only export components — react-refresh/only-export-
@@ -219,6 +211,48 @@ function desktopPositioning(
     : { position: { direction: "right" } };
 }
 
+// Tablet tier plan, PR 4 — the capped-grid policy that gives tablet real
+// layout work of its own, rather than being a relabeled desktop. Docks as
+// its own column (`position: { direction: "right" }`) while fewer than
+// `cap` columns are tiled; once the cap is reached, a new panel opens as a
+// tab in the active group instead (`{}` — dockview's own bare-add default,
+// the same mechanism phone already uses for single-pane mode and PR 1 made
+// touch-scrollable) — never as a float, so no floating-window touch
+// interaction is introduced on tablet at all.
+//
+// Grouped by `group.id`, not by panel count: a tablet group that already
+// holds two tabs (from a user manually tabbing panels together, or PR 1's
+// now-scrollable strip) still counts as ONE column against the cap, not
+// two — the cap limits simultaneously visible columns, not open panels.
+function tabletPositioning(
+  api: DockviewApi,
+  cap: TabletPaneCap,
+): { position: { direction: "right" } } | Record<string, never> {
+  const tiledGroupIds = new Set(api.panels.filter(isTiledPanel).map((p) => p.group.id));
+  return tiledGroupIds.size < cap ? { position: { direction: "right" } } : {};
+}
+
+// Single switch every open-or-focus-by-stable-id helper below routes
+// through: phone never positions explicitly (bare add, single-pane via
+// maximizeGroup — see each caller's own `layout.tier === "phone"` check);
+// tablet uses the capped grid above; desktop is unchanged.
+function positioningForTier(
+  api: DockviewApi,
+  layout: LayoutContext,
+):
+  | { floating: { width: number; height: number } }
+  | { position: { direction: "right" } }
+  | Record<string, never> {
+  switch (layout.tier) {
+    case "phone":
+      return {};
+    case "tablet":
+      return tabletPositioning(api, layout.tabletPaneCap);
+    case "desktop":
+      return desktopPositioning(api);
+  }
+}
+
 // A dockview panel's `params` is untyped (Parameters = Record<string,
 // unknown> | undefined) from the group/board's point of view — only a
 // `terminal` component panel's params are actually `{ sessionId: number }`;
@@ -316,58 +350,57 @@ export function shouldAutoOpenChildPanels(input: {
 export function openSessionPanel(
   api: DockviewApi,
   session: Session,
-  isMobile: boolean,
+  layout: LayoutContext,
   projects: { id: number; name: string | null }[],
 ): void {
   const panelId = `session-${session.id}`;
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
-    if (isMobile) maximizeIfTiled(api, existing);
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
   }
 
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
-  // Desktop: see desktopPositioning's own comment for the float-vs-dock
-  // choice and floating size. Mobile keeps its existing bare add +
-  // maximizeGroup — it never has floating groups and relies on the
-  // single-group + mobile-tabs model, which an explicit position would break.
+  // See positioningForTier's own comment for the tier switch. Phone keeps
+  // its existing bare add + maximizeGroup — it never has floating groups
+  // and relies on the single-group + mobile-tabs model, which an explicit
+  // position would break.
   const panel = api.addPanel({
     id: panelId,
     component: "terminal",
     tabComponent: "terminal",
     title: initialPaneTitle(session, projectName),
     params: { sessionId: session.id },
-    ...(!isMobile && desktopPositioning(api)),
+    ...positioningForTier(api, layout),
   });
-  if (isMobile) maximizeIfTiled(api, panel);
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
-// Self-contained variant of openSessionPanel for callers without `isMobile`
-// threaded through React state (e.g. PaneActionsMenu.tsx's promote flow,
-// which — like openTimelinePanel/openBrowserPanePanel below — has no access
-// to App.tsx's live `isMobile` state) — same live matchMedia() rationale as
-// those two.
+// Thin wrapper around openSessionPanel for callers that don't otherwise
+// need the panel/project bookkeeping split out (e.g. PaneActionsMenu.tsx's
+// promote flow) — same shape as openSessionPanel itself now that both take
+// an explicit LayoutContext rather than either one resolving it internally.
 export function openOrFocusSessionPanel(
   api: DockviewApi,
   session: Session,
+  layout: LayoutContext,
   projects: { id: number; name: string | null }[],
 ): void {
-  openSessionPanel(api, session, window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches, projects);
+  openSessionPanel(api, session, layout, projects);
 }
 
 // Issue #212 — opens (or focuses) a session's structured-event timeline
 // panel (SessionTimeline.tsx). Same open-or-focus-by-stable-id and
-// float-if-tiled-else-dock shape as openSessionPanel above, just a distinct
+// tier-positioned shape as openSessionPanel above, just a distinct
 // `timeline-<id>` panel id/component so it can coexist with that session's
 // own terminal panel (and be opened/closed independently of it).
-export function openTimelinePanel(api: DockviewApi, session: Session): void {
+export function openTimelinePanel(api: DockviewApi, session: Session, layout: LayoutContext): void {
   const panelId = `timeline-${session.id}`;
   const existing = api.getPanel(panelId);
-  const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) maximizeIfTiled(api, existing);
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
   }
 
@@ -376,26 +409,29 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
     component: "timeline",
     title: `Timeline: ${session.name || session.command}`,
     params: { sessionIds: [session.id] },
-    ...(!isMobile && desktopPositioning(api)),
+    ...positioningForTier(api, layout),
   });
-  if (isMobile) maximizeIfTiled(api, panel);
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
 // Phase 3 (#181) — opens (or focuses) a session's CDP-controlled browser
 // pane (BrowserPane.tsx, distinct from the iframe-based BrowserPanel/
 // `browser` component above). Same open-or-focus-by-stable-id and
-// float-if-tiled-else-dock shape as openTimelinePanel above; a `browserPane-
+// tier-positioned shape as openTimelinePanel above; a `browserPane-
 // <sessionId>` panel id lets it coexist with that session's own terminal
 // and timeline panels. The pane connects over /ws/browser/:sessionId
 // (routes/browser.ts, #180), which resolves the session's *project*
 // browser — there's no separate project lookup needed here.
-export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
+export function openBrowserPanePanel(
+  api: DockviewApi,
+  session: Session,
+  layout: LayoutContext,
+): void {
   const panelId = `browserPane-${session.id}`;
   const existing = api.getPanel(panelId);
-  const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) maximizeIfTiled(api, existing);
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
   }
 
@@ -404,9 +440,9 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
     component: "browserPane",
     title: `Agent Browser: ${session.name || session.command}`,
     params: { sessionId: session.id },
-    ...(!isMobile && desktopPositioning(api)),
+    ...positioningForTier(api, layout),
   });
-  if (isMobile) maximizeIfTiled(api, panel);
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
 // Phase 6 (6.5/#218) — opens (or focuses) a task's detail panel
@@ -419,13 +455,12 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
 // still restores correctly (same "opaque blob" concern as
 // TasksPanelRedirect.tsx's own header comment). Kept exported as a ready
 // building block for a future "pop this drawer out to a panel" action.
-export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
+export function openTaskDetailPanel(api: DockviewApi, task: Task, layout: LayoutContext): void {
   const panelId = `task-detail-${task.id}`;
   const existing = api.getPanel(panelId);
-  const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
   if (existing) {
     existing.api.setActive();
-    if (isMobile) maximizeIfTiled(api, existing);
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
   }
 
@@ -434,9 +469,9 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
     component: "task-detail",
     title: `Task: ${task.title}`,
     params: { taskId: task.id },
-    ...(!isMobile && desktopPositioning(api)),
+    ...positioningForTier(api, layout),
   });
-  if (isMobile) maximizeIfTiled(api, panel);
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
 // PR 34h of the hook-extraction series — App.tsx used to declare six
@@ -460,14 +495,15 @@ export interface ProjectPanelKindConfig {
   // label for both cases (e.g. onOpenGitHub: `GitHub: ${project.name}` /
   // "GitHub"), so a single field covers both rather than two.
   titleLabel: string;
-  // Whether to apply the float-if-tiled-else-dock desktop positioning
-  // (desktopPositioning above) when creating a NEW panel. True for every kind except
-  // `browser`: App.tsx's pre-existing onOpenBrowser never carried this
-  // spread — a genuine asymmetry from the other five, not an oversight in
-  // this generalization — so usePanelOpener.ts's onOpenBrowser passes
-  // `false` here specifically to preserve that exact (surprising but
-  // load-bearing "zero behavior change") quirk. See that hook's own
-  // onOpenBrowser doc comment.
+  // Whether to apply tier-based positioning (positioningForTier above) when
+  // creating a NEW panel. True for every kind except `browser`: App.tsx's
+  // pre-existing onOpenBrowser never carried this spread — a genuine
+  // asymmetry from the other five, not an oversight in this generalization
+  // — so usePanelOpener.ts's onOpenBrowser passes `false` here specifically
+  // to preserve that exact (surprising but load-bearing "zero behavior
+  // change") quirk. See that hook's own onOpenBrowser doc comment. Gates
+  // ALL tier positioning, not just desktop's — a `browser` panel opened on
+  // tablet also stays a bare add, same reasoning.
   applyDesktopPositioning: boolean;
 }
 
@@ -475,7 +511,7 @@ export function openOrFocusProjectPanel(
   api: DockviewApi,
   projectId: number,
   projects: { id: number; name: string | null }[],
-  isMobile: boolean,
+  layout: LayoutContext,
   config: ProjectPanelKindConfig,
 ): void {
   const project = projects.find((p) => p.id === projectId);
@@ -483,7 +519,7 @@ export function openOrFocusProjectPanel(
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
-    if (isMobile) maximizeIfTiled(api, existing);
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
   }
 
@@ -492,9 +528,9 @@ export function openOrFocusProjectPanel(
     component: config.kind,
     title: project ? `${config.titleLabel}: ${project.name}` : config.titleLabel,
     params: { projectId },
-    ...(config.applyDesktopPositioning && !isMobile ? desktopPositioning(api) : {}),
+    ...(config.applyDesktopPositioning ? positioningForTier(api, layout) : {}),
   });
-  if (isMobile) maximizeIfTiled(api, panel);
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
@@ -732,19 +768,30 @@ export function serializeForPersist(api: DockviewApi): SerializedDockview {
 // (there is nothing tiled to show single-pane) rather than crashing.
 //
 // The header.hidden sync itself is deliberately asymmetric: only TILED
-// groups are ever hidden entering mobile, but EVERY group (tiled or
+// groups are ever hidden entering phone, but EVERY group (tiled or
 // floating) is restored to visible leaving it. A floating group's header is
 // its only drag handle and close button — hiding it was never done to begin
 // with (the loop below only touches tiled groups going in) — but the
 // restore direction has to cover both anyway, otherwise a group that was
 // tiled while its header got hidden and then dragged into a floating
-// position before the next breakpoint change would leave mobile with a
+// position before the next breakpoint change would leave phone with a
 // hidden header and no way to undo it.
-export function applyMobilePresentation(api: DockviewApi, isMobile: boolean): void {
+//
+// Tablet tier plan, PR 4 — renamed from applyMobilePresentation and
+// branched on the resolved tier rather than an isMobile boolean, now that
+// it's a three-state switch. This single-pane maximize-and-hide-headers
+// behavior applies ONLY to the phone tier: tablet keeps every tiled group's
+// header visible (PR 1's touch-scrollable strip is how a tablet user reaches
+// a group's other tabs) and never proactively maximizes for tier reasons —
+// it shares desktop's "not phone" branch below (restore every header, exit
+// any maximize left over from a phone-tier session before this transition),
+// the same cleanup desktop already needed with no special-casing added.
+export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): void {
+  const isPhone = tier === "phone";
   for (const group of api.groups) {
-    if (!isMobile || isTiledGroup(group)) group.header.hidden = isMobile;
+    if (!isPhone || isTiledGroup(group)) group.header.hidden = isPhone;
   }
-  if (!isMobile) {
+  if (!isPhone) {
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
     return;
   }

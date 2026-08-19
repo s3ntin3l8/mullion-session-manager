@@ -19,12 +19,13 @@ import { openTimelinePanel, openBrowserPanePanel, openOrFocusSessionPanel } from
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { useLayoutContext } from "./lib/layoutTier.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
 // iterative-planet.md) — the kill/rename/timeline/browser/promote overflow
 // menu, extracted out of PaneTab.tsx so App.tsx's mobile pane bar can reach
 // the same actions dockview's own tab strip offers, instead of stranding
-// them behind a header that's now hidden on mobile (applyMobilePresentation,
+// them behind a header that's now hidden on phone (applyLayoutPresentation,
 // panelUtils.ts). PaneTab.tsx keeps its own inline double-click-to-rename
 // affordance and its own close (×) button — both are one-liners with no
 // shared state — and renders this component for everything else.
@@ -87,6 +88,7 @@ export function PaneActionsMenu({
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
   const projects = useDashboardStore((s) => s.projects);
+  const layout = useLayoutContext();
   // Issue: narrow headers overflow — PaneHeaderActions.tsx's own
   // split-right/split-down buttons hide below a certain group width, and
   // this is where they're still reachable from once they do (same
@@ -384,7 +386,7 @@ export function PaneActionsMenu({
                 className="pane-tab-overflow-item"
                 role="menuitem"
                 onClick={() => {
-                  closeMenuAfterAction(() => openTimelinePanel(containerApi, session));
+                  closeMenuAfterAction(() => openTimelinePanel(containerApi, session, layout));
                 }}
               >
                 <ListIcon size={14} style={{ color: "var(--muted)" }} />
@@ -396,7 +398,7 @@ export function PaneActionsMenu({
                 className="pane-tab-overflow-item"
                 role="menuitem"
                 onClick={() => {
-                  closeMenuAfterAction(() => openBrowserPanePanel(containerApi, session));
+                  closeMenuAfterAction(() => openBrowserPanePanel(containerApi, session, layout));
                 }}
               >
                 <BotIcon size={14} style={{ color: "var(--muted)" }} />
@@ -455,7 +457,7 @@ export function PaneActionsMenu({
             // promote — close it, then open/focus the replacement, so the
             // pane visibly hands off rather than just going dead.
             api.close();
-            openOrFocusSessionPanel(containerApi, newSession, projects);
+            openOrFocusSessionPanel(containerApi, newSession, layout, projects);
           }}
         />
       )}
