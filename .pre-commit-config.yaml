@@ -80,6 +80,18 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # Keeps AGENTS.md/GEMINI.md's shared briefing region from drifting when
+      # only one of the two is edited — see the script's own header comment
+      # for why it's an explicit file list, not a glob, and why CLAUDE.md
+      # isn't included.
+      - id: briefing-sync
+        name: agent briefing sync (AGENTS.md / GEMINI.md)
+        entry: node scripts/check-briefing-sync.mjs
+        language: system
+        files: '^(AGENTS|GEMINI)\.md$'
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: npm-test
         name: vitest (unit tests, backend)
         entry: npm run test
