@@ -47,6 +47,12 @@ clean: ## Remove node_modules and caches
 
 wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 	@if [ -z "$(name)" ]; then echo "Usage: make wt name=<slug>"; exit 1; fi
+	@echo "$(name)" | grep -Eq '^[a-zA-Z0-9._-]+$$' || \
+		(echo "Invalid name '$(name)': use only letters, digits, '.', '_', '-'."; exit 1)
+	@if [ -e ".wt/$(name)" ]; then echo ".wt/$(name) already exists."; exit 1; fi
+	@if git show-ref --verify --quiet "refs/heads/$(name)"; then \
+		echo "Branch '$(name)' already exists."; exit 1; \
+	fi
 	git fetch origin
 	git worktree add .wt/$(name) -b $(name) origin/main
 	cd .wt/$(name) && npm ci && npm --prefix frontend ci

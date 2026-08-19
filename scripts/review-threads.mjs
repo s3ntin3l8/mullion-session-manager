@@ -61,7 +61,7 @@ function listThreads(prNumber) {
     `pr=${prNumber}`,
   ]);
   const data = JSON.parse(out);
-  const threads = data.repository.pullRequest.reviewThreads.nodes;
+  const threads = data.data.repository.pullRequest.reviewThreads.nodes;
   const unresolved = threads.filter((t) => !t.isResolved);
   if (unresolved.length === 0) {
     console.log("No unresolved review threads.");
