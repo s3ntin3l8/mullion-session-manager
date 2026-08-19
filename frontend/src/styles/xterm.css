@@ -84,3 +84,40 @@
 .cmux-root .dv-default-tab-content {
   padding-left: 11px;
 }
+
+/* Touch panning of the tab strip — with more than ~2 tabs open the strip
+   overflows and the only way to reach the rest was a mouse wheel or the
+   3px scrollbar; a finger did nothing. dockview's own .dv-tabs-container
+   is already `overflow: auto; touch-action: pan-x` (dockview.css) — it IS
+   scrollable — but .dv-tab and .dv-void-container both ship
+   `touch-action: none` so PointerDragSource (dockview's touch
+   drag-to-reorder) owns every gesture that starts on them, and multi-tab
+   groups tile the strip with essentially no bare void surface left to
+   flick. Scoped to `pointer: coarse` so mouse-driven drag-to-reorder is
+   untouched — this only changes touch input.
+
+   Accepted trade-off: a horizontal finger drag on a tab now pans the strip
+   instead of reordering that tab. Vertical drags are unaffected, so
+   dragging a tab out to another group or splitting still works by touch;
+   only within-strip reorder-by-touch is lost. No JS change needed — once
+   the browser owns the pan it fires `pointercancel`, which
+   PointerDragSource already handles. */
+@media (pointer: coarse) {
+  .cmux-root .dv-tab {
+    touch-action: pan-x;
+  }
+  .cmux-root .dv-tabs-container-vertical .dv-tab {
+    touch-action: pan-y;
+  }
+  .cmux-root .dv-tabs-and-actions-container .dv-void-container {
+    touch-action: pan-x;
+  }
+  /* dockview's own 3px scrollbar (dockview.css) isn't a usable touch
+     target and only eats height out of the ~35px strip. */
+  .cmux-root .dv-tabs-container {
+    scrollbar-width: none;
+  }
+  .cmux-root .dv-tabs-container::-webkit-scrollbar {
+    display: none;
+  }
+}
