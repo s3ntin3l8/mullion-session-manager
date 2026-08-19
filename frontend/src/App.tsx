@@ -1068,8 +1068,17 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
     [dockviewApi, panelsVersion],
   );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const mobilePanels = useMemo(() => dockviewApi?.panels ?? [], [dockviewApi, panelsVersion]);
+  // Filtered to tiled panels only, same as tiledPaneCount above and for the
+  // same reason (independent code review): a leftover floating panel would
+  // otherwise get a tab in the mobile bar, and tapping it calls
+  // dockviewApi.maximizeGroup(panel) below — maximizeGroup on a floating
+  // panel throws (see applyMobilePresentation's own comment in
+  // panelUtils.ts), so that tap would crash inside this click handler.
+  const mobilePanels = useMemo(
+    () => dockviewApi?.panels.filter((p) => p.api.location.type === "grid") ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+    [dockviewApi, panelsVersion],
+  );
   // Projects with a session tiled in the active workspace, derived from the
   // live dockview panels the same way mobilePanels above walks them for the
   // mobile tab bar (panel.params.sessionId -> session.projectId) — reactive

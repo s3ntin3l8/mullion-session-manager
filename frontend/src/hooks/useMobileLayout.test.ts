@@ -68,8 +68,16 @@ function makeMockApi(options: { activePanel?: unknown } = {}) {
   return {
     api: api as unknown as DockviewApi,
     groups,
-    addGroup: () => {
-      const group = { header: { hidden: false } };
+    // `panels` defaults to a single tiled member — isTiledGroup (panelUtils.ts)
+    // reads `group.panels`, not a location field on the group itself, so a
+    // group with no panels would throw on `.some(...)` rather than behave as
+    // floating. Pass "floating" to exercise the onDidAddGroup skip-floating
+    // path (useMobileLayout.ts).
+    addGroup: (locationType: "grid" | "floating" = "grid") => {
+      const group = {
+        header: { hidden: false },
+        panels: [{ api: { location: { type: locationType } } }],
+      };
       groups.push(group);
       return group as unknown as { header: { hidden: boolean } };
     },
@@ -90,7 +98,7 @@ describe("useMobileLayout", () => {
   describe("breakpoint detection effect", () => {
     it("sets isMobile true and maximizes the active group when already mobile on mount", () => {
       stubMatchMedia(true);
-      const activePanel = { id: "session-1" };
+      const activePanel = { id: "session-1", api: { location: { type: "grid" } } };
       const { api } = makeMockApi({ activePanel });
       const setIsMobile = vi.fn();
 
@@ -126,7 +134,9 @@ describe("useMobileLayout", () => {
 
     it("re-applies presentation when dockviewApi transitions from null to non-null on the same breakpoint", () => {
       stubMatchMedia(true);
-      const { api } = makeMockApi({ activePanel: { id: "session-1" } });
+      const { api } = makeMockApi({
+        activePanel: { id: "session-1", api: { location: { type: "grid" } } },
+      });
       const setIsMobile = vi.fn();
 
       const { rerender } = renderHook(
@@ -165,6 +175,29 @@ describe("useMobileLayout", () => {
       // rather than asserting a mock call that mount's own initial
       // applyMobilePresentation(api, false) would already satisfy.
       expect(group.header.hidden).toBe(true);
+    });
+
+    // Only the desktop-to-mobile direction was covered above — this is the
+    // reverse crossing, going through applyMobilePresentation's own
+    // exitMaximizedGroup + header-restore path rather than its maximize
+    // path.
+    it("flips isMobile and un-hides headers on a live mobile-to-desktop crossing", () => {
+      const mql = stubMatchMedia(true);
+      const { api, addGroup } = makeMockApi();
+      vi.mocked(api.hasMaximizedGroup).mockReturnValue(true);
+      const group = addGroup();
+      group.header.hidden = true;
+      const setIsMobile = vi.fn();
+
+      renderHook(() => useMobileLayout({ dockviewApi: api, setIsMobile }));
+      setIsMobile.mockClear();
+
+      mql.matches = false;
+      mql.dispatchEvent(new Event("change"));
+
+      expect(setIsMobile).toHaveBeenCalledWith(false);
+      expect(api.exitMaximizedGroup).toHaveBeenCalledTimes(1);
+      expect(group.header.hidden).toBe(false);
     });
 
     it("removes the change listener on unmount", () => {
@@ -219,6 +252,23 @@ describe("useMobileLayout", () => {
       fireAddGroup(group);
 
       expect(group.header.hidden).toBe(true);
+    });
+
+    // Independent code review — onDidAddGroup fires for a newly created
+    // floating group too (e.g. desktopPositioning's `{floating: ...}`
+    // branch), and hiding a floating group's header removes its only drag
+    // handle and close button, so this path needs the same isTiledGroup
+    // check applyMobilePresentation uses.
+    it("leaves a newly added floating group's header visible via onDidAddGroup while mobile", () => {
+      stubMatchMedia(true);
+      const { api, addGroup, fireAddGroup } = makeMockApi();
+      const setIsMobile = vi.fn();
+      const group = addGroup("floating");
+
+      renderHook(() => useMobileLayout({ dockviewApi: api, setIsMobile }));
+      fireAddGroup(group);
+
+      expect(group.header.hidden).toBe(false);
     });
 
     it("does not subscribe to group events when dockviewApi is null", () => {

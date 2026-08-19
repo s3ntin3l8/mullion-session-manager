@@ -43,11 +43,16 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
 // mutable (a plain object, not a getter/setter) so applyMobilePresentation's
 // tests below can assert against it directly the same way the real
 // DockviewGroupPanel.header does (see panelUtils.ts's own comment on that).
+// `panels` carries one member panel sharing the group's own location — real
+// dockview groups are homogeneous that way (panelUtils.ts's own isTiledGroup
+// comment) — since isTiledGroup reads `group.panels`, not `group.api`, to
+// decide tiled-vs-floating.
 function mockGroup(id: string, locationType: "grid" | "floating" = "grid") {
   return {
     id,
     api: { location: { type: locationType } },
     header: { hidden: false },
+    panels: [{ api: { location: { type: locationType } } }],
   } as unknown as DockviewGroupPanel;
 }
 
@@ -1111,6 +1116,39 @@ describe("applyMobilePresentation (issue #85)", () => {
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 
+  // Bug fix (independent code review) — a floating activePanel used to be
+  // passed straight to maximizeGroup, which throws inside dockview-core
+  // (getGridLocation walks DOM ancestry for a `dv-grid-view` class and never
+  // finds one for a floating panel's element). See panelUtils.ts's own
+  // comment on applyMobilePresentation for the verified root cause.
+  it("falls back to a tiled panel when activePanel is floating", () => {
+    const floatingActive = mockPanel("floating-1", "floating");
+    const tiled = mockPanel("session-1", "grid");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [floatingActive, tiled],
+      activePanel: floatingActive,
+    });
+
+    applyMobilePresentation(api, true);
+
+    expect(api.maximizeGroup).toHaveBeenCalledWith(tiled);
+    expect(api.maximizeGroup).not.toHaveBeenCalledWith(floatingActive);
+  });
+
+  it("maximizes nothing, and does not throw, when every panel is floating", () => {
+    const floatingActive = mockPanel("floating-1", "floating");
+    const floatingOther = mockPanel("floating-2", "floating");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [floatingActive, floatingOther],
+      activePanel: floatingActive,
+    });
+
+    expect(() => applyMobilePresentation(api, true)).not.toThrow();
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
   it("exits maximization when leaving mobile with something maximized", () => {
     const api = mockApiForPresentation({ maximized: true });
 
@@ -1154,6 +1192,38 @@ describe("applyMobilePresentation (issue #85)", () => {
     const group = mockGroup("group-1");
     group.header.hidden = true;
     const api = mockApiForPresentation({ maximized: true, groups: [group] });
+
+    applyMobilePresentation(api, false);
+
+    expect(group.header.hidden).toBe(false);
+  });
+
+  // A floating group's header is its only drag handle and close button
+  // (panelUtils.ts's own comment) — hiding it entering mobile would strand
+  // the user with no way to move or close it.
+  it("leaves a floating group's header visible when entering mobile", () => {
+    const tiled = mockGroup("group-1", "grid");
+    const floating = mockGroup("group-2", "floating");
+    const api = mockApiForPresentation({
+      maximized: false,
+      panels: [mockPanel("session-1")],
+      activePanel: mockPanel("session-1"),
+      groups: [tiled, floating],
+    });
+
+    applyMobilePresentation(api, true);
+
+    expect(tiled.header.hidden).toBe(true);
+    expect(floating.header.hidden).toBe(false);
+  });
+
+  // Restore must cover both kinds of group, not just tiled ones: a group
+  // hidden while tiled and then dragged into a floating position before the
+  // next breakpoint change must still come back on the way out of mobile.
+  it("restores a group's header when leaving mobile even if it is now floating", () => {
+    const group = mockGroup("group-1", "floating");
+    group.header.hidden = true;
+    const api = mockApiForPresentation({ maximized: false, groups: [group] });
 
     applyMobilePresentation(api, false);
 

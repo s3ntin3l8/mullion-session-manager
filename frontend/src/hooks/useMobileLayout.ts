@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { DockviewGroupPanel } from "dockview";
-import { applyMobilePresentation } from "../panelUtils.js";
+import { applyMobilePresentation, isTiledGroup } from "../panelUtils.js";
 import { MOBILE_BREAKPOINT_QUERY } from "../panels/registry.js";
 
 export interface UseMobileLayoutParams {
@@ -48,7 +48,19 @@ export function useMobileLayout({ dockviewApi, setIsMobile }: UseMobileLayoutPar
     const mq = window.matchMedia(MOBILE_BREAKPOINT_QUERY);
     const onChange = () => {
       setIsMobile(mq.matches);
-      if (dockviewApi) applyMobilePresentation(dockviewApi, mq.matches);
+      if (!dockviewApi) return;
+      try {
+        applyMobilePresentation(dockviewApi, mq.matches);
+      } catch (err) {
+        // Independent code review — applyMobilePresentation's own comment
+        // documents the specific dockview crash this used to be exposed to
+        // (a floating active panel) and that path is now fixed, but this
+        // catch is belt-and-suspenders against any future one: without it,
+        // a throw here left the UI stuck mid-transition (isMobile already
+        // committed via setIsMobile above, but no maximize/header-hide ever
+        // applied), with no way to retry short of a full reload.
+        console.error("[useMobileLayout] applyMobilePresentation failed", err);
+      }
     };
     onChange();
     mq.addEventListener("change", onChange);
@@ -75,8 +87,19 @@ export function useMobileLayout({ dockviewApi, setIsMobile }: UseMobileLayoutPar
     const hideIfMobile = (group: DockviewGroupPanel) => {
       group.header.hidden = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
     };
+    // onDidMaximizedGroupChange's own `group` is always tiled by
+    // construction (a floating group can't be grid-maximized — dockview
+    // would throw first, see applyMobilePresentation's own comment), so it
+    // needs no filter. onDidAddGroup fires for a newly created FLOATING
+    // group too (independent code review) — e.g. a panel opened via
+    // desktopPositioning's `{floating: ...}` branch — and hiding a floating
+    // group's header removes its only drag handle and close button, so
+    // that one path does need the same isTiledGroup check
+    // applyMobilePresentation uses.
     const maximizedSub = dockviewApi.onDidMaximizedGroupChange(({ group }) => hideIfMobile(group));
-    const addedSub = dockviewApi.onDidAddGroup((group) => hideIfMobile(group));
+    const addedSub = dockviewApi.onDidAddGroup((group) => {
+      if (isTiledGroup(group)) hideIfMobile(group);
+    });
     return () => {
       maximizedSub.dispose();
       addedSub.dispose();
