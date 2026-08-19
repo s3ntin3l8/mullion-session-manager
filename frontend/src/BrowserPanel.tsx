@@ -6,6 +6,7 @@ import { useDashboardStore } from "./store/index.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./ui/icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 
 export interface BrowserPanelParams {
   projectId?: number;
@@ -21,11 +22,6 @@ type BrowserPanelState =
   | { status: "loading" }
   | { status: "unavailable"; message: string }
   | { status: "ready"; src: string };
-
-// Mirrors App.tsx's/panelUtils.ts's own private MOBILE_BREAKPOINT_QUERY —
-// see panelUtils.ts's comment on why this stays a small per-file duplicate
-// rather than a shared export.
-const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
 
 function isDangerousIframeSrc(url: string): boolean {
   try {
@@ -104,6 +100,7 @@ export function BrowserPanel({
 }) {
   const isExternal = params.kind === "external";
   const { projects, projectUrls, refreshProjectUrls } = useDashboardStore();
+  const isCoarsePointer = useCoarsePointer();
   const project = isExternal ? undefined : projects.find((p) => p.id === params.projectId);
   const projectId = project?.id;
   const devServerUrl = project?.devServerUrl;
@@ -563,10 +560,14 @@ export function BrowserPanel({
           // explicit user action (clicking Rename/Create/Add/Deny, or the
           // login screen itself) — this one fires the instant an empty
           // browser panel mounts, with no click involved, popping the
-          // keyboard on mobile before the user has asked to type a URL.
-          autoFocus={
-            state.status === "empty" && !window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
-          }
+          // keyboard before the user has asked to type a URL. Tablet tier
+          // plan, PR 4 — gated on pointer coarseness (independent review:
+          // was briefly tier-gated, which had it backwards — a touchscreen
+          // laptop at desktop width would still pop the keyboard, and an
+          // explicit `layoutMode: "tablet"` override on a mouse/trackpad
+          // device would lose autofocus it doesn't need to), same as the
+          // key bar and 44px hit targets elsewhere in this plan.
+          autoFocus={state.status === "empty" && !isCoarsePointer}
           onKeyDown={(e) => {
             if (e.key === "Enter") navigate();
           }}

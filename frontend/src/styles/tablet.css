@@ -1,0 +1,161 @@
+/* ============================================================ */
+/* Touch affordances (any width): key bar, 44px hit targets      */
+/* ============================================================ */
+
+/* Tablet tier plan, PR 4 — gated on `(pointer: coarse)`, not a width query.
+   Touch affordances need to track the actual input hardware, not the
+   layout tier: a folding phone unfolds into tablet-width territory while
+   staying touch-only throughout (the motivating case for this whole plan),
+   and a touchscreen laptop at desktop width still has a coarse pointer.
+   dockview itself already classifies input this way (`isCoarsePrimaryInput`,
+   dockview.js: `coarse && !fine`) — this keeps the two libraries agreeing
+   about the same hardware instead of using two different signals.
+
+   Imported from index.css AFTER mobile.css — deliberate, not incidental:
+   mobile.css's own header comment already declares cascade order
+   load-bearing for its eight `!important` declarations, and a phone at
+   <700px matches BOTH mobile.css's `max-width: 699px` query and this
+   file's `pointer: coarse` one (a real phone's pointer is coarse), so the
+   two files' rules for the same element must not conflict. They don't
+   today — mobile.css owns width-driven layout (single-pane, sidebar
+   drawer, dock hidden), this file owns touch-target sizing and the key
+   bar — but the import order is what keeps a future rule collision
+   resolving predictably rather than by chance. */
+@media (pointer: coarse) {
+  /* Tablet tier plan, PR 4 (decided explicitly, per that plan's own
+     "Two hazards to design around" section) — terminalInputRegistry.ts's
+     own header comment documents a real, known limitation: it resolves a
+     sessionId to whichever registration is most recent, with no
+     disambiguation between a session's main pane and a Dock monitor for
+     that same session. Below 700px this was masked because mobile.css hid
+     `.dock` entirely; making the key bar pointer-coarse-gated (not
+     phone-only) would otherwise make the Dock reachable at the same time
+     as the key bar on tablet too, reopening exactly the ambiguity that
+     comment describes.
+
+     This `display: none` alone only hides the element visually — it does
+     NOT stop Dock.tsx from mounting DockColumn/DockMonitor/TerminalPane,
+     which is what actually calls registerTerminalInput() (independent
+     review: the original version of this fix relied on the CSS hide alone
+     and didn't close the gap for that reason). Dock.tsx's own `collapsed`
+     check now also gates on the same `isCoarsePointer` this query
+     expresses, so DockColumn genuinely never mounts — and therefore never
+     registers — under a coarse pointer; this rule is the paired visual
+     layer for that, not the actual fix. Chose to keep the Dock unmounted
+     here too (same as phone) rather than fix the registry to resolve by
+     visibility — that fix needs either preferring the non-Dock
+     registration specifically or keying by (sessionId, pane) and having
+     the caller resolve the visible one, both larger changes than this
+     PR's own crash/positioning scope.
+
+     Hermes review — this is a broader tradeoff than "tablet loses the
+     Dock": `(pointer: coarse)` applies at ANY width, so a touch-primary
+     desktop-width device loses the Dock too, not just the tablet range,
+     and the hazard this guards against is actually narrower than "any
+     Dock use on touch" — it only bites when a visible pane's key bar AND
+     an invisible Dock monitor for that SAME session coexist. A tighter
+     fix (suppress only the ambiguous registration, or hide the Dock only
+     while a key-bar session with a same-session Dock monitor is active)
+     is possible but needs Dock.tsx to know which session the key bar is
+     currently targeting — real, cross-cutting new state, not a rule
+     tweak. Consciously accepting the broader "no Dock on any coarse
+     pointer" behavior for now rather than partially narrowing it; revisit
+     if losing Docker management on touch hardware turns out to matter in
+     practice. */
+  .dock {
+    display: none !important;
+  }
+
+  /* Mobile UI/UX overhaul, item B.4 — when the key bar renders, App.tsx adds
+     `.key-bar` to `.app` and the bar itself becomes the bottom-most element
+     in `.grid-area-body`'s flex column, so it — not `.grid-area-body` — is
+     what should touch the home-indicator gesture area. Without dropping
+     `.grid-area-body`'s own padding here, the inset would be reserved twice
+     (once by the now-irrelevant gap it leaves below the dockview container,
+     once by the bar), pushing real content up for no reason. */
+  .app.key-bar .grid-area-body {
+    padding-bottom: 0;
+  }
+
+  .mobile-key-bar {
+    display: flex;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--chrome);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-key-bar-btn {
+    flex: 1;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-right: 1px solid var(--border-soft);
+    background: transparent;
+    color: var(--fg);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mobile-key-bar-btn:last-child {
+    border-right: none;
+  }
+  .mobile-key-bar-btn:active {
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+
+  /* Item E — touch targets. .mobile-tab/.mobile-tab-btn are already sized
+     for this at phone width (mobile.css); these are the remaining sub-44px
+     interactive rows/buttons that are reachable at ANY width on a
+     coarse-pointer device (dockview's own tab strip, i.e.
+     .pane-tab/.pane-tab-btn, is handled separately — PR 1's xterm.css). */
+  .session-item,
+  .project-row-header,
+  .workspace-item,
+  .settings-nav-item {
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .settings-modal-close,
+  .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* Independent code review, PR #621 (originally mobile.css) —
+     .view-mode-toggle/.hierarchy-toggle's own `.toolbar-icon-btn` override
+     (two-class selector, styles.css) outranks the plain `.toolbar-icon-btn`
+     bump above regardless of source order — CSS specificity, not cascade
+     position, decides here — so both toggles were silently staying at
+     26x26 without this. ViewModeToggle.tsx always renders in
+     .toolbar-actions and HierarchyToggle.tsx renders in the sidebar drawer
+     (Sidebar.tsx) — both need their own, equally-specific override. */
+  .hierarchy-toggle .toolbar-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  /* Same specificity/source-order hazard the comment above documents —
+     .toolbar-back-to-workspace's own `width: auto` (toolbar.css) loses to
+     the plain .toolbar-icon-btn 44px bump above (equal one-class
+     specificity, later source) without this. ViewModeToggle.tsx used to be
+     the only way back to the workspace on mobile (Toolbar.tsx's own
+     comment); this button is what replaced it, so it has to stay reachable
+     here too, not squeezed into a 44px square its "Back" label can't fit. */
+  .toolbar-back-to-workspace {
+    width: auto;
+    height: 44px;
+  }
+  /* The card itself is a drag-and-drop reorder handle (out of scope on
+     touch — see the plan's "Explicitly out of scope"), not a tap target;
+     this only guards against its own padding/border squeezing the nested
+     .session-item (already bumped above) back under the floor. */
+  .kanban-card {
+    min-height: 44px;
+  }
+}

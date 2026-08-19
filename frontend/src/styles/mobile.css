@@ -29,47 +29,12 @@
     bottom: var(--kb-inset, 0px);
   }
 
-  /* Mobile UI/UX overhaul, item B.4 — when the key bar renders, App.tsx adds
-     `.key-bar` to `.app` and the bar itself becomes the bottom-most element
-     in `.grid-area-body`'s flex column, so it — not `.grid-area-body` — is
-     what should touch the home-indicator gesture area. Without dropping
-     `.grid-area-body`'s own padding here, the inset would be reserved twice
-     (once by the now-irrelevant gap it leaves below the dockview container,
-     once by the bar), pushing real content up for no reason. */
-  .app.key-bar .grid-area-body {
-    padding-bottom: 0;
-  }
-
-  .mobile-key-bar {
-    display: flex;
-    flex-shrink: 0;
-    border-top: 1px solid var(--border);
-    background: var(--chrome);
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  .mobile-key-bar-btn {
-    flex: 1;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-right: 1px solid var(--border-soft);
-    background: transparent;
-    color: var(--fg);
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-  .mobile-key-bar-btn:last-child {
-    border-right: none;
-  }
-  .mobile-key-bar-btn:active {
-    background: color-mix(in srgb, var(--fg) 12%, transparent);
-  }
+  /* Mobile UI/UX overhaul, item B.4 — the key bar's own CSS
+     (.app.key-bar .grid-area-body, .mobile-key-bar*) moved to tablet.css
+     under `(pointer: coarse)` (tablet tier plan, PR 4): App.tsx now gates
+     the key bar's render and `.key-bar` class on pointer coarseness, not
+     this width query, so its styling has to be reachable at any width a
+     coarse pointer shows up at, not just below 700px. */
 
   .toolbar-lead {
     width: auto !important;
@@ -111,6 +76,9 @@
     display: flex !important;
   }
 
+  /* Tablet tier plan, PR 4 — this rule's own condition no longer covers
+     every place the Dock needs to stay hidden; see tablet.css's
+     `(pointer: coarse)` block for why it's also hidden there now. */
   .dock {
     display: none !important;
   }
@@ -383,58 +351,10 @@
     font-size: 16px;
   }
 
-  /* Item E — touch targets. .mobile-tab/.mobile-tab-btn and the kanban lane
-     controls above are already sized for this; these are the remaining
-     sub-44px interactive rows/buttons that are still reachable on mobile
-     (dockview's own tab strip, i.e. .pane-tab/.pane-tab-btn, is not — its
-     group header is hidden entirely on mobile, item A). */
-  .session-item,
-  .project-row-header,
-  .workspace-item,
-  .settings-nav-item {
-    min-height: 44px;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-  .settings-modal-close,
-  .toolbar-icon-btn {
-    width: 44px;
-    height: 44px;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-  /* Independent code review, PR #621 — .view-mode-toggle/.hierarchy-toggle's
-     own `.toolbar-icon-btn` override (two-class selector, styles.css:315,
-     335) outranks the plain `.toolbar-icon-btn` bump above regardless of
-     source order — CSS specificity, not cascade position, decides here —
-     so both toggles were silently staying at 26x26 on mobile despite this
-     block's own comment claiming every reachable .toolbar-icon-btn was
-     covered. ViewModeToggle.tsx always renders in .toolbar-actions (never
-     hidden on mobile) and HierarchyToggle.tsx renders in the sidebar drawer
-     (Sidebar.tsx), which is reachable on mobile too — both need their own,
-     equally-specific override. */
-  .hierarchy-toggle .toolbar-icon-btn {
-    width: 44px;
-    height: 44px;
-  }
-  /* Same specificity/source-order hazard the comment above documents —
-     .toolbar-back-to-workspace's own `width: auto` (toolbar.css) loses to
-     the plain .toolbar-icon-btn 44px bump 5 lines up (equal one-class
-     specificity, later source) without this. ViewModeToggle.tsx used to be
-     the only way back to the workspace on mobile (Toolbar.tsx's own
-     comment); this button is what replaced it, so it has to stay reachable
-     here too, not squeezed into a 44px square its "Back" label can't fit. */
-  .toolbar-back-to-workspace {
-    width: auto;
-    height: 44px;
-  }
-  /* The card itself is a drag-and-drop reorder handle (out of scope on
-     touch — see the plan's "Explicitly out of scope"), not a tap target;
-     this only guards against its own padding/border squeezing the nested
-     .session-item (already bumped above) back under the floor. */
-  .kanban-card {
-    min-height: 44px;
-  }
+  /* Item E — touch targets. Moved to tablet.css under `(pointer: coarse)`
+     (tablet tier plan, PR 4) so the same sub-44px interactive rows/buttons
+     get a real hit target on tablet and any other coarse-pointer device,
+     not just below 700px — see that file for the actual rules. */
 
   /* Agent Rules / Skills / Dock config share the same two-pane shell
      (.agent-rules-panel: a 240px fixed list beside a flex-1 editor, see

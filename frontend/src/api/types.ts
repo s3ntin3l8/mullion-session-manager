@@ -19,6 +19,8 @@ import type {
   CursorStyle,
   SidebarDensity,
   SoundName,
+  LayoutMode,
+  TabletPaneCap,
 } from "../../../src/shared/types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
@@ -979,6 +981,10 @@ export interface AppSettings {
     };
   };
   sidebarDensity: SidebarDensity;
+  // Tablet tier plan (.claude/plans/another-thing-to-investigate-lively-
+  // kitten.md, PR 4) — see shared/types.ts's own doc comment on LayoutMode.
+  layoutMode: LayoutMode;
+  tabletPaneCap: TabletPaneCap;
   projectRoots: string[];
   launchers: {
     defaultShell: string;

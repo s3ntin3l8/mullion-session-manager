@@ -364,7 +364,7 @@ describe("useSessionDeepLink composed with useWorkspacePersistence (PR 34g's loa
         dockviewApi: api,
         activeWorkspaceId: 1,
         workspaces: [workspace],
-        isMobile: false,
+        layoutTier: "desktop",
         setPanelsVersion,
       });
       useSessionDeepLink({

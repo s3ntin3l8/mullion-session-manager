@@ -8,9 +8,16 @@ import type { getDb } from "../db/client.js";
 // AppSettings itself stays declared here — see shared/types.ts's own doc
 // comment for why (its notificationMatrix field is a real, deliberate
 // backend/frontend type divergence, not cosmetic drift).
-import type { Theme, CursorStyle, SidebarDensity, SoundName } from "../shared/types.js";
+import type {
+  Theme,
+  CursorStyle,
+  SidebarDensity,
+  SoundName,
+  LayoutMode,
+  TabletPaneCap,
+} from "../shared/types.js";
 
-export type { Theme, CursorStyle, SidebarDensity, SoundName };
+export type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode, TabletPaneCap };
 
 // Shared shape + defaults for the server-persisted Settings blob (the
 // Settings modal's "Everything wired now" rework). One JSON blob, same
@@ -74,6 +81,14 @@ export interface AppSettings {
     };
   };
   sidebarDensity: SidebarDensity;
+  // Tablet tier plan, PR 4 — "auto" resolves from live window width
+  // (frontend); see shared/types.ts's own doc comment on LayoutMode for the
+  // full rationale. tabletPaneCap only takes effect once the resolved tier
+  // is "tablet" — a lower cap keeps each column comfortably clear of PR 2's
+  // TerminalPane font-shrink threshold, a higher one trades that off for
+  // more visible panes; see AppearanceSection.tsx's Settings copy.
+  layoutMode: LayoutMode;
+  tabletPaneCap: TabletPaneCap;
   // Editable project-scan roots (Settings -> Projects & discovery). Empty
   // array = "use the PROJECTS_ROOTS env var" (see routes/projects.ts) —
   // this lets a fresh deploy keep working from its env config until someone
@@ -328,6 +343,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     },
   },
   sidebarDensity: "comfortable",
+  layoutMode: "auto",
+  tabletPaneCap: 2,
   projectRoots: [],
   launchers: {
     defaultShell: "zsh",
@@ -518,6 +535,19 @@ function safeSentinelNumber(
 export function sanitizeSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
+    // Same explicit-membership-check shape as taskMaster.enabled/
+    // skipPermissions below — deepMerge only proves these are *a* string/
+    // number, not a value the frontend's layout-tier switch actually
+    // branches on; an unrecognized value falls back rather than reaching
+    // resolveLayoutTier/tabletPositioning as a silent no-op.
+    layoutMode:
+      settings.layoutMode === "auto" ||
+      settings.layoutMode === "phone" ||
+      settings.layoutMode === "tablet" ||
+      settings.layoutMode === "desktop"
+        ? settings.layoutMode
+        : DEFAULT_SETTINGS.layoutMode,
+    tabletPaneCap: settings.tabletPaneCap === 3 ? 3 : 2,
     terminal: {
       ...settings.terminal,
       fontSize: safeNumber(settings.terminal.fontSize, {

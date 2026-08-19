@@ -438,6 +438,8 @@ function renderPane(extra: { active?: boolean } = {}) {
         clipboardKeys: { ctrlV: false, ctrlC: false },
       },
       sidebarDensity: "comfortable",
+      layoutMode: "auto",
+      tabletPaneCap: 2,
       projectRoots: [],
       launchers: {
         defaultShell: "bash",

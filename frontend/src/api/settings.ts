@@ -105,6 +105,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     },
   },
   sidebarDensity: "comfortable",
+  layoutMode: "auto",
+  tabletPaneCap: 2,
   projectRoots: [],
   launchers: {
     defaultShell: "zsh",

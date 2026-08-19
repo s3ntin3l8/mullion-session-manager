@@ -460,3 +460,39 @@ describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
     }
   });
 });
+
+// Tablet tier plan (PR 4) — layoutMode mirrors taskMaster.enabled's own
+// explicit-membership sanitization shape (see that describe block above);
+// tabletPaneCap is a two-value discrete set rather than a numeric range, so
+// it isn't a safeNumber candidate.
+describe("DEFAULT_SETTINGS.layoutMode / tabletPaneCap (tablet tier)", () => {
+  it("defaults to auto / 2", () => {
+    expect(DEFAULT_SETTINGS.layoutMode).toBe("auto");
+    expect(DEFAULT_SETTINGS.tabletPaneCap).toBe(2);
+  });
+
+  it("accepts auto/phone/tablet/desktop for layoutMode and repairs an unknown string to the default", () => {
+    expect(mergeSettings({ layoutMode: "phone" }).layoutMode).toBe("phone");
+    expect(mergeSettings({ layoutMode: "tablet" }).layoutMode).toBe("tablet");
+    expect(mergeSettings({ layoutMode: "desktop" }).layoutMode).toBe("desktop");
+    expect(mergeSettings({ layoutMode: "auto" }).layoutMode).toBe("auto");
+
+    const dirty = { ...DEFAULT_SETTINGS };
+    // Simulates a value that bypassed deepMerge's own type guard (which only
+    // proves "a string", not "a known union member").
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately invalid union member
+    (dirty as any).layoutMode = "bogus";
+    expect(sanitizeSettings(dirty).layoutMode).toBe(DEFAULT_SETTINGS.layoutMode);
+  });
+
+  it("accepts 2 or 3 for tabletPaneCap and repairs any other value to 2", () => {
+    expect(mergeSettings({ tabletPaneCap: 3 }).tabletPaneCap).toBe(3);
+    expect(mergeSettings({ tabletPaneCap: 2 }).tabletPaneCap).toBe(2);
+
+    const dirty = { ...DEFAULT_SETTINGS, tabletPaneCap: 4 } as typeof DEFAULT_SETTINGS;
+    expect(sanitizeSettings(dirty).tabletPaneCap).toBe(2);
+
+    const negative = { ...DEFAULT_SETTINGS, tabletPaneCap: -1 } as typeof DEFAULT_SETTINGS;
+    expect(sanitizeSettings(negative).tabletPaneCap).toBe(2);
+  });
+});

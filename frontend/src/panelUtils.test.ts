@@ -16,7 +16,7 @@ import {
   stripMaximizedNode,
   stripHiddenHeaders,
   serializeForPersist,
-  applyMobilePresentation,
+  applyLayoutPresentation,
   attentionTransitionPanelIds,
   newChildSessionIds,
   childPanelPosition,
@@ -28,6 +28,7 @@ import {
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api/index.js";
+import type { LayoutContext } from "./lib/layoutTier.js";
 import type { Session, Task } from "./api/index.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
@@ -46,7 +47,7 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
 // this rather than `group.panels` — see that function's own comment on why:
 // the group-level value is populated at creation time, before any panel
 // attaches, which matters for onDidAddGroup). `header.hidden` is mutable (a
-// plain object, not a getter/setter) so applyMobilePresentation's tests
+// plain object, not a getter/setter) so applyLayoutPresentation's tests
 // below can assert against it directly the same way the real
 // DockviewGroupPanel.header does. Deliberately carries no `panels` array —
 // leaving it absent (rather than populated) is what pins isTiledGroup to
@@ -84,6 +85,13 @@ const PROJECTS = [
   { id: 1, name: "project-alpha" },
   { id: 2, name: null },
 ];
+
+// Tablet tier plan, PR 4 — every open-or-focus-by-stable-id helper takes an
+// explicit LayoutContext now instead of a boolean/live matchMedia() read.
+const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
+const PHONE_LAYOUT: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
+const TABLET_LAYOUT_CAP2: LayoutContext = { tier: "tablet", tabletPaneCap: 2 };
+const TABLET_LAYOUT_CAP3: LayoutContext = { tier: "tablet", tabletPaneCap: 3 };
 
 const EXISTING_SESSION: Session = {
   id: 1,
@@ -160,7 +168,7 @@ describe("openSessionPanel", () => {
     const existing = api.getPanel("session-1")!;
     existing.api.setActive = vi.fn();
 
-    openSessionPanel(api, EXISTING_SESSION, false, PROJECTS);
+    openSessionPanel(api, EXISTING_SESSION, DESKTOP_LAYOUT, PROJECTS);
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
@@ -169,7 +177,7 @@ describe("openSessionPanel", () => {
   it("docks full-screen into an empty workspace (issue #121)", () => {
     const api = mockDockviewApi();
 
-    openSessionPanel(api, NEW_SESSION, false, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, DESKTOP_LAYOUT, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -186,7 +194,7 @@ describe("openSessionPanel", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
-    openSessionPanel(api, NEW_SESSION, false, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, DESKTOP_LAYOUT, PROJECTS);
 
     // An explicit size, not dockview's own 300x300 default (constants.js) —
     // that comes out under pty-manager.ts's MIN_TERMINAL_COLS/ROWS floor at
@@ -206,7 +214,7 @@ describe("openSessionPanel", () => {
   it("does not float on mobile; maximizes instead", () => {
     const api = mockDockviewApi();
 
-    openSessionPanel(api, NEW_SESSION, true, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, PHONE_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(addCall.id).toBe("session-2");
@@ -217,7 +225,7 @@ describe("openSessionPanel", () => {
   it("creates a panel with the session command as title", () => {
     const api = mockDockviewApi();
 
-    openSessionPanel(api, NEW_SESSION, false, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, DESKTOP_LAYOUT, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -229,7 +237,7 @@ describe("openSessionPanel", () => {
   it("handles a session with no matching project gracefully", () => {
     const api = mockDockviewApi();
 
-    openSessionPanel(api, SESSION_NO_PROJECT, false, PROJECTS);
+    openSessionPanel(api, SESSION_NO_PROJECT, DESKTOP_LAYOUT, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledTimes(1);
   });
@@ -238,59 +246,173 @@ describe("openSessionPanel", () => {
   // used to call `api.maximizeGroup(existing)` unconditionally. A panel
   // opened on desktop (where a tiled panel already existing floats every
   // later one — desktopPositioning above) stays floating across a later
-  // breakpoint crossing into mobile (applyMobilePresentation deliberately
+  // breakpoint crossing into mobile (applyLayoutPresentation deliberately
   // never re-tiles it — panelUtils.ts's own comment), so reopening that
   // exact panel while mobile hit `maximizeGroup` on a floating panel and
-  // threw the same way applyMobilePresentation's pre-fix bug did.
+  // threw the same way applyLayoutPresentation's pre-fix bug did.
   it("does not crash refocusing an existing FLOATING panel on mobile", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {}, floating: {} });
     const existing = api.getPanel("session-1")!;
     existing.api.setActive = vi.fn();
 
-    expect(() => openSessionPanel(api, EXISTING_SESSION, true, PROJECTS)).not.toThrow();
+    expect(() => openSessionPanel(api, EXISTING_SESSION, PHONE_LAYOUT, PROJECTS)).not.toThrow();
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 });
 
-// openTimelinePanel (issue #212) has no isMobile param — see panelUtils.ts's
-// own comment on why: it's called from PaneTab.tsx's overflow menu, which
-// has no access to App.tsx's live isMobile React state. It reads a live
-// matchMedia() check instead, so these tests stub that directly rather than
-// passing a boolean like openSessionPanel's tests do above.
-function stubMatchMedia(matches: boolean) {
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn((query: string) => ({
-      matches,
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })),
-  );
-}
+// Tablet tier plan, PR 4 — tabletPositioning itself isn't exported (a
+// private helper alongside desktopPositioning), so this exercises it the
+// same indirect way desktopPositioning's own float-vs-dock behavior is
+// covered above: through openSessionPanel with a tablet LayoutContext.
+// Pre-populates `api`'s existing panels via real addPanel() calls (each
+// carrying an explicit `group: { id }` override — mockDockviewApi's own
+// addPanel mock spreads its options onto the returned mock panel) so
+// tabletPositioning's own group.id-based counting has something to count.
+describe("tabletPositioning (via openSessionPanel)", () => {
+  it("docks as a new column when under the cap", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
+    );
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0];
+    expect(addCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("docks as a tab into a tiled group once the cap is reached", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
+    api.addPanel({ id: "session-3", component: "terminal", params: {} });
+    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[2][0];
+    expect(addCall.id).toBe("session-2");
+    // Independent review — no `activePanel` set here, so this falls back to
+    // the first tiled panel (session-1), same fallback
+    // applyLayoutPresentation itself uses to pick a maximize target. An
+    // explicit `referencePanel`, not a bare add relying on dockview's own
+    // `activeGroup` default — see tabletPositioning's own comment on why
+    // that ambiguity is exactly what the next test below exploits.
+    expect(addCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
+    expect(addCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  // Bug fix (independent review) — the at-cap branch used to return a bare
+  // `{}`, relying on dockview's own default of attaching to
+  // `api.activeGroup`. That default is not always tiled: a workspace
+  // narrowed from desktop width into tablet range can have a floating
+  // group as `activeGroup` (applyLayoutPresentation's tablet branch never
+  // closes or re-tiles pre-existing floats — only phone's own single-pane
+  // maximize path ever interacts with floating panels at all). A bare add
+  // there tabbed the new panel into that FLOATING group, reintroducing the
+  // exact floating-window touch interaction the "never floats on tablet"
+  // test above exists to rule out.
+  it("docks into a tiled group, not a floating activePanel/activeGroup, once the cap is reached", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
+    api.addPanel({ id: "session-3", component: "terminal", params: {} });
+    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
+    // Simulates the narrowed-from-desktop scenario: activePanel is a
+    // leftover floating panel, not one of the two tiled groups above.
+    api.addPanel({ id: "floating-1", component: "terminal", params: {}, floating: {} });
+    (api as unknown as { activePanel: unknown }).activePanel = api.getPanel("floating-1");
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[3][0];
+    expect(addCall.id).toBe("session-2");
+    expect(addCall).toEqual(
+      expect.objectContaining({
+        position: {
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+          direction: "within",
+        },
+      }),
+    );
+    expect(addCall).not.toHaveProperty("floating");
+  });
+
+  it("counts a group already holding two tabs as ONE column, not two, against the cap", () => {
+    const api = mockDockviewApi();
+    // Both panels share the same group id — one prior open, tabbed by the
+    // user (or PR 1's now-scrollable strip), not two separate columns.
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
+    api.addPanel({ id: "session-3", component: "terminal", params: {} });
+    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-1" };
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+
+    // Only 1 distinct group so far (< cap 2) -> still docks as its own
+    // column, not a tab.
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
+    );
+  });
+
+  it("respects a higher configured cap (3)", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
+    api.addPanel({ id: "session-3", component: "terminal", params: {} });
+    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP3, PROJECTS);
+
+    // Only 2 distinct groups so far (< cap 3) -> still docks as its own
+    // column.
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
+    );
+  });
+
+  it("never floats on tablet, even under the cap — no floating-window touch interaction", () => {
+    const api = mockDockviewApi();
+
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("floating");
+  });
+});
 
 describe("openTimelinePanel", () => {
   it("focuses an existing timeline panel without creating a new one", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
     api.addPanel({ id: "timeline-1", component: "timeline", params: {} });
     const existing = api.getPanel("timeline-1")!;
     existing.api.setActive = vi.fn();
 
-    openTimelinePanel(api, EXISTING_SESSION);
+    openTimelinePanel(api, EXISTING_SESSION, DESKTOP_LAYOUT);
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
   });
 
   it("docks full-screen into an empty workspace, same as openSessionPanel", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
 
-    openTimelinePanel(api, NEW_SESSION);
+    openTimelinePanel(api, NEW_SESSION, DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -304,11 +426,10 @@ describe("openTimelinePanel", () => {
   });
 
   it("floats (peeks) when a tiled panel already exists", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
-    openTimelinePanel(api, NEW_SESSION);
+    openTimelinePanel(api, NEW_SESSION, DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "timeline-2", floating: { width: 720, height: 460 } }),
@@ -317,10 +438,9 @@ describe("openTimelinePanel", () => {
   });
 
   it("does not float on mobile (per matchMedia); maximizes instead", () => {
-    stubMatchMedia(true);
     const api = mockDockviewApi();
 
-    openTimelinePanel(api, NEW_SESSION);
+    openTimelinePanel(api, NEW_SESSION, PHONE_LAYOUT);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(addCall.id).toBe("timeline-2");
@@ -329,10 +449,9 @@ describe("openTimelinePanel", () => {
   });
 
   it("titles the panel using the session's name, falling back to its command", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
 
-    openTimelinePanel(api, NEW_SESSION);
+    openTimelinePanel(api, NEW_SESSION, DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.stringContaining("codex") }),
@@ -342,23 +461,21 @@ describe("openTimelinePanel", () => {
 
 describe("openBrowserPanePanel", () => {
   it("focuses an existing browser pane without creating a new one", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
     api.addPanel({ id: "browserPane-1", component: "browserPane", params: {} });
     const existing = api.getPanel("browserPane-1")!;
     existing.api.setActive = vi.fn();
 
-    openBrowserPanePanel(api, EXISTING_SESSION);
+    openBrowserPanePanel(api, EXISTING_SESSION, DESKTOP_LAYOUT);
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
   });
 
   it("docks full-screen into an empty workspace, same as openSessionPanel/openTimelinePanel", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
 
-    openBrowserPanePanel(api, NEW_SESSION);
+    openBrowserPanePanel(api, NEW_SESSION, DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -372,11 +489,10 @@ describe("openBrowserPanePanel", () => {
   });
 
   it("floats (peeks) when a tiled panel already exists", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
-    openBrowserPanePanel(api, NEW_SESSION);
+    openBrowserPanePanel(api, NEW_SESSION, DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "browserPane-2", floating: { width: 720, height: 460 } }),
@@ -385,10 +501,9 @@ describe("openBrowserPanePanel", () => {
   });
 
   it("does not float on mobile (per matchMedia); maximizes instead", () => {
-    stubMatchMedia(true);
     const api = mockDockviewApi();
 
-    openBrowserPanePanel(api, NEW_SESSION);
+    openBrowserPanePanel(api, NEW_SESSION, PHONE_LAYOUT);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(addCall.id).toBe("browserPane-2");
@@ -397,10 +512,9 @@ describe("openBrowserPanePanel", () => {
   });
 
   it("titles the panel using the session's name, falling back to its command", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
 
-    openBrowserPanePanel(api, NEW_SESSION);
+    openBrowserPanePanel(api, NEW_SESSION, DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.stringContaining("codex") }),
@@ -459,23 +573,21 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 // props.containerApi.
 describe("openTaskDetailPanel", () => {
   it("focuses an existing task detail panel without creating a new one", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
     api.addPanel({ id: "task-detail-1", component: "task-detail", params: {} });
     const existing = api.getPanel("task-detail-1")!;
     existing.api.setActive = vi.fn();
 
-    openTaskDetailPanel(api, makeTask({ id: 1 }));
+    openTaskDetailPanel(api, makeTask({ id: 1 }), DESKTOP_LAYOUT);
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
   });
 
   it("docks full-screen into an empty workspace, same as openTimelinePanel", () => {
-    stubMatchMedia(false);
     const api = mockDockviewApi();
 
-    openTaskDetailPanel(api, makeTask({ id: 2, title: "Add widget" }));
+    openTaskDetailPanel(api, makeTask({ id: 2, title: "Add widget" }), DESKTOP_LAYOUT);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -504,7 +616,7 @@ describe("openOrFocusProjectPanel", () => {
     const existing = api.getPanel("github-1")!;
     existing.api.setActive = vi.fn();
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
+    openOrFocusProjectPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, GITHUB_CONFIG);
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.maximizeGroup).not.toHaveBeenCalled();
@@ -516,7 +628,7 @@ describe("openOrFocusProjectPanel", () => {
     api.addPanel({ id: "github-1", component: "github", params: {} });
     const existing = api.getPanel("github-1")!;
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, true, GITHUB_CONFIG);
+    openOrFocusProjectPanel(api, 1, PROJECTS, PHONE_LAYOUT, GITHUB_CONFIG);
 
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
     expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
@@ -525,7 +637,7 @@ describe("openOrFocusProjectPanel", () => {
   it("docks full-screen into an empty workspace, titled from the matching project", () => {
     const api = mockDockviewApi();
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
+    openOrFocusProjectPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, GITHUB_CONFIG);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -543,7 +655,7 @@ describe("openOrFocusProjectPanel", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, false, GITHUB_CONFIG);
+    openOrFocusProjectPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, GITHUB_CONFIG);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-1", floating: { width: 720, height: 460 } }),
@@ -553,7 +665,7 @@ describe("openOrFocusProjectPanel", () => {
   it("does not float on mobile when creating a new panel; maximizes instead", () => {
     const api = mockDockviewApi();
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, true, GITHUB_CONFIG);
+    openOrFocusProjectPanel(api, 1, PROJECTS, PHONE_LAYOUT, GITHUB_CONFIG);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(addCall).not.toHaveProperty("floating");
@@ -564,7 +676,7 @@ describe("openOrFocusProjectPanel", () => {
   it("falls back to the bare label when no matching project is found", () => {
     const api = mockDockviewApi();
 
-    openOrFocusProjectPanel(api, 999, PROJECTS, false, GITHUB_CONFIG);
+    openOrFocusProjectPanel(api, 999, PROJECTS, DESKTOP_LAYOUT, GITHUB_CONFIG);
 
     expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ title: "GitHub" }));
   });
@@ -572,7 +684,7 @@ describe("openOrFocusProjectPanel", () => {
   it("derives the panel id/component from `kind`, distinctly per panel type", () => {
     const api = mockDockviewApi();
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, false, {
+    openOrFocusProjectPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, {
       kind: "dock-config",
       titleLabel: "Dock",
       applyDesktopPositioning: true,
@@ -592,7 +704,7 @@ describe("openOrFocusProjectPanel", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, false, {
+    openOrFocusProjectPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, {
       kind: "browser",
       titleLabel: "Preview",
       applyDesktopPositioning: false,
@@ -1052,7 +1164,7 @@ describe("stripFloatingPanels", () => {
   });
 
   // Mobile UI/UX overhaul, item A.3 — mirrors stripMaximizedNode's own test
-  // shape one field over: `hideHeader` (set by applyMobilePresentation) is
+  // shape one field over: `hideHeader` (set by applyLayoutPresentation) is
   // pure viewport presentation and must never round-trip through a saved
   // workspace layout, exactly like grid.maximizedNode above.
   describe("stripHiddenHeaders", () => {
@@ -1155,7 +1267,7 @@ describe("stripFloatingPanels", () => {
   });
 });
 
-describe("applyMobilePresentation (issue #85)", () => {
+describe("applyLayoutPresentation (issue #85; tri-state as of tablet tier plan, PR 4)", () => {
   function mockApiForPresentation(opts: {
     maximized: boolean;
     panels?: ReturnType<DockviewApi["getPanel"]>[];
@@ -1176,7 +1288,7 @@ describe("applyMobilePresentation (issue #85)", () => {
     const active = mockPanel("session-1");
     const api = mockApiForPresentation({ maximized: false, panels: [active], activePanel: active });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(api.maximizeGroup).toHaveBeenCalledWith(active);
   });
@@ -1185,7 +1297,7 @@ describe("applyMobilePresentation (issue #85)", () => {
     const first = mockPanel("session-1");
     const api = mockApiForPresentation({ maximized: false, panels: [first], activePanel: null });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(api.maximizeGroup).toHaveBeenCalledWith(first);
   });
@@ -1194,7 +1306,7 @@ describe("applyMobilePresentation (issue #85)", () => {
     const active = mockPanel("session-1");
     const api = mockApiForPresentation({ maximized: true, panels: [active], activePanel: active });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
@@ -1202,7 +1314,7 @@ describe("applyMobilePresentation (issue #85)", () => {
   it("no-ops on an empty panel list", () => {
     const api = mockApiForPresentation({ maximized: false, panels: [], activePanel: null });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
@@ -1211,7 +1323,7 @@ describe("applyMobilePresentation (issue #85)", () => {
   // passed straight to maximizeGroup, which throws inside dockview-core
   // (getGridLocation walks DOM ancestry for a `dv-grid-view` class and never
   // finds one for a floating panel's element). See panelUtils.ts's own
-  // comment on applyMobilePresentation for the verified root cause.
+  // comment on applyLayoutPresentation for the verified root cause.
   it("falls back to a tiled panel when activePanel is floating", () => {
     const floatingActive = mockPanel("floating-1", "floating");
     const tiled = mockPanel("session-1", "grid");
@@ -1221,7 +1333,7 @@ describe("applyMobilePresentation (issue #85)", () => {
       activePanel: floatingActive,
     });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(api.maximizeGroup).toHaveBeenCalledWith(tiled);
     expect(api.maximizeGroup).not.toHaveBeenCalledWith(floatingActive);
@@ -1236,14 +1348,14 @@ describe("applyMobilePresentation (issue #85)", () => {
       activePanel: floatingActive,
     });
 
-    expect(() => applyMobilePresentation(api, true)).not.toThrow();
+    expect(() => applyLayoutPresentation(api, "phone")).not.toThrow();
     expect(api.maximizeGroup).not.toHaveBeenCalled();
   });
 
   it("exits maximization when leaving mobile with something maximized", () => {
     const api = mockApiForPresentation({ maximized: true });
 
-    applyMobilePresentation(api, false);
+    applyLayoutPresentation(api, "desktop");
 
     expect(api.exitMaximizedGroup).toHaveBeenCalledTimes(1);
   });
@@ -1251,7 +1363,7 @@ describe("applyMobilePresentation (issue #85)", () => {
   it("no-ops when leaving mobile with nothing maximized", () => {
     const api = mockApiForPresentation({ maximized: false });
 
-    applyMobilePresentation(api, false);
+    applyLayoutPresentation(api, "desktop");
 
     expect(api.exitMaximizedGroup).not.toHaveBeenCalled();
   });
@@ -1260,7 +1372,7 @@ describe("applyMobilePresentation (issue #85)", () => {
   // switcher": dockview's own tab strip must not render alongside App.tsx's
   // .mobile-tabs bar. Every group, not just the one being (de)maximized — a
   // desktop-authored layout can have several groups, and only one becomes
-  // the maximized/visible one here (see applyMobilePresentation's own
+  // the maximized/visible one here (see applyLayoutPresentation's own
   // comment on why).
   it("hides every group's header when entering mobile", () => {
     const active = mockPanel("session-1");
@@ -1273,7 +1385,7 @@ describe("applyMobilePresentation (issue #85)", () => {
       groups: [visibleGroup, backgroundGroup],
     });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(visibleGroup.header.hidden).toBe(true);
     expect(backgroundGroup.header.hidden).toBe(true);
@@ -1284,7 +1396,7 @@ describe("applyMobilePresentation (issue #85)", () => {
     group.header.hidden = true;
     const api = mockApiForPresentation({ maximized: true, groups: [group] });
 
-    applyMobilePresentation(api, false);
+    applyLayoutPresentation(api, "desktop");
 
     expect(group.header.hidden).toBe(false);
   });
@@ -1302,7 +1414,7 @@ describe("applyMobilePresentation (issue #85)", () => {
       groups: [tiled, floating],
     });
 
-    applyMobilePresentation(api, true);
+    applyLayoutPresentation(api, "phone");
 
     expect(tiled.header.hidden).toBe(true);
     expect(floating.header.hidden).toBe(false);
@@ -1316,9 +1428,49 @@ describe("applyMobilePresentation (issue #85)", () => {
     group.header.hidden = true;
     const api = mockApiForPresentation({ maximized: false, groups: [group] });
 
-    applyMobilePresentation(api, false);
+    applyLayoutPresentation(api, "desktop");
 
     expect(group.header.hidden).toBe(false);
+  });
+
+  // Tablet tier plan, PR 4 — tablet shares desktop's "not phone" branch
+  // (exit any stale maximize, restore every header) but never proactively
+  // maximizes for tier reasons of its own: PR 1's touch-scrollable tab strip
+  // is how a tablet user reaches a group's other tabs, not App.tsx's
+  // phone-only single-pane switcher.
+  describe("tablet tier", () => {
+    it("never maximizes, even with an active tiled panel and nothing already maximized", () => {
+      const active = mockPanel("session-1");
+      const api = mockApiForPresentation({
+        maximized: false,
+        panels: [active],
+        activePanel: active,
+      });
+
+      applyLayoutPresentation(api, "tablet");
+
+      expect(api.maximizeGroup).not.toHaveBeenCalled();
+    });
+
+    it("exits a maximize left over from the phone tier", () => {
+      const api = mockApiForPresentation({ maximized: true });
+
+      applyLayoutPresentation(api, "tablet");
+
+      expect(api.exitMaximizedGroup).toHaveBeenCalledTimes(1);
+    });
+
+    it("restores every group's header, tiled or floating, rather than hiding any", () => {
+      const tiled = mockGroup("group-1", "grid");
+      const floating = mockGroup("group-2", "floating");
+      tiled.header.hidden = true;
+      const api = mockApiForPresentation({ maximized: false, groups: [tiled, floating] });
+
+      applyLayoutPresentation(api, "tablet");
+
+      expect(tiled.header.hidden).toBe(false);
+      expect(floating.header.hidden).toBe(false);
+    });
   });
 });
 

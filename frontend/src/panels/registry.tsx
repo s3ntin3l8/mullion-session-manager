@@ -27,13 +27,7 @@ import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
 import { formatPaneTitle } from "../paneTitle.js";
 import { openSessionPanel } from "../panelUtils.js";
-
-// Matches styles.css's mobile breakpoint. Panel wrappers below need it to
-// decide whether opening a session should maximize its dockview group
-// (mobile) or just dock/float it (desktop); App.tsx's own mobile-layout
-// effects need the identical query, so it's exported from here rather than
-// duplicated.
-export const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
+import { useLayoutContext } from "../lib/layoutTier.js";
 
 // B2 — code-split the substantial, not-always-needed-on-first-paint dockview
 // panels (the two browser/preview panes and the Kanban board) out of the
@@ -224,14 +218,14 @@ const GitHubPanelWrapper = makePanelWrapper<GitHubPanelParams>(GitHubPanel);
 function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
   const [resetKey, resetPanel] = useResetKey();
   const projects = useDashboardStore((s) => s.projects);
+  const layout = useLayoutContext();
   return (
     <ErrorBoundary onReset={resetPanel}>
       <GitPanel
         key={resetKey}
         params={props.params}
         onOpenSession={(session) => {
-          const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-          openSessionPanel(props.containerApi, session, isMobile, projects);
+          openSessionPanel(props.containerApi, session, layout, projects);
         }}
       />
     </ErrorBoundary>
@@ -346,14 +340,14 @@ function TasksPanelRedirectWrapper(props: IDockviewPanelProps<Record<string, nev
 function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
   const [resetKey, resetPanel] = useResetKey();
   const projects = useDashboardStore((s) => s.projects);
+  const layout = useLayoutContext();
   return (
     <ErrorBoundary onReset={resetPanel}>
       <TaskDetail
         key={resetKey}
         params={props.params}
         onOpenSession={(session) => {
-          const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
-          openSessionPanel(props.containerApi, session, isMobile, projects);
+          openSessionPanel(props.containerApi, session, layout, projects);
         }}
       />
     </ErrorBoundary>

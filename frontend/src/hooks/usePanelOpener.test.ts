@@ -4,6 +4,7 @@ import { renderHook } from "@testing-library/react";
 import type { SetStateAction } from "react";
 import { usePanelOpener } from "./usePanelOpener.js";
 import type { DockviewApi } from "dockview-react";
+import type { LayoutContext } from "../lib/layoutTier.js";
 import { makeProject, makeSession, makeWorkspace } from "../test/fixtures.js";
 
 // Same store-mock shape as useDockviewDrop.test.ts/useSessionDeepLink.test.ts —
@@ -70,16 +71,19 @@ beforeEach(() => {
 
 interface SetupProps {
   dockviewApi: DockviewApi | null;
-  isMobile: boolean;
+  layout: LayoutContext;
   projects: typeof PROJECTS;
   workspaces: ReturnType<typeof makeWorkspace>[];
   activeWorkspaceId: number | null;
 }
 
+const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
+const PHONE_LAYOUT: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
+
 function setup(overrides: Partial<SetupProps> = {}) {
   const initialProps: SetupProps = {
     dockviewApi: null,
-    isMobile: false,
+    layout: DESKTOP_LAYOUT,
     projects: PROJECTS,
     workspaces: [],
     activeWorkspaceId: 1,
@@ -138,6 +142,27 @@ describe("usePanelOpener — onOpenSession", () => {
     expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
+  // Tablet tier plan, PR 4 — proves `layout` (not just a boolean) actually
+  // reaches openSessionPanel's own tier switch: under the cap, a new panel
+  // on tablet docks as its own column, the same as desktop, not phone's
+  // bare add. tabletPositioning's own branching (at/under the cap, grouping
+  // by group.id not panel count) is covered directly in panelUtils.test.ts
+  // — this only proves the wiring.
+  it("docks a new panel as its own column on tablet, under the pane cap", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({
+      dockviewApi: api,
+      layout: { tier: "tablet", tabletPaneCap: 2 },
+    });
+
+    result.current.onOpenSession(SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ position: { direction: "right" } }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
   // Not a churn-regression guard by itself — usePanelOpener deliberately has
   // no `sessions` param at all (see UsePanelOpenerParams's own `workspaces`
   // doc comment), which is what actually makes onOpenSession's identity
@@ -153,7 +178,7 @@ describe("usePanelOpener — onOpenSession", () => {
     const first = result.current.onOpenSession;
     rerender({
       dockviewApi: api,
-      isMobile: false,
+      layout: DESKTOP_LAYOUT,
       projects: PROJECTS,
       workspaces,
       activeWorkspaceId: 1,
@@ -167,7 +192,7 @@ describe("usePanelOpener — onOpenSession", () => {
     const first = result.current.onOpenSession;
     rerender({
       dockviewApi: api,
-      isMobile: false,
+      layout: DESKTOP_LAYOUT,
       projects: [makeProject({ id: 2, name: "other" })],
       workspaces: [],
       activeWorkspaceId: 1,
@@ -425,7 +450,7 @@ describe("usePanelOpener — onOpenBrowserUrl", () => {
 
   it("maximizes the group on mobile", () => {
     const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api, isMobile: true });
+    const { result } = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
 
     result.current.onOpenBrowserUrl(1, "https://example.com", "Example");
 
@@ -445,7 +470,7 @@ describe("usePanelOpener — onOpenBrowserUrl", () => {
       id: opts.id,
       api: { location: { type: "floating" } },
     }));
-    const { result } = setup({ dockviewApi: api, isMobile: true });
+    const { result } = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
 
     expect(() =>
       result.current.onOpenBrowserUrl(1, "https://example.com", "Example"),
@@ -477,7 +502,7 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
 
   it("maximizes the group on mobile", () => {
     const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api, isMobile: true });
+    const { result } = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
 
     result.current.onOpenBlankBrowser();
 
@@ -497,7 +522,7 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
       id: opts.id,
       api: { location: { type: "floating" } },
     }));
-    const { result } = setup({ dockviewApi: api, isMobile: true });
+    const { result } = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
 
     expect(() => result.current.onOpenBlankBrowser()).not.toThrow();
     expect(api.maximizeGroup).not.toHaveBeenCalled();

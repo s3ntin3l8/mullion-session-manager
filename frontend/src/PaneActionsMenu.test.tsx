@@ -45,7 +45,11 @@ function storeState() {
     projects,
     deleteSession: vi.fn().mockResolvedValue(undefined),
     theme: "dark",
-    settings: { sessions: { confirmBeforeKill: false } },
+    settings: {
+      sessions: { confirmBeforeKill: false },
+      layoutMode: "desktop",
+      tabletPaneCap: 2,
+    },
     promoteSession: promoteSessionMock,
     declinePromote: vi.fn().mockResolvedValue(undefined),
     requestSplit,
@@ -391,6 +395,11 @@ describe("PaneActionsMenu", () => {
 
     await vi.waitFor(() => expect(promoteSessionMock).toHaveBeenCalled());
     expect(paneApi.close).toHaveBeenCalled();
-    expect(openOrFocusSessionPanel).toHaveBeenCalledWith(CONTAINER_API, newSession, projects);
+    expect(openOrFocusSessionPanel).toHaveBeenCalledWith(
+      CONTAINER_API,
+      newSession,
+      { tier: "desktop", tabletPaneCap: 2 },
+      projects,
+    );
   });
 });

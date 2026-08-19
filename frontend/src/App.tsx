@@ -48,8 +48,10 @@ import { unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
+import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
-import { useMobileLayout } from "./hooks/useMobileLayout.js";
+import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useAppStreams } from "./hooks/useAppStreams.js";
@@ -110,7 +112,19 @@ export function App() {
   // on desktop, where .sidebar-wrapper ignores this class entirely.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  // Tablet tier plan, PR 4 — replaces the old phone-only `isMobile` boolean.
+  // `isMobile` below is now a derived `layoutTier === "phone"` local const
+  // (not its own state) so every "stays phone-only" call site the plan
+  // enumerates (mobile-tabs render, empty-grid dropzone suppression,
+  // toggleSidebar's dual semantics) keeps working unchanged, while
+  // tier-aware call sites (session-opening's positioning, applyLayoutPresentation)
+  // read `layoutTier` directly.
+  const [layoutTier, setLayoutTier] = useState<LayoutTier>("desktop");
+  const isMobile = layoutTier === "phone";
+  // Touch affordances (key bar, tab-strip panning) are gated on pointer
+  // coarseness, not layout tier — see lib/layoutTier.ts's own doc comment on
+  // COARSE_POINTER_QUERY for why a tier check alone is wrong here.
+  const isCoarsePointer = useCoarsePointer();
   // Mobile UI/UX overhaul, item B.2 — writes the keyboard's on-screen height
   // (0 when closed) directly onto `document.documentElement`'s own
   // `--kb-inset` custom property (no React state — see the hook's own
@@ -343,7 +357,7 @@ export function App() {
     dockviewApi,
     activeWorkspaceId,
     workspaces,
-    isMobile,
+    layoutTier,
     setPanelsVersion,
   });
 
@@ -381,19 +395,19 @@ export function App() {
     return () => disposable.dispose();
   }, [dockviewApi]);
 
-  // Keeps dockview's presentation in sync with the mobile breakpoint —
-  // extracted to useMobileLayout (hooks/useMobileLayout.ts). Called here, at
-  // the EXACT position its two effects previously occupied in this
-  // component's body, so their execution order relative to every other
-  // effect in this file — in particular, running AFTER the
+  // Keeps dockview's presentation in sync with the resolved layout tier —
+  // extracted to useLayoutPresentation (hooks/useLayoutPresentation.ts).
+  // Called here, at the EXACT position its two effects previously occupied
+  // in this component's body, so their execution order relative to every
+  // other effect in this file — in particular, running AFTER the
   // useWorkspacePersistence restore effect above on the commit where
-  // dockviewApi first becomes non-null — is unchanged. `isMobile` itself
+  // dockviewApi first becomes non-null — is unchanged. `layoutTier` itself
   // stays owned by this component's own useState (rather than being
   // returned from the hook) specifically because it's read EARLIER in this
   // render body, at the useWorkspacePersistence call above — see that hook's
-  // own `setIsMobile` param comment for why returning it here instead would
-  // be a real ordering regression, not just a style difference.
-  useMobileLayout({ dockviewApi, setIsMobile });
+  // own `setLayoutTier` param comment for why returning it here instead
+  // would be a real ordering regression, not just a style difference.
+  useLayoutPresentation({ dockviewApi, layoutMode: settings.layoutMode, setLayoutTier });
 
   // Focuses the mobile pane bar's inline rename input the moment it opens —
   // same "explicit transition, not a bare mount effect" shape as
@@ -435,7 +449,7 @@ export function App() {
   // the position its three effects previously occupied in this component's
   // body (right after the mobile pane bar's rename-cancel effect, right
   // before the global keyboard shortcuts effect below). Unlike
-  // useWorkspacePersistence/useMobileLayout above, this position is NOT
+  // useWorkspacePersistence/useLayoutPresentation above, this position is NOT
   // load-bearing: none of the three extracted effects share state with any
   // other effect in this file, or with each other beyond the ref the hook
   // now owns internally — see that hook's own header comment.
@@ -722,13 +736,21 @@ export function App() {
   // onOpenSession's own former position, because that's a closure-order
   // requirement, not an effect-ordering one: this hook registers no effects
   // at all (every value it returns is a useCallback), so unlike
-  // useWorkspacePersistence/useMobileLayout/useSessionDeepLink above, WHERE
+  // useWorkspacePersistence/useLayoutPresentation/useSessionDeepLink above, WHERE
   // in this component's body it's called doesn't affect behavior — but
   // onOpenSession itself must still be defined before useSessionDeepLink's
   // call and the onOpenSessionRef mirroring effect below, both of which
   // read it. See that hook's own header comment for the full design
   // rationale (why 6 of the 12 share one generic helper and 6 don't, and
   // why the actual count is 12 rather than the roadmap's estimated 16).
+  // Memoized so the onOpen* callbacks below (each lists `layout` in its own
+  // useCallback dependency array — see usePanelOpener's own header comment)
+  // don't get a fresh identity every render, only when the tier or the
+  // user's configured cap actually changes.
+  const layout: LayoutContext = useMemo(
+    () => ({ tier: layoutTier, tabletPaneCap: settings.tabletPaneCap }),
+    [layoutTier, settings.tabletPaneCap],
+  );
   const {
     onOpenSession,
     onOpenSessionAsFloat,
@@ -744,7 +766,7 @@ export function App() {
     onOpenBlankBrowser,
   } = usePanelOpener({
     dockviewApi,
-    isMobile,
+    layout,
     projects,
     workspaces,
     activeWorkspaceId,
@@ -906,7 +928,7 @@ export function App() {
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible. Guarded by
   // lastHandledHighlightRef (keyed on the panel id itself, not just a
-  // boolean) so the fallback's own sessions/isMobile/projects dependencies
+  // boolean) so the fallback's own sessions/layout/projects dependencies
   // — needed to call openSessionPanel with fresh data — don't also make
   // this effect re-run setActive()/openSessionPanel on every 4s live-refresh
   // poll tick that happens to land inside the ~1200ms highlight window
@@ -946,10 +968,10 @@ export function App() {
     // lets a later `sessions` update retry instead of giving up for the
     // rest of this highlight's window.
     if (session) {
-      openSessionPanel(dockviewApi, session, isMobile, projects);
+      openSessionPanel(dockviewApi, session, layout, projects);
       lastHandledHighlightRef.current = id;
     }
-  }, [activeWorkspaceId, dockviewApi, sessions, isMobile, projects]);
+  }, [activeWorkspaceId, dockviewApi, sessions, layout, projects]);
 
   // A session ended via the sidebar's explicit "end session" action (as
   // opposed to just closing its panel, which only detaches) should also
@@ -1026,12 +1048,15 @@ export function App() {
     [dockviewApi, splitRequest, onOpenSession, projects],
   );
 
-  // One toggle, two meanings depending on breakpoint: mobile's `sidebarOpen`
+  // One toggle, two meanings depending on breakpoint: phone's `sidebarOpen`
   // is a closed-by-default overlay flag (App.tsx-local, not persisted —
   // resets to closed every navigation, which is the right default for an
   // overlay); desktop's `sidebarCollapsed` is a persisted, open-by-default
   // panel-visibility preference (store-owned, survives reload). Same button,
-  // same handler, branch on the existing `isMobile` state.
+  // same handler, branch on the existing `isMobile` state — tablet tier
+  // plan, PR 4: deliberately still phone-only, not tier-generalized. Tablet
+  // keeps desktop's collapse behavior (it has room for the docked sidebar,
+  // unlike phone's overlay drawer).
   const toggleSidebar = useCallback(() => {
     if (isMobile) setSidebarOpen((v) => !v);
     else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
@@ -1149,7 +1174,7 @@ export function App() {
 
   return (
     <div
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isMobile && activeTerminalSession ? " key-bar" : ""}`}
+      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
@@ -1446,8 +1471,15 @@ export function App() {
                 // only — Hermes review: unscoped, this also swaps desktop's
                 // subtle on-hover custom overlay thumb for an always-visible
                 // native scrollbar, a needless mouse-facing side effect for
-                // a touch-only fix.
-                scrollbars={window.matchMedia("(pointer: coarse)").matches ? "native" : "custom"}
+                // a touch-only fix. Tablet tier plan, PR 4 (independent
+                // review) — reads the same live `isCoarsePointer` state the
+                // key bar above uses, not its own one-shot matchMedia()
+                // snapshot: this used to only reflect pointer type at mount,
+                // so a runtime pointer-type change (a 2-in-1 laptop's
+                // keyboard attach/detach, a devtools emulation toggle)
+                // wouldn't update it until next remount, unlike every other
+                // pointer-coarse-gated affordance this plan added.
+                scrollbars={isCoarsePointer ? "native" : "custom"}
               />
               {/* Empty tiled grid (design States doc §1D) — an overlay, not a
                   conditionally-mounted replacement, so dockview's own API
@@ -1498,8 +1530,12 @@ export function App() {
                 .grid-area-body (a flex column), so it sits at the bottom of
                 the already-`bottom: var(--kb-inset)`-shrunk .app shell —
                 i.e. directly above the keyboard — with no position:fixed or
-                separate inset tracking of its own needed. */}
-            {isMobile && activeTerminalSession && (
+                separate inset tracking of its own needed. Tablet tier plan,
+                PR 4 — gated on pointer coarseness (not the phone-only
+                `isMobile`) so a tablet's touch-primary input gets the key
+                bar too; a touchscreen laptop at desktop width gets it as
+                well, for the same reason. */}
+            {isCoarsePointer && activeTerminalSession && (
               <MobileKeyBar sessionId={activeTerminalSession.id} />
             )}
           </div>
