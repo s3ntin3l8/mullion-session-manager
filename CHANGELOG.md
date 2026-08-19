@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.34](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.33...v0.2.34) (2026-08-19)
+
+
+### Bug Fixes
+
+* keep a small pane's terminal grid in sync with the clamped PTY size ([#708](https://github.com/s3ntin3l8/mullion-session-manager/issues/708)) ([d52362e](https://github.com/s3ntin3l8/mullion-session-manager/commit/d52362e3ae52a0e6c85f529654ca558763b1edc3))
+* make the attention cue span the pane header and stop tab chrome overflowing ([#709](https://github.com/s3ntin3l8/mullion-session-manager/issues/709)) ([b944a3c](https://github.com/s3ntin3l8/mullion-session-manager/commit/b944a3c084ec8cb7eff351c3b7a8b5f9c141ac93))
+
 ## [0.2.33](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.32...v0.2.33) (2026-08-18)
 
 
