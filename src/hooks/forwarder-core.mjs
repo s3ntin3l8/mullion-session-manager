@@ -889,7 +889,52 @@ export function mapAgySessionStart(payload) {
 export function mapAgyEvent(kind, payload) {
   switch (kind) {
     case "Stop": {
-      const messages = [{ kind: "progress", phase: "done" }];
+      // `fullyIdle` (verified live against the installed agy binary, agy
+      // 1.1.15 — a real Stop payload on this host carried
+      // `"fullyIdle": true` with exactly this key/casing, matching agy's own
+      // bundled docs/hooks.md: "true if all background tasks are done") is
+      // agy's own signal that a Stop can genuinely be trusted as "my whole
+      // turn — not just this one model step — is over." Without this, every
+      // agy Stop reads as `progress phase:"done"` with no `backgroundTasks`
+      // field at all, which latches `deriveSessionStatus`'s `finished`
+      // status (a real hook-confirmed signal, outranking every guess) even
+      // while agy is still waiting on its own background shell commands —
+      // exactly what happened in Task Master trial 220921 / PR #743: a
+      // review agent repeatedly ended its turn ("I will wait for the
+      // verification tasks to complete") while npm test/lint were still
+      // running, and Mullion's reconciler read the first such Stop as "the
+      // review is done" 21 seconds before the review's own findings file
+      // was actually written.
+      //
+      // Symmetric on purpose — the `fullyIdle === true` (or absent, for an
+      // older agy build) branch below explicitly reports `backgroundTasks:
+      // []`, never omits the field. hook-handlers.ts's `progress` handler
+      // implements "absent ≠ cleared": a message with no `backgroundTasks`
+      // field must not wipe a previously-latched outstanding set. Omitting
+      // the field here on the "actually idle" Stop would mean a PRIOR
+      // `fullyIdle: false` Stop's synthesized entry never clears — the
+      // session would stick at the `background` status forever, and a
+      // perfectly good review verdict would never be ingested at all. That
+      // failure mode is silent (no comment, no latch, nothing visible on
+      // the PR) — strictly worse than the "inconclusive" comment this PR is
+      // part of fixing.
+      const stillBusy = payload?.fullyIdle === false;
+      const messages = [
+        {
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: stillBusy
+            ? [
+                {
+                  id: "agy-background",
+                  type: "background",
+                  status: "running",
+                  description: "agy reported outstanding background tasks",
+                },
+              ]
+            : [],
+        },
+      ];
       const reason =
         typeof payload?.terminationReason === "string" ? payload.terminationReason : null;
       if (reason === "error") {

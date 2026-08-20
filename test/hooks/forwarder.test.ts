@@ -254,7 +254,15 @@ describe("forwarder.mjs (issue #174)", () => {
     expect(stdout.trim()).toBe("{}");
 
     const [, messageLine] = await linesPromise;
-    expect(JSON.parse(messageLine)).toEqual({ kind: "progress", phase: "done" });
+    // backgroundTasks: [] — an empty `{}` Stop payload has no `fullyIdle`
+    // field, which maps to "not still busy" (see forwarder-core.mjs's Stop
+    // case doc comment); the explicit empty array, not an omitted field, is
+    // what actually clears any previously-latched outstanding entry.
+    expect(JSON.parse(messageLine)).toEqual({
+      kind: "progress",
+      phase: "done",
+      backgroundTasks: [],
+    });
   });
 
   it("still prints an empty JSON object to stdout even with no socket configured at all", async () => {
