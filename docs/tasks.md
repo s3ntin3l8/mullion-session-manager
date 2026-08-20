@@ -553,23 +553,28 @@ reviewing` transition itself — `task-reconciler.ts`'s
   open aren't atomic: a reviewer spawned inline at the transition would run
   before the PR — and therefore CI — exists at all. If the task has a PR,
   this pass resolves CI on its head commit (`github.ts`'s
-  `fetchRunsForHead`/`computeCiStatus`) and holds — on `in_progress`
-  **and** on `null` (no runs registered yet, indistinguishable at lookup
-  time from "this repo has no CI at all" — the very first lookup happens
-  within moments of the push that created the head commit, before GitHub
-  has necessarily registered the Actions run) — up to
-  `settings.taskMaster.reviewCiWaitMinutes` (default 15; `0` disables
-  waiting — no env-var counterpart, since this is the one knob a stranded
-  task on a repo with no CI needs live rather than a restart). Past the
-  deadline, or on any resolution failure (no repo, no token, the lookup
-  itself failing), it spawns anyway rather than let CI awareness become the
-  reason a task never gets reviewed — a missing/failed check just means the
-  reviewer sees no CI context instead of real pass/fail results. Waiting on
-  `null` too means a repo with no CI configured at all now costs up to
-  `reviewCiWaitMinutes` worth of polling (two GitHub calls per tick) before
-  its first review spawns, instead of spawning instantly — a deliberate
-  tradeoff (Hermes review, PR #742) given this pass has no per-task backoff,
-  acceptable at this tool's scale.
+  `fetchRunsForHead`/`computeCiStatus`) and holds — on `in_progress`, on
+  `null` (no runs registered yet, indistinguishable at lookup time from
+  "this repo has no CI at all"), **and** on the lookup itself throwing (a
+  transient network blip, or GitHub not yet consistent on the brand-new
+  PR) — up to `settings.taskMaster.reviewCiWaitMinutes` (default 15; `0`
+  disables waiting — no env-var counterpart, since this is the one knob a
+  stranded task on a repo with no CI needs live rather than a restart). All
+  three share the same root cause: the very first lookup happens within
+  moments of the push that created the head commit, before GitHub has
+  necessarily registered the Actions run or even become fully consistent on
+  the PR itself, so treating any of them as "proceed" on the very first
+  check reproduces the #213782 incident this whole change exists to fix.
+  Past the deadline — or immediately, for the genuinely nothing-to-check
+  cases (no repo configured, no token, no PR yet) — it spawns anyway rather
+  than let CI awareness become the reason a task never gets reviewed; a
+  missing/failed check just means the reviewer sees no CI context instead
+  of real pass/fail results. Waiting on `null`/throws too means a repo with
+  no CI configured at all now costs up to `reviewCiWaitMinutes` worth of
+  polling (two GitHub calls per tick) before its first review spawns,
+  instead of spawning instantly — a deliberate tradeoff (Hermes review, PR
+  #742) given this pass has no per-task backoff, acceptable at this tool's
+  scale.
 
   A CAS on `tasks.reviewSpawnClaimedAt`, claimed immediately before the
   spawn's own I/O, keeps a concurrent Reject/Give-up/Approve from racing a

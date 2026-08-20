@@ -201,11 +201,12 @@ function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
 
 /**
  * Resolves the CI signal for a task's PR head commit, or reports that the
- * caller should wait and re-check next tick. Never throws — any resolution
- * failure (no repo, no token, the PR/runs lookup itself failing) degrades to
+ * caller should wait and re-check next tick. Never throws — a resolution
+ * failure (no repo, no token, the PR/runs lookup itself throwing) waits up
+ * to the same deadline as `in_progress`/`null` below, then degrades to
  * `undefined` (spawn with no CI context at all, the pre-#738-followup
- * behavior) rather than blocking the spawn. The reviewer must never be the
- * thing a task gets stuck on.
+ * behavior) past it, rather than blocking the spawn forever. The reviewer
+ * must never be the thing a task gets stuck on.
  *
  * `undefined` also covers the case with nothing to check in the first
  * place: an issue-only task, or one whose draft PR hasn't opened yet.
@@ -275,9 +276,28 @@ async function resolveReviewCi(
           : `still running after the ${waitMinutes}-minute wait`,
     };
   } catch (err) {
+    // Same reasoning as the `null`-status branch above (Hermes review, PR
+    // #742, second pass) — a thrown lookup (a transient network blip, or
+    // GitHub not yet consistent on the brand-new PR) in the exact
+    // just-pushed window is indistinguishable from "will succeed on the
+    // next tick," and spawning without CI on the very first failure would
+    // reintroduce the same #213782 gap this whole change exists to close.
+    // Wait up to the same deadline; past it (a persistently broken
+    // repo/token, not a blip), fall through to "spawn without CI" exactly
+    // as before — this lookup must never be the reason a task wedges in
+    // "reviewing" forever.
+    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
+    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
+    if (!pastDeadline) {
+      app.log.warn(
+        { err, taskId: task.id, prNumber: task.prNumber },
+        "task reconcile: CI lookup for review spawn failed — waiting to retry",
+      );
+      return "wait";
+    }
     app.log.warn(
       { err, taskId: task.id, prNumber: task.prNumber },
-      "task reconcile: CI lookup for review spawn failed — spawning without it",
+      "task reconcile: CI lookup for review spawn still failing past the wait deadline — spawning without it",
     );
     return undefined;
   }

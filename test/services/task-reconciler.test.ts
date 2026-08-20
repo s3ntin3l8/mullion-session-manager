@@ -2213,7 +2213,13 @@ describe("reconcileTasks", () => {
       }
     });
 
-    it("spawns without CI context when the CI lookup itself throws — the reviewer must never be the thing a task gets stuck on", async () => {
+    // Hermes review, PR #742 (second pass) — a thrown lookup waits up to
+    // the deadline exactly like `in_progress`/`null`, rather than spawning
+    // without CI on the very first failure: a transient network blip or
+    // GitHub not yet being consistent on the brand-new PR, in the exact
+    // just-pushed window, is indistinguishable from "will succeed next
+    // tick," and spawning immediately would reintroduce the #213782 gap.
+    it("waits when the CI lookup itself throws and before the deadline, then spawns once it succeeds on a later tick", async () => {
       const app = await buildApp();
       const { taskId } = await claimWithPR(app);
       mockFetchRunsForHead.mockRejectedValueOnce(new Error("GitHub is down"));
@@ -2221,15 +2227,61 @@ describe("reconcileTasks", () => {
 
       await reconcileTasks(app);
 
-      const row = await getTask(app, taskId);
+      let row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId }),
-        expect.stringContaining("CI lookup for review spawn failed"),
+        expect.stringContaining("CI lookup for review spawn failed — waiting to retry"),
       );
 
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      await reconcileTasks(app);
+
+      row = await getTask(app, taskId);
+      expect(row.reviewSessionId).not.toBeNull();
+
       await app.close();
+    });
+
+    it("spawns without CI context once a persistently throwing CI lookup passes the wait deadline", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: 0 } },
+        });
+        const { taskId } = await claimWithPR(app);
+        mockFetchRunsForHead.mockRejectedValueOnce(new Error("GitHub is down"));
+        const warnSpy = vi.spyOn(app.log, "warn");
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).not.toBeNull();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ taskId }),
+          expect.stringContaining("still failing past the wait deadline"),
+        );
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: -1 } },
+        });
+        await app.close();
+      }
     });
 
     // The regression guard for the concurrency hazard splitting the spawn
