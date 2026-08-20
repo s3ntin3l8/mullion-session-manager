@@ -542,16 +542,38 @@ path to approve, reject, or send a task to `done`/`failed` — approve and
 reject stay a human's call, via the buttons in the task detail panel. What
 it CAN do:
 
-- **Write findings** to a round-suffixed file outside the worktree
-  (`task-prompt.ts`'s `taskReviewFindingsPath` — writing inside the worktree
-  would dirty it and block approve's own clean-tree check). The reconciler
-  (`task-reconciler.ts`'s `processReviewingTasks`) reads this back once the
-  review session's turn ends, posts it as a comment on the task's PR
-  (falling back to the linked issue), and appends it to `tasks.reviewFindings`
-  — durable across the worktree's own eventual removal, and rendered in the
-  task detail drawer's Review card.
-- **Trigger one automatic `reviewing → in_progress` round.** If those
-  findings are non-empty and this task hasn't already used its one round
+- **Write an explicit verdict.** The reviewer is told to ALWAYS write a
+  round-suffixed file outside the worktree (`task-prompt.ts`'s
+  `taskReviewFindingsPath` — writing inside the worktree would dirty it and
+  block approve's own clean-tree check), as JSON:
+  `{verdict: "clean" | "changes-requested", summary, findings: [{path, line,
+side, severity, body}]}`. `parseReviewFindings` tolerantly falls back to
+  `changes-requested` (the whole file as `summary`, no anchored findings) for
+  anything that isn't valid JSON in that shape — an agent that ignores the
+  contract must never silently read as a clean review. A missing or empty
+  file is treated as **inconclusive**, not "no findings" and not "clean": the
+  review may not have happened at all (a crash, a killed session, or an
+  agent that ignored the instruction), so `task-reconciler.ts` posts it as
+  such rather than a confident "nothing wrong here."
+- **Post as an actual GitHub PR review**, not a plain conversation comment.
+  Once the review session's turn ends, `task-reconciler.ts`'s
+  `processReviewingTasks` reads the verdict back and
+  `task-github-sync.ts`'s `postReviewFindingsComment` posts it via
+  `createPullRequestReview` (`github-write.ts`) — each anchored finding
+  becomes an inline comment on its own `path`/`line`, with the round header
+  and summary as the review's own body. Falls back to a plain issue comment
+  only when the task has no PR yet. The review is always `event: "COMMENT"`
+  — never `APPROVE`/`REQUEST_CHANGES` — since the PR is authored by this
+  same GitHub App installation and GitHub rejects both from a PR's own
+  author; it carries no merge-gating state. (A second identity able to
+  actually approve/request-changes is tracked separately —
+  [#737](https://github.com/s3ntin3l8/mullion-session-manager/issues/737) —
+  a materially bigger, deliberately deferred piece of work.) Either way, the
+  rendered text is also appended to `tasks.reviewFindings` — durable across
+  the worktree's own eventual removal, and rendered in the task detail
+  drawer's Review card.
+- **Trigger one automatic `reviewing → in_progress` round.** If the verdict
+  is `changes-requested` and this task hasn't already used its one round
   (`tasks.reviewRounds < 1`, a counter that's incremented but **never
   reset** — not by Retry, not by a human Reject, so a task auto-returns at
   most once across its whole lifecycle) and `taskMaster.enabled`: the task
@@ -564,12 +586,12 @@ it CAN do:
   genuinely idle session with nobody watching to feed it anything. `force`
   terminates that survivor first, then always spawns fresh via the same
   argv-prompt mechanism every other Task Master spawn uses — it never
-  injects keystrokes into a live, possibly mid-tool-call TUI.
-- A task with **zero findings** (or a review agent whose adapter can't
+  injects keystrokes into a live, possibly mid-tool-call TUI. A `clean`
+  verdict never auto-returns — nor does an inconclusive (missing-file) one.
+- A `clean` or inconclusive verdict (or a review agent whose adapter can't
   receive a seed at all — see `reviewSeedDelivered` below) simply stays in
-  `reviewing`; the findings comment still posts ("Review complete — no
-  findings."), so a finished review is never silently invisible, but nothing
-  auto-transitions.
+  `reviewing`; the review still posts, so a finished review is never
+  silently invisible, but nothing auto-transitions.
 
 `processReviewingTasks` is a genuinely separate poll from the
 claimed/in_progress reconcile loop (see the Lifecycle section's own note):

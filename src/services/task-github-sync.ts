@@ -485,6 +485,15 @@ export async function syncUnlabeledIssueToLocal(
  * review has no merge-gating state; it exists for visibility in the Reviews
  * timeline with real inline comments, not prose citing `file:42`.
  *
+ * A PR review needs two GitHub calls (`getPullRequestByNumber` for the head
+ * SHA, then `createPullRequestReview`) where a plain comment needed one, on
+ * a path with no second chance (the round's findings are already durably
+ * ingested by the time this runs). If EITHER call fails for a task that also
+ * has a linked issue, this falls back to an ordinary issue comment as a
+ * last resort — so a PR-side failure (rate limit, the PR being deleted or
+ * transferred, a transient 5xx) doesn't also mean GitHub never hears about
+ * this round at all.
+ *
  * Same best-effort posture as every other write in this file: never
  * throws, logs and records `githubSyncError` on failure, clears it on
  * success.
@@ -556,11 +565,36 @@ export async function postReviewFindingsComment(
         }
       }
       clearGithubSyncError(app, task.id);
+      return;
     } catch (err) {
       app.log.warn(
         { taskId: task.id, prNumber: task.prNumber, err },
         "[task-github-sync] failed to post review findings as a PR review",
       );
+      // A PR review needs two calls (GET the head SHA, then POST the
+      // review) where a plain comment needed one, and this whole path is
+      // one-shot — the round's findings are already durably written to
+      // `tasks.reviewFindings`/ingested, with nothing left to retry from.
+      // A linked issue is a last-resort fallback so the failure doesn't
+      // also mean GitHub never hears about this round at all.
+      if (task.issueNumber !== null) {
+        try {
+          await createComment(token, repoRef.owner, repoRef.repo, task.issueNumber, params.body);
+          clearGithubSyncError(app, task.id);
+          return;
+        } catch (fallbackErr) {
+          app.log.warn(
+            { taskId: task.id, issueNumber: task.issueNumber, err: fallbackErr },
+            "[task-github-sync] issue-comment fallback also failed after the PR review post failed",
+          );
+          recordGithubSyncError(
+            app,
+            task.id,
+            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+          );
+          return;
+        }
+      }
       recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
     }
     return;

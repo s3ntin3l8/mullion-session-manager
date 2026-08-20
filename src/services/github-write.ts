@@ -409,8 +409,8 @@ export interface ReviewCommentParams {
  * `APPROVE` and `REQUEST_CHANGES` from a PR's own author with a 422 — so
  * this posts a comment-only review with no merge-gating state. Actually
  * gating merge on this review needs a second identity (a separate App or
- * PAT) — a materially bigger, deliberately deferred piece of work; see the
- * tracking issue linked from docs/tasks.md's review-agent section.
+ * PAT) — a materially bigger, deliberately deferred piece of work; see
+ * https://github.com/s3ntin3l8/mullion-session-manager/issues/737.
  *
  * `commitId` should be the PR's current head SHA (`getPullRequestByNumber`'s
  * `headSha`) — GitHub anchors `comments[].line` against that specific
