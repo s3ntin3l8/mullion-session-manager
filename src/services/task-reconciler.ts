@@ -887,6 +887,14 @@ function clearMergeState(app: FastifyInstance, taskId: number): void {
     .set({ mergeRequestedAt: null, mergeError: null })
     .where(eq(tasks.id, taskId))
     .run();
+  // Hermes review, PR #763 — without this, a resolved task's backoff entry
+  // lingers in mergeRetryState until MAX_MERGE_RETRY_ENTRIES forces an
+  // oldest-insertion eviction, which can evict an ACTIVELY retrying task's
+  // entry instead of a resolved one, silently resetting its backoff/attempt
+  // count. Deleting here (unlike draftPrRetryState's own "never gets read
+  // again" reasoning, which relies on the row dropping out of that sweep's
+  // WHERE clause) closes that gap directly.
+  mergeRetryState.delete(taskId);
 }
 
 function recordMergeError(app: FastifyInstance, taskId: number, message: string): void {

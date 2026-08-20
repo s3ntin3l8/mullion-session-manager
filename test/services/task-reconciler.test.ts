@@ -1378,6 +1378,32 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Hermes review, PR #763 — clearMergeState must drop the task's
+    // mergeRetryState entry, not just the DB flag. Proved indirectly: a
+    // fresh merge request for the SAME task right after resolution is
+    // attempted on the very next tick rather than being suppressed by a
+    // leftover backoff entry from the resolved attempt.
+    it("re-attempts a fresh merge request immediately after a prior resolution, not backed off by a stale entry", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ merged: true, state: "closed" }));
+
+      await reconcileTasks(app);
+      let row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+
+      app.db.update(tasks).set({ mergeRequestedAt: new Date() }).where(eq(tasks.id, taskId)).run();
+      mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(2);
+      row = await getTask(app, taskId);
+      expect(row.mergeError).toContain("Conflicts with main");
+
+      await app.close();
+    });
+
     it("clears the merge flag idempotently when the PR was closed (not merged) out of band", async () => {
       const app = await buildApp();
       const { taskId } = await createDoneTaskWithPendingMerge(app);
