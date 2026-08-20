@@ -305,6 +305,64 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText(/Task Master is off/)).toBeInTheDocument();
   });
 
+  // Task-claim queueing (rate-limit-storm fix) — "claimed" now means
+  // queued, waiting for a free slot (task-claim.ts's enqueueTask/
+  // dispatchClaimedTask split). A queued card has no session yet, which
+  // otherwise looks identical to a genuinely stuck claimed task whose
+  // session was reaped — this hint is the tell.
+  it("shows a queued hint on a claimed card with no session yet", () => {
+    tasks = [
+      makeTask({ id: 1, status: "claimed", sessionId: null, queuedAt: "2026-01-01T00:00:00.000Z" }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Queued — waiting for a free slot/)).toBeInTheDocument();
+  });
+
+  it("does not show the queued hint once a claimed card actually has a session", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: 5 })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText(/Queued — waiting for a free slot/)).toBeNull();
+  });
+
+  it("shows a review-in-flight hint while the review agent hasn't finished yet", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 9,
+        reviewFindingsIngestedSessionId: null,
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Review in progress/)).toBeInTheDocument();
+  });
+
+  it("hides the review-in-flight hint once findings are ingested — awaiting manual approval instead", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 9,
+        reviewFindingsIngestedSessionId: 9,
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText(/Review in progress/)).toBeNull();
+  });
+
+  it("never shows the review-in-flight hint for a reviewing task with no review agent configured", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText(/Review in progress/)).toBeNull();
+  });
+
   it("carries the full title as a tooltip for the (possibly clamped) card title", () => {
     tasks = [makeTask({ id: 1, title: "A very long task title that might get clamped" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

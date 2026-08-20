@@ -8,19 +8,15 @@ import { getIssueState, getIssueTitle } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { claimTask } from "./task-claim.js";
+import { enqueueTask } from "./task-claim.js";
+import { dispatchQueuedTasks } from "./task-dispatch.js";
 import {
   syncClosedIssueToLocal,
   syncUnlabeledIssueToLocal,
   FAILURE_REASON_LABEL_LOST,
   FAILURE_REASON_ISSUE_CLOSED,
 } from "./task-github-sync.js";
-import {
-  canTransition,
-  recordTaskTransition,
-  CONCURRENCY_CAPPED_STATUSES,
-  type TaskStatus,
-} from "./task-state.js";
+import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import {
   dependencyGate,
@@ -569,18 +565,21 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // ingest, for every ready task with dependencies — which doesn't survive
   // this feature's own motivating scenario, see those constants' comment).
   //
-  // Capacity pre-count (#667) — this DELIBERATELY contradicts the "no local
-  // pre-count" reasoning this comment used to carry: that was true when
-  // every loop iteration was free (claimTask's own atomic reservation is
-  // simpler and no less correct than duplicating the count). It stops being
-  // true once an iteration can cost a real GitHub round-trip (the lazy
-  // dependency check above) — at that point, counting once up front to
-  // avoid burning calls on candidates that can't possibly be claimed this
-  // sweep is strictly better than discovering "cap" after the fact.
-  // claimTask's transaction remains the only correctness authority for the
-  // cap itself; this count is purely a call-avoidance guard and can be
-  // stale by the time claimTask actually runs (a manual claim racing this
-  // sweep), which is fine — claimTask's own reservation still catches it.
+  // Capacity pre-count (#667) — a call-avoidance guard, not a correctness
+  // check: `enqueueTask` never cap-checks (queueing is unconditional, the
+  // whole point of the claim/dispatch split — see task-claim.ts), so
+  // there's no "cap" outcome left for this loop to react to after the
+  // fact. Auto-claim still needs to pace ITSELF, though — without this,
+  // one sweep would drain the entire `ready` backlog into "claimed" the
+  // instant capacity opens even slightly, turning the board's Ready column
+  // into dead weight and making `ready`'s own boardOrder-preserving queue
+  // pointless (see task-claim.ts's own doc comment on why manual claim and
+  // auto-claim queue in different places). So this counts BOTH `claimed`
+  // and `in_progress` as "occupied" — deliberately not the same set
+  // CONCURRENCY_CAPPED_STATUSES exports now (that constant is
+  // `in_progress`-only, the real dispatch-time cap) — this is pure pacing:
+  // don't queue more than there's genuine room for, given what's already
+  // either running or already waiting in line.
   //
   // Gated on the runtime pause (settings.taskMaster.autoClaimPaused), the
   // roadmap's stated kill-switch requirement — distinct from the "enabled"
@@ -609,15 +608,15 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     }
 
     const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
-    const inFlight = app.db
+    const occupied = app.db
       .select({ id: tasks.id })
       .from(tasks)
-      .where(inArray(tasks.status, CONCURRENCY_CAPPED_STATUSES))
+      .where(inArray(tasks.status, ["claimed", "in_progress"]))
       .all().length;
-    let remaining = maxConcurrent - inFlight;
+    let remaining = maxConcurrent - occupied;
     if (remaining <= 0) {
       app.log.debug(
-        { inFlight, maxConcurrent },
+        { occupied, maxConcurrent },
         "[task-watcher] at capacity, skipping auto-claim sweep entirely",
       );
       return refreshedThisSweep;
@@ -696,23 +695,19 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       }
 
       try {
-        const outcome = await claimTask(app, row.id, { auto: true });
+        // enqueueTask never cap-checks (see this loop's own pre-count
+        // comment above) — its failure reasons are all genuine problems
+        // with THIS candidate (not-found/not-ready/no-seed-channel), never
+        // a capacity signal, so every failure here is warn-worthy and none
+        // of them should stop the sweep the way "cap" used to.
+        const outcome = await enqueueTask(app, row.id, { auto: true });
         if (outcome.ok) {
           remaining--;
         } else {
-          // "cap" is expected and frequent once the install is at its
-          // concurrency limit — debug, not warn, so a healthy install
-          // running at capacity doesn't spam warn-level logs every sweep.
-          // Still possible despite the pre-count above (a manual claim or a
-          // concurrent sweep racing this one) — stop trying further
-          // candidates this sweep rather than burning more dependency
-          // checks on tasks that can't be claimed anyway.
-          const level = outcome.reason === "cap" ? "debug" : "warn";
-          app.log[level](
+          app.log.warn(
             { taskId: row.id, reason: outcome.reason },
             "[task-watcher] auto-claim did not succeed",
           );
-          if (outcome.reason === "cap") remaining = 0;
         }
       } catch (err) {
         app.log.error({ err, taskId: row.id }, "[task-watcher] auto-claim threw unexpectedly");
@@ -1052,6 +1047,14 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // auto-claim shouldn't silently stop working just because ingest
       // has nothing to do this sweep.
       const refreshedByClaimPath = await autoClaimReadyTasks(githubContext);
+      // Periodic dispatch backstop (task-claim queueing, rate-limit-storm
+      // fix) — task-dispatch.ts's opportunistic hook (off every
+      // recordTaskTransition) handles the common case in near-real-time;
+      // this tick is what guarantees a queued task is never stuck forever
+      // if that hook's trigger was ever missed (e.g. a process restart
+      // right after a task was enqueued but before its own transition's
+      // listeners ran).
+      await dispatchQueuedTasks(app);
       // Deliberately decoupled from autoClaimReadyTasks — see
       // resolveStaleTaskBlockers' own doc comment and
       // MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP's for why this runs

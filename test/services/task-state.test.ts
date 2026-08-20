@@ -59,7 +59,11 @@ describe("task-state canTransition", () => {
 });
 
 describe("task-state status sets", () => {
-  it("CONCURRENCY_CAPPED_STATUSES is exactly claimed/in_progress", () => {
-    expect(CONCURRENCY_CAPPED_STATUSES).toEqual(["claimed", "in_progress"]);
+  // Task-claim queueing (rate-limit-storm fix) — "claimed" was removed:
+  // it's now the queue state (task-claim.ts's enqueueTask/
+  // dispatchClaimedTask split), and must never reject a human's claim
+  // click with a 429. See this constant's own doc comment in task-state.ts.
+  it("CONCURRENCY_CAPPED_STATUSES is exactly in_progress", () => {
+    expect(CONCURRENCY_CAPPED_STATUSES).toEqual(["in_progress"]);
   });
 });

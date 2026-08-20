@@ -141,14 +141,18 @@ export function TaskCard({
   // D3 — time in the task's current status, at scan distance rather than
   // only in the drawer's own "Created ... Claimed ... Completed" footer
   // (TaskDetail.tsx). The timestamp that means "how long has this been
-  // sitting here" changes with the column: claimedAt for claimed/
-  // in_progress (still not started, or actively running), reviewingAt once
-  // it's waiting on a look, completedAt once it's settled, createdAt
-  // otherwise (backlog/ready, never yet claimed). Task's own timestamps are
-  // ISO strings (api.ts) but formatRelativeAge takes epoch ms — converted
-  // via Date.parse here vs. TaskDetail.tsx's own footer's `new
-  // Date(x).getTime()`; same numeric result for an ISO string, just a
-  // shorter spelling, not the literal same call.
+  // sitting here" changes with the column: queuedAt for claimed (task-claim
+  // queueing, rate-limit-storm fix — claimed now means "waiting for a
+  // slot," not "actively spawning," so its age chip should answer "how
+  // long has it been queued," not read claimedAt, which is null until
+  // dispatch actually starts it), claimedAt for in_progress (the current
+  // worker spell), reviewingAt once it's waiting on a look, completedAt
+  // once it's settled, createdAt otherwise (backlog/ready, never yet
+  // claimed). Task's own timestamps are ISO strings (api.ts) but
+  // formatRelativeAge takes epoch ms — converted via Date.parse here vs.
+  // TaskDetail.tsx's own footer's `new Date(x).getTime()`; same numeric
+  // result for an ISO string, just a shorter spelling, not the literal
+  // same call.
   //
   // Hermes review — a Failed task also falls into that createdAt bucket,
   // but "how long has this been sitting here" is the wrong story for it: a
@@ -158,15 +162,29 @@ export function TaskCard({
   // best available timestamp, but the label is honest about what it means
   // only for Failed rather than implying it's freshness of the failure.
   const statusTimestamp =
-    task.status === "claimed" || task.status === "in_progress"
-      ? task.claimedAt
-      : task.status === "reviewing"
-        ? task.reviewingAt
-        : task.status === "done"
-          ? task.completedAt
-          : task.createdAt;
+    task.status === "claimed"
+      ? task.queuedAt
+      : task.status === "in_progress"
+        ? task.claimedAt
+        : task.status === "reviewing"
+          ? task.reviewingAt
+          : task.status === "done"
+            ? task.completedAt
+            : task.createdAt;
   const statusAge = statusTimestamp ? formatRelativeAge(Date.parse(statusTimestamp)) : null;
   const statusAgeLabel = statusAge && task.status === "failed" ? `created ${statusAge}` : statusAge;
+
+  // Task-claim queueing (rate-limit-storm fix) — "review in flight" vs.
+  // "awaiting your approval" for a reviewing task: a review agent that's
+  // still running hasn't had its findings ingested yet
+  // (reviewFindingsIngestedSessionId is set only once they're read — see
+  // task-reconciler.ts's processReviewingTasks); no review agent at all
+  // (reviewSessionId null) is pure human review, same "waiting on you" bucket
+  // as a finished one.
+  const reviewInFlight =
+    task.status === "reviewing" &&
+    task.reviewSessionId !== null &&
+    task.reviewFindingsIngestedSessionId !== task.reviewSessionId;
 
   return (
     <div
@@ -384,6 +402,15 @@ export function TaskCard({
       {task.status === "ready" && !taskMasterEnabled && (
         <div className="task-card-hint">Claiming is disabled — Task Master is off</div>
       )}
+      {/* Task-claim queueing (rate-limit-storm fix) — a queued card renders
+          with no session strip above (sessionId is null until dispatch),
+          which otherwise looks identical to a genuinely stuck claimed task
+          whose session was reaped. This is the "waiting for a slot" tell,
+          following the same hint pattern as the ready/disabled case above. */}
+      {task.status === "claimed" && task.sessionId === null && (
+        <div className="task-card-hint">Queued — waiting for a free slot</div>
+      )}
+      {reviewInFlight && <div className="task-card-hint">Review in progress</div>}
     </div>
   );
 }

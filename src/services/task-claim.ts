@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
 // createSessionRecord/withLiveStatus are pure business logic, filed under
@@ -33,75 +33,65 @@ function capDetail(limit: number): string {
   return `At capacity: ${limit} task(s) already running`;
 }
 
-export type ClaimTaskOutcome =
+export type EnqueueTaskOutcome =
+  | { ok: true; task: typeof tasks.$inferSelect }
+  | {
+      ok: false;
+      reason: "not-found" | "not-ready" | "no-seed-channel";
+      detail?: string;
+    };
+
+export type DispatchTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
   | {
       ok: false;
-      reason:
-        "not-found" | "not-ready" | "cap" | "worktree-failed" | "spawn-failed" | "no-seed-channel";
+      reason: "not-queued" | "cap" | "worktree-failed" | "spawn-failed";
       detail?: string;
-      /** Only set for "cap" — the concurrency limit that was hit, so the
-       * caller can build a specific error message without re-reading config. */
+      /** Only set for "cap" — the concurrency limit that was hit. */
       limit?: number;
     };
 
 /**
- * Phase 6 Task Master (6.2/#215) — the single claim orchestration both
- * `POST /api/tasks/:id/claim` (a human-initiated, manual claim) and the
- * watcher's auto-claim sweep (task-watcher.ts) call into, so the
- * reservation/spawn/rollback logic exists in exactly one place rather than
- * being duplicated between a route handler and a background loop.
+ * Task-claim queueing (rate-limit-storm fix) — `claimTask` used to reserve
+ * (cap-check + status flip) and spawn (worktree + session) as one atomic
+ * unit, which meant a claim past capacity had to be REJECTED with a 429:
+ * there was no state that meant "accepted, but not started yet." Splitting
+ * that into `enqueueTask` (this function) and `dispatchClaimedTask` (below)
+ * makes "claimed" that state — every manual claim now succeeds
+ * unconditionally and waits for `dispatchClaimedTask` to actually spawn it,
+ * called either by task-dispatch.ts's opportunistic hook (fires off
+ * task-state.ts's recordTaskTransition, see there) or its periodic sweep
+ * off the task-watcher tick.
  *
- * Reservation is atomic with the concurrency-cap check (Hermes/independent
- * review posture carried into 6.2): today's claim used to spawn first and
- * only conditionally UPDATE afterward, which is why a losing concurrent
- * request's worktree was left orphaned — the spawn had already happened
- * before the loss was detected. Here, one `app.db.transaction(...)` (
- * synchronous, better-sqlite3 — same shape as session-lifecycle.ts's own
- * child-cap reservation) counts tasks in `claimed`/`in_progress` against
- * `MULLION_TASK_MAX_CONCURRENT`, then conditionally flips this task to
- * "claimed" — both checks succeed or fail together, so neither the
- * double-claim race nor the cap can be raced past by two concurrent
- * requests each reading a stale count.
+ * `auto` still distinguishes a human clicking Claim from the watcher's
+ * autonomous sweep for exactly one thing: a manual claim still queues even
+ * when the resolved agent has no seed-delivery channel (the human is
+ * present and can paste the prompt in themselves once it starts), but an
+ * autonomous claim refuses to even queue rather than eventually spawning an
+ * agent with silently no instructions at all.
  *
- * `auto` distinguishes a human clicking Claim from the watcher's autonomous
- * sweep: a manual claim still proceeds even when the resolved agent has no
- * seed-delivery channel (the human is present and can paste the prompt in
- * themselves), but an autonomous claim refuses outright rather than
- * spawning an agent with silently no instructions at all.
+ * `agent`/`reviewAgent` overrides are persisted onto the row HERE, at
+ * enqueue time — not held in a closure until dispatch, which may run in an
+ * entirely separate call (a different tick, possibly after a process
+ * restart). `dispatchClaimedTask` reads them back off the row exactly the
+ * way this function used to read `opts.agent ?? task.agent` at call time.
  *
- * Orphan clearing (6.8/#283): a claim that reserves the task but then
- * fails at worktree creation releases the reservation back to "ready", but
- * its deterministic branch/worktree path (`mullion/task-<id>`) can still be
- * left on disk from that attempt — a retry's `git worktree add -b` would
- * collide with it. Before creating, this function proactively clears
- * whatever sits at that deterministic path via `removeWorktreeIfClean` (see
- * git-worktree.ts) — a no-op when nothing's there, a refusal (surfaced as
- * `worktree-failed`) when something's there and dirty, since a dirty
- * leftover needs a human's eyes, not a silent overwrite.
- *
- * `worktreePath`/`branchName` are stamped into the row inside the SAME
- * reservation transaction that flips status to "claimed" — BEFORE anything
- * is actually created on disk — not only afterward once creation succeeds
- * (independent review, PR #476). Without this, there's a window where the
- * task is DB-visibly "claimed" with nothing in `worktreePath` yet, but the
- * worktree directory already exists on disk (`createWorktree` runs before
- * the post-success UPDATE below) — `plugins/task-watcher.ts`'s boot-time
- * sweep computes "orphan" as "on disk, but not referenced by any non-
- * terminal task's `worktreePath`," so a human clicking Claim moments after
- * a restart (no delay, unlike the watcher's own staggered auto-claim sweep)
- * could race the fire-and-forget sweep into deleting a worktree a live
- * claim just created. Stamping the DB-visible claim first closes the
- * window: the sweep's active-paths filter sees this task's path from the
- * moment reservation succeeds, well before the directory exists to be
- * mistaken for an orphan. `release()` clears both back to null on failure,
- * matching pre-6.8 behavior (never non-null for a "ready" task).
+ * `worktreePath`/`branchName` are stamped here too, before anything is
+ * created on disk (independent review, PR #476, predating the queue split)
+ * — `plugins/task-watcher.ts`'s boot-time orphan sweep computes "orphan" as
+ * "on disk, but not referenced by any non-terminal task's `worktreePath`,"
+ * so a task must be DB-visibly claimed with its future path already
+ * recorded before that path exists, not after. The queue makes this
+ * predicted-but-not-yet-real window last far longer than before (a task can
+ * now sit "claimed" for the queue's entire depth, not just the time it
+ * takes to spawn) — safe only because `ACTIVE_WORKTREE_STATUSES`
+ * (plugins/task-watcher.ts) already includes "claimed".
  */
-export async function claimTask(
+export async function enqueueTask(
   app: FastifyInstance,
   taskId: number,
   opts: { auto: boolean; agent?: string | null; reviewAgent?: string | null },
-): Promise<ClaimTaskOutcome> {
+): Promise<EnqueueTaskOutcome> {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
   if (!task) return { ok: false, reason: "not-found" };
 
@@ -126,26 +116,123 @@ export async function claimTask(
 
   // Derived from task.id, not task.issueNumber: issueNumber is nullable
   // (6.9) and every local task shares the same NULL — branching on it
-  // would collide every local task onto `mullion/task-null`. Computed
-  // before the reservation transaction so both the DB stamp below and the
-  // orphan-clear/create calls further down use the identical value.
+  // would collide every local task onto `mullion/task-null`.
   const branchName = `mullion/task-${task.id}`;
   const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
 
-  // Settings-backed override of MULLION_TASK_MAX_CONCURRENT (Task Master
-  // Settings UI follow-up) — see task-config.ts's doc comment. Also reads
-  // skipPermissions (used further down, at the actual spawn) from the same
-  // resolved config rather than a second DB round trip.
-  const taskMasterConfig = resolveTaskMasterConfig(app);
-  const maxConcurrent = taskMasterConfig.maxConcurrent;
-  const reservation = app.db.transaction((tx) => {
+  const reserved = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
     if (!current || current.status !== "ready") {
       return { reserved: false as const, currentStatus: current?.status };
     }
-    // Same "select + .length" cap-check shape as session-lifecycle.ts's own
-    // child-session cap reservation (createSessionRecord's maxChildren
-    // check) — a plain row count, not a raw SQL count(*) template.
+    const patch: Partial<typeof tasks.$inferInsert> = {
+      status: "claimed",
+      queuedAt: new Date(),
+      worktreePath: predictedWorktreePath,
+      branchName,
+    };
+    if (opts.agent !== undefined) patch.agent = opts.agent;
+    if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
+    tx.update(tasks)
+      .set(patch)
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready")))
+      .run();
+    return { reserved: true as const };
+  });
+
+  if (!reserved.reserved) {
+    return {
+      ok: false,
+      reason: "not-ready",
+      detail: `Task is not ready (status: ${reserved.currentStatus ?? "unknown"})`,
+    };
+  }
+
+  const [queuedRow] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+  recordTaskTransition(app, {
+    taskId,
+    projectId: project.id,
+    from: "ready",
+    to: "claimed",
+    via: opts.auto ? "auto-claim-queue" : "claim-queue",
+    context: { auto: opts.auto },
+  });
+
+  // Fire-and-forget, same reasoning as the old claimTask's own sync call
+  // (still below, on dispatchClaimedTask's success — this is the "claimed"
+  // half only). No sessionId/worktreePath/agentCommand yet — those don't
+  // exist until dispatch.
+  void syncTaskTransition(app, { ...task, status: "claimed" }, project, "claimed");
+
+  return { ok: true, task: queuedRow };
+}
+
+/**
+ * Task-claim queueing (rate-limit-storm fix) — the half of the old
+ * `claimTask` that actually spawns a worker: reservation (now JUST the
+ * concurrency-cap check + the "claimed" -> "in_progress" flip, since
+ * `enqueueTask` above already did everything else) followed by the same
+ * orphan-clear/base-ref/createSessionRecord sequence that function always
+ * had.
+ *
+ * Reservation is atomic with the concurrency-cap check (Hermes/independent
+ * review posture carried into 6.2, unchanged by the split): one
+ * `app.db.transaction(...)` (synchronous, better-sqlite3) counts tasks
+ * `in_progress` against `MULLION_TASK_MAX_CONCURRENT`, then conditionally
+ * flips this task's status — both checks succeed or fail together, so two
+ * concurrent dispatch attempts (the opportunistic hook AND the periodic
+ * sweep can both fire for the same free slot) can't both win it.
+ *
+ * On success, status goes straight "claimed" -> "in_progress" — never
+ * lands on an intermediate "in_progress, no session yet" the way the old
+ * single-phase claimTask could transiently. `claimedAt`/`startedAt` are
+ * BOTH stamped here (not `enqueueTask`'s `queuedAt`) — this is genuinely
+ * "when did the CURRENT spell start," the same meaning
+ * task-reconciler.ts's budget deadline and `turnFinishedSinceClaim` already
+ * give `claimedAt` today; a task that queued for hours must not have that
+ * time counted against its budget.
+ *
+ * On failure, `release()` returns the task to "claimed" (its queue
+ * position), NOT "ready" — an enqueue was a real, unconditional commitment;
+ * a transient dispatch failure (a dirty leftover worktree, a briefly
+ * unreachable host) shouldn't cost the task its place in line. The caller
+ * (task-dispatch.ts) is responsible for backing off a task that keeps
+ * failing dispatch, so this doesn't retry the identical failure in a tight
+ * loop — see that module's own doc comment.
+ */
+export async function dispatchClaimedTask(
+  app: FastifyInstance,
+  taskId: number,
+): Promise<DispatchTaskOutcome> {
+  const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+  if (!task || task.status !== "claimed" || task.sessionId !== null) {
+    return { ok: false, reason: "not-queued" };
+  }
+
+  const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
+  if (!project) return { ok: false, reason: "not-queued" };
+
+  // Re-resolved here, not carried from enqueue time: task.agent/reviewAgent
+  // were already persisted onto the row by enqueueTask (or predate it, for
+  // an unedited task), so re-reading them now picks up any edit made while
+  // the task sat queued, the same way a fresh claimTask call always did.
+  const command = resolveAgentCommand(app, {
+    taskAgent: task.agent,
+    issueBody: task.body,
+    projectDefaultAgent: project.defaultAgent,
+  });
+  const seedCapable = commandSupportsSeed(command);
+
+  const branchName = task.branchName ?? `mullion/task-${task.id}`;
+  const predictedWorktreePath = task.worktreePath ?? deriveWorktreePath(project.cwd, branchName);
+
+  const taskMasterConfig = resolveTaskMasterConfig(app);
+  const maxConcurrent = taskMasterConfig.maxConcurrent;
+  const reservation = app.db.transaction((tx) => {
+    const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
+    if (!current || current.status !== "claimed" || current.sessionId !== null) {
+      return { reserved: false as const };
+    }
     const inFlight = tx
       .select({ id: tasks.id })
       .from(tasks)
@@ -155,103 +242,72 @@ export async function claimTask(
       return { reserved: false as const, capped: true as const };
     }
     tx.update(tasks)
-      .set({
-        status: "claimed",
-        claimedAt: new Date(),
-        // See this function's own doc comment on why these are stamped
-        // here, before anything exists on disk (independent review, PR #476).
-        worktreePath: predictedWorktreePath,
-        branchName,
-      })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready")))
+      .set({ status: "in_progress", claimedAt: new Date(), startedAt: new Date() })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
     return { reserved: true as const };
   });
 
   if (!reservation.reserved) {
     if ("capped" in reservation && reservation.capped) {
-      // Previously silent — the "cap" outcome short-circuits before the
-      // reservation transaction writes anything, so there was no status
-      // change for recordTaskTransition to log and no other signal at all.
-      // A plain app.log call (not recordTaskTransition, which asserts an
-      // actual from/to transition) makes a capped claim visible without
-      // inventing a transition that never happened.
-      app.log.info({ taskId, limit: maxConcurrent, auto: opts.auto }, "task claim: at capacity");
       return { ok: false, reason: "cap", limit: maxConcurrent, detail: capDetail(maxConcurrent) };
     }
-    return {
-      ok: false,
-      reason: "not-ready",
-      detail: `Task is not ready (status: ${reservation.currentStatus ?? "unknown"})`,
-    };
+    // Lost a race with another dispatch attempt for this same task (or it
+    // was deleted/edited out from under us) — not an error, just nothing
+    // to do; the caller (task-dispatch.ts) moves on to the next candidate.
+    return { ok: false, reason: "not-queued" };
   }
 
-  // From here on the reservation is ours — any failure must release it
-  // back to "ready" rather than leaving a "claimed" row with nothing
-  // spawned behind it, which would both strand the task and silently
-  // consume a concurrency slot forever. Clears worktreePath/branchName back
-  // to null too, matching pre-6.8 behavior for a "ready" task (both are
-  // now stamped speculatively at reservation time, above). seedDelivered is
-  // cleared for the same reason, even though this attempt's own commit
-  // block is the only place that ever WRITES it (never at reservation
-  // time): a "ready" task must never carry a prior claim's seedDelivered
-  // forward — belt-and-suspenders against the `failed → ready` transition
-  // table edge (task-state.ts), which exists but has no live trigger today.
+  recordTaskTransition(app, {
+    taskId,
+    projectId: project.id,
+    from: "claimed",
+    to: "in_progress",
+    via: "dispatch",
+  });
+
+  // Mirrors enqueueTask's release() — puts the reservation back rather than
+  // leaving an "in_progress" row with no session behind it. Releases to
+  // "claimed" (see this function's own doc comment), not "ready" —
+  // worktreePath/branchName are deliberately LEFT AS-IS (they're the
+  // queue's still-correct predicted path, needed for the next dispatch
+  // attempt's own orphan-clearing). baseSha/seedDelivered ARE nulled, same
+  // belt-and-suspenders reasoning as enqueueTask's release() below: no path
+  // in this codebase today lands a genuinely-committed prior spell's values
+  // back on a "claimed" row, but a "claimed" row must never carry them
+  // forward regardless — only this function's own commit block ever WRITES
+  // them.
   async function release(reason: string): Promise<void> {
     const updated = app.db
       .update(tasks)
       .set({
-        status: "ready",
+        status: "claimed",
         claimedAt: null,
+        startedAt: null,
         failureReason: reason,
-        worktreePath: null,
-        branchName: null,
         baseSha: null,
         seedDelivered: null,
       })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress"), isNull(tasks.sessionId)))
       .run();
-    // #488 — previously unlogged: this is how a claim reservation that
-    // couldn't be completed actually reaches "ready" again, and had no
-    // signal of any kind before.
     if (updated.changes > 0) {
       recordTaskTransition(app, {
         taskId,
         projectId: project.id,
-        from: "claimed",
-        to: "ready",
-        via: "claim-release",
+        from: "in_progress",
+        to: "claimed",
+        via: "dispatch-release",
         context: { reason },
       });
     }
   }
 
-  // None of resolveHostBaseRef/createSessionRecord/removeWorktreeIfClean are
-  // known to throw for a documented failure today (traced: resolveHostBaseRef
-  // is best-effort — a git-level or transport failure both resolve `ok:
-  // false` rather than throwing, see host-git.ts — createSessionRecord
-  // returns {ok:false,...} for every documented failure,
-  // removeWorktreeIfClean routes through resolveBackend, which for a remote
-  // host can throw synchronously on a misconfigured hostId) — this
-  // try/catch exists to make good on this function's own doc-comment
-  // promise ("any failure past this point releases the reservation")
-  // rather than leaving it enforced only by every callee happening not to
-  // throw. `committed` marks the point of no return: once the row is
-  // stamped with sessionId, the claim has genuinely succeeded, so a later
-  // throw (e.g. from withLiveStatus) must NOT release the reservation —
-  // that would orphan a real, already-spawned session while making the
-  // task claimable again — it propagates instead, same as before this
-  // try/catch existed.
+  // Same throw/rollback posture as the old claimTask — see its own doc
+  // comment (still on enqueueTask above) for why this try/catch exists and
+  // what `committed` guards.
   let committed = false;
   try {
-    // Orphan-clearing (6.8/#283) — see this function's own doc comment, and
-    // clearOrphanedTaskWorktree's, for why this clears both the worktree
-    // directory AND the branch ref at the deterministic path/name (a plain
-    // removeWorktreeIfClean only clears the directory, leaving the branch
-    // to collide with a fresh `git worktree add -b` on retry). Runs
-    // regardless of whether this is a truly fresh claim (nothing there —
-    // a no-op) or a retry after a prior attempt's worktree creation
-    // succeeded but something later failed.
+    // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
     const clearResult = await resolveBackend(app, project.hostId).clearOrphanedTaskWorktree(
       project.cwd,
       predictedWorktreePath,
@@ -268,59 +324,26 @@ export async function claimTask(
       };
     }
 
-    // #484 — routed through host-git.ts so a remote-hosted project resolves
-    // its own real default base ref (and its pinned SHA) the same way a
-    // local one does, rather than the literal "HEAD" fallback this used
-    // before proxying existed. A transport failure (unreachable/unsupported
-    // host) degrades to the exact same `{ baseRef: "HEAD", sha: null }`
-    // this already fell back to — byte-identical to the old remote
-    // behavior, never a regression.
-    //
-    // #491 — pin baseRef to a commit SHA *before* creating the worktree,
-    // and branch from the SHA rather than the symbolic ref. baseRef here
-    // can be a moving target (e.g. "origin/main"); resolving it to a SHA
-    // only after the worktree exists would be a second, independent
-    // resolution of that same moving ref, and main could have advanced in
-    // between — reproducing the exact "diff-stat against a base the branch
-    // was never actually cut from" failure #491's own code comment refuses
-    // to ship. Branching from the SHA directly makes the persisted value
-    // and the branch's actual base provably identical, no window.
+    // #484/#491 — unchanged from the old claimTask; see git blame on this
+    // function's prior revision (before the queue split) for the full
+    // base-ref-pinning rationale.
     const baseRefResult = await resolveHostBaseRef(app, project.hostId, project.cwd);
     const { baseRef, baseSha } = baseRefResult.ok
       ? { baseRef: baseRefResult.value.baseRef, baseSha: baseRefResult.value.sha }
       : { baseRef: "HEAD", baseSha: null };
-    // Delivered as argv, not stashSeed — SessionStart's `additionalContext`
-    // (stashSeed's only consumer, hooks.ts) injects context but never
-    // submits a turn, so an unattended worker spawned that way idles at an
-    // empty prompt forever (see docs/tasks.md's Agent selection section).
-    // `createSessionRecord` threads `initialPrompt` down to
-    // pty-manager.ts's Session.bootstrapMaster, which appends the matched
-    // hook adapter's `initialPromptArgs` to the spawned command line — a
-    // real submitted turn. `seedCapable` (computed above from
-    // commandSupportsSeed, itself now backed by the same adapter capability)
-    // is also this call's accurate prediction of whether that argv will
-    // actually be built, so `seedDelivered` below can be derived from it
-    // directly rather than a separate post-hoc check.
-    // The issue text alone left the agent to guess Task Master's completion
-    // contract (end the turn but don't exit, commit, leave no untracked
-    // files, don't push or touch the issue) — see task-prompt.ts's own doc
-    // comment for why each of those is unguessable from inside the worktree.
-    // worktreePath here is predictedWorktreePath, computed above from
-    // deriveWorktreePath — not yet the row's actual `cwd` (stamped from
-    // result.row.cwd below, once the spawn succeeds). Identical today: the
-    // `worktree: {...}` intent passed to createSessionRecord just below
-    // carries this same `branchName` as its seed, and createWorktree's own
-    // path resolution (session-lifecycle.ts's resolveWorktreeCwd) runs
-    // through that same deriveWorktreePath call (git-worktree.ts) — so the
-    // path the agent is told and the path it actually runs in are the same
-    // function applied to the same inputs, not two independent guesses
-    // that happen to agree (Hermes review, PR #569).
     const prompt = buildWorkerPrompt({
       task,
       branchName,
       worktreePath: predictedWorktreePath,
       budgetMinutes: taskMasterConfig.budgetMinutes,
-      auto: opts.auto,
+      // `auto` no longer distinguishes anything at dispatch time (the
+      // no-seed-channel refusal already happened at enqueue) — always
+      // false here just means the prompt's "don't stop to ask" framing
+      // matches a human having originated this claim. An auto-claimed
+      // task's prompt got that framing from enqueueTask's own opts.auto,
+      // which this function has no way to recover — a cosmetic prompt
+      // difference, not a correctness gate the way no-seed-channel is.
+      auto: false,
       mode: "claim",
     });
     const result = await createSessionRecord(app, {
@@ -335,10 +358,6 @@ export async function claimTask(
         await release("worktree creation failed");
         return { ok: false, reason: "worktree-failed" };
       }
-      if (result.reason === "unknown-project") {
-        await release("project not found during spawn");
-        return { ok: false, reason: "not-found" };
-      }
       await release("session spawn failed");
       return { ok: false, reason: "spawn-failed" };
     }
@@ -351,59 +370,41 @@ export async function claimTask(
     if (seedCapable && !seedDelivered) {
       app.log.warn(
         { taskId, hostId: project.hostId, command },
-        "task claim: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew (the remote agent build may not support initialPrompt yet)",
+        "task dispatch: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew (the remote agent build may not support initialPrompt yet)",
       );
     }
 
-    const patch: Partial<typeof tasks.$inferInsert> = {
-      sessionId: result.row.id,
-      worktreePath: result.row.cwd,
-      branchName,
-      agentCommand: command,
-      baseSha,
-      seedDelivered,
-    };
-    if (opts.agent !== undefined) patch.agent = opts.agent;
-    if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
-
-    app.db.update(tasks).set(patch).where(eq(tasks.id, taskId)).run();
-    committed = true;
-    recordTaskTransition(app, {
-      taskId,
-      projectId: project.id,
-      from: "ready",
-      to: "claimed",
-      via: "claim",
-      context: { auto: opts.auto, command, seedDelivered },
-    });
-
-    // Best-effort GitHub sync (6.4/#217) — a no-op for a local task or an
-    // unconnected install; failures are logged inside syncTaskTransition
-    // and never thrown here. Uses the just-committed values directly
-    // rather than re-querying (result.row is a SESSION row — only
-    // sessionId/worktreePath/branchName/agentCommand are pulled from it,
-    // never spread wholesale, since it shares field names like `id`/
-    // `status` with the task row but means something different by them).
-    //
-    // Deliberately NOT awaited (Hermes review, PR #474) — this sits on
-    // claim's HTTP request path, and syncTaskTransition makes 2-3
-    // sequential GitHub round-trips with a 5s timeout each. Awaiting buys
-    // nothing (the function never throws — every failure is already
-    // caught and logged inside it) except adding up to ~15s of latency to
-    // a slow/unreachable GitHub onto the claim response. Fire-and-forget.
-    void syncTaskTransition(
-      app,
-      {
-        ...task,
-        status: "claimed",
+    app.db
+      .update(tasks)
+      .set({
         sessionId: result.row.id,
         worktreePath: result.row.cwd,
         branchName,
         agentCommand: command,
         baseSha,
+        seedDelivered,
+      })
+      .where(eq(tasks.id, taskId))
+      .run();
+    committed = true;
+
+    // Fire-and-forget, matching the reconciler's own now-removed
+    // "claimed -> in_progress" branch (task-reconciler.ts), which synced
+    // this exact event before dispatch existed.
+    void syncTaskTransition(
+      app,
+      {
+        ...task,
+        status: "in_progress",
+        sessionId: result.row.id,
+        worktreePath: result.row.cwd,
+        branchName,
+        agentCommand: command,
+        baseSha,
+        startedAt: new Date(),
       },
       project,
-      "claimed",
+      "in_progress",
     );
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
@@ -411,8 +412,8 @@ export async function claimTask(
     return { ok: true, session, seedDelivered };
   } catch (err) {
     if (committed) throw err;
-    await release(err instanceof Error ? err.message : "unexpected error during claim");
-    app.log.error({ err, taskId }, "task claim: unexpected error, reservation released");
+    await release(err instanceof Error ? err.message : "unexpected error during dispatch");
+    app.log.error({ err, taskId }, "task dispatch: unexpected error, reservation released");
     return {
       ok: false,
       reason: "spawn-failed",
@@ -699,7 +700,18 @@ export async function retryTask(
       result.initialPromptApplied,
     );
 
+    // Task-claim queueing (rate-limit-storm fix) — status goes straight to
+    // "in_progress" here, not "claimed": retryTask stays a single-phase,
+    // unsplit operation (see this function's own doc comment on why —
+    // the fresh-claim-vs-resume discriminator problem), but
+    // `CONCURRENCY_CAPPED_STATUSES` now only counts "in_progress". A
+    // successfully retried task already has a real, running session by
+    // this point — leaving it at "claimed" would make it invisible to
+    // MULLION_TASK_MAX_CONCURRENT entirely (a "claimed" row is defined
+    // everywhere else as session-less/queued), silently uncapping retries.
     const patch: Partial<typeof tasks.$inferInsert> = {
+      status: "in_progress",
+      startedAt: new Date(),
       sessionId: result.row.id,
       worktreePath: result.row.cwd,
       agentCommand: command,
@@ -714,7 +726,7 @@ export async function retryTask(
       taskId,
       projectId: project.id,
       from: "failed",
-      to: "claimed",
+      to: "in_progress",
       via: "retry",
       context: { command, seedDelivered },
     });
@@ -724,7 +736,7 @@ export async function retryTask(
       app,
       {
         ...task,
-        status: "claimed",
+        status: "in_progress",
         sessionId: result.row.id,
         worktreePath: result.row.cwd,
         agentCommand: command,
@@ -732,7 +744,7 @@ export async function retryTask(
         completedAt: null,
       },
       project,
-      "claimed",
+      "in_progress",
     );
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;

@@ -402,50 +402,41 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
-  it("flips claimed -> in_progress once the session shows any non-idle signal", async () => {
+  // Task-claim queueing (rate-limit-storm fix) — a "claimed" row with a
+  // live session should never occur in production anymore (dispatch flips
+  // status to "in_progress" INSIDE the same reservation transaction that
+  // reserves the slot, before the session is spawned — see
+  // task-claim.ts's dispatchClaimedTask). This test constructs that state
+  // directly anyway (bypassing enqueueTask/dispatchClaimedTask, same as
+  // this file's own createSessionAndTask helper always has) purely as a
+  // defensive check: reconcileTasks must leave a "claimed" row alone no
+  // matter what its session is doing, regardless of how it got there — the
+  // "claimed -> in_progress" and "claimed -> reviewing" promotions this
+  // used to test were removed as dead code (dispatchClaimedTask now owns
+  // both edges; task-reconciler.ts's own comment where the old "claimed"
+  // bucket used to live explains why).
+  it("leaves claimed alone regardless of session activity — dispatchClaimedTask, not this pass, owns claimed -> in_progress/reviewing now", async () => {
     const app = await buildApp();
-    const { taskId, sessionId } = await createSessionAndTask(app, "claimed");
-    vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo({ activity: "working" }),
-    } as never);
+    const working = await createSessionAndTask(app, "claimed");
+    const idle = await createSessionAndTask(app, "claimed");
+    const finished = await createSessionAndTask(app, "claimed");
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(working.sessionId)) {
+        return { toInfo: () => fakeInfo({ activity: "working" }) } as never;
+      }
+      if (id === String(finished.sessionId)) {
+        return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+      }
+      return { toInfo: () => fakeInfo() } as never;
+    });
 
     await reconcileTasks(app);
 
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("in_progress");
-    expect(row.startedAt).not.toBeNull();
-    void sessionId;
-    await app.close();
-  });
-
-  it("leaves claimed alone while the session is still idle (no signal yet)", async () => {
-    const app = await buildApp();
-    const { taskId } = await createSessionAndTask(app, "claimed");
-    vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo(),
-    } as never);
-
-    await reconcileTasks(app);
-
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("claimed");
-    expect(row.startedAt).toBeNull();
-    await app.close();
-  });
-
-  it("flips claimed straight to reviewing when the first observed signal is already finished (task-state.ts's claimed -> reviewing edge)", async () => {
-    const app = await buildApp();
-    const { taskId } = await createSessionAndTask(app, "claimed");
-    vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-    } as never);
-
-    await reconcileTasks(app);
-
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("reviewing");
-    expect(row.startedAt).not.toBeNull();
-    expect(row.reviewingAt).not.toBeNull();
+    for (const { taskId } of [working, idle, finished]) {
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("claimed");
+      expect(row.startedAt).toBeNull();
+    }
     await app.close();
   });
 
@@ -666,9 +657,13 @@ describe("reconcileTasks", () => {
   describe("review agent (this phase's binding design)", () => {
     it("spawns the configured review agent when a task enters reviewing, recording reviewSessionId", async () => {
       const app = await buildApp();
+      // "in_progress", not "claimed" — task-claim queueing (rate-limit-storm
+      // fix) removed the claimed -> reviewing edge; see this describe
+      // block's own "in_progress -> reviewing" test below for why that
+      // used to be tested via BOTH edges and is now only reachable via one.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         "codex",
       );
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -691,7 +686,7 @@ describe("reconcileTasks", () => {
       // (`--prompt`) and is seed-capable now, see hook-adapters/opencode.ts.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         "gemini",
       );
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -727,7 +722,10 @@ describe("reconcileTasks", () => {
 
     it("records reviewSeedDelivered: true for a seed-capable review agent, delivering the review prompt as argv (not stashSeed — additionalContext never starts a turn)", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      // "in_progress", not "claimed" — task-claim queueing (rate-limit-storm
+      // fix) removed the claimed -> reviewing edge; in_progress -> reviewing
+      // is the only path left to exercise this.
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -798,12 +796,15 @@ describe("reconcileTasks", () => {
       const [task] = app.db
         .insert(tasks)
         .values({
+          // "in_progress", not "claimed" — task-claim queueing (rate-limit-
+          // storm fix) removed the claimed -> reviewing edge.
           projectId,
           title: "reviewed task",
           body: "some spec",
-          status: "claimed",
+          status: "in_progress",
           sessionId: workerSession.id,
           claimedAt: new Date(),
+          startedAt: new Date(),
           worktreePath: "/remote/project",
         })
         .returning()
@@ -857,7 +858,7 @@ describe("reconcileTasks", () => {
 
     it("does not spawn a review agent when none is configured", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTask(app, "claimed");
+      const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -873,7 +874,7 @@ describe("reconcileTasks", () => {
 
     it("logs and swallows a review agent spawn failure without affecting the reviewing transition", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -900,7 +901,7 @@ describe("reconcileTasks", () => {
           url: "/api/settings",
           payload: { taskMaster: { enabled: "off" } },
         });
-        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
         } as never);
@@ -910,11 +911,12 @@ describe("reconcileTasks", () => {
         await reconcileTasks(app);
 
         const row = await getTask(app, taskId);
-        // Left in "claimed" rather than advanced to "reviewing" — approve
-        // and reject are both gated on "enabled" too, so a reviewing task
-        // would otherwise be unresolvable until Task Master is turned back
-        // on. Still reachable by the (ungated) budget force-fail below.
-        expect(row.status).toBe("claimed");
+        // Left in "in_progress" rather than advanced to "reviewing" —
+        // approve and reject are both gated on "enabled" too, so a
+        // reviewing task would otherwise be unresolvable until Task Master
+        // is turned back on. Still reachable by the (ungated) budget
+        // force-fail below.
+        expect(row.status).toBe("in_progress");
         expect(row.reviewSessionId).toBeNull();
         expect(createSessionSpy).not.toHaveBeenCalled();
       } finally {
@@ -935,13 +937,13 @@ describe("reconcileTasks", () => {
           url: "/api/settings",
           payload: { taskMaster: { enabled: "off" } },
         });
-        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
         } as never);
 
         await reconcileTasks(app);
-        expect((await getTask(app, taskId)).status).toBe("claimed");
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
 
         await app.inject({
           method: "PATCH",
@@ -986,31 +988,12 @@ describe("reconcileTasks", () => {
   // reconciler actually calls it (with the right task/project) or persists
   // its result. task-promote.ts is mocked above specifically for these.
   describe("draft PR on entering reviewing (Hermes review, PR #574, finding #2)", () => {
-    it("calls openDraftPRForTask on the claimed -> reviewing edge and persists prUrl/prNumber on success", async () => {
-      const app = await buildApp();
-      const { taskId } = await createSessionAndTask(app, "claimed");
-      vi.spyOn(app.pty, "get").mockReturnValue({
-        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-      } as never);
-      mockOpenDraftPRForTask.mockResolvedValue({
-        ok: true,
-        prUrl: "https://github.com/test-owner/test-repo/pull/9",
-        prNumber: 9,
-      });
-
-      await reconcileTasks(app);
-
-      const row = await getTask(app, taskId);
-      expect(row.status).toBe("reviewing");
-      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
-      expect(mockOpenDraftPRForTask.mock.calls[0][1]).toMatchObject({ id: taskId });
-      expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/9");
-      expect(row.prNumber).toBe(9);
-
-      await app.close();
-    });
-
-    it("calls openDraftPRForTask on the in_progress -> reviewing edge too, and persists its result", async () => {
+    // The former "claimed -> reviewing edge" sibling of this test was
+    // deleted (task-claim queueing, rate-limit-storm fix) — that edge no
+    // longer exists (dispatchClaimedTask now flips claimed -> in_progress
+    // BEFORE a session ever spawns), so in_progress -> reviewing is the
+    // only edge left to exercise this behavior through.
+    it("calls openDraftPRForTask on the in_progress -> reviewing edge, and persists its result", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -1027,6 +1010,7 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      expect(mockOpenDraftPRForTask.mock.calls[0][1]).toMatchObject({ id: taskId });
       expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/11");
       expect(row.prNumber).toBe(11);
 
@@ -1035,7 +1019,7 @@ describe("reconcileTasks", () => {
 
     it("never blocks the reviewing transition, and leaves prUrl/prNumber unset, when openDraftPRForTask fails (best-effort posture)", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTask(app, "claimed");
+      const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -1726,21 +1710,13 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("applies the same no-commits gate on the claimed -> reviewing edge", async () => {
-      const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithBase(app, "claimed");
-      vi.spyOn(app.pty, "get").mockReturnValue({
-        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-      } as never);
-      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
-
-      await reconcileTasks(app);
-
-      const row = await getTask(app, taskId);
-      expect(row.status).toBe("failed");
-      expect(row.failureReason).toContain("no commits");
-      await app.close();
-    });
+    // The former "applies the same no-commits gate on the claimed ->
+    // reviewing edge" sibling of this describe block was deleted (task-claim
+    // queueing, rate-limit-storm fix) — that edge no longer exists, and this
+    // block's own in_progress-based no-commits-gate coverage above
+    // ("still fails the task... when the WIP salvage commit itself fails")
+    // already exercises the identical assertion via the one edge that
+    // remains.
 
     // RC5 — the reject snap-back: derived.status === "finished" is a LATCH
     // on lastTurnEndedAt, not an edge. A task rejected back to "in_progress"
@@ -1808,9 +1784,13 @@ describe("reconcileTasks", () => {
       app: Awaited<ReturnType<typeof buildApp>>,
       reviewAgent: string,
     ) {
+      // "in_progress", not "claimed" — task-claim queueing (rate-limit-storm
+      // fix) removed the claimed -> reviewing edge; this helper's whole job
+      // is getting a task INTO "reviewing" via reconcileTasks below, so it
+      // needs to start somewhere that edge still exists.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         reviewAgent,
       );
       // createSessionAndTaskWithReviewAgent (shared with the review-agent
@@ -2521,9 +2501,12 @@ describe("reconcileTasks", () => {
     }
 
     async function claimWithPR(app: Awaited<ReturnType<typeof buildApp>>) {
+      // "in_progress", not "claimed" — see claimIntoReviewing's own comment
+      // above (task-claim queueing, rate-limit-storm fix removed the
+      // claimed -> reviewing edge this helper relies on to reach "reviewing").
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         "codex",
       );
       app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
@@ -2854,7 +2837,7 @@ describe("reconcileTasks", () => {
 
     it("clears the spawn claim on a failed spawn so the next tick retries, rather than leaving the task with no reviewer forever", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
