@@ -47,6 +47,7 @@ const {
   syncTaskTransition,
   syncClosedIssueToLocal,
   syncUnlabeledIssueToLocal,
+  isIssueStillTrackable,
   resetProgressThrottleForTests,
   recordGithubSyncError,
   clearGithubSyncError,
@@ -665,6 +666,69 @@ describe("task-github-sync", () => {
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.status).toBe("claimed");
       expect(mockCreateComment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("isIssueStillTrackable (#729)", () => {
+    function insertTask(status: string, issueNumber = 5) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("returns false when the issue is confirmed closed", async () => {
+      const task = insertTask("failed", 501);
+      mockGetIssueState.mockResolvedValue({ state: "closed", labels: ["mullion-task"] });
+
+      await expect(isIssueStillTrackable(app, task, project)).resolves.toBe(false);
+    });
+
+    it("returns false when the issue is open but has lost the tracking label", async () => {
+      const task = insertTask("failed", 502);
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: ["bug"] });
+
+      await expect(isIssueStillTrackable(app, task, project)).resolves.toBe(false);
+    });
+
+    it("returns true when the issue is still open and labeled", async () => {
+      const task = insertTask("failed", 503);
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+
+      await expect(isIssueStillTrackable(app, task, project)).resolves.toBe(true);
+    });
+
+    it("returns undefined for a local task (no linked issue) without calling GitHub", async () => {
+      const task = insertTask("failed", 5);
+      const local = { ...task, issueNumber: null };
+
+      await expect(isIssueStillTrackable(app, local, project)).resolves.toBeUndefined();
+      expect(mockResolveRepoRef).not.toHaveBeenCalled();
+    });
+
+    it("returns undefined when no repo can be resolved", async () => {
+      const task = insertTask("failed", 504);
+      mockResolveRepoRef.mockResolvedValue(null);
+
+      await expect(isIssueStillTrackable(app, task, project)).resolves.toBeUndefined();
+      expect(mockGetIssueState).not.toHaveBeenCalled();
+    });
+
+    it("returns undefined when no GitHub token is available", async () => {
+      const task = insertTask("failed", 505);
+      mockGetToken.mockReturnValue(null);
+
+      await expect(isIssueStillTrackable(app, task, project)).resolves.toBeUndefined();
+      expect(mockGetIssueState).not.toHaveBeenCalled();
+    });
+
+    it("returns undefined when the GitHub read itself fails", async () => {
+      const task = insertTask("failed", 506);
+      mockGetIssueState.mockRejectedValue(new Error("rate limited"));
+
+      await expect(isIssueStillTrackable(app, task, project)).resolves.toBeUndefined();
     });
   });
 

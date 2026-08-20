@@ -84,6 +84,32 @@ function createGitRepo(): string {
   return cwd;
 }
 
+// #729 — same shape as webhooks.test.ts's own createMatchingGitRepo: an
+// `origin` remote pointing at owner/repo, so `resolveRepoRef` (parseGitRemote
+// under the hood) resolves this project to a real repo the DELETE route's
+// isIssueStillTrackable check can query.
+function createGitRepoWithRemote(owner: string, repo: string): string {
+  const cwd = createGitRepo();
+  git(cwd, ["remote", "add", "origin", `https://github.com/${owner}/${repo}.git`]);
+  return cwd;
+}
+
+// #729 — a stubbed PAT connection (real network call spied out), same
+// pattern as webhooks.test.ts's own connectPat, so resolveGitHubToken has
+// something to hand back before isIssueStillTrackable's getIssueState spy
+// takes over.
+async function connectPat(app: Awaited<ReturnType<typeof buildApp>>, token: string) {
+  const originalFetch = global.fetch;
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ login: "octocat" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  const { setPat } = await import("../../src/services/github-integration.js");
+  await setPat(app, token);
+  global.fetch = originalFetch;
+}
+
 describe("tasks route", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
@@ -2076,6 +2102,165 @@ describe("tasks route", () => {
       const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
       expect(res.statusCode).toBe(409);
       await app.close();
+    });
+
+    // #729 — a GitHub-linked task auto-failed by a lost tracking label
+    // (syncUnlabeledIssueToLocal) previously had no way out: not local
+    // (issueNumber !== null) and past backlog/ready (failed), so it hit
+    // both refusals above forever. These four cases match
+    // isIssueStillTrackable's own contract (task-github-sync.test.ts) at
+    // the route layer: confirmed closed or unlabeled deletes; still
+    // tracked, or unconfirmable, refuses.
+    describe("DELETE of a failed GitHub-linked task (#729)", () => {
+      async function createLinkedFailedTask(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        cwd: string,
+        issueNumber: number,
+      ) {
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber,
+            title: "label-lost",
+            htmlUrl: `https://github.com/acme/widgets-729/issues/${issueNumber}`,
+            status: "failed",
+            failureReason: "GitHub issue lost its tracking label",
+          })
+          .returning()
+          .all();
+        return row;
+      }
+
+      it("deletes once the linked issue is confirmed closed", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-729");
+        const app = await buildApp();
+        await connectPat(app, "ghp_delete_closed");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "closed", labels: ["mullion-task"] });
+
+        const row = await createLinkedFailedTask(app, cwd, 601);
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(204);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(false);
+
+        getIssueStateSpy.mockRestore();
+        await app.close();
+      });
+
+      // #729 — the guard here is "GitHub-linked and failed", not "never
+      // claimed": a task that WAS claimed (a real worktree/branch behind
+      // it) can also end up failed and then have its issue's label removed
+      // independently, after the fact. Same cleanupTaskWorktree fire-and-
+      // forget helper every other terminal transition in this file already
+      // calls (see e.g. the give-up test above) must fire here too, or the
+      // worktree/branch are orphaned on disk once the row is gone.
+      it("cleans up a preserved worktree/branch when deleting a claimed-then-failed task", async () => {
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const realResolveBackend = sessionBackendModule.resolveBackend;
+        const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+        const resolveBackendSpy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockImplementation((appArg, hostId) => {
+            const real = realResolveBackend(appArg, hostId);
+            return new Proxy(real, {
+              get(target, prop, receiver) {
+                if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          });
+
+        const cwd = createGitRepoWithRemote("acme", "widgets-729-cleanup");
+        const app = await buildApp();
+        await connectPat(app, "ghp_delete_cleanup");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "closed", labels: ["mullion-task"] });
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 605,
+            title: "claimed then died",
+            htmlUrl: "https://github.com/acme/widgets-729-cleanup/issues/605",
+            status: "failed",
+            failureReason: "session exited unexpectedly",
+            worktreePath: `${cwd}/.mullion-worktrees/mullion-task-605`,
+            branchName: "mullion/task-605",
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(204);
+        expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
+          `${cwd}/.mullion-worktrees/mullion-task-605`,
+          cwd,
+        );
+
+        getIssueStateSpy.mockRestore();
+        resolveBackendSpy.mockRestore();
+        await app.close();
+      });
+
+      it("deletes once the linked issue is confirmed open but unlabeled", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-729");
+        const app = await buildApp();
+        await connectPat(app, "ghp_delete_unlabeled");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "open", labels: ["bug"] });
+
+        const row = await createLinkedFailedTask(app, cwd, 602);
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(204);
+
+        getIssueStateSpy.mockRestore();
+        await app.close();
+      });
+
+      it("refuses when the linked issue is still open and labeled", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-729");
+        const app = await buildApp();
+        await connectPat(app, "ghp_delete_still_tracked");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+
+        const row = await createLinkedFailedTask(app, cwd, 603);
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(409);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(true);
+
+        getIssueStateSpy.mockRestore();
+        await app.close();
+      });
+
+      it("refuses when the linked issue's state can't be confirmed (no GitHub connection)", async () => {
+        // No connectPat call — resolveGitHubToken has nothing to hand back,
+        // so isIssueStillTrackable returns undefined rather than false.
+        const cwd = createGitRepoWithRemote("acme", "widgets-729-noauth");
+        const app = await buildApp();
+
+        const row = await createLinkedFailedTask(app, cwd, 604);
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(409);
+        await app.close();
+      });
     });
   });
 });

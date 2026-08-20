@@ -982,6 +982,43 @@ describe("TaskDetail delete action", () => {
     expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
   });
 
+  // #729 — a GitHub-linked task auto-failed by a lost tracking label had no
+  // way out of the board at all (Retry needs a preserved branch it never
+  // got, and Delete was hidden for any GitHub-linked task). Shown alongside
+  // Retry rather than replacing it — the server's own DELETE guard (see
+  // routes/tasks.ts) is what actually decides whether the linked issue is
+  // safe to remove; the confirm click surfaces a rejection the same way
+  // Retry already does above.
+  it("shows Delete alongside Retry for a failed GitHub-linked task", async () => {
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(deleteTask).toHaveBeenCalledWith(1);
+  });
+
+  it("surfaces the server's still-tracked refusal as an inline error", async () => {
+    deleteTask.mockRejectedValueOnce(new Error("still tracked, use Retry"));
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(screen.getByText("Failed to delete task")).toBeInTheDocument();
+  });
+
+  it("hides Delete for a failed LOCAL task (no linked issue) — out of scope for #729", () => {
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+  });
+
   describe("agent selection and display", () => {
     it("renders agent dropdowns for backlog tasks and calls updateTask on change", async () => {
       tasks = [makeTask({ id: 1, status: "backlog", agent: null, reviewAgent: null })];

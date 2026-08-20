@@ -5,7 +5,7 @@ import { claimTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
-import { syncTaskTransition } from "../services/task-github-sync.js";
+import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
@@ -429,23 +429,62 @@ export async function tasksRoute(app: FastifyInstance) {
   // Phase 6 (6.9/#233) — deletion is restricted to locally-created tasks
   // (no linked GitHub issue — deleting a GitHub-ingested row would just
   // have the watcher re-create it on the next poll, per its insert-or-
-  // update sync) that haven't been claimed yet. Widening this to
-  // done/failed once those statuses exist is 6.2's job, not this PR's.
+  // update sync) that haven't been claimed yet.
+  //
+  // #729 — a `failed` GitHub-linked task is the one deliberate exception:
+  // a task auto-failed by `syncUnlabeledIssueToLocal` (issue lost the
+  // `mullion-task` label, or closed, while still backlog/ready) has no
+  // worktree/branch, so Retry can't recover it (`no-worktree`) and it was
+  // otherwise permanently orphaned — neither refusal above has an escape
+  // hatch for it. Deleting it is only durable if the watcher genuinely
+  // won't re-create the row on its next sweep, so this re-checks the
+  // linked issue's CURRENT state via `isIssueStillTrackable` (the same
+  // "closed, or open-but-unlabeled" definition the watcher's own read-back
+  // uses) rather than trusting the failure reason alone — the issue could
+  // have been reopened/relabeled since the task failed. Any other
+  // GitHub-linked status (including a `failed` task whose issue is STILL
+  // tracked, e.g. failed from session death) keeps the original refusal:
+  // deleting that would race the watcher re-ingesting it.
+  //
+  // The condition here is "GitHub-linked and failed", not "never claimed" —
+  // a task that WAS claimed (real worktree/branch behind it) can also fail
+  // and then have its issue's label removed independently, after the fact.
+  // cleanupTaskWorktree below (same fire-and-forget helper every other
+  // terminal transition in this file already uses) covers that case; it's
+  // a no-op for the never-claimed, no-worktree case #729 actually
+  // describes.
   app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
     const existing = getLocalTaskOr404(taskId);
     if (!existing) return reply.notFound();
+
+    let project: typeof projects.$inferSelect | null = null;
     if (existing.issueNumber !== null) {
-      return reply.conflict("Cannot delete a task linked to a GitHub issue");
-    }
-    if (!LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus)) {
+      if (existing.status !== "failed") {
+        return reply.conflict("Cannot delete a task linked to a GitHub issue");
+      }
+      project = getProjectOr404(existing.projectId);
+      if (!project) return reply.notFound();
+      const trackable = await isIssueStillTrackable(app, existing, {
+        cwd: project.cwd,
+        hostId: project.hostId,
+      });
+      if (trackable !== false) {
+        return reply.conflict(
+          trackable === undefined
+            ? "Could not confirm the linked GitHub issue is no longer tracked — try again, or use Retry"
+            : "Cannot delete: the linked GitHub issue is still open and labeled mullion-task — remove the label or close the issue first, or use Retry",
+        );
+      }
+    } else if (!LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus)) {
       return reply.conflict(
         `Cannot delete a task past the backlog/ready stage (status: ${existing.status})`,
       );
     }
 
     app.db.delete(tasks).where(eq(tasks.id, taskId)).run();
+    if (project) cleanupTaskWorktree(app, existing, project);
     reply.code(204);
   });
 

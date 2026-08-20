@@ -44,14 +44,32 @@ title, spec (issue body), and the final PR link.
 
   An issue that loses the `mullion-task` label (or closes) while its task
   is still `backlog`/`ready` is **not** left untouched: the task fails
-  (reversible via Retry) rather than sitting in `ready` forever eligible
-  for auto-claim on an issue that's no longer trackable. A task that's
-  already `claimed`/`in_progress`/`reviewing` — real work behind it, a
-  worktree, maybe a branch — is left strictly alone either way; silently
-  failing it out from under a label removal would be destructive. Both the
-  webhook `unlabeled`/`closed` handlers and the poll loop's own read-back
-  apply this identically, via one shared function, so the two can't
-  produce different outcomes for the same issue.
+  rather than sitting in `ready` forever eligible for auto-claim on an
+  issue that's no longer trackable. A task that's already
+  `claimed`/`in_progress`/`reviewing` — real work behind it, a worktree,
+  maybe a branch — is left strictly alone either way; silently failing it
+  out from under a label removal would be destructive. Both the webhook
+  `unlabeled`/`closed` handlers and the poll loop's own read-back apply
+  this identically, via one shared function, so the two can't produce
+  different outcomes for the same issue.
+
+  A task that failed this way was never claimed, so it has no preserved
+  branch — Retry (`failed → backlog`/`ready`, below) can't resume it
+  (`no-worktree`), which used to leave it permanently orphaned: not local
+  (so the delete route refused it), and past `backlog`/`ready` (so did the
+  delete route's other guard). `DELETE /api/tasks/:id` (#729) carves out
+  exactly this case: a `failed` GitHub-linked task can be deleted once a
+  fresh read of the linked issue confirms it's genuinely no longer
+  trackable (closed, or open but missing the label) — the same check the
+  read-back above uses, so deleting it can't race the watcher into
+  re-creating the row on its next sweep. A `failed` task whose issue is
+  **still** tracked (e.g. failed from session death, not a lost label)
+  keeps the original refusal; use Retry for that one instead. The delete
+  guard is "GitHub-linked and failed", not "never claimed" — a task that
+  WAS claimed (a real worktree/branch behind it) can also fail and then
+  have its issue's label removed independently; the delete route runs the
+  same worktree cleanup every other terminal transition already does, so
+  that case doesn't leave an orphaned worktree/branch behind either.
 
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has
@@ -63,10 +81,12 @@ title, spec (issue body), and the final PR link.
   plain PATCH endpoint while the task's **current** status is `backlog` or
   `ready` (linkage isn't checked here — a linked task still sitting in
   `ready` can be dragged back to `backlog`). Deleting a task outright is
-  the one operation gated on both conditions together: still
-  `backlog`/`ready` **and** no linked issue. Once a task is claimed, or
-  once it reaches a status past `ready`, the state machine below drives it
-  instead.
+  normally gated on both conditions together: still `backlog`/`ready`
+  **and** no linked issue — with one deliberate exception, a `failed`
+  GitHub-linked task whose issue is confirmed no longer trackable (see the
+  lost-label paragraph above). Once a task is claimed, or once it reaches
+  a status past `ready` (outside that one exception), the state machine
+  below drives it instead.
 
 ## Lifecycle
 

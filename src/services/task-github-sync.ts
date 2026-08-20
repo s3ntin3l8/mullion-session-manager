@@ -467,6 +467,54 @@ export async function syncUnlabeledIssueToLocal(
 }
 
 /**
+ * #729 — read-only counterpart to the trackability check above
+ * (`syncUnlabeledIssueToLocal`) and the one `task-watcher.ts`'s read-back
+ * inlines (`state === "closed" || (state === "open" && !labels.includes(label))`,
+ * task-watcher.ts:439): answers "would the watcher re-create this task on
+ * its next sweep?" without acting on the answer, so the DELETE route
+ * (routes/tasks.ts) can gate removing an orphaned `failed` task on the same
+ * definition of "no longer trackable" the watcher itself uses, rather than
+ * a second, driftable copy of the label check.
+ *
+ * Returns `false` only when a fresh GitHub read confirms the issue is
+ * closed, or open but missing the tracking label — the two cases
+ * `syncUnlabeledIssueToLocal` itself treats as "no longer relevant".
+ * Returns `undefined` (NOT `false`) whenever the check couldn't actually
+ * run — no linked issue, no resolvable repo/token, or the GitHub call
+ * itself failed — so a transient outage or misconfiguration can't be
+ * mistaken for "confirmed untrackable" and let a caller delete a task the
+ * watcher would otherwise still re-ingest.
+ */
+export async function isIssueStillTrackable(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+): Promise<boolean | undefined> {
+  if (task.issueNumber === null) return undefined;
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return undefined;
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return undefined;
+
+  try {
+    const { state, labels } = await getIssueState(
+      token,
+      repoRef.owner,
+      repoRef.repo,
+      task.issueNumber,
+    );
+    const label = app.config.MULLION_TASK_LABEL;
+    return !(state === "closed" || (state === "open" && !labels.includes(label)));
+  } catch (err) {
+    app.log.warn(
+      { taskId: task.id, issueNumber: task.issueNumber, err },
+      "[task-github-sync] trackability read-back failed",
+    );
+    return undefined;
+  }
+}
+
+/**
  * Posts the review agent's findings — as an actual PR review (`task.prNumber`,
  * the common case once a task has entered "reviewing") with each finding as
  * an inline anchored comment, falling back to an ordinary issue comment when
