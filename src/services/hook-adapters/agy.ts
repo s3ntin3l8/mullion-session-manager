@@ -44,6 +44,48 @@ import { resolveMcpServerPath, shellQuote } from "./shared.js";
 const AGY_COMMAND_RE = /^(?:\S*\/)?agy(?:\s|$)/;
 const MULLION_HOOK_NAME = "mullion-hook-forwarder";
 
+/**
+ * Reads and parses one of agy's own config files (`hooks.json`,
+ * `mcp_config.json`, `settings.json`), tolerating three cases the same way:
+ * the file doesn't exist yet (ENOENT), and — the case this helper exists
+ * for — the file exists but is **empty or whitespace-only**. agy itself
+ * creates zero-byte config files ahead of ever writing real content into
+ * them (`~/.gemini/config/mcp_config.json` was observed 0 bytes, created by
+ * agy itself, well before any managed install ever touched it), and
+ * `JSON.parse("")` throws a `SyntaxError` with no `code` property at all —
+ * which used to fall straight through the ENOENT-only guard every one of
+ * these three merge functions used to have inline, and abort with "cannot
+ * parse". Task Master trial 220921 / PR #743's incident traces to exactly
+ * this: `mergeAgyMcpConfig` threw on that empty file, `managedInstall` ran
+ * its three steps fail-fast in sequence, and `mergeAgyTrustedWorkspace` —
+ * downstream of the throw — never ran, leaving an unattended review agent
+ * blocked on agy's own interactive "Do you trust this folder?" prompt for
+ * its whole lifetime. An empty file has no content to preserve, so both
+ * "missing" and "empty" return `{}`, same as always.
+ *
+ * Genuinely unparseable NON-empty content still throws — "a file we can't
+ * parse is a file we must not blindly overwrite" is the right posture for
+ * garbage, just not for a file with nothing in it yet.
+ */
+function readAgyJsonConfig<T>(configPath: string): T {
+  let raw: string;
+  try {
+    raw = readFileSync(configPath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return {} as T;
+    throw err;
+  }
+  if (raw.trim().length === 0) return {} as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    // Same posture as before this helper existed: a file we can't parse is
+    // a file we must not blindly overwrite.
+    throw new Error(`cannot parse existing ${configPath}, leaving it untouched`, { cause: err });
+  }
+}
+
 interface AgyHandler {
   type?: string;
   command?: unknown;
@@ -59,17 +101,7 @@ function resolveAgyHooksPath(): string {
 }
 
 function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath()): void {
-  let existing: AgyHooksFile = {};
-  try {
-    existing = JSON.parse(readFileSync(hooksPath, "utf8")) as AgyHooksFile;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      // Same posture as codex.ts: a file we can't parse is a file we must
-      // not blindly overwrite.
-      throw new Error(`cannot parse existing ${hooksPath}, leaving it untouched`, { cause: err });
-    }
-  }
+  const existing = readAgyJsonConfig<AgyHooksFile>(hooksPath);
 
   const execPath = process.execPath;
   const fwd = ctx.forwarderPath;
@@ -178,19 +210,7 @@ function mergeAgyTrustedWorkspace(
   // non-symlinked path — a relative or symlinked cwd would otherwise never
   // match agy's own entry and the trust prompt would return.
   const cwd = path.resolve(rawCwd);
-  let existing: AgySettingsFile = {};
-  try {
-    existing = JSON.parse(readFileSync(settingsPath, "utf8")) as AgySettingsFile;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      // Same posture as mergeAgyHooks/mergeAgyMcpConfig above: a file we
-      // can't parse is a file we must not blindly overwrite.
-      throw new Error(`cannot parse existing ${settingsPath}, leaving it untouched`, {
-        cause: err,
-      });
-    }
-  }
+  const existing = readAgyJsonConfig<AgySettingsFile>(settingsPath);
   // Hermes review, PR #573 — the "parse-or-leave-untouched" posture above
   // only guards unparseable JSON, not valid JSON with a wrong-shaped
   // trustedWorkspaces. A hand-edited string would otherwise spread into
@@ -233,17 +253,7 @@ function mergeAgyMcpConfig(
 ): void {
   const mcpServerPath = resolveMcpServerPath();
 
-  let existing: AgyMcpConfigFile = {};
-  try {
-    existing = JSON.parse(readFileSync(mcpConfigPath, "utf8")) as AgyMcpConfigFile;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      throw new Error(`cannot parse existing ${mcpConfigPath}, leaving it untouched`, {
-        cause: err,
-      });
-    }
-  }
+  const existing = readAgyJsonConfig<AgyMcpConfigFile>(mcpConfigPath);
 
   const existingServers = existing.mcpServers ? { ...existing.mcpServers } : {};
   delete existingServers.mullion;
@@ -277,18 +287,60 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // async, not a plain wrapper — see codex.ts's identical note: a
     // synchronous throw from mergeAgyHooks must become a rejected promise
     // here, not an exception out of this call itself.
+    //
+    // The three steps below are INDEPENDENTLY guarded and run in this
+    // specific order — both fixes for the same incident (Task Master trial
+    // 220921 / PR #743): the old version ran them fail-fast in sequence
+    // (mergeAgyHooks, mergeAgyMcpConfig, THEN the trust gate), so one bad
+    // config file — a 0-byte mcp_config.json, observed live — threw and
+    // skipped every step after it. `applyHookAdapters` only logs the single
+    // resulting rejection and swallows it (a broken hook-config write must
+    // never prevent a session from spawning), so that was silent: the
+    // trusted-workspace write never ran, and an unattended review agent sat
+    // blocked on agy's own interactive "Do you trust this folder?" prompt —
+    // NOT suppressed by --dangerously-skip-permissions, see
+    // mergeAgyTrustedWorkspace's own doc comment — for its entire lifetime.
+    //
+    // mergeAgyTrustedWorkspace now runs FIRST: it's the one step whose
+    // failure actually stalls an unattended session on a human. hooks.json/
+    // mcp_config.json failing just means this session runs with reduced
+    // integration (no forwarder events, no Mullion MCP tools) — degraded,
+    // never blocking.
     managedInstall: async () => {
-      mergeAgyHooks(ctx);
-      mergeAgyMcpConfig(ctx);
-      // Gated on skipPermissions, not unconditional — see
-      // mergeAgyTrustedWorkspace's own doc comment above for why that's
-      // the right gate (the same flag that already suppresses agy's
-      // tool-permission prompts). ctx.cwd is optional on the shared
-      // interface (only this adapter reads it); skip silently if it's
-      // somehow absent rather than pre-trusting nothing meaningful.
-      if (ctx.skipPermissions && ctx.cwd) {
-        mergeAgyTrustedWorkspace(ctx.cwd);
+      const steps: Array<[string, () => void]> = [
+        [
+          "mergeAgyTrustedWorkspace",
+          () => {
+            // Gated on skipPermissions, not unconditional — see
+            // mergeAgyTrustedWorkspace's own doc comment for why that's the
+            // right gate (the same flag that already suppresses agy's
+            // tool-permission prompts). ctx.cwd is optional on the shared
+            // interface (only this adapter reads it); skip silently if it's
+            // somehow absent rather than pre-trusting nothing meaningful.
+            if (ctx.skipPermissions && ctx.cwd) mergeAgyTrustedWorkspace(ctx.cwd);
+          },
+        ],
+        ["mergeAgyHooks", () => mergeAgyHooks(ctx)],
+        ["mergeAgyMcpConfig", () => mergeAgyMcpConfig(ctx)],
+      ];
+      let firstError: unknown;
+      for (const [name, step] of steps) {
+        try {
+          step();
+        } catch (err) {
+          // Logged here, per-step — applyHookAdapters' own catch only ever
+          // sees whichever error this function ultimately rethrows, so a
+          // step that fails but isn't the one rethrown (see firstError
+          // below) would otherwise vanish with no trace at all.
+          console.error(`[agy] managedInstall step "${name}" failed:`, err);
+          firstError ??= err;
+        }
       }
+      // Re-throw so applyHookAdapters' existing "managed install failed"
+      // log line still fires too (dual logging is intentional — this loop's
+      // per-step log is the only way to see steps 2/3 when step 1 also
+      // failed, since only one rejection ever reaches that outer catch).
+      if (firstError !== undefined) throw firstError;
     },
   };
 }
