@@ -741,13 +741,82 @@ export function stripHiddenHeaders(serialized: SerializedDockview): SerializedDo
   };
 }
 
+// Workspace-autosave rate-limit-storm fix — a terminal panel's tab title
+// ticks roughly once a second while an agent CLI is "thinking" (issue #69's
+// live-title feature: Claude Code's `✳ Thinking… (23s · ...)` and similar
+// elapsed-time counters from Codex/opencode), and dockview-core wires panel
+// TITLE changes into the same `onDidPanelTitleChange`/`onDidLayoutChange`
+// emitter as an actual layout edit. Left in the persisted blob, every OSC
+// tick produced a distinct serialized blob (grid geometry never changed,
+// but the title string did), which meant every tick scheduled — and, once
+// the tick cadence landed just outside AUTOSAVE_DEBOUNCE_MS, actually sent —
+// its own `PATCH /api/workspaces/:id`. A panel's title is runtime-derived
+// (the live OSC stream, or `session.lastTitle` at restore) and doesn't
+// belong in a *layout* blob's identity, so it's stripped here rather than
+// merely deduped upstream (see useWorkspacePersistence.ts's own comment on
+// why a same-blob dedupe alone wouldn't have been enough).
+//
+// Scoped to session (terminal) panels only — `session-<id>`, the id
+// openSessionPanel/buildPanelBase always use — not every panel type: this
+// is the one panel type with second-scale title churn; a GitHub/git/dock-
+// config/etc. panel's title is computed once at creation and essentially
+// static, so leaving those in the blob is harmless and keeps this change
+// narrowly scoped to the actual source of the storm.
+//
+// Stripping this from what's saved means a *restored* workspace needs its
+// terminal panels' titles re-derived some other way — see
+// reseedSessionPanelTitles below, called once after every `fromJSON`
+// restore (useWorkspacePersistence.ts) to cover exactly that gap.
+export function stripSessionPanelTitles(serialized: SerializedDockview): SerializedDockview {
+  let changed = false;
+  const panels: Record<string, (typeof serialized.panels)[string]> = {};
+  for (const [id, panel] of Object.entries(serialized.panels)) {
+    if (id.startsWith("session-") && "title" in panel) {
+      const { title: _title, ...rest } = panel;
+      panels[id] = rest;
+      changed = true;
+    } else {
+      panels[id] = panel;
+    }
+  }
+  return changed ? { ...serialized, panels } : serialized;
+}
+
+// Companion to stripSessionPanelTitles: re-derives each restored terminal
+// panel's title the same way a freshly-opened one gets it (openSessionPanel/
+// buildPanelBase's own `initialPaneTitle(session, projectName)` — session
+// name if locked, else `session.lastTitle` (the backend's last-seen OSC
+// title, issue #69), else the bare command), since the persisted blob no
+// longer carries it. Call this once, right after `dockviewApi.fromJSON(...)`
+// — a live terminal reconnecting will overwrite it again in real time via
+// TerminalPanelWrapper's own (now-throttled) onTitleChange, same as it
+// always did; this only covers the gap between restore and that first live
+// OSC event.
+export function reseedSessionPanelTitles(
+  api: DockviewApi,
+  sessions: Session[],
+  projects: { id: number; name: string | null }[],
+): void {
+  for (const panel of api.panels) {
+    if (!panel.id.startsWith("session-")) continue;
+    const sessionId = (panel.params as { sessionId?: number } | undefined)?.sessionId;
+    if (sessionId == null) continue;
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) continue;
+    const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
+    panel.api.setTitle(initialPaneTitle(session, projectName));
+  }
+}
+
 // Single choke point for both save paths (App.tsx's flushPendingSave and
 // scheduleSave) so they can't drift — flushPendingSave previously wrote raw
 // api.toJSON() with neither strip applied, leaking floating panels AND
 // maximization through every workspace switch.
 export function serializeForPersist(api: DockviewApi): SerializedDockview {
   return stripHiddenHeaders(
-    stripMaximizedNode(stripFloatingPanels(api.toJSON() as SerializedDockview)),
+    stripSessionPanelTitles(
+      stripMaximizedNode(stripFloatingPanels(api.toJSON() as SerializedDockview)),
+    ),
   );
 }
 

@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
+import type { SerializedDockview } from "dockview";
 import { useDashboardStore } from "../store/index.js";
 import type { Workspace } from "../api/index.js";
-import { serializeForPersist, applyLayoutPresentation, closeLegacyPanels } from "../panelUtils.js";
+import {
+  serializeForPersist,
+  applyLayoutPresentation,
+  closeLegacyPanels,
+  reseedSessionPanelTitles,
+} from "../panelUtils.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -76,37 +82,56 @@ export function useWorkspacePersistence({
   const restoringRef = useRef(false);
   const pendingSaveRef = useRef<PendingSave | null>(null);
   const restoredWorkspaceIdRef = useRef<number | null>(null);
+  // Belt-and-braces guard for the workspace-autosave rate-limit-storm fix —
+  // panelUtils.ts's stripSessionPanelTitles is the actual fix (it's what
+  // stops the blob from genuinely DIFFERING on every OSC title tick in the
+  // first place; this dedupe alone would not have helped, since before that
+  // strip every tick produced a distinct blob and would still have compared
+  // unequal here). Kept anyway as a real guard against any OTHER future
+  // no-op-triggering path (onDidLayoutChange has more than one source —
+  // see that hook's own header comment on why the naive form fires wildly
+  // too often). One entry per workspace id, not a single scalar — a fast
+  // A/B workspace switch must compare each workspace's save against its
+  // OWN last-persisted blob, not the other one's.
+  const lastPersistedRef = useRef<Map<number, string>>(new Map());
 
-  const flushPendingSave = useCallback((api: DockviewApi) => {
-    const pending = pendingSaveRef.current;
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    pendingSaveRef.current = null;
-    // Read *before* the caller clears/replaces the grid — this is still
-    // the outgoing workspace's own layout at this point. Issue #85: goes
-    // through serializeForPersist (not raw api.toJSON()) so a
-    // workspace-switch save strips floating panels AND maximization the
-    // same way the debounced scheduleSave below does — this previously
-    // wrote the raw blob and leaked both.
+  const persistIfChanged = useCallback((workspaceId: number, serialized: SerializedDockview) => {
+    const json = JSON.stringify(serialized);
+    if (lastPersistedRef.current.get(workspaceId) === json) return;
+    lastPersistedRef.current.set(workspaceId, json);
     void useDashboardStore
       .getState()
-      .saveWorkspaceLayout(
-        pending.workspaceId,
-        serializeForPersist(api) as unknown as Record<string, unknown>,
-      );
+      .saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
   }, []);
 
-  const scheduleSave = useCallback((api: DockviewApi, workspaceId: number) => {
-    if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
-    const timer = setTimeout(() => {
+  const flushPendingSave = useCallback(
+    (api: DockviewApi) => {
+      const pending = pendingSaveRef.current;
+      if (!pending) return;
+      clearTimeout(pending.timer);
       pendingSaveRef.current = null;
-      const serialized = serializeForPersist(api);
-      void useDashboardStore
-        .getState()
-        .saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
-    }, AUTOSAVE_DEBOUNCE_MS);
-    pendingSaveRef.current = { workspaceId, timer };
-  }, []);
+      // Read *before* the caller clears/replaces the grid — this is still
+      // the outgoing workspace's own layout at this point. Issue #85: goes
+      // through serializeForPersist (not raw api.toJSON()) so a
+      // workspace-switch save strips floating panels AND maximization the
+      // same way the debounced scheduleSave below does — this previously
+      // wrote the raw blob and leaked both.
+      persistIfChanged(pending.workspaceId, serializeForPersist(api));
+    },
+    [persistIfChanged],
+  );
+
+  const scheduleSave = useCallback(
+    (api: DockviewApi, workspaceId: number) => {
+      if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
+      const timer = setTimeout(() => {
+        pendingSaveRef.current = null;
+        persistIfChanged(workspaceId, serializeForPersist(api));
+      }, AUTOSAVE_DEBOUNCE_MS);
+      pendingSaveRef.current = { workspaceId, timer };
+    },
+    [persistIfChanged],
+  );
 
   // Restore the active workspace's saved layout whenever it changes
   // (including the first time dockview itself becomes ready). `workspaces`
@@ -172,6 +197,14 @@ export function useWorkspacePersistence({
       // than folded into closedKilledPanels above since the two sweeps close
       // panels for unrelated reasons.
       closedLegacyPanels = closeLegacyPanels(dockviewApi);
+      // Terminal panel titles are deliberately excluded from the persisted
+      // blob (panelUtils.ts's stripSessionPanelTitles, part of the
+      // workspace-autosave rate-limit-storm fix) — re-derive them here the
+      // same way a freshly-opened panel gets its title. Still inside
+      // restoringRef's true window, so this call's own onDidLayoutChange
+      // echo (setTitle feeds it too) is suppressed the same as every other
+      // mutation in this block.
+      reseedSessionPanelTitles(dockviewApi, currentSessions, useDashboardStore.getState().projects);
     } catch (err) {
       // A corrupt or version-incompatible layout blob must never brick the
       // whole dashboard — this runs outside any panel's own ErrorBoundary,

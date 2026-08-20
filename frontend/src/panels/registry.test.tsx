@@ -4,7 +4,10 @@ import { useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
-import { makePanelWrapper } from "./registry.js";
+import { makePanelWrapper, components } from "./registry.js";
+import { useDashboardStore } from "../store/index.js";
+import { makeSession, makeProject } from "../test/fixtures.js";
+import { resetStore } from "../test/resetStore.js";
 
 // Minimal stand-in for the dockview panel props every real wrapper receives
 // — only `params` is read by makePanelWrapper itself; `api`/`containerApi`
@@ -146,5 +149,105 @@ describe("makePanelWrapper", () => {
     });
     render(<Wrapped {...makeProps({ label: "hi" })} />);
     expect(screen.getByTestId("extra")).toHaveTextContent("derived");
+  });
+});
+
+// Workspace-autosave rate-limit-storm fix — TerminalPanelWrapper's own
+// onTitleChange throttles OSC title updates (issue #69's live-title
+// feature ticks roughly once a second while an agent is "thinking", and
+// dockview-core feeds a panel's title change into the same emitter that
+// backs onDidLayoutChange — see registry.tsx's own OSC_TITLE_THROTTLE_MS
+// comment for the full trace). TerminalPane itself is covered elsewhere
+// (its own test file) and reaches for xterm/browser APIs jsdom doesn't
+// implement — mocked here the same way DockMonitor.test.tsx's own comment
+// explains, capturing the onTitleChange callback this wrapper passes down
+// so tests can drive it directly, like a real OSC event stream would.
+let capturedOnTitleChange: ((title: string) => void) | null = null;
+vi.mock("../TerminalPane.js", () => ({
+  TerminalPane: (props: { onTitleChange?: (title: string) => void }) => {
+    capturedOnTitleChange = props.onTitleChange ?? null;
+    return <div data-testid="terminal-pane" />;
+  },
+}));
+
+describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave storm fix)", () => {
+  beforeEach(() => {
+    capturedOnTitleChange = null;
+    resetStore();
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, projectId: 1, nameLocked: false })],
+      projects: [makeProject({ id: 1, name: "demo" })],
+    });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderTerminalPanel(setTitle: ReturnType<typeof vi.fn>) {
+    const props = {
+      params: { sessionId: 1 },
+      api: {
+        setTitle,
+        isActive: false,
+        onDidActiveChange: () => ({ dispose: () => {} }),
+      },
+      containerApi: {},
+    } as unknown as IDockviewPanelProps<{ sessionId: number }>;
+    render(<components.terminal {...props} />);
+  }
+
+  it("applies the first OSC title immediately, with no delay", () => {
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+
+    capturedOnTitleChange?.("first title");
+
+    expect(setTitle).toHaveBeenCalledTimes(1);
+    expect(setTitle).toHaveBeenCalledWith("first title · demo");
+  });
+
+  it("collapses a burst of titles inside the throttle window into one trailing apply carrying the latest", () => {
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+    capturedOnTitleChange?.("first"); // leading-edge apply, starts the window
+    setTitle.mockClear();
+
+    capturedOnTitleChange?.("second");
+    capturedOnTitleChange?.("third");
+    capturedOnTitleChange?.("fourth");
+    expect(setTitle).not.toHaveBeenCalled(); // still inside the 1s window
+
+    vi.advanceTimersByTime(1000);
+
+    expect(setTitle).toHaveBeenCalledTimes(1);
+    expect(setTitle).toHaveBeenCalledWith("fourth · demo");
+  });
+
+  it("applies immediately again once the throttle window has elapsed", () => {
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+    capturedOnTitleChange?.("first");
+    setTitle.mockClear();
+    vi.advanceTimersByTime(1000);
+
+    capturedOnTitleChange?.("second");
+
+    expect(setTitle).toHaveBeenCalledTimes(1);
+    expect(setTitle).toHaveBeenCalledWith("second · demo");
+  });
+
+  it("never calls setTitle once the session is nameLocked (an explicit rename pins it)", () => {
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, projectId: 1, nameLocked: true })],
+    });
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+
+    capturedOnTitleChange?.("ignored");
+    vi.advanceTimersByTime(1000);
+
+    expect(setTitle).not.toHaveBeenCalled();
   });
 });

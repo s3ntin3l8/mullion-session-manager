@@ -9,10 +9,23 @@ import type { Workspace } from "../api/index.js";
 // serving both call forms this hook uses: `useDashboardStore.getState()`
 // directly, no selector).
 const saveWorkspaceLayout = vi.fn().mockResolvedValue(undefined);
-let sessions: Array<{ id: number; status: string }> = [];
+let sessions: Array<{
+  id: number;
+  status: string;
+  nameLocked?: boolean;
+  name?: string | null;
+  lastTitle?: string | null;
+  command?: string;
+  projectId?: number;
+}> = [];
+// Workspace-autosave rate-limit-storm fix — the restore effect now reseeds
+// each terminal panel's title via reseedSessionPanelTitles (panelUtils.ts),
+// which reads `projects` off the store the same way TerminalPanelWrapper's
+// own onTitleChange already did. Real usage.
+let projects: Array<{ id: number; name: string | null }> = [];
 
 function storeState() {
-  return { sessions, saveWorkspaceLayout };
+  return { sessions, projects, saveWorkspaceLayout };
 }
 
 vi.mock("../store/index.js", () => {
@@ -50,7 +63,11 @@ function makeMockApi() {
   const layoutChangeListeners: Array<() => void> = [];
   const panels = new Map<
     string,
-    { id: string; params?: Record<string, unknown>; api: { close: ReturnType<typeof vi.fn> } }
+    {
+      id: string;
+      params?: Record<string, unknown>;
+      api: { close: ReturnType<typeof vi.fn>; setTitle: ReturnType<typeof vi.fn> };
+    }
   >();
   const api = {
     clear: vi.fn(),
@@ -78,7 +95,7 @@ function makeMockApi() {
     // right after its (mocked, no-op) fromJSON() call, so tests populate
     // this map directly to stand in for what a real restore would produce.
     addPanel: (id: string, params?: Record<string, unknown>) => {
-      const panel = { id, params, api: { close: vi.fn() } };
+      const panel = { id, params, api: { close: vi.fn(), setTitle: vi.fn() } };
       panels.set(id, panel);
       return panel;
     },
@@ -98,6 +115,7 @@ function makeSetPanelsVersion() {
 
 beforeEach(() => {
   sessions = [];
+  projects = [];
   saveWorkspaceLayout.mockClear();
 });
 
@@ -401,5 +419,154 @@ describe("useWorkspacePersistence", () => {
       }),
     );
     expect(api.clear).not.toHaveBeenCalled();
+  });
+
+  // Workspace-autosave rate-limit-storm fix, belt-and-braces leg — see
+  // panelUtils.ts's stripSessionPanelTitles for the actual fix and this
+  // dedupe's own doc comment here for why it alone wouldn't have stopped
+  // the storm. toJSON() is stubbed to always return the SAME blob, which is
+  // exactly what a title-stripped, geometry-unchanged autosave attempt now
+  // looks like — the real regression this pins is a save firing again for
+  // an unchanged blob at all.
+  it("skips the PATCH when the serialized layout is identical to the last one persisted", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0); // let the restore settle
+
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+
+    // A second edit whose serialized result is byte-for-byte the same as
+    // what was just persisted (api.toJSON() is stubbed to always return
+    // `{ panels: {} }`) — must not fire a second PATCH.
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("still saves when the layout genuinely changes after an unchanged attempt was skipped", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+
+    vi.mocked(api.toJSON).mockReturnValue({ panels: { "session-9": {} } } as never);
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(2);
+  });
+
+  it("compares each workspace's save against its OWN last-persisted blob, not a shared one", () => {
+    vi.useFakeTimers();
+    const { api: api1, fireLayoutChange: fire1 } = makeMockApi();
+    const { api: api2, fireLayoutChange: fire2 } = makeMockApi();
+    // Both workspaces serialize to the exact same blob (both toJSON stubs
+    // default to `{ panels: {} }`) — a shared (rather than per-workspace)
+    // last-persisted value would wrongly skip workspace 2's first-ever save
+    // just because workspace 1 already persisted an identical-looking blob.
+    const ws1 = makeWorkspace({ id: 1 });
+    const ws2 = makeWorkspace({ id: 2 });
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    const { rerender } = renderHook(
+      ({ api, activeWorkspaceId }: { api: DockviewApi; activeWorkspaceId: number }) =>
+        useWorkspacePersistence({
+          dockviewApi: api,
+          activeWorkspaceId,
+          workspaces: [ws1, ws2],
+          layoutTier: "desktop",
+          setPanelsVersion,
+        }),
+      { initialProps: { api: api1, activeWorkspaceId: 1 } },
+    );
+    vi.advanceTimersByTime(0);
+    fire1();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+    expect(saveWorkspaceLayout).toHaveBeenLastCalledWith(1, { panels: {} });
+
+    rerender({ api: api2, activeWorkspaceId: 2 });
+    vi.advanceTimersByTime(0);
+    fire2();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(2);
+    expect(saveWorkspaceLayout).toHaveBeenLastCalledWith(2, { panels: {} });
+  });
+
+  // Companion to panelUtils.ts's stripSessionPanelTitles (which is why a
+  // restored session panel's title needs re-deriving in the first place —
+  // the persisted blob no longer carries it).
+  it("re-seeds each restored terminal panel's title from the live session, not the (title-less) blob", () => {
+    vi.useFakeTimers();
+    const { api, addPanel } = makeMockApi();
+    sessions = [
+      { id: 1, status: "active", nameLocked: false, lastTitle: "opencode", projectId: 5 },
+    ];
+    projects = [{ id: 5, name: "my-project" }];
+    const sessionPanel = addPanel("session-1", { sessionId: 1 });
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+
+    expect(sessionPanel.api.setTitle).toHaveBeenCalledTimes(1);
+    expect(sessionPanel.api.setTitle).toHaveBeenCalledWith("opencode · my-project");
+  });
+
+  it("does not reseed a panel whose session no longer exists", () => {
+    vi.useFakeTimers();
+    const { api, addPanel } = makeMockApi();
+    sessions = [];
+    const orphanPanel = addPanel("session-404", { sessionId: 404 });
+    const workspace = makeWorkspace();
+    const setPanelsVersion = makeSetPanelsVersion();
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [workspace],
+        layoutTier: "desktop",
+        setPanelsVersion,
+      }),
+    );
+
+    expect(orphanPanel.api.setTitle).not.toHaveBeenCalled();
   });
 });
