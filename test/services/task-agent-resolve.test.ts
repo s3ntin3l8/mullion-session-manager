@@ -25,7 +25,7 @@ function mockApp(): FastifyInstance {
 describe("resolveAgentCommand", () => {
   beforeEach(() => {
     mockGetStoredSettings.mockReset();
-    mockGetStoredSettings.mockReturnValue({ launchers: { defaultAgent: "claude" } });
+    mockGetStoredSettings.mockReturnValue({ taskMaster: { defaultAgent: "claude" } });
   });
 
   it("prefers the task's own agent column over issue body and project default", () => {
@@ -110,7 +110,14 @@ describe("resolveAgentCommand", () => {
 });
 
 describe("resolveReviewAgentCommand", () => {
-  it("returns null when nothing configures a review agent", () => {
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { defaultAgent: "claude", defaultReviewAgent: "none" },
+    });
+  });
+
+  it("returns null when nothing configures a review agent and the install-wide default is 'none'", () => {
     const app = mockApp();
     const command = resolveReviewAgentCommand(app, {
       issueBody: null,
@@ -178,13 +185,42 @@ describe("resolveReviewAgentCommand", () => {
     expect(command).toBe("agy");
   });
 
-  it("has no global-settings fallback tier — unlike the worker agent, it stays null", () => {
+  it("falls through to the install-wide taskMaster.defaultReviewAgent when nothing per-task or per-project configures one", () => {
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { defaultAgent: "claude", defaultReviewAgent: "codex" },
+    });
     const app = mockApp();
     const command = resolveReviewAgentCommand(app, {
-      issueBody: "not-a-real-agent-name mentioned in prose",
+      issueBody: null,
+      projectDefaultReviewAgent: null,
+    });
+    expect(command).toBe("codex");
+    expect(mockGetStoredSettings).toHaveBeenCalled();
+  });
+
+  it("treats an empty install-wide defaultReviewAgent as no review agent", () => {
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { defaultAgent: "claude", defaultReviewAgent: "" },
+    });
+    const app = mockApp();
+    const command = resolveReviewAgentCommand(app, {
+      issueBody: null,
       projectDefaultReviewAgent: null,
     });
     expect(command).toBeNull();
+  });
+
+  it("lets a per-task or per-project review agent beat the install-wide default", () => {
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { defaultAgent: "claude", defaultReviewAgent: "codex" },
+    });
+    const app = mockApp();
+    const command = resolveReviewAgentCommand(app, {
+      taskReviewAgent: "agy",
+      issueBody: "ReviewAgent: codex",
+      projectDefaultReviewAgent: "opencode",
+    });
+    expect(command).toBe("agy");
     expect(mockGetStoredSettings).not.toHaveBeenCalled();
   });
 });

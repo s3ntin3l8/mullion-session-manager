@@ -558,16 +558,20 @@ Two independent choices are resolved per task, most-specific tier wins:
 1. The issue body's own `Agent: <name>` line (e.g. `Agent: codex`).
 2. The owning project's `defaultAgent` setting (Project Settings' Default
    Agent dropdown, or `projects.defaultAgent` directly).
-3. The install-wide `settings.launchers.defaultAgent`.
+3. The install-wide `settings.taskMaster.defaultAgent` (Task Master Settings'
+   Default agent — independent of the terminal launcher's own default, which
+   only drives the launcher).
 
 **Review agent** (the optional reviewer — see below):
 
 1. The issue body's own `ReviewAgent: <name>` line.
 2. The owning project's `defaultReviewAgent` setting.
-3. Unset → no review agent spawned; a human reviews directly, today's
-   unchanged default behavior. There is **no** install-wide fallback tier
-   for the review agent — it's opt-in per project/task, not a new global
-   default.
+3. The install-wide `settings.taskMaster.defaultReviewAgent` (Task Master
+   Settings' Default review agent). When unset, or explicitly `"none"`/empty,
+   no review agent is spawned and a human reviews directly — today's
+   unchanged default behavior. A review agent remains an additive, advisory
+   feature; the install-wide tier just lets an operator engage one for every
+   task without configuring it per project.
 
 Both directives are matched case-insensitively on their own line (a
 document that merely _mentions_ "Agent: claude" in prose isn't picked up).

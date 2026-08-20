@@ -109,8 +109,9 @@ export function TaskDetail({
 
   const project = projects?.find((p) => p.id === task.projectId);
   const projectDefaultAgent =
-    project?.defaultAgent || settings?.launchers?.defaultAgent || "claude";
-  const projectDefaultReviewAgent = project?.defaultReviewAgent || "None";
+    project?.defaultAgent || settings?.taskMaster?.defaultAgent || "claude";
+  const projectDefaultReviewAgent =
+    project?.defaultReviewAgent || settings?.taskMaster?.defaultReviewAgent || "none";
   const isEditableStatus =
     task.status === "backlog" ||
     (task.status === "ready" && task.agentCommand === null) ||
