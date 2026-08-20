@@ -2432,6 +2432,57 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Regression guard for the gap the `changes === 0` branch above doesn't
+    // cover: a throw AFTER createSessionRecord already succeeded (a DB
+    // error on the CAS update, or resolveSeedDelivered itself throwing)
+    // used to fall into the generic `catch`, which only cleared the claim —
+    // `result` was scoped inside the `try`, unreachable from there, so the
+    // already-spawned session was never killed (Hermes review, PR #742).
+    it("kills the orphaned session when a later step throws after createSessionRecord already succeeded", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+
+      const taskAgentResolveModule = await import("../../src/services/task-agent-resolve.js");
+      const resolveSeedDeliveredSpy = vi
+        .spyOn(taskAgentResolveModule, "resolveSeedDelivered")
+        .mockImplementation(() => {
+          throw new Error("boom");
+        });
+
+      try {
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull(); // the throw happened before this write
+        expect(row.reviewSpawnClaimedAt).toBeNull(); // cleared by the catch block
+        expect(terminateSpy).toHaveBeenCalledWith(expect.any(String));
+        const [orphanedSession] = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, Number(terminateSpy.mock.calls[0]?.[0])))
+          .all();
+        expect(orphanedSession?.status).toBe("killed");
+      } finally {
+        resolveSeedDeliveredSpy.mockRestore();
+        // This task is deliberately left "reviewing" + reviewSessionId null
+        // with a real prNumber — same shared-DB leak hazard as the
+        // "disabled" test's own cleanup above.
+        getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
+        await app.close();
+      }
+    });
+
     // Regression guard for a claim abandoned by a process crash/redeploy
     // between the claim write and either outcome — nothing else ever clears
     // reviewSpawnClaimedAt in that case, so without a staleness reclaim the

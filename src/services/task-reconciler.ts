@@ -80,6 +80,15 @@ async function spawnReviewAgentNow(
   ci: ReviewCiInfo | undefined,
 ): Promise<void> {
   if (!task.worktreePath) return;
+  // Hoisted out of the `try` (Hermes review, PR #742) — a throw AFTER
+  // createSessionRecord succeeds (a DB error on the CAS update below, or
+  // resolveSeedDelivered itself throwing) used to fall into the generic
+  // `catch`, which only cleared the claim and had no way to reach the
+  // session it had just created — left "active" and untracked, it would
+  // surface later at the exited-session reconciler as a mystery crash with
+  // no task behind it, same failure mode the `changes === 0` branch below
+  // exists to prevent for the "task moved on" case.
+  let spawnedSessionId: number | undefined;
   try {
     // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
     // worker spawns: SessionStart's `additionalContext` (stashSeed's only
@@ -112,6 +121,7 @@ async function spawnReviewAgentNow(
       clearReviewSpawnClaim(app, task.id);
       return;
     }
+    spawnedSessionId = result.row.id;
     // Same version-skew guard as task-claim.ts's own — see
     // resolveSeedDelivered's doc comment.
     const seedDelivered = resolveSeedDelivered(
@@ -165,6 +175,14 @@ async function spawnReviewAgentNow(
   } catch (err) {
     app.log.warn({ err, taskId: task.id, reviewCommand }, "task reconcile: review agent threw");
     clearReviewSpawnClaim(app, task.id);
+    if (spawnedSessionId !== undefined) {
+      await killSession(app, spawnedSessionId).catch((killErr: unknown) => {
+        app.log.warn(
+          { err: killErr, taskId: task.id, reviewSessionId: spawnedSessionId },
+          "task reconcile: failed to kill the orphaned review session after a post-spawn throw",
+        );
+      });
+    }
   }
 }
 
