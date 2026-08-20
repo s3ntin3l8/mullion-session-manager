@@ -87,6 +87,8 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     createdAt: "2026-01-01T00:00:00.000Z",
     defaultAgent: null,
     defaultReviewAgent: null,
+    mergeOnApprove: null,
+    autoApprove: null,
     ...overrides,
   };
 }
@@ -117,6 +119,9 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     agentCommand: null,
     prUrl: null,
     prNumber: null,
+    mergeRequestedAt: null,
+    mergeError: null,
+    lastReviewVerdict: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
