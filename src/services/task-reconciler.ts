@@ -105,6 +105,19 @@ async function spawnReviewAgentNow(
       task.id,
       task.reviewRounds,
     );
+    // Task Master trial 220921 / PR #743's incident left exactly this file
+    // on disk: `processReviewingTasks`'s own unlink-on-ingest ran before the
+    // real (late-arriving) findings file existed, so it found nothing to
+    // remove, and the file that appeared 21 seconds later was never cleaned
+    // up. `reviewRounds` doesn't change on a same-round re-review (a
+    // rejected task's next review reuses this exact round-suffixed path —
+    // see `taskReviewFindingsPath`'s own doc comment on why round-suffixing
+    // exists at all), so a leftover from a PRIOR attempt at this round would
+    // otherwise be silently re-ingested as THIS attempt's fresh output.
+    // Unlinking here, before the agent gets a chance to write anything, is
+    // the fix: whatever this fresh spawn's own agent writes is now
+    // guaranteed to be the only thing this path can ever contain.
+    unlinkFindingsFileIfPresent(app, task.id, findingsPath);
     const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath, ci });
     const result = await createSessionRecord(app, {
       projectId: project.id,
@@ -823,6 +836,29 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   );
 }
 
+// Task Master trial 220921 / PR #743's incident — `derived.status ===
+// "finished"` used to be trusted as "the review is over, and if there's no
+// findings file, there never will be" the INSTANT it was observed, with no
+// allowance for a review agent that's still writing its own output. That
+// incident's review agent posted a real `verdict: "clean"` file 21 SECONDS
+// after this reconciler's tick had already read `finished` off a stale
+// latch, concluded "inconclusive," and durably recorded
+// `reviewFindingsIngestedSessionId` — permanently. The real file could then
+// never be read again (see the `parsed === null` branch of `isUsableSignal`
+// below): a recoverable timing miss became an unrecoverable dead task.
+//
+// This constant is the fix's other half: for a MISSING file specifically
+// (`parsed === null`), "finished" alone is no longer enough — the review
+// session's own age (`sessions.createdAt`, already joined into this query,
+// so no schema change) must also have crossed this grace window. The
+// review prompt (`buildReviewPrompt`, task-prompt.ts) now asks the agent to
+// run the repo's WHOLE verification gate before writing its findings file,
+// so several minutes of silence with no file yet is the ordinary case, not
+// evidence of a crash. `derived.status === "exited"` still ingests
+// immediately regardless of this window — a session that has genuinely
+// exited can't write anything more no matter how long is waited.
+const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
+
 /**
  * The review-findings loop — a SEPARATE poll from the claimed/in_progress
  * one below (see reconcileTasks's own doc comment for why a "reviewing"
@@ -899,6 +935,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
     .all();
   if (allRows.length === 0) return;
 
+  const now = Date.now();
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   const sessionsDir = path.dirname(app.pty.hookSocketPath);
@@ -983,33 +1020,59 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // unlike the worker preamble's own instruction — buildReviewPrompt
         // now tells it to as well, but this doesn't rely on compliance) was
         // previously skipped forever: no comment, no auto-return, silent.
-        // Accept "exited" too, but ONLY when a findings file actually
-        // exists — a session killed by a human, or one that crashed
-        // mid-review, also derives "exited", and would otherwise get
-        // ingested as a false "inconclusive" result permanently marked
-        // processed. (A crash BEFORE writing anything still isn't ingested
-        // at all here — `parsed === null` — and the task just stalls in
-        // "reviewing" with no comment; a pre-existing gap, not something
-        // this ingestion pass can distinguish from "the reviewer is still
-        // running".)
+        // "exited" is always a usable signal — a session that has genuinely
+        // exited can't write anything more no matter how long is waited, so
+        // there's nothing left to gain by delaying past it, whether or not
+        // it left a findings file behind. (This also closes a pre-existing
+        // gap this comment used to document: a session that crashed BEFORE
+        // writing anything used to leave `parsed === null` unaccepted here,
+        // and the task just stalled in "reviewing" forever with no comment
+        // at all — "exited" alone now surfaces it as inconclusive instead.)
+        //
+        // Split on whether a findings file was actually read (see
+        // `REVIEW_FINDINGS_GRACE_MS`'s own doc comment for the incident
+        // this split fixes). A REAL file (`parsed !== null`) is trustworthy
+        // the instant `finished` latches — nothing more to wait for. A
+        // MISSING file (`parsed === null`) is NOT immediately trustworthy
+        // as "never coming": `finished` is a hook-confirmed "a turn ended,"
+        // not "the review agent gave up entirely," and the review prompt
+        // now asks for a full verification-gate run before the file is
+        // written. Deliberately NOT re-gated on `finished` for the
+        // grace-elapsed branch below — a review session that's been alive
+        // this long with no findings file and hasn't even reached
+        // "finished" once is itself the failure worth surfacing (a hung or
+        // runaway session), not a reason to keep waiting silently forever.
         const isUsableSignal =
-          derived.status === "finished" || (derived.status === "exited" && parsed !== null);
+          parsed !== null
+            ? derived.status === "finished" || derived.status === "exited"
+            : derived.status === "exited" ||
+              now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS;
         if (!isUsableSignal) continue;
 
         const roundLabel = `## Round ${task.reviewRounds + 1}`;
+        // A killed/crashed session (`exited`, now unconditionally usable —
+        // see `isUsableSignal`'s own doc comment) never "finished" anything.
+        // Saying so on a real, human-visible GitHub PR review would be a
+        // false claim about what actually happened to the session.
+        const noFindingsReason =
+          derived.status === "exited"
+            ? "Review agent ended without writing a findings file"
+            : "Review agent finished but wrote no findings file";
         const commentBody = parsed
           ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
-          : `${roundLabel}\n\nReview agent finished but wrote no findings file — treat this` +
-            " review as inconclusive.";
+          : `${roundLabel}\n\n${noFindingsReason} — treat this review as inconclusive.`;
 
         const appendedFindings = task.reviewFindings
           ? `${task.reviewFindings}\n\n${commentBody}`
           : commentBody;
 
         // Hermes review, PR #576 — a non-seed-capable worker adapter (e.g.
-        // OpenCode) can't receive the findings as an initial prompt at all
-        // (reseedTaskIfSessionExited delivers argv-only, same as every other
-        // Task Master spawn). Auto-returning anyway would burn the task's
+        // aider/gemini/pi — every registered adapter, including OpenCode,
+        // has initialPromptArgs by now; see getAdapterInitialPromptArgs's
+        // own doc comment for the current list) can't receive the findings
+        // as an initial prompt at all (reseedTaskIfSessionExited delivers
+        // argv-only, same as every other Task Master spawn). Auto-returning
+        // anyway would burn the task's
         // one round, flip it to in_progress, and spawn a fresh session with
         // NO instructions — one that never ends a turn, so the task just
         // rides its budget out and fails. Recording + commenting the
