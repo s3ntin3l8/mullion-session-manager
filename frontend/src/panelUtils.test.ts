@@ -15,6 +15,8 @@ import {
   stripFloatingPanels,
   stripMaximizedNode,
   stripHiddenHeaders,
+  stripSessionPanelTitles,
+  reseedSessionPanelTitles,
   serializeForPersist,
   applyLayoutPresentation,
   attentionTransitionPanelIds,
@@ -1231,12 +1233,65 @@ describe("stripFloatingPanels", () => {
     });
   });
 
+  // Workspace-autosave rate-limit-storm fix — a terminal panel's title
+  // ticks roughly once a second while an agent CLI is "thinking" (issue
+  // #69's live-title feature), and dockview-core feeds panel title changes
+  // into the same emitter that backs onDidLayoutChange. Stripping it here is
+  // the actual fix (see panelUtils.ts's own comment on this function); the
+  // throttle in registry.tsx's TerminalPanelWrapper and the dedupe in
+  // useWorkspacePersistence.ts are the other two legs of the same fix.
+  describe("stripSessionPanelTitles", () => {
+    it("removes title from a session panel", () => {
+      const serialized = makeSerialized();
+
+      const result = stripSessionPanelTitles(serialized);
+
+      expect(result.panels["session-1"]).not.toHaveProperty("title");
+      expect(result.panels["session-1"]).toMatchObject({ contentComponent: "terminal" });
+    });
+
+    it("leaves a non-session panel's title untouched", () => {
+      const serialized = makeSerialized({
+        extraPanels: {
+          github: { id: "github", contentComponent: "github", title: "GitHub: repo" },
+        },
+      });
+
+      const result = stripSessionPanelTitles(serialized);
+
+      expect(result.panels.github).toHaveProperty("title", "GitHub: repo");
+    });
+
+    it("returns the input unchanged when no panel has a session- id", () => {
+      const serialized = makeSerialized({
+        extraPanels: {},
+      });
+      const noSessionPanels = {
+        ...serialized,
+        panels: { github: { id: "github", contentComponent: "github", title: "GitHub: repo" } },
+      } as unknown as SerializedDockview;
+
+      const result = stripSessionPanelTitles(noSessionPanels);
+
+      expect(result).toBe(noSessionPanels);
+    });
+
+    it("does not mutate the input", () => {
+      const serialized = makeSerialized();
+      const copy = JSON.parse(JSON.stringify(serialized));
+
+      stripSessionPanelTitles(serialized);
+
+      expect(serialized).toEqual(copy);
+    });
+  });
+
   describe("serializeForPersist (issue #85)", () => {
     function mockApiWithJSON(serialized: SerializedDockview): DockviewApi {
       return { toJSON: vi.fn(() => serialized) } as unknown as DockviewApi;
     }
 
-    it("strips floating panels, maximizedNode, and hideHeader in one pass", () => {
+    it("strips floating panels, maximizedNode, hideHeader, and session titles in one pass", () => {
       const serialized = makeSerialized({ activeGroup: "session-2" });
       const withMaximized = {
         ...serialized,
@@ -1257,6 +1312,7 @@ describe("stripFloatingPanels", () => {
       expect(result).not.toHaveProperty("floatingGroups");
       expect(result.grid).not.toHaveProperty("maximizedNode");
       expect(result.grid.root.data).not.toHaveProperty("hideHeader");
+      expect(result.panels["session-1"]).not.toHaveProperty("title");
     });
 
     it("is a no-op pass-through when there is nothing to strip", () => {
@@ -1268,6 +1324,65 @@ describe("stripFloatingPanels", () => {
       expect(result.panels).toHaveProperty("session-1");
       expect(result.panels).toHaveProperty("session-2");
       expect(result.grid).not.toHaveProperty("maximizedNode");
+    });
+
+    it("a title-only difference between two calls produces an identical result (pins the storm fix)", () => {
+      const first = makeSerialized();
+      const second = {
+        ...first,
+        panels: {
+          ...first.panels,
+          "session-1": { ...first.panels["session-1"], title: "a different title entirely" },
+        },
+      } as unknown as SerializedDockview;
+
+      const resultFirst = serializeForPersist(mockApiWithJSON(first));
+      const resultSecond = serializeForPersist(mockApiWithJSON(second));
+
+      expect(resultSecond).toEqual(resultFirst);
+    });
+  });
+
+  describe("reseedSessionPanelTitles", () => {
+    function mockTitledPanel(id: string, params: Record<string, unknown> = {}) {
+      return { id, params, api: { setTitle: vi.fn() } };
+    }
+
+    it("re-derives a session panel's title from the live session, not the (now title-less) blob", () => {
+      const panel = mockTitledPanel("session-1", { sessionId: 1 });
+      const api = { panels: [panel] } as unknown as DockviewApi;
+
+      reseedSessionPanelTitles(api, [EXISTING_SESSION], PROJECTS);
+
+      expect(panel.api.setTitle).toHaveBeenCalledTimes(1);
+      expect(panel.api.setTitle).toHaveBeenCalledWith(expect.any(String));
+    });
+
+    it("skips a non-session panel entirely", () => {
+      const panel = mockTitledPanel("github-1");
+      const api = { panels: [panel] } as unknown as DockviewApi;
+
+      reseedSessionPanelTitles(api, [EXISTING_SESSION], PROJECTS);
+
+      expect(panel.api.setTitle).not.toHaveBeenCalled();
+    });
+
+    it("skips a session panel with no matching live session (e.g. mid-teardown)", () => {
+      const panel = mockTitledPanel("session-404", { sessionId: 404 });
+      const api = { panels: [panel] } as unknown as DockviewApi;
+
+      reseedSessionPanelTitles(api, [EXISTING_SESSION], PROJECTS);
+
+      expect(panel.api.setTitle).not.toHaveBeenCalled();
+    });
+
+    it("skips a session panel whose params carry no sessionId", () => {
+      const panel = mockTitledPanel("session-1", {});
+      const api = { panels: [panel] } as unknown as DockviewApi;
+
+      reseedSessionPanelTitles(api, [EXISTING_SESSION], PROJECTS);
+
+      expect(panel.api.setTitle).not.toHaveBeenCalled();
     });
   });
 });
