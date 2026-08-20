@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -36,7 +36,12 @@ import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges } from "./git-worktree.js";
 import { resolveGitHubToken } from "./github-integration.js";
-import { getPullRequestByNumber } from "./github-write.js";
+import {
+  getPullRequestByNumber,
+  mergePullRequest,
+  updatePullRequestBranch,
+  deleteRemoteBranch,
+} from "./github-write.js";
 import { computeCiStatus, fetchRunsForHead } from "./github.js";
 
 /**
@@ -836,6 +841,223 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   );
 }
 
+// Merge-on-approve sweep — approving a task on a project with
+// projects.mergeOnApprove sets tasks.mergeRequestedAt (routes/tasks.ts's
+// approve handler); this sweep is what actually lands the merge. It can't
+// happen synchronously inside approve: main's branch protection here is
+// `strict: true` (branch must be up to date) plus required checks, and a
+// branch that was JUST pushed almost never satisfies either yet. GitHub's
+// own native auto-merge doesn't help either — it does not update a behind
+// branch under `strict`, and this repo's `allow_auto_merge` is `false`
+// regardless — so this sweep does the "record intent, land it once GitHub
+// allows" work by hand: read the PR's mergeableState every tick (subject to
+// backoff) and act on it.
+//
+// Per-task attempt state is process-local (module state, not a DB column),
+// same posture and same reasoning as draftPrRetryState above — the merge
+// *intent* is durable (tasks.mergeRequestedAt), the retry *rate limiter*
+// doesn't need to be.
+const MERGE_RETRY_TTL_MS = 60 * 1000;
+// Tighter ceiling than DRAFT_PR_RETRY_MAX_TTL_MS above — a merge is a cheap
+// GitHub API call (no git push involved) and a human is typically watching
+// for it to land, unlike a stranded draft-PR retry.
+const MERGE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
+const MAX_MERGE_RETRIES_PER_SWEEP = 20;
+const MAX_MERGE_RETRY_ENTRIES = 500;
+const mergeRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+
+function mergeRetryBackoffMs(attempts: number): number {
+  return Math.min(MERGE_RETRY_TTL_MS * 2 ** (attempts - 1), MERGE_RETRY_MAX_TTL_MS);
+}
+
+/**
+ * Re-arms a task's merge backoff so the next reconcile tick attempts it
+ * immediately instead of waiting out whatever backoff interval it was on.
+ * Called by `POST /api/tasks/:id/merge` (a human's "Merge now"/"Retry merge"
+ * click) — without this, a click during a long backoff window would appear
+ * to do nothing until the window elapsed on its own.
+ */
+export function resetMergeBackoff(taskId: number): void {
+  mergeRetryState.delete(taskId);
+}
+
+function clearMergeState(app: FastifyInstance, taskId: number): void {
+  app.db
+    .update(tasks)
+    .set({ mergeRequestedAt: null, mergeError: null })
+    .where(eq(tasks.id, taskId))
+    .run();
+  // Hermes review, PR #763 — without this, a resolved task's backoff entry
+  // lingers in mergeRetryState until MAX_MERGE_RETRY_ENTRIES forces an
+  // oldest-insertion eviction, which can evict an ACTIVELY retrying task's
+  // entry instead of a resolved one, silently resetting its backoff/attempt
+  // count. Deleting here (unlike draftPrRetryState's own "never gets read
+  // again" reasoning, which relies on the row dropping out of that sweep's
+  // WHERE clause) closes that gap directly.
+  mergeRetryState.delete(taskId);
+}
+
+function recordMergeError(app: FastifyInstance, taskId: number, message: string): void {
+  app.db.update(tasks).set({ mergeError: message }).where(eq(tasks.id, taskId)).run();
+}
+
+async function attemptMerge(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<void> {
+  if (task.prNumber === null) return; // WHERE below already guarantees this; narrows the type.
+
+  // Resolve repoRef/token from `project` alone, never from
+  // `task.worktreePath` — cleanupTaskWorktree already ran at approve
+  // (routes/tasks.ts), so the worktree is gone by the time this sweep fires.
+  // Same posture as closeDraftPRForTask (task-promote.ts): a pure GitHub API
+  // write with no filesystem/git dependency on the task's host at all.
+  // Reaching for worktreePath here would fail every merge forever with an
+  // unfixable no-repo/no-token — exactly the stranding shape this codebase
+  // keeps getting bitten by (see REVIEW_FINDINGS_GRACE_MS's own history).
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return;
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return;
+
+  try {
+    const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+
+    if (pr.merged || pr.state === "closed") {
+      // Merged or closed out of band (a human merged it directly on GitHub,
+      // or closed it) — idempotent no-op, not an error.
+      clearMergeState(app, task.id);
+      return;
+    }
+
+    switch (pr.mergeableState) {
+      case "clean": {
+        await mergePullRequest(token, repoRef.owner, repoRef.repo, task.prNumber, {
+          sha: pr.headSha,
+          commitTitle: pr.title,
+        });
+        // Best-effort: a failure here must not undo the merge that just
+        // succeeded, nor re-arm the sweep to retry a merge that's already
+        // done. delete_branch_on_merge is false on this repo, so without
+        // this the branch is left behind forever.
+        try {
+          await deleteRemoteBranch(token, repoRef.owner, repoRef.repo, pr.headRef);
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, branch: pr.headRef },
+            "task reconcile: merged the PR but failed to delete its remote branch",
+          );
+        }
+        clearMergeState(app, task.id);
+        return;
+      }
+      case "behind": {
+        // Update the branch, then wait for the NEXT tick rather than
+        // attempting the merge in this same pass — checks must re-run
+        // against the new head first. Can ping-pong if main moves faster
+        // than CI resolves; the backoff above bounds how often this repeats.
+        await updatePullRequestBranch(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          task.prNumber,
+          pr.headSha,
+        );
+        recordMergeError(app, task.id, "Branch was behind main — requested an update, retrying");
+        return;
+      }
+      case "unstable": {
+        // A NON-required check is failing or still running — e.g. this
+        // repo's own test-e2e/codecov/patch, deliberately not required (see
+        // CLAUDE.md). Merging on "unstable" would silently skip whatever
+        // that check was verifying; a human clicking Squash-and-merge at
+        // least sees the red X. Back off and retry: a pending non-required
+        // check resolves into "clean" on its own, and a genuinely failing
+        // one stays "unstable" forever, which is the correct outcome —
+        // "Merge now" is the escape hatch for deciding to override it.
+        // Counter-risk, stated deliberately: a non-required check that never
+        // reports at all leaves this PR never auto-merging.
+        recordMergeError(app, task.id, "A non-required check is failing or still running");
+        return;
+      }
+      case "dirty": {
+        // A real merge conflict with main. Never resolves on its own —
+        // needs a rebase (see the auto-rebase follow-up issue) or a human.
+        recordMergeError(app, task.id, "Conflicts with main — needs manual resolution");
+        return;
+      }
+      case "blocked": {
+        // A required check is red or still pending.
+        recordMergeError(app, task.id, "Required checks are red or still pending");
+        return;
+      }
+      default: {
+        // "unknown" (pr.mergeable === null — GitHub is still computing
+        // mergeability after a push) or any future state GitHub adds. Wait
+        // and retry, no error recorded.
+        return;
+      }
+    }
+    // Never give up on any of the above, no matter how long: a conflict
+    // becomes resolvable the moment someone rebases, checks can go green on
+    // a rerun — a give-up cap would recreate exactly the "stranded forever"
+    // failure mode DRAFT_PR_RETRY_MAX_TTL_MS's own comment above exists to
+    // prevent. Indefinite retry at a ceiling-bounded interval is this
+    // sweep's whole posture.
+  } catch (err) {
+    // Covers a merge/update-branch call itself failing — including a 405
+    // ("not mergeable") or 409 (head-SHA moved) racing this same read, both
+    // ordinary expected outcomes here, not alarms; err.message already
+    // carries the HTTP status (see githubRequest's own error formatting).
+    const detail = err instanceof Error ? err.message : String(err);
+    recordMergeError(app, task.id, `Merge attempt failed: ${detail}`);
+  }
+}
+
+async function processMergeRequests(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  // Same gate as the transition itself — a merge is real GitHub state, not
+  // a passive read.
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(isNotNull(tasks.mergeRequestedAt), isNotNull(tasks.prNumber), eq(tasks.status, "done")),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  const now = Date.now();
+  let attempted = 0;
+
+  // Deliberately NOT grouped/concurrent by host the way retryStrandedDraftPRs
+  // is above. That grouping exists because openDraftPRForTask does a real
+  // git push with up to GIT_TIMEOUT_MS (120s); this sweep only ever makes
+  // GitHub API calls with a 5s timeout (REQUEST_TIMEOUT_MS, github-write.ts),
+  // so there's no slow-host stall here worth isolating a flat sequential
+  // loop from.
+  for (const { task, project } of rows) {
+    if (attempted >= MAX_MERGE_RETRIES_PER_SWEEP) return;
+
+    const state = mergeRetryState.get(task.id);
+    if (state !== undefined && now - state.lastAttemptedAt < mergeRetryBackoffMs(state.attempts))
+      continue;
+
+    attempted++;
+    if (!mergeRetryState.has(task.id) && mergeRetryState.size >= MAX_MERGE_RETRY_ENTRIES) {
+      const oldest = mergeRetryState.keys().next().value;
+      if (oldest !== undefined) mergeRetryState.delete(oldest);
+    }
+    mergeRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
+
+    await attemptMerge(app, task, project);
+  }
+}
+
 // Task Master trial 220921 / PR #743's incident — `derived.status ===
 // "finished"` used to be trusted as "the review is over, and if there's no
 // findings file, there never will be" the INSTANT it was observed, with no
@@ -1143,6 +1365,14 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // then does neither the DB write nor the PR comment for a decision
         // the task no longer reflects, rather than a comment landing with
         // no matching DB write behind it.
+        //
+        // lastReviewVerdict rides this same write (durable, not re-derived
+        // from the rendered reviewFindings prose) — the auto-approve sweep
+        // (processAutoApprovals) reads it back later to gate approving a
+        // task with no human in the loop. Written here regardless of
+        // whether auto-approve exists/is enabled on this project: the write
+        // is inert until read, and landing it now means real verdict data
+        // has already accumulated by the time auto-approve ships.
         const updated = app.db
           .update(tasks)
           .set(
@@ -1152,10 +1382,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                   reviewFindings: appendedFindings,
                   reviewFindingsIngestedSessionId: task.reviewSessionId,
                   reviewRounds: task.reviewRounds + 1,
+                  lastReviewVerdict: parsed?.verdict ?? "inconclusive",
                 }
               : {
                   reviewFindings: appendedFindings,
                   reviewFindingsIngestedSessionId: task.reviewSessionId,
+                  lastReviewVerdict: parsed?.verdict ?? "inconclusive",
                 },
           )
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
@@ -1303,6 +1535,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // needs to keep being retried regardless of whether anything is currently
   // claimed/in_progress.
   await retryStrandedDraftPRs(app);
+  // Same independence reasoning again — a "done" task with a merge
+  // outstanding needs to keep being retried regardless of what's currently
+  // claimed/in_progress.
+  await processMergeRequests(app);
 
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })

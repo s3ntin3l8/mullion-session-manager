@@ -105,6 +105,9 @@ const {
   mockResolveRepoRef,
   mockResolveGitHubToken,
   mockGetPullRequestByNumber,
+  mockMergePullRequest,
+  mockUpdatePullRequestBranch,
+  mockDeleteRemoteBranch,
   mockFetchRunsForHead,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
@@ -112,6 +115,9 @@ const {
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
+  mockMergePullRequest: vi.fn(),
+  mockUpdatePullRequestBranch: vi.fn(),
+  mockDeleteRemoteBranch: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
@@ -157,6 +163,9 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   return {
     ...actual,
     getPullRequestByNumber: mockGetPullRequestByNumber,
+    mergePullRequest: mockMergePullRequest,
+    updatePullRequestBranch: mockUpdatePullRequestBranch,
+    deleteRemoteBranch: mockDeleteRemoteBranch,
   };
 });
 vi.mock("../../src/services/github.js", async (importOriginal) => {
@@ -190,7 +199,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
-const { and, eq, isNull } = await import("drizzle-orm");
+const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
@@ -267,6 +276,15 @@ describe("reconcileTasks", () => {
         .delete(tasks)
         .where(and(eq(tasks.status, "reviewing"), isNull(tasks.prNumber)))
         .run();
+      // Same reasoning, for the merge sweep: a "done" task with
+      // mergeRequestedAt still set is exactly what processMergeRequests
+      // sweeps every tick, and a leftover row from an earlier test would
+      // otherwise get re-processed (against stale/reset mocks) on a later,
+      // unrelated test's first reconcileTasks() call.
+      getDb()
+        .delete(tasks)
+        .where(and(eq(tasks.status, "done"), isNotNull(tasks.mergeRequestedAt)))
+        .run();
     } catch {
       // no such table yet — fine, see above.
     }
@@ -284,6 +302,14 @@ describe("reconcileTasks", () => {
     mockResolveRepoRef.mockClear();
     mockResolveGitHubToken.mockClear();
     mockGetPullRequestByNumber.mockClear();
+    // Merge-sweep mocks have no pass-through default (unlike the four
+    // above) — no pre-existing test's tasks ever set mergeRequestedAt, so
+    // processMergeRequests never reaches these calls outside the dedicated
+    // describe block below. Reset (not just clear) so a leaked
+    // .mockResolvedValueOnce/.mockRejectedValueOnce can't bleed forward.
+    mockMergePullRequest.mockReset();
+    mockUpdatePullRequestBranch.mockReset();
+    mockDeleteRemoteBranch.mockReset();
     mockFetchRunsForHead.mockClear();
   });
 
@@ -1149,6 +1175,327 @@ describe("reconcileTasks", () => {
         });
         await app.close();
       }
+    });
+  });
+
+  describe("merge-on-approve sweep (processMergeRequests)", () => {
+    // Mirrors createReviewingTaskWithNoPR above — inserts a "done" task with
+    // a linked PR and mergeRequestedAt already set, exactly the state
+    // approve (or a "Merge now" click) leaves behind. worktreePath is
+    // deliberately left null (never set) on every task here: the sweep must
+    // resolve repoRef/token from the project alone (see attemptMerge's own
+    // doc comment) — a task whose worktree was already cleaned up at
+    // approve is the REAL shape this sweep always sees, so a test that
+    // accidentally depended on worktreePath would be testing a case that
+    // can't happen in production.
+    async function createDoneTaskWithPendingMerge(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      prNumber = 9,
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-merge-${Math.random()}`, cwd: "/tmp" },
+      });
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "merge-pending",
+          status: "done",
+          claimedAt: new Date(),
+          completedAt: new Date(),
+          prNumber,
+          prUrl: `https://github.com/o/r/pull/${prNumber}`,
+          mergeRequestedAt: new Date(),
+        })
+        .returning()
+        .all();
+      return { taskId: row.id, projectId: project.json().id };
+    }
+
+    function mockPr(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+        headRef: "mullion/task-x",
+        title: "feat: do the thing",
+        state: "open",
+        merged: false,
+        mergeable: true,
+        mergeableState: "clean",
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+    });
+
+    // Same reasoning as the CI-gated review-spawn block's own afterEach
+    // above: restore the pass-through defaults so this block's fake
+    // "tok"/"o/r" values can't leak into an unrelated later test.
+    afterEach(() => {
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+      mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
+    });
+
+    it("merges a clean PR and deletes its remote branch, clearing the merge flag", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+      mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+      mockDeleteRemoteBranch.mockResolvedValue(undefined);
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).toHaveBeenCalledWith("tok", "o", "r", 9, {
+        sha: "sha-head",
+        commitTitle: "feat: do the thing",
+      });
+      expect(mockDeleteRemoteBranch).toHaveBeenCalledWith("tok", "o", "r", "mullion/task-x");
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("still merges when the remote-branch delete fails — the merge itself is the outcome that matters", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+      mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+      mockDeleteRemoteBranch.mockRejectedValue(new Error("network blip"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("updates a behind branch and waits for the next tick instead of merging in the same pass", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "behind" }));
+      mockUpdatePullRequestBranch.mockResolvedValue(undefined);
+
+      await reconcileTasks(app);
+
+      expect(mockUpdatePullRequestBranch).toHaveBeenCalledWith("tok", "o", "r", 9, "sha-head");
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("behind");
+
+      await app.close();
+    });
+
+    it("does not merge on 'unstable' — a non-required check is failing or still running", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("non-required check");
+
+      await app.close();
+    });
+
+    it("backs off and retries on a real conflict ('dirty') rather than giving up", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("Conflicts with main");
+
+      await app.close();
+    });
+
+    it("backs off and retries when a required check is blocked", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("Required checks");
+
+      await app.close();
+    });
+
+    it("waits with no error recorded while GitHub is still computing mergeability (mergeable: null)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: null, mergeableState: "unknown" }),
+      );
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("clears the merge flag idempotently when the PR was already merged out of band", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ merged: true, state: "closed" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    // Hermes review, PR #763 — clearMergeState must drop the task's
+    // mergeRetryState entry, not just the DB flag. Proved indirectly: a
+    // fresh merge request for the SAME task right after resolution is
+    // attempted on the very next tick rather than being suppressed by a
+    // leftover backoff entry from the resolved attempt.
+    it("re-attempts a fresh merge request immediately after a prior resolution, not backed off by a stale entry", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ merged: true, state: "closed" }));
+
+      await reconcileTasks(app);
+      let row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+
+      app.db.update(tasks).set({ mergeRequestedAt: new Date() }).where(eq(tasks.id, taskId)).run();
+      mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(2);
+      row = await getTask(app, taskId);
+      expect(row.mergeError).toContain("Conflicts with main");
+
+      await app.close();
+    });
+
+    it("clears the merge flag idempotently when the PR was closed (not merged) out of band", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ merged: false, state: "closed" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("records the failure and keeps retrying when the merge call itself throws (e.g. a 409 head-sha race)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+      mockMergePullRequest.mockRejectedValue(
+        new Error("GitHub API error (HTTP 409): Head branch was modified"),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("409");
+
+      await app.close();
+    });
+
+    it("backs off after an attempt instead of retrying on every tick", async () => {
+      const app = await buildApp();
+      await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+      await reconcileTasks(app);
+
+      // Second tick lands well inside the 1-minute TTL — no second lookup.
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("does not attempt a merge while Task Master is disabled", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        await createDoneTaskWithPendingMerge(app);
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("does not touch a done task with no merge requested", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-no-merge-${Math.random()}`, cwd: "/tmp" },
+      });
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "done, no merge requested",
+          status: "done",
+          claimedAt: new Date(),
+          completedAt: new Date(),
+          prNumber: 9,
+          prUrl: "https://github.com/o/r/pull/9",
+        })
+        .run();
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      await app.close();
     });
   });
 

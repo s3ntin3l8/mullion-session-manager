@@ -362,19 +362,48 @@ export async function createPullRequest(
  * `headSha` was already on the wire and previously discarded — added for
  * `createPullRequestReview` below, which needs the exact commit its
  * `comments[]` anchors bind to.
+ *
+ * `mergeable`/`mergeableState`/`state`/`merged`/`title`/`headRef` — added for
+ * the merge-on-approve sweep (`processMergeRequests`, task-reconciler.ts).
+ * `mergeable` is `boolean | null`: GitHub computes it asynchronously after a
+ * push, and `null` means "still computing, ask again" — never treat it as
+ * false. `mergeableState` (GitHub's `mergeable_state`) is the finer-grained
+ * signal the sweep actually branches on (`clean`/`behind`/`blocked`/
+ * `unstable`/`dirty`/`unknown`); it's stable in practice but officially
+ * undocumented by GitHub's REST API. Read via REST rather than GraphQL's
+ * `mergeStateStatus` purely to avoid adding a second query shape to this
+ * file for one more field — REST already returns it on the same response
+ * every other field here comes from.
  */
 export async function getPullRequestByNumber(
   token: string,
   owner: string,
   repo: string,
   number: number,
-): Promise<{ number: number; htmlUrl: string; nodeId: string; draft: boolean; headSha: string }> {
+): Promise<{
+  number: number;
+  htmlUrl: string;
+  nodeId: string;
+  draft: boolean;
+  headSha: string;
+  headRef: string;
+  title: string;
+  state: "open" | "closed";
+  merged: boolean;
+  mergeable: boolean | null;
+  mergeableState: string;
+}> {
   const result = await githubRequest<{
     number: number;
     html_url: string;
     node_id: string;
     draft: boolean;
-    head: { sha: string };
+    head: { sha: string; ref: string };
+    title: string;
+    state: "open" | "closed";
+    merged: boolean;
+    mergeable: boolean | null;
+    mergeable_state: string;
   }>(token, owner, repo, "GET", `/pulls/${number}`);
   return {
     number: result.number,
@@ -382,7 +411,113 @@ export async function getPullRequestByNumber(
     nodeId: result.node_id,
     draft: result.draft,
     headSha: result.head.sha,
+    headRef: result.head.ref,
+    title: result.title,
+    state: result.state,
+    merged: result.merged,
+    mergeable: result.mergeable,
+    mergeableState: result.mergeable_state,
   };
+}
+
+/**
+ * Squash-merges a PR — `PUT /pulls/:number/merge`. Used only by the
+ * merge-on-approve sweep (`processMergeRequests`, task-reconciler.ts), which
+ * only ever calls this once `getPullRequestByNumber`'s `mergeableState` reads
+ * `"clean"`.
+ *
+ * `sha` should be the head SHA just read via `getPullRequestByNumber` — GitHub
+ * rejects the merge with a 409 if the branch moved since, rather than
+ * silently merging a commit nobody has reviewed/CI'd. `commitTitle` is passed
+ * explicitly (not left to the repo's own `squash_merge_commit_title`
+ * setting) so the resulting `main` commit message is deterministic regardless
+ * of repo config — see docs/tasks.md's note on task PR titles not being
+ * Conventional-Commits-prefixed.
+ *
+ * `405` ("Pull Request is not mergeable") and `409` (the head-SHA mismatch
+ * above) are BOTH ordinary, expected, retryable outcomes here — a PR whose
+ * mergeability changed between the read and this call, or a push racing the
+ * merge — not alarms. Callers should inspect `err.statusCode`
+ * (`GitHubApiError`'s own field) rather than treating every failure as a
+ * write-scope problem; only 403/404 route to `GitHubWriteScopeError` (see
+ * `githubRequest`'s own doc comment).
+ */
+export async function mergePullRequest(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  opts: { sha: string; commitTitle: string },
+): Promise<{ merged: boolean; sha: string }> {
+  const result = await githubRequest<{ merged: boolean; sha: string }>(
+    token,
+    owner,
+    repo,
+    "PUT",
+    `/pulls/${number}/merge`,
+    { merge_method: "squash", sha: opts.sha, commit_title: opts.commitTitle },
+  );
+  return { merged: result.merged, sha: result.sha };
+}
+
+/**
+ * Updates a PR's branch against its base — `PUT /pulls/:number/update-branch`,
+ * the API behind GitHub's "Update branch" button. Needed because native
+ * auto-merge does NOT do this under `strict: true` branch protection (GitHub
+ * merges only once the branch is already up to date; it never updates it for
+ * you), and this repo's `allow_auto_merge` is `false` regardless.
+ *
+ * `expectedHeadSha` guards against updating a branch that moved again since
+ * the caller last read it — same 422/409-on-mismatch posture as `mergePullRequest`.
+ * The merge-on-approve sweep calls this only on `mergeableState === "behind"`,
+ * then waits for the next tick rather than attempting the merge in the same
+ * pass — checks must re-run against the new head first.
+ */
+export async function updatePullRequestBranch(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  expectedHeadSha: string,
+): Promise<void> {
+  await githubRequest(token, owner, repo, "PUT", `/pulls/${number}/update-branch`, {
+    expected_head_sha: expectedHeadSha,
+  });
+}
+
+/**
+ * Deletes a remote branch ref — `DELETE /git/refs/heads/:branch`. Needed
+ * because this repo's `delete_branch_on_merge` is `false`, so a successful
+ * squash-merge otherwise leaves the branch behind forever. Safe ONLY on the
+ * merge-sweep's `merged` path: `-> failed` deliberately preserves a task's
+ * branch for Retry to resume (docs/tasks.md's Worktree lifecycle section),
+ * but that path never reaches here — this only runs after a real, successful
+ * merge, which has no Retry path to protect. Best-effort from the caller's
+ * point of view: a 404 (already deleted, e.g. by someone clicking GitHub's
+ * own post-merge "Delete branch" button) is already the desired end state,
+ * so it's swallowed as a no-op — same `removeLabel`-precedent posture above.
+ * `githubRequest` routes a non-GET 404 to `GitHubWriteScopeError` (not the
+ * base `GitHubApiError`), so that's what's caught here; any other failure,
+ * including a real 403 scope problem, still throws.
+ */
+export async function deleteRemoteBranch(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<void> {
+  try {
+    await githubRequest(
+      token,
+      owner,
+      repo,
+      "DELETE",
+      `/git/refs/heads/${encodeURIComponent(branch)}`,
+    );
+  } catch (err) {
+    if (err instanceof GitHubWriteScopeError && err.statusCode === 404) return;
+    throw err;
+  }
 }
 
 /**

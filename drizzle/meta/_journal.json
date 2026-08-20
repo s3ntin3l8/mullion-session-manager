@@ -295,6 +295,13 @@
       "when": 1787186671291,
       "tag": "0041_sad_bruce_banner",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1787238070383,
+      "tag": "0042_clammy_silver_sable",
+      "breakpoints": true
     }
   ]
 }

@@ -921,6 +921,10 @@ single-blocker case.
 | `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                                                                                                                                                                                                           |
 | reject          | Comment with the human's feedback text                                                                                                                                                                                                                                                                                 |
 
+`→ done`'s label swap/comment/issue-close all happen synchronously at approve,
+same as always — none of it waits on the PR actually merging. Whether the PR
+merges is a separate, asynchronous concern; see **Merge on approve** below.
+
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
 worktree — the worktree is branched from that exact SHA, not a symbolic ref
@@ -1025,6 +1029,68 @@ On give-up (`reviewing → failed`): a still-open draft PR is closed
 since a budget/session-death failure never reaches `reviewing` in the first
 place and so never has a draft to close.
 
+### Merge on approve
+
+By default, approving a task does everything above and stops — the PR is
+open, ready for review, non-draft, and nobody merges it. A per-project
+setting, **`mergeOnApprove`** (Project Settings; a column on `projects`, no
+install-wide equivalent — same "opt-in per project" posture as
+`defaultReviewAgent`), changes that: approving a task also requests a merge
+for its PR. A related setting, `autoApprove`, exists alongside it on the same
+schema for a follow-up that has a `reviewing` task approve itself once its
+review agent's last verdict was `clean` and CI is green — not yet wired up
+to any behavior.
+
+Both default off. `mergeOnApprove` alone still requires a human to click
+Approve; combined with `autoApprove`, the pair gives a fully automatic
+issue-to-merged-`main` pipeline for that project.
+
+**Why merging isn't synchronous.** A merge can't happen inside the approve
+request itself — `main`'s branch protection requires the branch to be up to
+date and its required checks green, and a branch that was just pushed almost
+never satisfies either yet. GitHub's native auto-merge doesn't help either:
+it does not update a behind branch under a `strict` (up-to-date-required)
+protection rule, so relying on it would still need this same update-branch
+step by hand. Approving instead sets `tasks.mergeRequestedAt` (the durable
+_intent_), and a reconciler sweep (`processMergeRequests`,
+task-reconciler.ts) lands the merge asynchronously, once GitHub allows it:
+
+| PR state (`mergeable_state`)     | Sweep action                                                                                                                      |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `clean`                          | Squash-merges (explicit commit title — see the caveat below) and deletes the remote branch                                        |
+| `behind`                         | Updates the branch, waits for the next tick (checks must re-run first)                                                            |
+| `unstable`                       | Backs off and retries — does **not** merge (a non-required check, e.g. this repo's own `test-e2e`, is failing/pending; see below) |
+| `blocked`                        | Backs off and retries — a required check is red or still pending                                                                  |
+| `dirty`                          | Backs off and retries — a real conflict with the base branch, needs a rebase or a human                                           |
+| `unknown` (`mergeable === null`) | Backs off and retries — GitHub is still computing mergeability                                                                    |
+| merged/closed (out of band)      | Clears the merge flag — idempotent no-op                                                                                          |
+
+The sweep never gives up on a retryable state — a conflict becomes
+resolvable the moment someone rebases, and a give-up cap would just strand
+the task the same way an unbounded-wait bug would. A **"Merge now"/"Retry
+merge"** button in the task drawer (`POST /api/tasks/:id/merge`) re-arms the
+sweep immediately for any `done` task with a linked PR, for the conflict/red-
+CI cases that need a human to actually go fix something first.
+
+**Why `unstable` doesn't merge.** `unstable` means a _non-required_ check is
+failing or still running — and this repo deliberately does not require
+`test-e2e` or `codecov/patch` (see the CI/CD section above). Merging on
+`unstable` would silently skip whatever that check was verifying, right after
+a fresh push while e2e is still queued. A human clicking Squash-and-merge on
+GitHub at least sees the red X first; "Merge now" is the equivalent override
+here. The flip side: a non-required check that never reports at all leaves a
+PR `unstable` — and therefore never auto-merging — forever.
+
+**Commit title caveat.** This repo's squash-merge uses the PR title as the
+`main` commit message, and an unprefixed title (no `feat:`/`fix:`/...)
+silently drops out of release-please's changelog. A task's PR title is the
+raw task title, with no Conventional Commits enforcement. The merge sweep
+passes the commit title explicitly so the result is deterministic regardless
+of the repo's own squash-title setting, but it does **not** gate the merge on
+a prefix check — that's this repo's policy, not a Mullion-wide one. This
+matters more with `mergeOnApprove`/`autoApprove` on, since nobody is reading
+the title before it becomes a permanent commit message.
+
 ## Worktree lifecycle
 
 A task's worktree lives at `.mullion-worktrees/mullion-task-<id>`, on
@@ -1112,14 +1178,11 @@ extensive design comments.
   to one issue number. Without an App configured (the default), every write
   still shares the one install-wide PAT, same as before. The
   cap/budget/kill-switch above are unaffected either way.
-- **`tasks.assignee` is never populated, and PR merges don't read back.**
-  The assignee flow is one-way: on claim, Mullion assigns the linked issue
-  to the integration's own login on GitHub, but nothing ever writes the
-  local `tasks.assignee` column, so it is always null despite being plumbed
-  through the API and rendered in the task detail drawer. Separately, the
-  only read-backs that exist are issue-close and tracking-label removal (see
-  GitHub sync above) — merging the promoted PR does not sync anything back;
-  the task reaches `done` on approve, not on merge.
+- **`tasks.assignee` is never populated.** The assignee flow is one-way: on
+  claim, Mullion assigns the linked issue to the integration's own login on
+  GitHub, but nothing ever writes the local `tasks.assignee` column, so it is
+  always null despite being plumbed through the API and rendered in the task
+  detail drawer.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A re-parenting (or de-parenting) between polls produces no live push
   (`#701`).** Sub-issue hierarchy has no push-based path the way dependency

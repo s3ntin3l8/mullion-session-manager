@@ -9,6 +9,9 @@ import {
   createPullRequest,
   findPullRequestByHead,
   getPullRequestByNumber,
+  mergePullRequest,
+  updatePullRequestBranch,
+  deleteRemoteBranch,
   closePullRequest,
   markPullRequestReadyForReview,
   createPullRequestReview,
@@ -194,6 +197,138 @@ describe("github-write service", () => {
       "https://api.github.com/repos/owner/repo/pulls/9",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("getPullRequestByNumber also returns mergeable/mergeableState/state/merged/title/headRef", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        number: 9,
+        html_url: "https://github.com/owner/repo/pull/9",
+        node_id: "PR_node9",
+        draft: false,
+        head: { sha: "abc123", ref: "mullion/task-9" },
+        title: "feat: do the thing",
+        state: "open",
+        merged: false,
+        mergeable: true,
+        mergeable_state: "clean",
+      }),
+    );
+    const result = await getPullRequestByNumber("tok", "owner", "repo", 9);
+    expect(result).toEqual({
+      number: 9,
+      htmlUrl: "https://github.com/owner/repo/pull/9",
+      nodeId: "PR_node9",
+      draft: false,
+      headSha: "abc123",
+      headRef: "mullion/task-9",
+      title: "feat: do the thing",
+      state: "open",
+      merged: false,
+      mergeable: true,
+      mergeableState: "clean",
+    });
+  });
+
+  it("getPullRequestByNumber passes through mergeable: null (GitHub still computing it)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        number: 9,
+        html_url: "u",
+        node_id: "n",
+        draft: false,
+        head: { sha: "abc123", ref: "mullion/task-9" },
+        title: "t",
+        state: "open",
+        merged: false,
+        mergeable: null,
+        mergeable_state: "unknown",
+      }),
+    );
+    const result = await getPullRequestByNumber("tok", "owner", "repo", 9);
+    expect(result.mergeable).toBeNull();
+    expect(result.mergeableState).toBe("unknown");
+  });
+
+  it("mergePullRequest PUTs merge_method/sha/commit_title to the merge endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { merged: true, sha: "def456" }));
+    const result = await mergePullRequest("tok", "owner", "repo", 9, {
+      sha: "abc123",
+      commitTitle: "feat: do the thing (#9)",
+    });
+    expect(result).toEqual({ merged: true, sha: "def456" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9/merge",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          merge_method: "squash",
+          sha: "abc123",
+          commit_title: "feat: do the thing (#9)",
+        }),
+      }),
+    );
+  });
+
+  it("mergePullRequest maps a 405 (not mergeable) to a plain GitHubApiError, not a scope error", async () => {
+    fetchMock.mockResolvedValueOnce(textResponse(405, "Pull Request is not mergeable"));
+    try {
+      await mergePullRequest("tok", "owner", "repo", 9, { sha: "abc123", commitTitle: "t" });
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect(err).not.toBeInstanceOf(GitHubWriteScopeError);
+      expect((err as GitHubApiError).statusCode).toBe(405);
+    }
+  });
+
+  it("mergePullRequest maps a 409 (head sha moved) to a plain GitHubApiError, not a scope error", async () => {
+    fetchMock.mockResolvedValueOnce(textResponse(409, "Head branch was modified"));
+    try {
+      await mergePullRequest("tok", "owner", "repo", 9, { sha: "abc123", commitTitle: "t" });
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect(err).not.toBeInstanceOf(GitHubWriteScopeError);
+      expect((err as GitHubApiError).statusCode).toBe(409);
+    }
+  });
+
+  it("updatePullRequestBranch PUTs expected_head_sha to the update-branch endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(202, { message: "Updating pull request branch." }),
+    );
+    await updatePullRequestBranch("tok", "owner", "repo", 9, "abc123");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9/update-branch",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ expected_head_sha: "abc123" }),
+      }),
+    );
+  });
+
+  it("deleteRemoteBranch DELETEs the branch's git ref", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await deleteRemoteBranch("tok", "owner", "repo", "mullion/task-9");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/git/refs/heads/mullion%2Ftask-9",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("deleteRemoteBranch swallows a 404 (branch already gone) instead of throwing", async () => {
+    fetchMock.mockResolvedValueOnce(textResponse(404, "Reference does not exist"));
+    await expect(
+      deleteRemoteBranch("tok", "owner", "repo", "mullion/task-9"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("deleteRemoteBranch still throws on a real scope problem (403)", async () => {
+    fetchMock.mockResolvedValueOnce(textResponse(403, "Resource not accessible by integration"));
+    await expect(
+      deleteRemoteBranch("tok", "owner", "repo", "mullion/task-9"),
+    ).rejects.toBeInstanceOf(GitHubWriteScopeError);
   });
 
   it("createPullRequestReview POSTs a COMMENT-event review with anchored comments", async () => {
