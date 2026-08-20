@@ -508,16 +508,21 @@ export async function postReviewFindingsComment(
      * and as the PR review's own body when there's nothing to anchor (no
      * `findings`) or GitHub rejects the anchored attempt (see below). */
     body: string;
-    /** Round header + summary only, no bullets — the PR review's body when
-     * `findings` below ARE posted as inline anchors instead, so the same
-     * content doesn't appear twice (once as an anchor, once as a bullet).
-     * Falls back to `body` when omitted. */
-    reviewSummary?: string;
-    /** Anchored findings for a PR review's inline comments. Every entry
-     * already carries a real `path`/`line` — `parseReviewFindings` drops
-     * anything missing one, so no filtering is needed here. */
-    findings?: ReviewFinding[];
-  },
+  } & (
+    | {
+        /** Round header + summary only, no bullets — the PR review's body
+         * when `findings` are posted as inline anchors instead, so the same
+         * content doesn't appear twice (once as an anchor, once as a
+         * bullet). Hermes review, PR #736: this and `findings` are typed as
+         * a pair, not two independent optionals, so a caller can't supply
+         * one without the other and accidentally reintroduce that
+         * duplication — `body` is what's used when there's nothing to
+         * anchor at all. */
+        reviewSummary: string;
+        findings: ReviewFinding[];
+      }
+    | { reviewSummary?: undefined; findings?: undefined }
+  ),
 ): Promise<void> {
   // Cheap short-circuit before any GitHub call: genuinely nothing to post
   // to (an unclaimed remote-hosted task, or one whose draft-PR-open attempt
@@ -532,15 +537,25 @@ export async function postReviewFindingsComment(
   if (task.prNumber !== null) {
     try {
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-      const anchored = (params.findings ?? []).map((f) => ({
-        path: f.path,
-        line: f.line,
-        side: f.side,
-        body: f.severity ? `**[${f.severity}]** ${f.body}` : f.body,
-      }));
+      // Narrows `params.reviewSummary` to `string` on this branch — the
+      // union above ties it to `findings` being present, so this check is
+      // what makes the anchor/bullet duplication structurally impossible
+      // rather than just documented.
+      const anchored =
+        params.findings !== undefined
+          ? params.findings.map((f) => ({
+              path: f.path,
+              line: f.line,
+              side: f.side,
+              body: f.severity ? `**[${f.severity}]** ${f.body}` : f.body,
+            }))
+          : [];
       try {
         await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
-          body: anchored.length > 0 ? (params.reviewSummary ?? params.body) : params.body,
+          body:
+            params.findings !== undefined && anchored.length > 0
+              ? params.reviewSummary
+              : params.body,
           commitId: pr.headSha,
           comments: anchored.length > 0 ? anchored : undefined,
         });
