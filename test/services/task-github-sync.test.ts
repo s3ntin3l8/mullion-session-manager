@@ -803,8 +803,12 @@ describe("task-github-sync", () => {
       expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 
-    it("records a sync error, never throws, when posting the review fails", async () => {
+    it("falls back to an issue comment when posting the review fails but the task also has a linked issue", async () => {
       mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      mockCreateComment.mockResolvedValue({
+        id: 1,
+        htmlUrl: "https://github.com/o/r/issues/910#c1",
+      });
       const [row0] = app.db
         .insert(tasks)
         .values({ projectId, issueNumber: 910, prNumber: 9, title: "t", status: "reviewing" })
@@ -815,8 +819,69 @@ describe("task-github-sync", () => {
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
       ).resolves.toBeUndefined();
 
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        910,
+        "## Round 1\n\nfindings",
+      );
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
+      expect(row.githubSyncError).toBeNull();
+    });
+
+    it("records the fallback's own error when both the PR review and the issue-comment fallback fail", async () => {
+      mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      mockCreateComment.mockRejectedValue(new Error("issue comment also rejected"));
+      const [row0] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber: 912, prNumber: 9, title: "t", status: "reviewing" })
+        .returning()
+        .all();
+
+      await expect(
+        postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
+      ).resolves.toBeUndefined();
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
+      expect(row.githubSyncError).toContain("issue comment also rejected");
+    });
+
+    it("records a sync error, never throws, when posting the review fails and there's no linked issue to fall back to", async () => {
+      mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      const [row0] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber: null, prNumber: 9, title: "t", status: "reviewing" })
+        .returning()
+        .all();
+
+      await expect(
+        postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
+      ).resolves.toBeUndefined();
+
+      expect(mockCreateComment).not.toHaveBeenCalled();
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
       expect(row.githubSyncError).toContain("insufficient scope");
+    });
+
+    // The review-subagent's finding on this PR: GitHubWriteScopeError
+    // EXTENDS GitHubApiError, so `err instanceof GitHubApiError` alone
+    // can't distinguish a 403 scope failure from a 422 anchor rejection —
+    // only the `statusCode === 422` check does. This pins that a 403 never
+    // triggers the drop-anchors-and-retry path (a second POST with the
+    // same doomed token would just 403 again).
+    it("does not retry a 403 the way it retries a 422 — a scope failure isn't an anchor problem", async () => {
+      const { GitHubApiError } = await import("../../src/services/github.js");
+      mockCreatePullRequestReview.mockRejectedValue(new GitHubApiError("insufficient scope", 403));
+      const task = baseTask({ issueNumber: null, prNumber: 9 });
+
+      await postReviewFindingsComment(app, task, project, {
+        body: "## Round 1\n\nOne finding.",
+        reviewSummary: "## Round 1\n\nOne finding.",
+        findings: [{ path: "a.go", line: 42, side: "RIGHT", severity: null, body: "b" }],
+      });
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
     });
 
     it("clears a previously-recorded sync error on a successful post", async () => {
