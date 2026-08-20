@@ -7,34 +7,13 @@ import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
-import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
+import { closeDraftPRForTask } from "../services/task-promote.js";
+import { approveTask, cleanupTaskWorktree } from "../services/task-approve.js";
 import { resetMergeBackoff } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
-import { resolveBackend } from "../services/session-backend.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 
-// Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
-// "reviewing" for a terminal state. Fire-and-forget, same posture as the
-// GitHub sync calls below it: cleanup succeeding or failing doesn't change
-// whether the transition itself is valid, and removeWorktreeIfClean already
-// leaves a dirty/unclear tree in place for a later pass to retry rather
-// than losing anything.
-function cleanupTaskWorktree(
-  app: FastifyInstance,
-  task: { worktreePath: string | null },
-  project: typeof projects.$inferSelect,
-): void {
-  if (!task.worktreePath) return;
-  void resolveBackend(app, project.hostId)
-    .removeWorktreeIfClean(task.worktreePath, project.cwd)
-    .catch((err) => {
-      app.log.warn(
-        { err, worktreePath: task.worktreePath, projectId: project.id },
-        "task cleanup: removeWorktreeIfClean threw",
-      );
-    });
-}
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
 // transition available before 6.2's state machine lands is the interactive
@@ -636,74 +615,36 @@ export async function tasksRoute(app: FastifyInstance) {
     const project = getProjectOr404(existing.projectId);
     if (!project) return reply.notFound("Project not found");
 
-    const promotion = await promoteTaskToPR(app, existing, project);
-    if (!promotion.ok) {
-      switch (promotion.reason) {
+    const outcome = await approveTask(app, existing, project, "approve");
+    if (!outcome.ok) {
+      switch (outcome.reason) {
         case "dirty-tree":
-          return reply.conflict(promotion.detail ?? "Worktree has uncommitted changes");
+          return reply.conflict(outcome.detail ?? "Worktree has uncommitted changes");
         case "no-worktree":
-          return reply.badGateway(promotion.detail ?? "Task has no worktree to promote");
+          return reply.badGateway(outcome.detail ?? "Task has no worktree to promote");
         case "no-token":
-          return reply.badRequest(promotion.detail ?? "No GitHub token connected");
+          return reply.badRequest(outcome.detail ?? "No GitHub token connected");
         case "no-repo":
-          return reply.badGateway(
-            promotion.detail ?? "Could not resolve the project's GitHub repo",
-          );
+          return reply.badGateway(outcome.detail ?? "Could not resolve the project's GitHub repo");
         case "push-failed":
-          return reply.badGateway(promotion.detail ?? "Failed to push the task's branch");
+          return reply.badGateway(outcome.detail ?? "Failed to push the task's branch");
         case "pr-create-failed":
-          return reply.badGateway(promotion.detail ?? "Failed to create the pull request");
+          return reply.badGateway(outcome.detail ?? "Failed to create the pull request");
         case "remote-not-supported":
-          return reply.code(501).send({ error: "remote-not-supported", message: promotion.detail });
+          return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
+        case "cas-lost":
+          // Promotion already succeeded (branch pushed, PR opened) but the
+          // task moved out of "reviewing" before the CAS write could land —
+          // a concurrent reject, most plausibly. The PR is real and left
+          // open; nothing to roll back here (see task-promote.ts's own doc
+          // comment on the narrower "PR already exists" retry case this is
+          // adjacent to).
+          return reply.conflict(
+            `Task was no longer in reviewing by the time this ran — a PR was opened at ${outcome.prUrl} but the task's status was not updated`,
+          );
       }
     }
-
-    const [updated] = app.db
-      .update(tasks)
-      .set({
-        status: "done",
-        completedAt: new Date(),
-        prUrl: promotion.prUrl,
-        prNumber: promotion.prNumber,
-        // Merge-on-approve — read from `promotion.prNumber`, not
-        // `existing.prNumber`: the latter can still be null here (the draft
-        // PR open at "-> reviewing" is best-effort and can have failed), but
-        // `promotion` above is awaited and guaranteed non-null on `ok: true`.
-        // The reconciler's processMergeRequests sweep (task-reconciler.ts)
-        // picks this up and lands the merge asynchronously once GitHub
-        // allows it — never inline here, since main's branch protection
-        // requires an up-to-date branch and green checks that a
-        // just-pushed commit almost never has yet.
-        mergeRequestedAt: project.mergeOnApprove ? new Date() : null,
-      })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
-      .returning()
-      .all();
-    if (!updated) {
-      // Promotion already succeeded (branch pushed, PR opened) but the
-      // task moved out of "reviewing" before this write — a concurrent
-      // reject, most plausibly. The PR is real and left open; nothing to
-      // roll back here (see task-promote.ts's own doc comment on the
-      // narrower "PR already exists" retry case this is adjacent to).
-      return reply.conflict(
-        `Task was no longer in reviewing by the time this ran — a PR was opened at ${promotion.prUrl} but the task's status was not updated`,
-      );
-    }
-    recordTaskTransition(app, {
-      taskId,
-      projectId: project.id,
-      from: "reviewing",
-      to: "done",
-      via: "approve",
-      context: { prUrl: promotion.prUrl },
-    });
-    // Deliberately NOT awaited (Hermes review, PR #474) — syncTaskTransition
-    // never throws (every failure is caught and logged inside it), so
-    // awaiting its GitHub round-trips here would only add latency for no
-    // benefit. Fire-and-forget.
-    void syncTaskTransition(app, updated, project, "done", { prUrl: updated.prUrl ?? undefined });
-    cleanupTaskWorktree(app, updated, project);
-    return updated;
+    return outcome.task;
   });
 
   // Merge-on-approve — "Merge now" / "Retry merge". Re-arms the merge sweep
