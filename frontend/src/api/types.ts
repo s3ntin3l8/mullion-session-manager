@@ -1103,6 +1103,9 @@ export interface AppSettings {
     budgetMinutes: number;
     progressCommentMinutes: number;
     skipPermissions: "inherit" | "on" | "off";
+    // No sentinel, no env counterpart — settings.ts's own doc comment on
+    // this field explains why.
+    reviewCiWaitMinutes: number;
   };
 }
 

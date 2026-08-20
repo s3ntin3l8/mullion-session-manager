@@ -307,6 +307,14 @@ export interface AppSettings {
     // "no override, use the env default" reading MULLION_TASK_SKIP_PERMISSIONS
     // provides.
     skipPermissions: "inherit" | "on" | "off";
+    // #738 follow-up — how long the review-agent spawn (task-reconciler.ts's
+    // processPendingReviewSpawns) waits for CI to reach a terminal state on
+    // the task's PR head before spawning anyway. Plain number, NOT one of
+    // the "inherit"-sentinel fields above: those exist only for fields with
+    // an env-var counterpart (MULLION_TASK_*), and this one has none — a
+    // repo with Actions disabled or no workflows needs `0` (spawn
+    // immediately, never wait) to be reachable without env-var surgery.
+    reviewCiWaitMinutes: number;
   };
 }
 
@@ -427,6 +435,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     budgetMinutes: -1,
     progressCommentMinutes: -1,
     skipPermissions: "inherit",
+    reviewCiWaitMinutes: 15,
   },
 };
 
@@ -690,6 +699,14 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         settings.taskMaster.skipPermissions === "off"
           ? settings.taskMaster.skipPermissions
           : DEFAULT_SETTINGS.taskMaster.skipPermissions,
+      // No sentinel — 0 is a legitimate "never wait" value (same "0 is a
+      // real floor" shape as budgetMinutes/progressCommentMinutes' own 0,
+      // just without an "inherit" case to also preserve).
+      reviewCiWaitMinutes: safeNumber(settings.taskMaster.reviewCiWaitMinutes, {
+        min: 0,
+        max: 240,
+        fallback: DEFAULT_SETTINGS.taskMaster.reviewCiWaitMinutes,
+      }),
     },
   };
 }

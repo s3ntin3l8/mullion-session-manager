@@ -288,6 +288,13 @@
       "when": 1787137247176,
       "tag": "0040_shiny_maximus",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1787186671291,
+      "tag": "0041_sad_bruce_banner",
+      "breakpoints": true
     }
   ]
 }

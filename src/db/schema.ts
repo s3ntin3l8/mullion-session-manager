@@ -368,6 +368,20 @@ export const tasks = sqliteTable(
     // this true/false alongside reviewSessionId, so a promptless review
     // session is visible on the row instead of only in a server log line.
     reviewSeedDelivered: integer("review_seed_delivered", { mode: "boolean" }),
+    // #738 follow-up — the review-agent spawn moved out of the `→
+    // reviewing` transition (task-reconciler.ts's `processPendingReviewSpawns`,
+    // a separate pass gated on `reviewSessionId IS NULL`) so it can hold
+    // until CI reports on the PR's head commit instead of spawning before
+    // the PR even exists. That split needs its own concurrency guard: this
+    // column is a CAS claim written immediately before the spawn's own I/O
+    // (`createSessionRecord`), gated on `status = "reviewing" AND
+    // reviewSessionId IS NULL AND reviewSpawnClaimedAt IS NULL`, so a human
+    // hitting Reject/Give-up mid-spawn can't race a second claim into
+    // existence. Reset to null alongside `reviewSessionId` on every fresh
+    // `→ reviewing` entry (a second review round needs its own claim), and
+    // cleared back to null on a failed spawn attempt so the next tick
+    // retries rather than leaving the task with no reviewer forever.
+    reviewSpawnClaimedAt: integer("review_spawn_claimed_at", { mode: "timestamp" }),
     // Review-feedback loop — the review agent's own findings, read from the
     // round-suffixed file it wrote (see task-prompt.ts's
     // taskReviewFindingsPath) once its session reaches "finished". Appended

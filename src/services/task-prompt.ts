@@ -348,6 +348,53 @@ export function buildRejectPrompt(
 }
 
 /**
+ * CI signal for the PR head commit the reviewer is about to look at —
+ * `task-reconciler.ts`'s `processPendingReviewSpawns` resolves this (via
+ * `github.ts`'s `fetchRunsForHead`/`computeCiStatus`) before spawning, so
+ * the reviewer sees real pass/fail results instead of running before CI even
+ * starts (the gap a live Task Master run against branchdam #213782 exposed:
+ * the reviewer posted "no findings" 26s before a real golangci-lint failure
+ * landed). `note` carries why a non-terminal signal was accepted anyway — a
+ * wait-deadline timeout or a lookup failure — so the reviewer knows to trust
+ * its own read of the diff over an absent or stale check.
+ */
+export interface ReviewCiInfo {
+  headSha: string;
+  status: "success" | "failure" | "in_progress" | null;
+  runs: { name: string; conclusion: string | null; htmlUrl: string }[];
+  note?: string;
+}
+
+/** Renders `ReviewCiInfo` into the paragraph `buildReviewPrompt` hands the
+ * reviewer. Deliberately terse for `success`/`null` (nothing to act on);
+ * `failure` gets an explicit instruction, since that's the one status this
+ * whole mechanism exists to surface as a finding. */
+export function renderCiSummary(ci: ReviewCiInfo): string {
+  const shortSha = ci.headSha.slice(0, 7);
+  const suffix = ci.note ? ` (${ci.note})` : "";
+
+  if (ci.status === null) {
+    return (
+      `CI status on this PR's head commit ${shortSha} could not be determined${suffix || " (no runs, or the lookup failed)"} — ` +
+      "review the diff without it."
+    );
+  }
+
+  const lines = [`CI on this PR's head commit ${shortSha} is ${ci.status.toUpperCase()}${suffix}:`];
+  for (const run of ci.runs) {
+    lines.push(`  - ${run.name} — ${run.conclusion ?? "pending"} — ${run.htmlUrl}`);
+  }
+  if (ci.status === "failure") {
+    lines.push(
+      "",
+      "A failing check is a finding. Read its log before concluding it is unrelated to",
+      "this diff, and write it up with the file and line the failure names.",
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
  * The review agent's prompt (`task-reconciler.ts`).
  *
  * Keeps the original first sentence verbatim — the review agent is not
@@ -376,6 +423,10 @@ export function buildReviewPrompt(opts: {
   task: TaskPromptTask;
   worktreePath: string;
   findingsPath: string;
+  /** Omitted for an issue-only task (no PR to check CI on) or when the
+   * reconciler couldn't resolve one before its wait deadline — see
+   * `ReviewCiInfo`'s own doc comment. */
+  ci?: ReviewCiInfo;
 }): string {
   const preamble = [
     "Review this task's diff. You are not expected to make changes.",
@@ -384,6 +435,7 @@ export function buildReviewPrompt(opts: {
     "not a copy. Do not create or modify any file here: an untracked or modified",
     "file blocks the human's approval of this task.",
     "",
+    ...(opts.ci ? [renderCiSummary(opts.ci), ""] : []),
     `Always write your findings to ${opts.findingsPath} — that path is outside`,
     "the worktree, so writing it does not block approval — as JSON with this shape:",
     "",

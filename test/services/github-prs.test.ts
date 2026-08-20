@@ -5,6 +5,8 @@ import {
   getPRsStatus,
   getWorkflowRunJobs,
   getJobLogs,
+  fetchRunsForHead,
+  computeCiStatus,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown) {
@@ -159,6 +161,90 @@ describe("getRepoPRsStatus", () => {
     // No runs at all → ciStatus null, which counts as unknown
     expect(result.prs[0].ciStatus).toBeNull();
     expect(result.prs[0].actionsRuns).toEqual([]);
+  });
+});
+
+// Exported for task-reconciler.ts's review-spawn CI gate (see github.ts's
+// own doc comments on both) — getRepoPRsStatus above already exercises them
+// indirectly; these pin the two functions' own direct contracts.
+describe("fetchRunsForHead", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the latest run per distinct workflow name for the given head sha", async () => {
+    vi.stubGlobal("fetch", mockGithubApi({ headRuns: { sha1: [RUN_SUCCESS] } }));
+    const runs = await fetchRunsForHead("tok", "owner", "repo", "sha1");
+    expect(runs).toEqual([
+      {
+        name: "CI",
+        status: "completed",
+        conclusion: "success",
+        htmlUrl: "https://github.com/o/r/actions/runs/1",
+        headSha: "sha1",
+      },
+    ]);
+  });
+
+  it("returns [] (never throws) when the request fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("nope", { status: 500 }))),
+    );
+    await expect(fetchRunsForHead("tok", "owner", "repo", "sha1")).resolves.toEqual([]);
+  });
+
+  it("returns [] (never throws) on a network error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("network down"))),
+    );
+    await expect(fetchRunsForHead("tok", "owner", "repo", "sha1")).resolves.toEqual([]);
+  });
+
+  it("rejects an invalid owner/repo before ever calling fetch", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchRunsForHead("tok", "bad owner", "repo", "sha1")).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("computeCiStatus", () => {
+  it("returns null for no runs at all — the same signal as every run being skipped/cancelled", () => {
+    expect(computeCiStatus([])).toBeNull();
+    expect(
+      computeCiStatus([
+        { name: "a", status: "completed", conclusion: "skipped", htmlUrl: "u", headSha: "s" },
+        { name: "b", status: "completed", conclusion: "cancelled", htmlUrl: "u", headSha: "s" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("returns in_progress when any run hasn't completed yet", () => {
+    expect(
+      computeCiStatus([
+        { name: "a", status: "queued", conclusion: null, htmlUrl: "u", headSha: "s" },
+      ]),
+    ).toBe("in_progress");
+  });
+
+  it("returns success only when every meaningful run succeeded", () => {
+    expect(
+      computeCiStatus([
+        { name: "a", status: "completed", conclusion: "success", htmlUrl: "u", headSha: "s" },
+        { name: "b", status: "completed", conclusion: "skipped", htmlUrl: "u", headSha: "s" },
+      ]),
+    ).toBe("success");
+  });
+
+  it("returns failure when any meaningful run didn't succeed", () => {
+    expect(
+      computeCiStatus([
+        { name: "a", status: "completed", conclusion: "success", htmlUrl: "u", headSha: "s" },
+        { name: "b", status: "completed", conclusion: "failure", htmlUrl: "u", headSha: "s" },
+      ]),
+    ).toBe("failure");
   });
 });
 

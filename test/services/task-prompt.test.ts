@@ -9,6 +9,8 @@ import {
   parseReviewFindings,
   renderReviewFindingsMarkdown,
   severityPrefix,
+  renderCiSummary,
+  type ReviewCiInfo,
   type TaskPromptTask,
 } from "../../src/services/task-prompt.js";
 
@@ -224,6 +226,32 @@ describe("buildReviewPrompt", () => {
     });
     expect(out).toContain("may be sent back to the worker automatically");
   });
+
+  it("omits any CI paragraph when ci is not given", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).not.toContain("CI on this PR");
+    expect(out).not.toContain("CI status on this PR");
+  });
+
+  it("includes the rendered CI summary before the task spec when ci is given", () => {
+    const ci: ReviewCiInfo = {
+      headSha: "d2cc8f96f200690f2353b2b57defc460f75105d", // pragma: allowlist secret
+      status: "failure",
+      runs: [{ name: "CI / golangci-lint", conclusion: "failure", htmlUrl: "https://x/1" }],
+    };
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+      ci,
+    });
+    expect(out).toContain("CI on this PR's head commit d2cc8f9 is FAILURE");
+    expect(out.indexOf("CI on this PR")).toBeLessThan(out.indexOf(`Task: ${TASK.title}`));
+  });
 });
 
 const CLEAN_JSON = JSON.stringify({
@@ -380,6 +408,59 @@ describe("renderReviewFindingsMarkdown", () => {
     expect(out).toContain("- **a.go:1** — b");
     expect(out).not.toContain("[null]");
     expect(out).not.toContain("undefined");
+  });
+});
+
+describe("renderCiSummary", () => {
+  it("lists every run under an uppercased status header, keyed to a shortened head sha", () => {
+    const out = renderCiSummary({
+      headSha: "d2cc8f96f200690f2353b2b57defc460f75105d", // pragma: allowlist secret
+      status: "failure",
+      runs: [
+        { name: "CI / golangci-lint", conclusion: "failure", htmlUrl: "https://x/1" },
+        { name: "CI / go test", conclusion: "success", htmlUrl: "https://x/2" },
+      ],
+    });
+    expect(out).toContain("CI on this PR's head commit d2cc8f9 is FAILURE:");
+    expect(out).toContain("- CI / golangci-lint — failure — https://x/1");
+    expect(out).toContain("- CI / go test — success — https://x/2");
+  });
+
+  it("tells the reviewer a failing check is a finding, only when the status is failure", () => {
+    const failing = renderCiSummary({ headSha: "abc1234", status: "failure", runs: [] });
+    const passing = renderCiSummary({ headSha: "abc1234", status: "success", runs: [] });
+    expect(failing).toContain("A failing check is a finding");
+    expect(passing).not.toContain("A failing check is a finding");
+  });
+
+  it("stays terse for success, with no per-run bullets required to have content", () => {
+    const out = renderCiSummary({ headSha: "abc1234", status: "success", runs: [] });
+    expect(out).toContain("CI on this PR's head commit abc1234 is SUCCESS:");
+  });
+
+  it("renders a distinct message for a null status (no runs, or the lookup failed)", () => {
+    const out = renderCiSummary({ headSha: "abc1234", status: null, runs: [] });
+    expect(out).toContain("could not be determined");
+    expect(out).toContain("no runs, or the lookup failed");
+  });
+
+  it("surfaces a custom note instead of the default explanation when one is given", () => {
+    const timedOut = renderCiSummary({
+      headSha: "abc1234",
+      status: "in_progress",
+      runs: [],
+      note: "still running after the 15-minute wait",
+    });
+    expect(timedOut).toContain("IN_PROGRESS (still running after the 15-minute wait):");
+
+    const lookupFailed = renderCiSummary({
+      headSha: "abc1234",
+      status: null,
+      runs: [],
+      note: "token unavailable",
+    });
+    expect(lookupFailed).toContain("could not be determined (token unavailable)");
+    expect(lookupFailed).not.toContain("no runs, or the lookup failed");
   });
 });
 

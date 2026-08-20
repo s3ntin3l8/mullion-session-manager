@@ -282,6 +282,7 @@ describe("Settings -> Task Master", () => {
           budgetMinutes: 30,
           progressCommentMinutes: 5,
           skipPermissions: "on",
+          reviewCiWaitMinutes: 30,
         },
       },
     });
@@ -297,9 +298,11 @@ describe("Settings -> Task Master", () => {
     expect(tm.budgetMinutes).toBe(-1);
     expect(tm.progressCommentMinutes).toBe(-1);
     expect(tm.skipPermissions).toBe("inherit");
-    // autoClaimPaused has no sentinel/inherit concept (settings.ts's own
-    // doc comment) — Reset must not silently clear it too.
+    // autoClaimPaused and reviewCiWaitMinutes have no sentinel/inherit
+    // concept (settings.ts's own doc comment) — Reset must not silently
+    // clear either.
     expect(tm.autoClaimPaused).toBe(true);
+    expect(tm.reviewCiWaitMinutes).toBe(30);
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
