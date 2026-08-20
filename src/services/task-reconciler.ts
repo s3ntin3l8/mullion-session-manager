@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -32,11 +32,17 @@ import {
   type ReviewCiInfo,
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
+import { approveTask } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges } from "./git-worktree.js";
 import { resolveGitHubToken } from "./github-integration.js";
-import { getPullRequestByNumber } from "./github-write.js";
+import {
+  getPullRequestByNumber,
+  mergePullRequest,
+  updatePullRequestBranch,
+  deleteRemoteBranch,
+} from "./github-write.js";
 import { computeCiStatus, fetchRunsForHead } from "./github.js";
 
 /**
@@ -213,6 +219,45 @@ function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
 }
 
 /**
+ * Shared primitive behind both `resolveReviewCi` below (which layers a
+ * wait-then-give-up deadline on top, for gating a review-agent spawn) and
+ * the auto-approve gate's own CI check (`processAutoApprovals`, which never
+ * gives up — see that function's own doc comment on why). Reads the task's
+ * PR and its Actions runs for the current head commit; returns `null` for
+ * every "nothing to check yet" case (no PR, no resolvable repo/token) with
+ * no logging, since that's an ordinary, expected state for plenty of tasks,
+ * not a failure. Can still throw on a real lookup failure (a thrown
+ * `getPullRequestByNumber`/`fetchRunsForHead` call) — callers decide their
+ * own retry/deadline posture around that.
+ */
+async function fetchCurrentCiStatus(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<{
+  headSha: string;
+  status: ReturnType<typeof computeCiStatus>;
+  runs: ReviewCiInfo["runs"];
+} | null> {
+  if (task.prNumber === null) return null;
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return null;
+  // "read" scope (#489's least-privilege split) — this only ever reads the
+  // PR and its Actions runs, never writes.
+  const token = await resolveGitHubToken(app, repoRef, "read");
+  if (!token) return null;
+  const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+  const runs = await fetchRunsForHead(token, repoRef.owner, repoRef.repo, pr.headSha);
+  const status = computeCiStatus(runs);
+  const runSummaries = runs.map((r) => ({
+    name: r.name,
+    conclusion: r.conclusion,
+    htmlUrl: r.htmlUrl,
+  }));
+  return { headSha: pr.headSha, status, runs: runSummaries };
+}
+
+/**
  * Resolves the CI signal for a task's PR head commit, or reports that the
  * caller should wait and re-check next tick. Never throws — a resolution
  * failure (no repo, no token, the PR/runs lookup itself throwing) waits up
@@ -251,23 +296,12 @@ async function resolveReviewCi(
   if (task.prNumber === null) return undefined;
 
   try {
-    const repoRef = await resolveRepoRef(app, project);
-    if (!repoRef) return undefined;
-    // "read" scope (#489's least-privilege split) — this only ever reads
-    // the PR and its Actions runs, never writes.
-    const token = await resolveGitHubToken(app, repoRef, "read");
-    if (!token) return undefined;
-    const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-    const runs = await fetchRunsForHead(token, repoRef.owner, repoRef.repo, pr.headSha);
-    const status = computeCiStatus(runs);
-    const runSummaries = runs.map((r) => ({
-      name: r.name,
-      conclusion: r.conclusion,
-      htmlUrl: r.htmlUrl,
-    }));
+    const current = await fetchCurrentCiStatus(app, task, project);
+    if (!current) return undefined;
+    const { headSha, status, runs: runSummaries } = current;
 
     if (status !== "in_progress" && status !== null) {
-      return { headSha: pr.headSha, status, runs: runSummaries };
+      return { headSha, status, runs: runSummaries };
     }
 
     // `waitMinutes === 0` disables waiting entirely — `now - reviewingAt`
@@ -280,7 +314,7 @@ async function resolveReviewCi(
     const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
     if (!pastDeadline) return "wait";
     return {
-      headSha: pr.headSha,
+      headSha,
       status,
       runs: runSummaries,
       note:
@@ -836,6 +870,407 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   );
 }
 
+// Merge-on-approve sweep — approving a task on a project with
+// projects.mergeOnApprove sets tasks.mergeRequestedAt (routes/tasks.ts's
+// approve handler); this sweep is what actually lands the merge. It can't
+// happen synchronously inside approve: main's branch protection here is
+// `strict: true` (branch must be up to date) plus required checks, and a
+// branch that was JUST pushed almost never satisfies either yet. GitHub's
+// own native auto-merge doesn't help either — it does not update a behind
+// branch under `strict`, and this repo's `allow_auto_merge` is `false`
+// regardless — so this sweep does the "record intent, land it once GitHub
+// allows" work by hand: read the PR's mergeableState every tick (subject to
+// backoff) and act on it.
+//
+// Per-task attempt state is process-local (module state, not a DB column),
+// same posture and same reasoning as draftPrRetryState above — the merge
+// *intent* is durable (tasks.mergeRequestedAt), the retry *rate limiter*
+// doesn't need to be.
+const MERGE_RETRY_TTL_MS = 60 * 1000;
+// Tighter ceiling than DRAFT_PR_RETRY_MAX_TTL_MS above — a merge is a cheap
+// GitHub API call (no git push involved) and a human is typically watching
+// for it to land, unlike a stranded draft-PR retry.
+const MERGE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
+const MAX_MERGE_RETRIES_PER_SWEEP = 20;
+const MAX_MERGE_RETRY_ENTRIES = 500;
+const mergeRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+
+function mergeRetryBackoffMs(attempts: number): number {
+  return Math.min(MERGE_RETRY_TTL_MS * 2 ** (attempts - 1), MERGE_RETRY_MAX_TTL_MS);
+}
+
+/**
+ * Re-arms a task's merge backoff so the next reconcile tick attempts it
+ * immediately instead of waiting out whatever backoff interval it was on.
+ * Called by `POST /api/tasks/:id/merge` (a human's "Merge now"/"Retry merge"
+ * click) — without this, a click during a long backoff window would appear
+ * to do nothing until the window elapsed on its own.
+ */
+export function resetMergeBackoff(taskId: number): void {
+  mergeRetryState.delete(taskId);
+}
+
+function clearMergeState(app: FastifyInstance, taskId: number): void {
+  app.db
+    .update(tasks)
+    .set({ mergeRequestedAt: null, mergeError: null })
+    .where(eq(tasks.id, taskId))
+    .run();
+  // Hermes review, PR #763 — without this, a resolved task's backoff entry
+  // lingers in mergeRetryState until MAX_MERGE_RETRY_ENTRIES forces an
+  // oldest-insertion eviction, which can evict an ACTIVELY retrying task's
+  // entry instead of a resolved one, silently resetting its backoff/attempt
+  // count. Deleting here (unlike draftPrRetryState's own "never gets read
+  // again" reasoning, which relies on the row dropping out of that sweep's
+  // WHERE clause) closes that gap directly.
+  mergeRetryState.delete(taskId);
+}
+
+function recordMergeError(app: FastifyInstance, taskId: number, message: string): void {
+  app.db.update(tasks).set({ mergeError: message }).where(eq(tasks.id, taskId)).run();
+}
+
+async function attemptMerge(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<void> {
+  if (task.prNumber === null) return; // WHERE below already guarantees this; narrows the type.
+
+  // Resolve repoRef/token from `project` alone, never from
+  // `task.worktreePath` — cleanupTaskWorktree already ran at approve
+  // (routes/tasks.ts), so the worktree is gone by the time this sweep fires.
+  // Same posture as closeDraftPRForTask (task-promote.ts): a pure GitHub API
+  // write with no filesystem/git dependency on the task's host at all.
+  // Reaching for worktreePath here would fail every merge forever with an
+  // unfixable no-repo/no-token — exactly the stranding shape this codebase
+  // keeps getting bitten by (see REVIEW_FINDINGS_GRACE_MS's own history).
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return;
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return;
+
+  try {
+    const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+
+    if (pr.merged || pr.state === "closed") {
+      // Merged or closed out of band (a human merged it directly on GitHub,
+      // or closed it) — idempotent no-op, not an error.
+      clearMergeState(app, task.id);
+      return;
+    }
+
+    switch (pr.mergeableState) {
+      case "clean": {
+        await mergePullRequest(token, repoRef.owner, repoRef.repo, task.prNumber, {
+          sha: pr.headSha,
+          commitTitle: pr.title,
+        });
+        // Best-effort: a failure here must not undo the merge that just
+        // succeeded, nor re-arm the sweep to retry a merge that's already
+        // done. delete_branch_on_merge is false on this repo, so without
+        // this the branch is left behind forever.
+        try {
+          await deleteRemoteBranch(token, repoRef.owner, repoRef.repo, pr.headRef);
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, branch: pr.headRef },
+            "task reconcile: merged the PR but failed to delete its remote branch",
+          );
+        }
+        clearMergeState(app, task.id);
+        return;
+      }
+      case "behind": {
+        // Update the branch, then wait for the NEXT tick rather than
+        // attempting the merge in this same pass — checks must re-run
+        // against the new head first. Can ping-pong if main moves faster
+        // than CI resolves; the backoff above bounds how often this repeats.
+        await updatePullRequestBranch(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          task.prNumber,
+          pr.headSha,
+        );
+        recordMergeError(app, task.id, "Branch was behind main — requested an update, retrying");
+        return;
+      }
+      case "unstable": {
+        // A NON-required check is failing or still running — e.g. this
+        // repo's own test-e2e/codecov/patch, deliberately not required (see
+        // CLAUDE.md). Merging on "unstable" would silently skip whatever
+        // that check was verifying; a human clicking Squash-and-merge at
+        // least sees the red X. Back off and retry: a pending non-required
+        // check resolves into "clean" on its own, and a genuinely failing
+        // one stays "unstable" forever, which is the correct outcome —
+        // "Merge now" is the escape hatch for deciding to override it.
+        // Counter-risk, stated deliberately: a non-required check that never
+        // reports at all leaves this PR never auto-merging.
+        recordMergeError(app, task.id, "A non-required check is failing or still running");
+        return;
+      }
+      case "dirty": {
+        // A real merge conflict with main. Never resolves on its own —
+        // needs a rebase (see the auto-rebase follow-up issue) or a human.
+        recordMergeError(app, task.id, "Conflicts with main — needs manual resolution");
+        return;
+      }
+      case "blocked": {
+        // A required check is red or still pending.
+        recordMergeError(app, task.id, "Required checks are red or still pending");
+        return;
+      }
+      default: {
+        // "unknown" (pr.mergeable === null — GitHub is still computing
+        // mergeability after a push) or any future state GitHub adds. Wait
+        // and retry, no error recorded.
+        return;
+      }
+    }
+    // Never give up on any of the above, no matter how long: a conflict
+    // becomes resolvable the moment someone rebases, checks can go green on
+    // a rerun — a give-up cap would recreate exactly the "stranded forever"
+    // failure mode DRAFT_PR_RETRY_MAX_TTL_MS's own comment above exists to
+    // prevent. Indefinite retry at a ceiling-bounded interval is this
+    // sweep's whole posture.
+  } catch (err) {
+    // Covers a merge/update-branch call itself failing — including a 405
+    // ("not mergeable") or 409 (head-SHA moved) racing this same read, both
+    // ordinary expected outcomes here, not alarms; err.message already
+    // carries the HTTP status (see githubRequest's own error formatting).
+    const detail = err instanceof Error ? err.message : String(err);
+    recordMergeError(app, task.id, `Merge attempt failed: ${detail}`);
+  }
+}
+
+async function processMergeRequests(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  // Same gate as the transition itself — a merge is real GitHub state, not
+  // a passive read.
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(isNotNull(tasks.mergeRequestedAt), isNotNull(tasks.prNumber), eq(tasks.status, "done")),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  const now = Date.now();
+  let attempted = 0;
+
+  // Deliberately NOT grouped/concurrent by host the way retryStrandedDraftPRs
+  // is above. That grouping exists because openDraftPRForTask does a real
+  // git push with up to GIT_TIMEOUT_MS (120s); this sweep only ever makes
+  // GitHub API calls with a 5s timeout (REQUEST_TIMEOUT_MS, github-write.ts),
+  // so there's no slow-host stall here worth isolating a flat sequential
+  // loop from.
+  for (const { task, project } of rows) {
+    if (attempted >= MAX_MERGE_RETRIES_PER_SWEEP) return;
+
+    const state = mergeRetryState.get(task.id);
+    if (state !== undefined && now - state.lastAttemptedAt < mergeRetryBackoffMs(state.attempts))
+      continue;
+
+    attempted++;
+    if (!mergeRetryState.has(task.id) && mergeRetryState.size >= MAX_MERGE_RETRY_ENTRIES) {
+      const oldest = mergeRetryState.keys().next().value;
+      if (oldest !== undefined) mergeRetryState.delete(oldest);
+    }
+    mergeRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
+
+    await attemptMerge(app, task, project);
+  }
+}
+
+// Auto-approve sweep — a per-project projects.autoApprove setting has a
+// "reviewing" task approve itself, no human click, once ALL of these hold:
+//   1. Task Master is enabled.
+//   2. The task's CURRENT review round has actually been ingested
+//      (reviewFindingsIngestedSessionId === reviewSessionId — the latest
+//      round's verdict, never a stale one from an earlier round).
+//   3. That round's verdict (tasks.lastReviewVerdict, written alongside
+//      ingestion in processReviewingTasks above) is "clean".
+//   4. CI on the PR head reads an explicit "success".
+//   5. The task is still "reviewing" at the moment of the write — enforced
+//      by approveTask's own CAS, not checked here; a human racing the
+//      sweep simply wins.
+// Anything else — no review agent configured (never ingests a verdict at
+// all), "changes-requested", "inconclusive", CI red/still running/absent —
+// leaves the task in "reviewing" for a human, exactly today's behavior.
+//
+// Gate 4 deliberately has NO deadline, unlike resolveReviewCi's own
+// wait-then-proceed-anyway posture for spawning the reviewer in the first
+// place: a repo with no CI configured at all must never auto-approve,
+// since the whole point of this gate is to BE a gate, not a formality that
+// eventually rubber-stamps itself. "in_progress"/null status, no
+// resolvable repo/token, or a thrown lookup are all simply "not yet" here
+// — forever, until CI genuinely reports success.
+const AUTO_APPROVE_RETRY_TTL_MS = 60 * 1000;
+const AUTO_APPROVE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
+const MAX_AUTO_APPROVALS_PER_SWEEP = 20;
+const MAX_AUTO_APPROVE_RETRY_ENTRIES = 500;
+const autoApproveRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+
+function autoApproveRetryBackoffMs(attempts: number): number {
+  return Math.min(AUTO_APPROVE_RETRY_TTL_MS * 2 ** (attempts - 1), AUTO_APPROVE_RETRY_MAX_TTL_MS);
+}
+
+/**
+ * What happens once `approveTask` actually runs — the gate above says WHEN
+ * to attempt; this says what to do with each `ApproveOutcome`. In a sweep
+ * there's no human reading a 409, so every reason needs a named
+ * disposition, same posture as the merge sweep's own per-`mergeableState`
+ * table above.
+ */
+async function attemptAutoApprove(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<void> {
+  if (
+    task.reviewFindingsIngestedSessionId === null ||
+    task.reviewFindingsIngestedSessionId !== task.reviewSessionId
+  ) {
+    return;
+  }
+  if (task.lastReviewVerdict !== "clean") return;
+
+  let current: Awaited<ReturnType<typeof fetchCurrentCiStatus>>;
+  try {
+    current = await fetchCurrentCiStatus(app, task, project);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id },
+      "task reconcile: auto-approve CI lookup failed — waiting to retry",
+    );
+    return;
+  }
+  if (!current || current.status !== "success") return;
+
+  const outcome = await approveTask(app, task, project, "auto-approve");
+  if (outcome.ok) {
+    app.log.info(
+      { taskId: task.id, prNumber: task.prNumber, prUrl: outcome.task.prUrl },
+      "task reconcile: auto-approved",
+    );
+    // Hermes review, PR #768 — drop the retry-state entry rather than
+    // leaving it to linger until the 500-cap evicts it (same fix as the
+    // merge sweep's own clearMergeState, PR #763's Hermes finding). Not
+    // strictly load-bearing the way it was there (this task's status just
+    // flipped to "done", dropping it out of this sweep's own `status =
+    // "reviewing"` WHERE clause on the next tick regardless), but keeping
+    // the map to live-in-flight candidates only is worth the one line.
+    autoApproveRetryState.delete(task.id);
+    return;
+  }
+
+  switch (outcome.reason) {
+    case "cas-lost":
+      // A human approved/rejected in the same window — silent no-op, not
+      // an error. The task's status already changed out from under this
+      // sweep's own WHERE clause, so — same reasoning as the success case
+      // above — this entry would never be read again regardless, but drop
+      // it now rather than waiting on the eviction cap.
+      autoApproveRetryState.delete(task.id);
+      return;
+    case "dirty-tree":
+      // A review agent leaving a scratch file behind looks permanent but
+      // is genuinely transient. Back off and retry indefinitely; never
+      // mark anything failed.
+      app.log.warn(
+        { taskId: task.id },
+        "task reconcile: auto-approve blocked on a dirty worktree — retrying",
+      );
+      return;
+    case "remote-not-supported":
+      // Permanent for this host — logged once per attempt (the backoff
+      // below still bounds how often that is). Mostly moot: a remote-hosted
+      // task can't reach a "clean" verdict at all today, since review-
+      // findings ingestion is local-only (processReviewingTasks's own doc
+      // comment) — this branch exists for completeness, not because it's
+      // expected to fire.
+      app.log.warn(
+        { taskId: task.id },
+        "task reconcile: auto-approve not supported for this task's host",
+      );
+      return;
+    case "no-worktree":
+    case "no-repo":
+    case "no-token":
+    case "push-failed":
+    case "pr-create-failed":
+      // Back off and retry indefinitely, same posture as every other
+      // GitHub-write path in this file.
+      app.log.warn(
+        { taskId: task.id, reason: outcome.reason, detail: outcome.detail },
+        "task reconcile: auto-approve attempt failed — retrying",
+      );
+      return;
+    default: {
+      // Hermes review, PR #768 — exhaustiveness guard: if ApproveOutcome's
+      // failure-reason union ever grows, this line fails to typecheck
+      // instead of silently falling through the switch with no log and no
+      // named disposition, the exact gap the missing "no-worktree" case
+      // above was.
+      const exhaustiveCheck: never = outcome;
+      app.log.warn(
+        { taskId: task.id, outcome: exhaustiveCheck },
+        "task reconcile: auto-approve failed with an unrecognized reason — retrying",
+      );
+      return;
+    }
+  }
+}
+
+async function processAutoApprovals(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(eq(tasks.status, "reviewing"), eq(projects.autoApprove, true), isNotNull(tasks.prNumber)),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  const now = Date.now();
+  let attempted = 0;
+
+  for (const { task, project } of rows) {
+    if (attempted >= MAX_AUTO_APPROVALS_PER_SWEEP) return;
+
+    const state = autoApproveRetryState.get(task.id);
+    if (
+      state !== undefined &&
+      now - state.lastAttemptedAt < autoApproveRetryBackoffMs(state.attempts)
+    )
+      continue;
+
+    attempted++;
+    if (
+      !autoApproveRetryState.has(task.id) &&
+      autoApproveRetryState.size >= MAX_AUTO_APPROVE_RETRY_ENTRIES
+    ) {
+      const oldest = autoApproveRetryState.keys().next().value;
+      if (oldest !== undefined) autoApproveRetryState.delete(oldest);
+    }
+    autoApproveRetryState.set(task.id, {
+      lastAttemptedAt: now,
+      attempts: (state?.attempts ?? 0) + 1,
+    });
+
+    await attemptAutoApprove(app, task, project);
+  }
+}
+
 // Task Master trial 220921 / PR #743's incident — `derived.status ===
 // "finished"` used to be trusted as "the review is over, and if there's no
 // findings file, there never will be" the INSTANT it was observed, with no
@@ -1143,6 +1578,14 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // then does neither the DB write nor the PR comment for a decision
         // the task no longer reflects, rather than a comment landing with
         // no matching DB write behind it.
+        //
+        // lastReviewVerdict rides this same write (durable, not re-derived
+        // from the rendered reviewFindings prose) — the auto-approve sweep
+        // (processAutoApprovals) reads it back later to gate approving a
+        // task with no human in the loop. Written here regardless of
+        // whether auto-approve exists/is enabled on this project: the write
+        // is inert until read, and landing it now means real verdict data
+        // has already accumulated by the time auto-approve ships.
         const updated = app.db
           .update(tasks)
           .set(
@@ -1152,10 +1595,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                   reviewFindings: appendedFindings,
                   reviewFindingsIngestedSessionId: task.reviewSessionId,
                   reviewRounds: task.reviewRounds + 1,
+                  lastReviewVerdict: parsed?.verdict ?? "inconclusive",
                 }
               : {
                   reviewFindings: appendedFindings,
                   reviewFindingsIngestedSessionId: task.reviewSessionId,
+                  lastReviewVerdict: parsed?.verdict ?? "inconclusive",
                 },
           )
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
@@ -1299,10 +1744,18 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // findings would never be processed on a tick with no claimed/in_progress
   // work at all.
   await processReviewingTasks(app);
+  // Runs right after processReviewingTasks, same tick — both re-read from
+  // the DB, so a verdict ingested earlier in this pass is already visible
+  // and can be acted on immediately, not deferred to the next tick.
+  await processAutoApprovals(app);
   // Same independence reasoning — a stranded "reviewing" task with no PR
   // needs to keep being retried regardless of whether anything is currently
   // claimed/in_progress.
   await retryStrandedDraftPRs(app);
+  // Same independence reasoning again — a "done" task with a merge
+  // outstanding needs to keep being retried regardless of what's currently
+  // claimed/in_progress.
+  await processMergeRequests(app);
 
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })
@@ -1430,99 +1883,21 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // write, so it just leaves an exited-session task alone.
           if (derived.status === "exited") continue;
 
-          if (task.status === "claimed") {
-            // Hermes review, PR #480 (second pass) — entering "reviewing" is
-            // gated on "enabled" entirely, not just the review-agent spawn
-            // below. approve/reject are BOTH gated on the same flag (they
-            // write real GitHub state — PR creation, re-seeding a session),
-            // so a task that reached "reviewing" while disabled would be
-            // stuck there with no way to resolve it until re-enabled. Leaving
-            // it in claimed/in_progress instead keeps it reachable by the
-            // still-ungated budget force-fail below, and it picks up the
-            // normal reviewing transition on the next tick once re-enabled.
-            if (
-              derived.status === "finished" &&
-              resolvedTaskMaster.enabled &&
-              turnFinishedSinceClaim(info, task)
-            ) {
-              const gate = await checkReviewingGate(app, task, project, info);
-              if (!gate.ok) {
-                await failReviewingGate(
-                  app,
-                  task,
-                  session,
-                  project,
-                  backend,
-                  "claimed",
-                  gate.failureReason,
-                  now,
-                );
-                continue;
-              }
-              const updated = app.db
-                .update(tasks)
-                .set({
-                  status: "reviewing",
-                  startedAt: task.startedAt ?? now,
-                  reviewingAt: now,
-                  // #738 follow-up — the spawn moved out of this transition
-                  // into processPendingReviewSpawns below (it needs to wait
-                  // on CI, which doesn't exist yet the instant this fires).
-                  // Nulled here, not left alone: a second "→ reviewing" entry
-                  // (after an auto-returned round) would otherwise carry the
-                  // FIRST round's reviewSessionId/claim marker forward, and
-                  // that pass only ever looks at tasks where they're null.
-                  reviewSessionId: null,
-                  reviewSeedDelivered: null,
-                  reviewSpawnClaimedAt: null,
-                })
-                .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
-                .run();
-              if (updated.changes > 0) {
-                recordTaskTransition(app, {
-                  taskId: task.id,
-                  projectId: project.id,
-                  from: "claimed",
-                  to: "reviewing",
-                  via: "reconcile",
-                });
-                await syncTaskTransition(
-                  app,
-                  {
-                    ...task,
-                    status: "reviewing",
-                    startedAt: task.startedAt ?? now,
-                    reviewingAt: now,
-                  },
-                  project,
-                  "reviewing",
-                  { diffStat: await computeTaskDiffStat(app, task, project) },
-                );
-                await maybeOpenDraftPR(app, task, project);
-              }
-            } else if (derived.status !== "idle" && derived.status !== "finished") {
-              const updated = app.db
-                .update(tasks)
-                .set({ status: "in_progress", startedAt: now })
-                .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
-                .run();
-              if (updated.changes > 0) {
-                recordTaskTransition(app, {
-                  taskId: task.id,
-                  projectId: project.id,
-                  from: "claimed",
-                  to: "in_progress",
-                  via: "reconcile",
-                });
-                await syncTaskTransition(
-                  app,
-                  { ...task, status: "in_progress", startedAt: now },
-                  project,
-                  "in_progress",
-                );
-              }
-            }
-          } else if (
+          // A "claimed" task's own reconciliation (both "-> reviewing" on a
+          // fast-finishing first turn, and "-> in_progress" on any other
+          // real activity) used to live here. Task-claim queueing
+          // (rate-limit-storm fix) removed it as dead code: "claimed" is now
+          // the queue state (task-claim.ts's enqueueTask/dispatchClaimedTask
+          // split), so a "claimed" row never has a session — `rows`/
+          // `hostRows` above are built from an INNER JOIN on `sessions`,
+          // which such a row can never satisfy. Dispatch itself now flips
+          // "claimed" -> "in_progress" synchronously (inside its own
+          // reservation transaction, task-claim.ts), so a task with a live
+          // session is always already "in_progress" by the time this sweep
+          // could ever observe it — the "claimed -> reviewing" direct edge
+          // (task-state.ts's transition table) stays legal for the type
+          // system but is unreachable via this path now.
+          if (
             task.status === "in_progress" &&
             derived.status === "finished" &&
             resolvedTaskMaster.enabled &&

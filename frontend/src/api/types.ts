@@ -77,6 +77,16 @@ export interface Project {
   // install-wide settings.taskMaster.defaultReviewAgent, which itself
   // defaults to "none" (no review agent).
   defaultReviewAgent: string | null;
+  // Per-project only, no install-wide tier — same posture as
+  // defaultReviewAgent above. Approving a task also requests a merge for
+  // its PR; the reconciler lands it once GitHub's checks are green and the
+  // branch is up to date. Mirrors src/db/schema.ts's projects.mergeOnApprove.
+  mergeOnApprove: boolean | null;
+  // A "reviewing" task approves itself once its review agent's latest
+  // verdict is "clean" and CI on the PR head is green — no human click.
+  // Needs a review agent configured (defaultReviewAgent above) to ever
+  // produce a verdict at all. Mirrors projects.autoApprove.
+  autoApprove: boolean | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live
@@ -830,6 +840,13 @@ export interface Task {
   // (some agents, e.g. OpenCode, can't — the session still spawns, just
   // with no instructions). See TaskDetail.tsx's review card.
   reviewSeedDelivered: boolean | null;
+  // Task-claim queueing (rate-limit-storm fix) — the reviewSessionId whose
+  // findings have already been read and acted on. `reviewSessionId !==
+  // reviewFindingsIngestedSessionId` means a review agent is still running;
+  // equal (or reviewSessionId null) means either awaiting your manual
+  // approve/reject, or there was never a review agent at all. See
+  // TaskCard.tsx's "review in flight" label.
+  reviewFindingsIngestedSessionId: number | null;
   // The review agent's own findings, captured once its session finishes —
   // appended across rounds under a "## Round N" header, never replaced.
   // Null until the first round is ingested (no review agent configured,
@@ -857,6 +874,21 @@ export interface Task {
   // approve creates directly as a fallback for a task that reached
   // "reviewing" before that shipped. Not otherwise rendered in the UI yet.
   prNumber: number | null;
+  // Merge-on-approve — set at approve time when the project's
+  // mergeOnApprove is on, or by a manual "Merge now"/"Retry merge" click.
+  // The reconciler's merge sweep clears this once the PR merges (or is
+  // found already merged/closed). Non-null means a merge is outstanding.
+  mergeRequestedAt: string | null;
+  // The merge sweep's last failure reason (conflicts with main, checks
+  // blocked, ...), independent of mergeRequestedAt itself — a task can have
+  // an outstanding merge request AND a recorded error at the same time
+  // (the sweep keeps retrying). Null means no known problem.
+  mergeError: string | null;
+  // The review agent's most recently ingested verdict — "clean" |
+  // "changes-requested" | "inconclusive" — or null if no round has been
+  // ingested yet. Durable input to auto-approve's gate; not itself the
+  // rendered findings text (see reviewFindings above).
+  lastReviewVerdict: string | null;
   assignee: string | null;
   // Why a task went "failed" — session death, budget exceeded, or spawn
   // failure. Also carries the human's reject feedback while the task is
@@ -892,6 +924,12 @@ export interface Task {
   subIssueCompleted: number | null;
   createdAt: string;
   updatedAt: string;
+  // Task-claim queueing (rate-limit-storm fix) — when the task joined the
+  // queue (status -> "claimed"), distinct from claimedAt below. See
+  // TaskCard.tsx's age-chip logic.
+  queuedAt: string | null;
+  // When the CURRENT worker spell started (dispatch, not enqueue) — null
+  // while a task sits queued with no session yet.
   claimedAt: string | null;
   startedAt: string | null;
   reviewingAt: string | null;

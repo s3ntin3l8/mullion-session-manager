@@ -66,7 +66,7 @@ export type HostGitResult<T> =
  * but nothing enforces it at the DB layer). Independent review, PR #590 —
  * this module's every caller (task-promote.ts's preparePromotion/
  * resolveBaseBranch/pushForPromotion) has no try/catch of its own around
- * these calls, unlike task-claim.ts's claimTask/retryTask, which each wrap
+ * these calls, unlike task-claim.ts's dispatchClaimedTask/retryTask, which each wrap
  * an equivalent `resolveBackend`-can-throw-synchronously risk in their own
  * outer try/catch specifically for this. Rather than require every current
  * and future caller of this module to duplicate that defense, any

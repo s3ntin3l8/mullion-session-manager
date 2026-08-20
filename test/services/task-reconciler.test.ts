@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { spawn as childProcessSpawn } from "node:child_process";
 import type * as TaskReseedModule from "../../src/services/task-reseed.js";
+import type * as TaskPromoteModule from "../../src/services/task-promote.js";
 import type * as GitHubIntegrationModule from "../../src/services/github-integration.js";
 import type * as GitHubWriteModule from "../../src/services/github-write.js";
 import type * as GitHubModule from "../../src/services/github.js";
@@ -44,11 +45,19 @@ vi.mock("node:child_process", async (importOriginal) => {
 // their prior no-op behavior, while new tests below assert the call
 // directly.
 const mockOpenDraftPRForTask = vi.fn();
+// Auto-approve sweep tests below call the REAL approveTask (task-approve.ts),
+// which calls the real promoteTaskToPR — a real git push + GitHub PR flow
+// this file's tasks have no real worktree/repo for. Pass-through by default
+// (wired via importActual below, same posture as mockResolveRepoRef etc.),
+// only overridden with `.mockResolvedValueOnce` in the auto-approve describe
+// block itself.
+const mockPromoteTaskToPR = vi.fn();
 vi.mock("../../src/services/task-promote.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     openDraftPRForTask: mockOpenDraftPRForTask,
+    promoteTaskToPR: mockPromoteTaskToPR,
   };
 });
 
@@ -105,6 +114,9 @@ const {
   mockResolveRepoRef,
   mockResolveGitHubToken,
   mockGetPullRequestByNumber,
+  mockMergePullRequest,
+  mockUpdatePullRequestBranch,
+  mockDeleteRemoteBranch,
   mockFetchRunsForHead,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
@@ -112,6 +124,9 @@ const {
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
+  mockMergePullRequest: vi.fn(),
+  mockUpdatePullRequestBranch: vi.fn(),
+  mockDeleteRemoteBranch: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
@@ -157,6 +172,9 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   return {
     ...actual,
     getPullRequestByNumber: mockGetPullRequestByNumber,
+    mergePullRequest: mockMergePullRequest,
+    updatePullRequestBranch: mockUpdatePullRequestBranch,
+    deleteRemoteBranch: mockDeleteRemoteBranch,
   };
 });
 vi.mock("../../src/services/github.js", async (importOriginal) => {
@@ -185,12 +203,16 @@ const actualGithubModule = await vi.importActual<typeof GitHubModule>(
   "../../src/services/github.js",
 );
 mockFetchRunsForHead.mockImplementation(actualGithubModule.fetchRunsForHead);
+const actualTaskPromoteModule = await vi.importActual<typeof TaskPromoteModule>(
+  "../../src/services/task-promote.js",
+);
+mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
-const { and, eq, isNull } = await import("drizzle-orm");
+const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
@@ -267,6 +289,25 @@ describe("reconcileTasks", () => {
         .delete(tasks)
         .where(and(eq(tasks.status, "reviewing"), isNull(tasks.prNumber)))
         .run();
+      // Same reasoning, for the merge sweep: a "done" task with
+      // mergeRequestedAt still set is exactly what processMergeRequests
+      // sweeps every tick, and a leftover row from an earlier test would
+      // otherwise get re-processed (against stale/reset mocks) on a later,
+      // unrelated test's first reconcileTasks() call.
+      getDb()
+        .delete(tasks)
+        .where(and(eq(tasks.status, "done"), isNotNull(tasks.mergeRequestedAt)))
+        .run();
+      // Same reasoning again, for the auto-approve sweep: a "reviewing"
+      // task with a PR is exactly what processAutoApprovals sweeps every
+      // tick on any project with autoApprove on, and a leftover row from an
+      // earlier test (one that deliberately didn't get approved, e.g. a CI-
+      // not-green test) would otherwise be re-swept — against by-then stale
+      // mocks — on a later, unrelated test's first reconcileTasks() call.
+      getDb()
+        .delete(tasks)
+        .where(and(eq(tasks.status, "reviewing"), isNotNull(tasks.prNumber)))
+        .run();
     } catch {
       // no such table yet — fine, see above.
     }
@@ -284,6 +325,15 @@ describe("reconcileTasks", () => {
     mockResolveRepoRef.mockClear();
     mockResolveGitHubToken.mockClear();
     mockGetPullRequestByNumber.mockClear();
+    mockPromoteTaskToPR.mockClear();
+    // Merge-sweep mocks have no pass-through default (unlike the four
+    // above) — no pre-existing test's tasks ever set mergeRequestedAt, so
+    // processMergeRequests never reaches these calls outside the dedicated
+    // describe block below. Reset (not just clear) so a leaked
+    // .mockResolvedValueOnce/.mockRejectedValueOnce can't bleed forward.
+    mockMergePullRequest.mockReset();
+    mockUpdatePullRequestBranch.mockReset();
+    mockDeleteRemoteBranch.mockReset();
     mockFetchRunsForHead.mockClear();
   });
 
@@ -376,50 +426,41 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
-  it("flips claimed -> in_progress once the session shows any non-idle signal", async () => {
+  // Task-claim queueing (rate-limit-storm fix) — a "claimed" row with a
+  // live session should never occur in production anymore (dispatch flips
+  // status to "in_progress" INSIDE the same reservation transaction that
+  // reserves the slot, before the session is spawned — see
+  // task-claim.ts's dispatchClaimedTask). This test constructs that state
+  // directly anyway (bypassing enqueueTask/dispatchClaimedTask, same as
+  // this file's own createSessionAndTask helper always has) purely as a
+  // defensive check: reconcileTasks must leave a "claimed" row alone no
+  // matter what its session is doing, regardless of how it got there — the
+  // "claimed -> in_progress" and "claimed -> reviewing" promotions this
+  // used to test were removed as dead code (dispatchClaimedTask now owns
+  // both edges; task-reconciler.ts's own comment where the old "claimed"
+  // bucket used to live explains why).
+  it("leaves claimed alone regardless of session activity — dispatchClaimedTask, not this pass, owns claimed -> in_progress/reviewing now", async () => {
     const app = await buildApp();
-    const { taskId, sessionId } = await createSessionAndTask(app, "claimed");
-    vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo({ activity: "working" }),
-    } as never);
+    const working = await createSessionAndTask(app, "claimed");
+    const idle = await createSessionAndTask(app, "claimed");
+    const finished = await createSessionAndTask(app, "claimed");
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(working.sessionId)) {
+        return { toInfo: () => fakeInfo({ activity: "working" }) } as never;
+      }
+      if (id === String(finished.sessionId)) {
+        return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+      }
+      return { toInfo: () => fakeInfo() } as never;
+    });
 
     await reconcileTasks(app);
 
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("in_progress");
-    expect(row.startedAt).not.toBeNull();
-    void sessionId;
-    await app.close();
-  });
-
-  it("leaves claimed alone while the session is still idle (no signal yet)", async () => {
-    const app = await buildApp();
-    const { taskId } = await createSessionAndTask(app, "claimed");
-    vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo(),
-    } as never);
-
-    await reconcileTasks(app);
-
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("claimed");
-    expect(row.startedAt).toBeNull();
-    await app.close();
-  });
-
-  it("flips claimed straight to reviewing when the first observed signal is already finished (task-state.ts's claimed -> reviewing edge)", async () => {
-    const app = await buildApp();
-    const { taskId } = await createSessionAndTask(app, "claimed");
-    vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-    } as never);
-
-    await reconcileTasks(app);
-
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("reviewing");
-    expect(row.startedAt).not.toBeNull();
-    expect(row.reviewingAt).not.toBeNull();
+    for (const { taskId } of [working, idle, finished]) {
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("claimed");
+      expect(row.startedAt).toBeNull();
+    }
     await app.close();
   });
 
@@ -640,9 +681,13 @@ describe("reconcileTasks", () => {
   describe("review agent (this phase's binding design)", () => {
     it("spawns the configured review agent when a task enters reviewing, recording reviewSessionId", async () => {
       const app = await buildApp();
+      // "in_progress", not "claimed" — task-claim queueing (rate-limit-storm
+      // fix) removed the claimed -> reviewing edge; see this describe
+      // block's own "in_progress -> reviewing" test below for why that
+      // used to be tested via BOTH edges and is now only reachable via one.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         "codex",
       );
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -665,7 +710,7 @@ describe("reconcileTasks", () => {
       // (`--prompt`) and is seed-capable now, see hook-adapters/opencode.ts.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         "gemini",
       );
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -701,7 +746,10 @@ describe("reconcileTasks", () => {
 
     it("records reviewSeedDelivered: true for a seed-capable review agent, delivering the review prompt as argv (not stashSeed — additionalContext never starts a turn)", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      // "in_progress", not "claimed" — task-claim queueing (rate-limit-storm
+      // fix) removed the claimed -> reviewing edge; in_progress -> reviewing
+      // is the only path left to exercise this.
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -772,12 +820,15 @@ describe("reconcileTasks", () => {
       const [task] = app.db
         .insert(tasks)
         .values({
+          // "in_progress", not "claimed" — task-claim queueing (rate-limit-
+          // storm fix) removed the claimed -> reviewing edge.
           projectId,
           title: "reviewed task",
           body: "some spec",
-          status: "claimed",
+          status: "in_progress",
           sessionId: workerSession.id,
           claimedAt: new Date(),
+          startedAt: new Date(),
           worktreePath: "/remote/project",
         })
         .returning()
@@ -831,7 +882,7 @@ describe("reconcileTasks", () => {
 
     it("does not spawn a review agent when none is configured", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTask(app, "claimed");
+      const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -847,7 +898,7 @@ describe("reconcileTasks", () => {
 
     it("logs and swallows a review agent spawn failure without affecting the reviewing transition", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -874,7 +925,7 @@ describe("reconcileTasks", () => {
           url: "/api/settings",
           payload: { taskMaster: { enabled: "off" } },
         });
-        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
         } as never);
@@ -884,11 +935,12 @@ describe("reconcileTasks", () => {
         await reconcileTasks(app);
 
         const row = await getTask(app, taskId);
-        // Left in "claimed" rather than advanced to "reviewing" — approve
-        // and reject are both gated on "enabled" too, so a reviewing task
-        // would otherwise be unresolvable until Task Master is turned back
-        // on. Still reachable by the (ungated) budget force-fail below.
-        expect(row.status).toBe("claimed");
+        // Left in "in_progress" rather than advanced to "reviewing" —
+        // approve and reject are both gated on "enabled" too, so a
+        // reviewing task would otherwise be unresolvable until Task Master
+        // is turned back on. Still reachable by the (ungated) budget
+        // force-fail below.
+        expect(row.status).toBe("in_progress");
         expect(row.reviewSessionId).toBeNull();
         expect(createSessionSpy).not.toHaveBeenCalled();
       } finally {
@@ -909,13 +961,13 @@ describe("reconcileTasks", () => {
           url: "/api/settings",
           payload: { taskMaster: { enabled: "off" } },
         });
-        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
         } as never);
 
         await reconcileTasks(app);
-        expect((await getTask(app, taskId)).status).toBe("claimed");
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
 
         await app.inject({
           method: "PATCH",
@@ -960,31 +1012,12 @@ describe("reconcileTasks", () => {
   // reconciler actually calls it (with the right task/project) or persists
   // its result. task-promote.ts is mocked above specifically for these.
   describe("draft PR on entering reviewing (Hermes review, PR #574, finding #2)", () => {
-    it("calls openDraftPRForTask on the claimed -> reviewing edge and persists prUrl/prNumber on success", async () => {
-      const app = await buildApp();
-      const { taskId } = await createSessionAndTask(app, "claimed");
-      vi.spyOn(app.pty, "get").mockReturnValue({
-        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-      } as never);
-      mockOpenDraftPRForTask.mockResolvedValue({
-        ok: true,
-        prUrl: "https://github.com/test-owner/test-repo/pull/9",
-        prNumber: 9,
-      });
-
-      await reconcileTasks(app);
-
-      const row = await getTask(app, taskId);
-      expect(row.status).toBe("reviewing");
-      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
-      expect(mockOpenDraftPRForTask.mock.calls[0][1]).toMatchObject({ id: taskId });
-      expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/9");
-      expect(row.prNumber).toBe(9);
-
-      await app.close();
-    });
-
-    it("calls openDraftPRForTask on the in_progress -> reviewing edge too, and persists its result", async () => {
+    // The former "claimed -> reviewing edge" sibling of this test was
+    // deleted (task-claim queueing, rate-limit-storm fix) — that edge no
+    // longer exists (dispatchClaimedTask now flips claimed -> in_progress
+    // BEFORE a session ever spawns), so in_progress -> reviewing is the
+    // only edge left to exercise this behavior through.
+    it("calls openDraftPRForTask on the in_progress -> reviewing edge, and persists its result", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -1001,6 +1034,7 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      expect(mockOpenDraftPRForTask.mock.calls[0][1]).toMatchObject({ id: taskId });
       expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/11");
       expect(row.prNumber).toBe(11);
 
@@ -1009,7 +1043,7 @@ describe("reconcileTasks", () => {
 
     it("never blocks the reviewing transition, and leaves prUrl/prNumber unset, when openDraftPRForTask fails (best-effort posture)", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTask(app, "claimed");
+      const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
@@ -1149,6 +1183,685 @@ describe("reconcileTasks", () => {
         });
         await app.close();
       }
+    });
+  });
+
+  describe("merge-on-approve sweep (processMergeRequests)", () => {
+    // Mirrors createReviewingTaskWithNoPR above — inserts a "done" task with
+    // a linked PR and mergeRequestedAt already set, exactly the state
+    // approve (or a "Merge now" click) leaves behind. worktreePath is
+    // deliberately left null (never set) on every task here: the sweep must
+    // resolve repoRef/token from the project alone (see attemptMerge's own
+    // doc comment) — a task whose worktree was already cleaned up at
+    // approve is the REAL shape this sweep always sees, so a test that
+    // accidentally depended on worktreePath would be testing a case that
+    // can't happen in production.
+    async function createDoneTaskWithPendingMerge(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      prNumber = 9,
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-merge-${Math.random()}`, cwd: "/tmp" },
+      });
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "merge-pending",
+          status: "done",
+          claimedAt: new Date(),
+          completedAt: new Date(),
+          prNumber,
+          prUrl: `https://github.com/o/r/pull/${prNumber}`,
+          mergeRequestedAt: new Date(),
+        })
+        .returning()
+        .all();
+      return { taskId: row.id, projectId: project.json().id };
+    }
+
+    function mockPr(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+        headRef: "mullion/task-x",
+        title: "feat: do the thing",
+        state: "open",
+        merged: false,
+        mergeable: true,
+        mergeableState: "clean",
+        ...overrides,
+      };
+    }
+
+    beforeEach(() => {
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+    });
+
+    // Same reasoning as the CI-gated review-spawn block's own afterEach
+    // above: restore the pass-through defaults so this block's fake
+    // "tok"/"o/r" values can't leak into an unrelated later test.
+    afterEach(() => {
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+      mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
+    });
+
+    it("merges a clean PR and deletes its remote branch, clearing the merge flag", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+      mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+      mockDeleteRemoteBranch.mockResolvedValue(undefined);
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).toHaveBeenCalledWith("tok", "o", "r", 9, {
+        sha: "sha-head",
+        commitTitle: "feat: do the thing",
+      });
+      expect(mockDeleteRemoteBranch).toHaveBeenCalledWith("tok", "o", "r", "mullion/task-x");
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("still merges when the remote-branch delete fails — the merge itself is the outcome that matters", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+      mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+      mockDeleteRemoteBranch.mockRejectedValue(new Error("network blip"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("updates a behind branch and waits for the next tick instead of merging in the same pass", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "behind" }));
+      mockUpdatePullRequestBranch.mockResolvedValue(undefined);
+
+      await reconcileTasks(app);
+
+      expect(mockUpdatePullRequestBranch).toHaveBeenCalledWith("tok", "o", "r", 9, "sha-head");
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("behind");
+
+      await app.close();
+    });
+
+    it("does not merge on 'unstable' — a non-required check is failing or still running", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("non-required check");
+
+      await app.close();
+    });
+
+    it("backs off and retries on a real conflict ('dirty') rather than giving up", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("Conflicts with main");
+
+      await app.close();
+    });
+
+    it("backs off and retries when a required check is blocked", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("Required checks");
+
+      await app.close();
+    });
+
+    it("waits with no error recorded while GitHub is still computing mergeability (mergeable: null)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: null, mergeableState: "unknown" }),
+      );
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("clears the merge flag idempotently when the PR was already merged out of band", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ merged: true, state: "closed" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    // Hermes review, PR #763 — clearMergeState must drop the task's
+    // mergeRetryState entry, not just the DB flag. Proved indirectly: a
+    // fresh merge request for the SAME task right after resolution is
+    // attempted on the very next tick rather than being suppressed by a
+    // leftover backoff entry from the resolved attempt.
+    it("re-attempts a fresh merge request immediately after a prior resolution, not backed off by a stale entry", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ merged: true, state: "closed" }));
+
+      await reconcileTasks(app);
+      let row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+
+      app.db.update(tasks).set({ mergeRequestedAt: new Date() }).where(eq(tasks.id, taskId)).run();
+      mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(2);
+      row = await getTask(app, taskId);
+      expect(row.mergeError).toContain("Conflicts with main");
+
+      await app.close();
+    });
+
+    it("clears the merge flag idempotently when the PR was closed (not merged) out of band", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ merged: false, state: "closed" }));
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+
+      await app.close();
+    });
+
+    it("records the failure and keeps retrying when the merge call itself throws (e.g. a 409 head-sha race)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+      mockMergePullRequest.mockRejectedValue(
+        new Error("GitHub API error (HTTP 409): Head branch was modified"),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.mergeRequestedAt).not.toBeNull();
+      expect(row.mergeError).toContain("409");
+
+      await app.close();
+    });
+
+    it("backs off after an attempt instead of retrying on every tick", async () => {
+      const app = await buildApp();
+      await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+      await reconcileTasks(app);
+      await reconcileTasks(app);
+
+      // Second tick lands well inside the 1-minute TTL — no second lookup.
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("does not attempt a merge while Task Master is disabled", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        await createDoneTaskWithPendingMerge(app);
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("does not touch a done task with no merge requested", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-no-merge-${Math.random()}`, cwd: "/tmp" },
+      });
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "done, no merge requested",
+          status: "done",
+          claimedAt: new Date(),
+          completedAt: new Date(),
+          prNumber: 9,
+          prUrl: "https://github.com/o/r/pull/9",
+        })
+        .run();
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
+  describe("auto-approve sweep (processAutoApprovals)", () => {
+    // Every field an auto-approve candidate needs already set — mirrors
+    // exactly what processReviewingTasks' own ingestion write leaves
+    // behind for a "clean" verdict. Individual tests override just the
+    // field(s) they're testing.
+    async function createAutoApproveCandidate(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      overrides: Partial<{
+        lastReviewVerdict: string | null;
+        reviewFindingsIngestedSessionId: number | null;
+        prNumber: number | null;
+        autoApprove: boolean;
+      }> = {},
+    ) {
+      const { autoApprove = true, ...taskOverrides } = overrides;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-auto-approve-${Math.random()}`, cwd: "/tmp" },
+      });
+      const projectId = project.json().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { autoApprove },
+      });
+      const session = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const reviewSessionId = session.json().id as number;
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "auto-approve candidate",
+          status: "reviewing",
+          claimedAt: new Date(),
+          reviewingAt: new Date(),
+          prNumber: 9,
+          reviewSessionId,
+          reviewFindingsIngestedSessionId: reviewSessionId,
+          lastReviewVerdict: "clean",
+          ...taskOverrides,
+        })
+        .returning()
+        .all();
+      return { taskId: row.id, projectId, reviewSessionId };
+    }
+
+    function mockPr(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+        headRef: "mullion/task-x",
+        title: "feat: do the thing",
+        state: "open",
+        merged: false,
+        mergeable: true,
+        mergeableState: "clean",
+        ...overrides,
+      };
+    }
+
+    function ciRun(conclusion: "success" | "failure") {
+      return [
+        {
+          name: "CI",
+          status: "completed" as const,
+          conclusion,
+          htmlUrl: "https://x/1",
+          headSha: "sha-head",
+        },
+      ];
+    }
+
+    beforeEach(() => {
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+    });
+
+    // Same reasoning as the merge sweep's own afterEach above — restore the
+    // pass-through defaults so this block's fake values can't leak into an
+    // unrelated later test.
+    afterEach(() => {
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+      mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
+      mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
+    });
+
+    it("auto-approves once the latest verdict is clean and CI reads success", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockPromoteTaskToPR.mockResolvedValueOnce({
+        ok: true,
+        prUrl: "https://github.com/o/r/pull/9",
+        prNumber: 9,
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("done");
+      expect(row.prUrl).toBe("https://github.com/o/r/pull/9");
+
+      await app.close();
+    });
+
+    it("records the transition via 'auto-approve', distinct from a human's 'approve'", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockPromoteTaskToPR.mockResolvedValueOnce({
+        ok: true,
+        prUrl: "https://github.com/o/r/pull/9",
+        prNumber: 9,
+      });
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      await reconcileTasks(app);
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, via: "auto-approve" }),
+        "task transition",
+      );
+
+      await app.close();
+    });
+
+    it("does not approve when the project's autoApprove is off", async () => {
+      const app = await buildApp();
+      await createAutoApproveCandidate(app, { autoApprove: false });
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("does not approve while Task Master is disabled", async () => {
+      const app = await buildApp();
+      try {
+        await createAutoApproveCandidate(app);
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("does not approve when no review round has been ingested yet", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app, {
+        reviewFindingsIngestedSessionId: null,
+      });
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("does not approve on a stale ingested verdict from an earlier review round", async () => {
+      const app = await buildApp();
+      const { taskId, projectId } = await createAutoApproveCandidate(app);
+      // Simulates a fresh review round spawned after the ingested one —
+      // reviewSessionId has moved on, but reviewFindingsIngestedSessionId
+      // (and the "clean" verdict it produced) still point at the OLD round.
+      const freshSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: freshSession.json().id })
+        .where(eq(tasks.id, taskId))
+        .run();
+
+      await reconcileTasks(app);
+
+      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it.each(["changes-requested", "inconclusive"])(
+      "does not approve on a '%s' verdict",
+      async (verdict) => {
+        const app = await buildApp();
+        await createAutoApproveCandidate(app, { lastReviewVerdict: verdict });
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+
+        await app.close();
+      },
+    );
+
+    it("waits (does not approve) while CI is still in progress", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue([
+        {
+          name: "CI",
+          status: "in_progress",
+          conclusion: null,
+          htmlUrl: "https://x/1",
+          headSha: "sha-head",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("waits (does not approve) while CI status is red", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("waits forever (no deadline) when no CI is found at all — unlike the review-spawn gate", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue([]);
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("backs off and retries when the CI lookup itself throws", async () => {
+      const app = await buildApp();
+      await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockRejectedValue(new Error("network blip"));
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("does not treat a concurrent human approve/reject (cas-lost) as an error", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      // Simulates a human's reject landing while promoteTaskToPR's own
+      // network call is still in flight.
+      mockPromoteTaskToPR.mockImplementationOnce(async () => {
+        app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, taskId)).run();
+        return { ok: true, prUrl: "https://github.com/o/r/pull/9", prNumber: 9 };
+      });
+
+      await expect(reconcileTasks(app)).resolves.toBeUndefined();
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+
+      await app.close();
+    });
+
+    it("backs off after an attempt instead of re-checking CI on every tick", async () => {
+      const app = await buildApp();
+      await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+
+      await reconcileTasks(app);
+      await reconcileTasks(app);
+
+      // Second tick lands well inside the 1-minute TTL — no second lookup.
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(1);
+
+      await app.close();
+    });
+
+    // Hermes review, PR #768 — attemptAutoApprove's switch on
+    // ApproveOutcome's failure reasons originally omitted "no-worktree"
+    // entirely (no case, no default), so it fell through silently: no log,
+    // no named disposition, directly contradicting the function's own
+    // "every reason needs a named disposition" contract. Proves the task
+    // stays in "reviewing" (retried, not marked failed) and that the
+    // disposition is now actually logged.
+    it("backs off and logs on a 'no-worktree' promotion failure, instead of falling through silently", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockPromoteTaskToPR.mockResolvedValueOnce({
+        ok: false,
+        reason: "no-worktree",
+        detail: "Task has no worktree to promote",
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, reason: "no-worktree" }),
+        "task reconcile: auto-approve attempt failed — retrying",
+      );
+
+      await app.close();
     });
   });
 
@@ -1379,21 +2092,13 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("applies the same no-commits gate on the claimed -> reviewing edge", async () => {
-      const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithBase(app, "claimed");
-      vi.spyOn(app.pty, "get").mockReturnValue({
-        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-      } as never);
-      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", true));
-
-      await reconcileTasks(app);
-
-      const row = await getTask(app, taskId);
-      expect(row.status).toBe("failed");
-      expect(row.failureReason).toContain("no commits");
-      await app.close();
-    });
+    // The former "applies the same no-commits gate on the claimed ->
+    // reviewing edge" sibling of this describe block was deleted (task-claim
+    // queueing, rate-limit-storm fix) — that edge no longer exists, and this
+    // block's own in_progress-based no-commits-gate coverage above
+    // ("still fails the task... when the WIP salvage commit itself fails")
+    // already exercises the identical assertion via the one edge that
+    // remains.
 
     // RC5 — the reject snap-back: derived.status === "finished" is a LATCH
     // on lastTurnEndedAt, not an edge. A task rejected back to "in_progress"
@@ -1461,9 +2166,13 @@ describe("reconcileTasks", () => {
       app: Awaited<ReturnType<typeof buildApp>>,
       reviewAgent: string,
     ) {
+      // "in_progress", not "claimed" — task-claim queueing (rate-limit-storm
+      // fix) removed the claimed -> reviewing edge; this helper's whole job
+      // is getting a task INTO "reviewing" via reconcileTasks below, so it
+      // needs to start somewhere that edge still exists.
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         reviewAgent,
       );
       // createSessionAndTaskWithReviewAgent (shared with the review-agent
@@ -2174,9 +2883,12 @@ describe("reconcileTasks", () => {
     }
 
     async function claimWithPR(app: Awaited<ReturnType<typeof buildApp>>) {
+      // "in_progress", not "claimed" — see claimIntoReviewing's own comment
+      // above (task-claim queueing, rate-limit-storm fix removed the
+      // claimed -> reviewing edge this helper relies on to reach "reviewing").
       const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
         app,
-        "claimed",
+        "in_progress",
         "codex",
       );
       app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
@@ -2507,7 +3219,7 @@ describe("reconcileTasks", () => {
 
     it("clears the spawn claim on a failed spawn so the next tick retries, rather than leaving the task with no reviewer forever", async () => {
       const app = await buildApp();
-      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);

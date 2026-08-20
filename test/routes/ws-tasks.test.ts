@@ -138,7 +138,10 @@ describe("tasks WS route (/ws/tasks, #488)", () => {
       method: "POST",
       url: `/api/tasks/${task.id}/claim`,
     });
-    expect(claimRes.statusCode).toBe(201);
+    // Task-claim queueing (rate-limit-storm fix) — claim now only enqueues
+    // (202), which is all this test needs: the "ready -> claimed"
+    // transition it's actually checking for fires from enqueueTask itself.
+    expect(claimRes.statusCode).toBe(202);
 
     await waitUntil(() => messages1.length > 0 && messages2.length > 0);
 

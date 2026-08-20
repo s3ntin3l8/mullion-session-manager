@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, FunctionComponent } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { TerminalPane } from "../TerminalPane.js";
@@ -147,6 +147,20 @@ export function makePanelWrapper<
   };
 }
 
+// Workspace-autosave rate-limit-storm fix — an agent CLI's terminal title
+// carries a live elapsed-second counter while it's working (Claude Code's
+// `✳ Thinking… (23s · ...)`, Codex/opencode equivalents), so raw OSC title
+// events arrive roughly once a second. dockview-core wires a panel's TITLE
+// change into the same emitter that backs onDidLayoutChange, so an
+// unthrottled setTitle call here was the actual source of the per-second
+// `PATCH /api/workspaces/:id` storm (see panelUtils.ts's
+// stripSessionPanelTitles for the persistence-side half of this fix, and
+// that function's own comment for the full trace). A title repainting
+// faster than the eye can read isn't worth a tab repaint either, so this is
+// a UX throttle as much as a network one — issue #69's live-title behavior
+// stays intact, it just doesn't repaint on every single OSC frame.
+const OSC_TITLE_THROTTLE_MS = 1000;
+
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too.
 function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
@@ -161,16 +175,54 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // useDashboardStore selectors + a dep-array effect) so the always-current
   // nameLocked flag gates every OSC event without re-subscribing TerminalPane
   // on every store change.
-  const onTitleChange = useCallback(
+  const applyTitle = useCallback(
     (oscTitle: string) => {
       const { sessions, projects } = useDashboardStore.getState();
       const session = sessions.find((s) => s.id === sessionId);
       if (!session || session.nameLocked) return; // pinned by an explicit rename
       const projectName = projects.find((p) => p.id === session.projectId)?.name;
       props.api.setTitle(formatPaneTitle(oscTitle, projectName));
+      lastAppliedAtRef.current = Date.now();
     },
     [props.api, sessionId],
   );
+  // Trailing-edge throttle: the first title in any OSC_TITLE_THROTTLE_MS
+  // window applies immediately (lastAppliedAtRef starts at 0, so the very
+  // first call in this panel's lifetime is always instant — no delay before
+  // a freshly-opened terminal shows a real title). Every title that arrives
+  // inside that window overwrites `pendingTitleRef` rather than scheduling
+  // its own timer, so a burst of OSC events collapses to exactly one
+  // trailing apply carrying the LATEST title, not the first-in-window one.
+  const lastAppliedAtRef = useRef(0);
+  const pendingTitleRef = useRef<string | null>(null);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onTitleChange = useCallback(
+    (oscTitle: string) => {
+      const elapsed = Date.now() - lastAppliedAtRef.current;
+      if (elapsed >= OSC_TITLE_THROTTLE_MS) {
+        if (throttleTimerRef.current) {
+          clearTimeout(throttleTimerRef.current);
+          throttleTimerRef.current = null;
+        }
+        applyTitle(oscTitle);
+        return;
+      }
+      pendingTitleRef.current = oscTitle;
+      if (throttleTimerRef.current) return; // already scheduled for this window
+      throttleTimerRef.current = setTimeout(() => {
+        throttleTimerRef.current = null;
+        const latest = pendingTitleRef.current;
+        pendingTitleRef.current = null;
+        if (latest !== null) applyTitle(latest);
+      }, OSC_TITLE_THROTTLE_MS - elapsed);
+    },
+    [applyTitle],
+  );
+  useEffect(() => {
+    return () => {
+      if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
+    };
+  }, []);
   // U7 — same api.onDidActiveChange subscription PaneTab.tsx already uses
   // for its own badge logic (see that component's own comment on why the
   // useState initializer, not the effect, is what makes an already-active

@@ -1,39 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { claimTask, retryTask } from "../services/task-claim.js";
+import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
-import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
+import { closeDraftPRForTask } from "../services/task-promote.js";
+import { approveTask, cleanupTaskWorktree } from "../services/task-approve.js";
+import { resetMergeBackoff } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
-import { resolveBackend } from "../services/session-backend.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 
-// Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
-// "reviewing" for a terminal state. Fire-and-forget, same posture as the
-// GitHub sync calls below it: cleanup succeeding or failing doesn't change
-// whether the transition itself is valid, and removeWorktreeIfClean already
-// leaves a dirty/unclear tree in place for a later pass to retry rather
-// than losing anything.
-function cleanupTaskWorktree(
-  app: FastifyInstance,
-  task: { worktreePath: string | null },
-  project: typeof projects.$inferSelect,
-): void {
-  if (!task.worktreePath) return;
-  void resolveBackend(app, project.hostId)
-    .removeWorktreeIfClean(task.worktreePath, project.cwd)
-    .catch((err) => {
-      app.log.warn(
-        { err, worktreePath: task.worktreePath, projectId: project.id },
-        "task cleanup: removeWorktreeIfClean threw",
-      );
-    });
-}
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
 // transition available before 6.2's state machine lands is the interactive
@@ -151,6 +131,11 @@ const TASK_ROW_COLUMNS = {
   seedDelivered: tasks.seedDelivered,
   reviewSessionId: tasks.reviewSessionId,
   reviewSeedDelivered: tasks.reviewSeedDelivered,
+  // Task-claim queueing (rate-limit-storm fix) — the frontend's own
+  // "review in flight vs. awaiting your approval" predicate compares this
+  // against reviewSessionId (see TaskCard.tsx); wasn't previously exposed
+  // to any API response.
+  reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
   reviewFindings: tasks.reviewFindings,
   reviewRounds: tasks.reviewRounds,
   worktreePath: tasks.worktreePath,
@@ -175,6 +160,10 @@ const TASK_ROW_COLUMNS = {
   subIssueCompleted: tasks.subIssueCompleted,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
+  // Task-claim queueing (rate-limit-storm fix) — when the task JOINED the
+  // queue, distinct from claimedAt below (when its current worker spell
+  // actually started). See task-claim.ts's enqueueTask/dispatchClaimedTask.
+  queuedAt: tasks.queuedAt,
   claimedAt: tasks.claimedAt,
   startedAt: tasks.startedAt,
   reviewingAt: tasks.reviewingAt,
@@ -256,17 +245,27 @@ export async function tasksRoute(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+  // Shared by GET /api/tasks/:id below and claim's own 202 response
+  // (task-claim queueing, rate-limit-storm fix) — a queued/dispatched task
+  // now returns its row, not a session, so it needs the exact same
+  // shape/withBlockedState treatment the detail view already gets, not a
+  // second, drifting definition of "what a task looks like over the wire."
+  function selectTaskRow(taskId: number) {
     const [row] = app.db
       .select(TASK_ROW_COLUMNS)
       .from(tasks)
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .where(eq(tasks.id, taskId))
       .all();
+    return row ? withBlockedState(row) : null;
+  }
+
+  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const row = selectTaskRow(taskId);
     if (!row) return reply.notFound();
-    return withBlockedState(row);
+    return row;
   });
 
   function getProjectOr404(projectId: number) {
@@ -504,18 +503,27 @@ export async function tasksRoute(app: FastifyInstance) {
 
   // Phase 6 (6.2/#215) — thin wrapper over task-claim.ts's shared
   // orchestration (also used by task-watcher.ts's auto-claim sweep), which
-  // owns the reservation-first/concurrency-cap/agent-resolution/seed logic.
-  // This handler's only job is mapping ClaimTaskOutcome to an HTTP
-  // response.
+  // owns the agent-resolution/seed logic. This handler's only job is
+  // mapping EnqueueTaskOutcome to an HTTP response.
+  //
+  // Task-claim queueing (rate-limit-storm fix) — claiming now unconditionally
+  // ENQUEUES the task (status -> "claimed") and returns 202, rather than
+  // reserving-and-spawning synchronously and returning 201 with the new
+  // session. A manual claim can therefore no longer 429 on the concurrency
+  // cap at all — see task-claim.ts's enqueueTask/dispatchClaimedTask split.
+  // Dispatch (the actual worktree/session spawn) happens asynchronously,
+  // off task-dispatch.ts's opportunistic hook or its periodic sweep; the
+  // caller observes it via GET /api/tasks (or /ws/tasks) once it happens,
+  // not synchronously on this response.
   //
   // Task-Master-enabled-gated (independent review, PR #471; settings
   // override added by the Settings UI follow-up — see task-config.ts):
-  // claiming spawns an agent — the roadmap's Flag semantics decision names
-  // this endpoint explicitly as autonomous behavior the gate must cover,
-  // unlike the local board's create/edit/drag routes above. Before this
-  // check, a task created via the (deliberately un-gated) local board with
-  // `status: "ready"` could reach claim with Task Master off — the exact
-  // bypass the gate exists to prevent.
+  // claiming queues real autonomous work — the roadmap's Flag semantics
+  // decision names this endpoint explicitly as autonomous behavior the gate
+  // must cover, unlike the local board's create/edit/drag routes above.
+  // Before this check, a task created via the (deliberately un-gated) local
+  // board with `status: "ready"` could reach claim with Task Master off —
+  // the exact bypass the gate exists to prevent.
   app.post<{ Params: { id: string }; Body: ClaimTaskBody }>(
     "/api/tasks/:id/claim",
     { schema: claimTaskSchema },
@@ -529,7 +537,7 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
       const body = request.body ?? {};
-      const outcome = await claimTask(app, taskId, {
+      const outcome = await enqueueTask(app, taskId, {
         auto: false,
         agent: body.agent,
         reviewAgent: body.reviewAgent,
@@ -540,21 +548,13 @@ export async function tasksRoute(app: FastifyInstance) {
             return reply.notFound();
           case "not-ready":
             return reply.conflict(outcome.detail ?? "Task is not ready");
-          case "cap":
-            return reply
-              .code(429)
-              .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
-          case "worktree-failed":
-            return reply.badGateway(outcome.detail ?? "Failed to create a worktree for this task");
-          case "spawn-failed":
-            return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
           case "no-seed-channel":
             return reply.badRequest(outcome.detail ?? "Resolved agent can't receive a seed prompt");
         }
       }
 
-      reply.code(201);
-      return { ...outcome.session, seedDelivered: outcome.seedDelivered };
+      reply.code(202);
+      return selectTaskRow(taskId);
     },
   );
 
@@ -635,63 +635,69 @@ export async function tasksRoute(app: FastifyInstance) {
     const project = getProjectOr404(existing.projectId);
     if (!project) return reply.notFound("Project not found");
 
-    const promotion = await promoteTaskToPR(app, existing, project);
-    if (!promotion.ok) {
-      switch (promotion.reason) {
+    const outcome = await approveTask(app, existing, project, "approve");
+    if (!outcome.ok) {
+      switch (outcome.reason) {
         case "dirty-tree":
-          return reply.conflict(promotion.detail ?? "Worktree has uncommitted changes");
+          return reply.conflict(outcome.detail ?? "Worktree has uncommitted changes");
         case "no-worktree":
-          return reply.badGateway(promotion.detail ?? "Task has no worktree to promote");
+          return reply.badGateway(outcome.detail ?? "Task has no worktree to promote");
         case "no-token":
-          return reply.badRequest(promotion.detail ?? "No GitHub token connected");
+          return reply.badRequest(outcome.detail ?? "No GitHub token connected");
         case "no-repo":
-          return reply.badGateway(
-            promotion.detail ?? "Could not resolve the project's GitHub repo",
-          );
+          return reply.badGateway(outcome.detail ?? "Could not resolve the project's GitHub repo");
         case "push-failed":
-          return reply.badGateway(promotion.detail ?? "Failed to push the task's branch");
+          return reply.badGateway(outcome.detail ?? "Failed to push the task's branch");
         case "pr-create-failed":
-          return reply.badGateway(promotion.detail ?? "Failed to create the pull request");
+          return reply.badGateway(outcome.detail ?? "Failed to create the pull request");
         case "remote-not-supported":
-          return reply.code(501).send({ error: "remote-not-supported", message: promotion.detail });
+          return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
+        case "cas-lost":
+          // Promotion already succeeded (branch pushed, PR opened) but the
+          // task moved out of "reviewing" before the CAS write could land —
+          // a concurrent reject, most plausibly. The PR is real and left
+          // open; nothing to roll back here (see task-promote.ts's own doc
+          // comment on the narrower "PR already exists" retry case this is
+          // adjacent to).
+          return reply.conflict(
+            `Task was no longer in reviewing by the time this ran — a PR was opened at ${outcome.prUrl} but the task's status was not updated`,
+          );
       }
+    }
+    return outcome.task;
+  });
+
+  // Merge-on-approve — "Merge now" / "Retry merge". Re-arms the merge sweep
+  // (task-reconciler.ts's processMergeRequests) rather than merging inline:
+  // the same branch-protection reasoning as approve above applies here too
+  // (an up-to-date branch + green required checks a fresh click can't
+  // guarantee synchronously), so this only sets intent and resets the
+  // sweep's own backoff so the next tick attempts it immediately instead of
+  // waiting out whatever interval it was already on.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/merge", async (request, reply) => {
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
+    }
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+    if (existing.status !== "done") {
+      return reply.conflict(`Cannot request a merge for a task in status "${existing.status}"`);
+    }
+    if (existing.prNumber === null) {
+      return reply.conflict("Task has no linked pull request to merge");
     }
 
     const [updated] = app.db
       .update(tasks)
-      .set({
-        status: "done",
-        completedAt: new Date(),
-        prUrl: promotion.prUrl,
-        prNumber: promotion.prNumber,
-      })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
+      .set({ mergeRequestedAt: new Date(), mergeError: null })
+      .where(eq(tasks.id, taskId))
       .returning()
       .all();
-    if (!updated) {
-      // Promotion already succeeded (branch pushed, PR opened) but the
-      // task moved out of "reviewing" before this write — a concurrent
-      // reject, most plausibly. The PR is real and left open; nothing to
-      // roll back here (see task-promote.ts's own doc comment on the
-      // narrower "PR already exists" retry case this is adjacent to).
-      return reply.conflict(
-        `Task was no longer in reviewing by the time this ran — a PR was opened at ${promotion.prUrl} but the task's status was not updated`,
-      );
-    }
-    recordTaskTransition(app, {
-      taskId,
-      projectId: project.id,
-      from: "reviewing",
-      to: "done",
-      via: "approve",
-      context: { prUrl: promotion.prUrl },
-    });
-    // Deliberately NOT awaited (Hermes review, PR #474) — syncTaskTransition
-    // never throws (every failure is caught and logged inside it), so
-    // awaiting its GitHub round-trips here would only add latency for no
-    // benefit. Fire-and-forget.
-    void syncTaskTransition(app, updated, project, "done", { prUrl: updated.prUrl ?? undefined });
-    cleanupTaskWorktree(app, updated, project);
+    resetMergeBackoff(taskId);
     return updated;
   });
 

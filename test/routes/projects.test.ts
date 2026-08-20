@@ -703,6 +703,85 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("sets, then clears, mergeOnApprove/autoApprove", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "merge-settings", cwd: "/tmp/merge-settings" },
+      });
+      const { id } = created.json();
+      expect(created.json().mergeOnApprove).toBeNull();
+      expect(created.json().autoApprove).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { mergeOnApprove: true, autoApprove: true },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toMatchObject({ mergeOnApprove: true, autoApprove: true });
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { mergeOnApprove: false, autoApprove: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().mergeOnApprove).toBe(false);
+      expect(cleared.json().autoApprove).toBeNull();
+
+      await app.close();
+    });
+
+    // Regression guard for the "nothing maps to a column" 400 check
+    // (routes/projects.ts) — a PATCH carrying ONLY one of these two new
+    // fields must not fall through to `.update(projects).set({})`, which
+    // drizzle-orm throws on ("No values to set", a 500 not a 400).
+    it("accepts a PATCH carrying only mergeOnApprove", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "merge-only-field", cwd: "/tmp/merge-only-field" },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { mergeOnApprove: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().mergeOnApprove).toBe(true);
+
+      await app.close();
+    });
+
+    it("accepts a PATCH carrying only autoApprove", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "auto-approve-only-field",
+          cwd: "/tmp/auto-approve-only",
+        },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { autoApprove: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().autoApprove).toBe(true);
+
+      await app.close();
+    });
+
     it("rejects an unrecognized defaultAgent name", async () => {
       const app = await buildApp();
       const created = await app.inject({

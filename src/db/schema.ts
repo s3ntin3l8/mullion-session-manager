@@ -111,6 +111,22 @@ export const projects = sqliteTable("projects", {
   // default. Nullable: unset means "no review agent, human reviews
   // directly" — today's behavior, unchanged.
   defaultReviewAgent: text("default_review_agent"),
+  // Merge-on-approve / auto-approve — both per-project only, no install-wide
+  // tier, same posture as defaultReviewAgent above: whether a repo may merge
+  // to its own main unattended is a property of that repo's branch
+  // protection/CI/conventions, not of the Mullion install. Nullable,
+  // null/false = off; default-off matters, since merging is outward-facing
+  // and must not switch itself on for existing projects at upgrade.
+  //
+  // mergeOnApprove: approving a task (reviewing -> done) sets
+  // tasks.mergeRequestedAt; task-reconciler.ts's processMergeRequests sweep
+  // lands the merge asynchronously once GitHub allows it (see docs/tasks.md's
+  // Task -> PR promotion section).
+  mergeOnApprove: integer("merge_on_approve", { mode: "boolean" }),
+  // autoApprove: task-reconciler.ts's processAutoApprovals sweep approves a
+  // "reviewing" task on its own once its review agent's last verdict is
+  // "clean" AND CI on the PR head is green — see tasks.lastReviewVerdict.
+  autoApprove: integer("auto_approve", { mode: "boolean" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -465,6 +481,28 @@ export const tasks = sqliteTable(
     // already set and pushes new commits to the existing PR instead of
     // creating another one.
     prNumber: integer("pr_number"),
+    // Merge-on-approve — the durable *intent* to merge this task's PR, set
+    // when approve runs on a project with mergeOnApprove on (or by a manual
+    // "Merge now"/"Retry merge" click). Bounds task-reconciler.ts's
+    // processMergeRequests sweep candidate set: without this column, rollout
+    // would retroactively try to merge every historically-approved PR.
+    // Cleared once the PR is merged (or found already merged/closed) — the
+    // rate limiter (backoff between attempts) is intentionally in-memory
+    // only, not durable, same reasoning as retryStrandedDraftPRs' own
+    // draftPrRetryState.
+    mergeRequestedAt: integer("merge_requested_at", { mode: "timestamp" }),
+    // Merge-on-approve — the last merge-sweep failure reason (conflicts with
+    // main, checks blocked, no token, ...), surfaced in the task drawer. A
+    // separate column from githubSyncError, which clearGithubSyncError would
+    // otherwise clobber independently of this sweep's own state.
+    mergeError: text("merge_error"),
+    // Auto-approve — the review agent's most recently ingested verdict
+    // ("clean" | "changes-requested" | "inconclusive"), written alongside
+    // reviewFindingsIngestedSessionId in task-reconciler.ts's
+    // processReviewingTasks. Durable because auto-approve's gate needs to
+    // read it back later, not just at ingestion time — re-parsing the
+    // rendered reviewFindings prose is not a gate worth betting a merge on.
+    lastReviewVerdict: text("last_review_verdict"),
     // 6.4/6.9 — intended as part of the Tier-1 durable subset, but NOT
     // actually synced today and always null in practice: nothing in src/
     // ever writes this column. The assignee flow is write-only in the other
@@ -553,6 +591,19 @@ export const tasks = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
+    // The queue-then-dispatch split (rate-limit-storm fix) — stamped the
+    // moment a task enters "claimed" (manual claim/retry unconditionally,
+    // auto-claim only when it believes there's room), i.e. when the task
+    // joins the queue. `claimedAt` below is stamped separately, only once a
+    // worker session actually spawns — so a task that sits queued for hours
+    // isn't force-failed by the budget reaper the instant it starts (that
+    // reaper measures from `claimedAt`, never `queuedAt`). Never cleared
+    // once set; a queued-then-dispatched task keeps this as a lifecycle
+    // audit timestamp distinct from "when did its current spell start."
+    queuedAt: integer("queued_at", { mode: "timestamp" }),
+    // Stamped at DISPATCH (the reservation transaction that flips
+    // "claimed" -> "in_progress"), not at claim/retry/enqueue time — see
+    // queuedAt above. Null while a task sits queued with no session yet.
     claimedAt: integer("claimed_at", { mode: "timestamp" }),
     // 6.2 — lifecycle audit + the input to the per-task time-budget
     // deadline math (see task-reconciler.ts).

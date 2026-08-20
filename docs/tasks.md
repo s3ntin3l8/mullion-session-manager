@@ -127,6 +127,12 @@ done        → (terminal)
 failed      → backlog, ready
 ```
 
+`claimed` is the **queue** state (task-claim queueing, rate-limit-storm
+fix) — a task a human clicked Claim on, or auto-claim picked up, that is
+waiting for a free concurrency slot. It never holds a session; see the
+`claimed → in_progress` bullet below and Concurrency further down for the
+full design.
+
 - **A locally-created task** starts in `backlog`; dragging it to `ready` on
   the board is the interactive "make this claimable" trigger.
 - **A watcher-ingested issue** is inserted directly into `ready` — i.e.
@@ -134,19 +140,32 @@ failed      → backlog, ready
   `Manual: true`, in which case it lands in `backlog` instead. This is the
   opt-out: an ingested issue is autonomous by default, matching the "make
   this production-grade and auto-claimable" goal.
-- **`claimed → in_progress`** fires on the reconciler's next poll once the
-  claimed session's derived status is anything other than `idle` — not
-  specifically "real activity": a session merely blocked on a permission
-  prompt, or mid-compaction, also flips the task to `in_progress`.
-- **`* → reviewing`** fires when the worker session reaches
+- **`claimed` is the queue, not a reconciler-observed transient state**
+  (task-claim queueing, rate-limit-storm fix — see Concurrency below for
+  the full design). A manual claim or an auto-claim candidate always
+  enters `claimed` unconditionally (`task-claim.ts`'s `enqueueTask`), with
+  no session yet. **`claimed → in_progress`** fires the moment
+  `dispatchClaimedTask` reserves a free concurrency slot — inside the same
+  transaction that flips the status, before the worktree/session are
+  created — either off `task-dispatch.ts`'s opportunistic hook (any
+  transition that just freed a slot or just queued a task) or its periodic
+  sweep on the watcher's own poll tick. There is no longer a window where a
+  `claimed` row has a live session: dispatch commits the status flip first.
+- **`in_progress → reviewing`** fires when the worker session reaches
   `sessionStatus === "finished"` (its last turn ended and no background
   tasks are still running) **and** that finish postdates this
-  `claimed`/`in_progress` spell (`task.claimedAt`) **and** the branch has at
+  `in_progress` spell (`task.claimedAt`) **and** the branch has at
   least one commit past its recorded `baseSha` (`task-reconciler.ts`'s
-  `checkReviewingGate`, `#722`). `claimed → reviewing` directly (skipping
-  `in_progress`) is a real, reachable edge: the reconciler polls on an
-  interval, and a task whose agent finishes its very first turn between two
-  polls is legitimately never observed `in_progress` in between.
+  `checkReviewingGate`, `#722`). The transition table still lists
+  `claimed → reviewing` as legal (`task-state.ts`'s `canTransition` stays
+  advisory, bypassed in several places already), but it is no longer
+  reachable in practice: dispatch always flips `claimed → in_progress`
+  synchronously, inside its own reservation transaction, before a session
+  ever exists — so by the time any session could report "finished," the
+  task is already `in_progress`. (Historically this WAS a reachable edge,
+  when a single-phase `claimTask` reserved and spawned in one step and the
+  reconciler polled for activity afterward — see task-claim queueing,
+  rate-limit-storm fix, for why that changed.)
 
   Both extra conditions close real gaps a plain "finished" signal left open:
   - **The commits check is deliberately keyed on "any commits past
@@ -204,18 +223,28 @@ failed      → backlog, ready
   automatic on session exit — the worker's turn is already over and the
   work is committed on its branch, still promotable regardless of whether
   that session is still alive.
-- **`failed → claimed`** (`#483`) — **Retry**, on a `failed` task, resumes
-  work rather than restarting it: it checks out the task's preserved
-  `mullion/task-<id>` branch (see Worktree lifecycle below for why that
-  branch survives a failure) into a fresh worktree and spawns a new session
-  there, so committed-but-unfinished work isn't lost. This is a dedicated
-  route (`POST /api/tasks/:id/retry`), not the `failed → backlog`/`ready`
-  table edges — those two remain legal but have their own separate,
-  automatic trigger too (relabel-resurrection, see GitHub sync above),
-  since retry supersedes the two-step "flip to ready, then claim" flow they
-  would otherwise have required for a task Retry can actually resume.
-  Gated on Task Master being enabled, same as Claim, since it also spawns
-  a session.
+- **`failed → in_progress`** (`#483`) — **Retry**, on a `failed` task,
+  resumes work rather than restarting it: it checks out the task's
+  preserved `mullion/task-<id>` branch (see Worktree lifecycle below for
+  why that branch survives a failure) into a fresh worktree and spawns a
+  new session there, so committed-but-unfinished work isn't lost. Retry
+  stays a single-phase, atomic operation (unlike Claim, it does **not**
+  queue — task-claim queueing, rate-limit-storm fix, deliberately kept it
+  out of that split; the two spawn strategies, create-fresh vs.
+  resume-preserved-branch, would need an explicit column to disambiguate
+  once queued, left to a follow-up). It lands directly on `in_progress`,
+  not `claimed`: a successfully retried task already has a real, running
+  session, and `claimed` now means "queued, no session" everywhere else —
+  leaving it there would make it invisible to the concurrency cap (below),
+  which only counts `in_progress`. This is a dedicated route
+  (`POST /api/tasks/:id/retry`), not the `failed → backlog`/`ready` table
+  edges — those two remain legal but have their own separate, automatic
+  trigger too (relabel-resurrection, see GitHub sync above), since retry
+  supersedes the two-step "flip to ready, then claim" flow they would
+  otherwise have required for a task Retry can actually resume. Gated on
+  Task Master being enabled, same as Claim, since it also spawns a session.
+  Still cap-checked (the same transactional reservation, just resolving to
+  `in_progress` on success) — a retry can still 429 at capacity.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
@@ -276,8 +305,13 @@ GitHub's rate limit (this repo has no 429/`Retry-After` handling anywhere).
 Instead, `autoClaimReadyTasks` only resolves blockers for a candidate it is
 actually about to try, bounded three ways, cheapest first:
 
-1. A **capacity pre-count** — zero GitHub calls once `claimed`/
-   `in_progress` tasks already fill `maxConcurrent`.
+1. A **capacity pre-count** — zero GitHub calls once `claimed` + `in_progress`
+   tasks already fill `maxConcurrent`. Deliberately counts BOTH (task-claim
+   queueing, rate-limit-storm fix): this is pure pacing, not the real cap
+   (`dispatchClaimedTask`'s own transactional reservation, `in_progress`
+   only, is that) — without it, one sweep would drain the entire `ready`
+   backlog into `claimed` the moment even one slot opens, since
+   `enqueueTask` never itself cap-checks.
 2. A **5-minute re-check TTL** (`blockedByCheckedAt`) — a recently-checked
    task isn't re-resolved every poll tick regardless of state.
 3. A **per-sweep cap** (`MAX_DEPENDENCY_CHECKS_PER_SWEEP`, 20, mirroring the
@@ -573,6 +607,14 @@ Two independent choices are resolved per task, most-specific tier wins:
    feature; the install-wide tier just lets an operator engage one for every
    task without configuring it per project.
 
+   This becomes load-bearing, not just advisory, once a project's
+   `autoApprove` setting is on (see "Auto-approve" under Task → PR promotion
+   below): auto-approve's gate requires an ingested `clean` verdict, which
+   only exists if a review agent actually ran. No review agent configured on
+   a project means that project's tasks can never auto-approve, by design —
+   the same "opt-in, no global default" posture above, just with a
+   consequence attached now.
+
 Both directives are matched case-insensitively on their own line (a
 document that merely _mentions_ "Agent: claude" in prose isn't picked up).
 An unrecognized agent name at any tier is logged and falls through to the
@@ -855,15 +897,15 @@ env default; see [`configuration.md`](configuration.md) for the
 authoritative description of each env var — this table's own job is
 mapping each one to its Settings key and explaining what it actually gates.
 
-| Control                               | Setting (overrides the env default)          | Env default                                    | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------- | -------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Whether Task Master runs at all       | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)        | Gates every _new_ piece of autonomous work: the watcher's GitHub ingest + auto-claim, the claim/approve/retry endpoints (all refuse with 403/501 while off), and the reconciler's `claimed`/`in_progress` → `reviewing` transition itself (which includes spawning the review-agent session) — a finished session while disabled is left in `claimed`/`in_progress` instead, still reachable by the budget force-fail below, and transitions normally on the next tick once re-enabled. **`reject`/give-up are deliberately NOT gated** (Hermes review, PR #480, fourth pass; extended to give-up by `#483`): they're the only routes that can resolve an already-`reviewing` task, so a task that reached `reviewing` before the toggle flipped off — the one case the transition-gate above can't prevent — still has an escape hatch (back to `in_progress`, or to `failed`) instead of being stranded until re-enabled; `approve`/`retry` stay gated since they create a real PR/spawn a real session. Does **not** gate an already-in-flight task's own budget enforcement or `claimed`↔`in_progress` status sync to GitHub — that stays a safety net regardless. The local task board (create/edit/drag/delete) works regardless too — see the Flag semantics decision above. |
-| Max concurrent autonomous claims      | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Tasks in `claimed`/`in_progress` count against this cap; both manual and auto-claim share one transactional reservation, so this is an actual ceiling, not a soft throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `claimed`/`in_progress` task that's been running longer than this, regardless of what the agent is doing. `0` = unlimited.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops new claims; tasks already `claimed`/`in_progress` are unaffected. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long `processPendingReviewSpawns` (see below) holds a `reviewing` task whose PR has CI still `in_progress` **or** not yet registered (`null` — indistinguishable at lookup time from "no CI at all") before spawning the review agent anyway. `0` disables waiting — the reviewer spawns immediately regardless of CI state. No env-var counterpart: this is the one knob a task stranded on a repo whose CI will never report needs adjustable live, not only at process restart. A repo with no CI configured costs up to this long in polling before its first review spawns (no per-task backoff) — see the review-agent section's own note.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Control                               | Setting (overrides the env default)          | Env default                                    | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | -------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Whether Task Master runs at all       | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)        | Gates every _new_ piece of autonomous work: the watcher's GitHub ingest + auto-claim, the claim/approve/retry endpoints (all refuse with 403/501 while off), and the reconciler's `in_progress` → `reviewing` transition itself (which includes spawning the review-agent session) — a finished session while disabled is left in `in_progress` instead, still reachable by the budget force-fail below, and transitions normally on the next tick once re-enabled. **`reject`/give-up are deliberately NOT gated** (Hermes review, PR #480, fourth pass; extended to give-up by `#483`): they're the only routes that can resolve an already-`reviewing` task, so a task that reached `reviewing` before the toggle flipped off — the one case the transition-gate above can't prevent — still has an escape hatch (back to `in_progress`, or to `failed`) instead of being stranded until re-enabled; `approve`/`retry` stay gated since they create a real PR/spawn a real session. Does **not** gate an already-in-flight task's own budget enforcement or `in_progress` status sync to GitHub — that stays a safety net regardless. The local task board (create/edit/drag/delete) works regardless too — see the Flag semantics decision above. |
+| Max concurrent autonomous workers     | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Only tasks in `in_progress` count against this cap (task-claim queueing, rate-limit-storm fix) — `claimed` is the queue, and `reviewing` never held it (see the note below the cap doesn't cover). `dispatchClaimedTask`'s own transactional reservation (count `in_progress` + flip `claimed → in_progress`) is the sole correctness authority; a manual claim, auto-claim, and Retry all funnel through it, so this is an actual ceiling on live workers, not a soft throttle — it's just no longer a ceiling on how many tasks may be QUEUED, which is unbounded by design (that's the whole point: a manual claim past capacity queues instead of 429ing). `reviewing` deliberately isn't counted either, even though it can hold a live review-agent session and an open draft PR — see Concurrency below for why.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `in_progress` task that's been running longer than this, regardless of what the agent is doing — measured from `claimedAt`, which is stamped at dispatch (when the worker spell actually starts), not at enqueue, so time spent queued never counts against the budget. `0` = unlimited.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops the watcher picking new candidates off `ready`; it does **not** stop dispatch draining the queue — a task a human already queued (or that was auto-claimed before the pause) still dispatches once a slot is free, same as if the toggle were off. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long `processPendingReviewSpawns` (see below) holds a `reviewing` task whose PR has CI still `in_progress` **or** not yet registered (`null` — indistinguishable at lookup time from "no CI at all") before spawning the review agent anyway. `0` disables waiting — the reviewer spawns immediately regardless of CI state. No env-var counterpart: this is the one knob a task stranded on a repo whose CI will never report needs adjustable live, not only at process restart. A repo with no CI configured costs up to this long in polling before its first review spawns (no per-task backoff) — see the review-agent section's own note.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 No separate control for dependency-aware claiming (`#667`) — a
 zero-dependency issue costs nothing extra to begin with, so there's
@@ -924,6 +966,10 @@ single-blocker case.
 | `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue                                                                                                                                                                                                                                   |
 | `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                                                                                                                                                                                                           |
 | reject          | Comment with the human's feedback text                                                                                                                                                                                                                                                                                 |
+
+`→ done`'s label swap/comment/issue-close all happen synchronously at approve,
+same as always — none of it waits on the PR actually merging. Whether the PR
+merges is a separate, asynchronous concern; see **Merge on approve** below.
 
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
@@ -1029,18 +1075,121 @@ On give-up (`reviewing → failed`): a still-open draft PR is closed
 since a budget/session-death failure never reaches `reviewing` in the first
 place and so never has a draft to close.
 
+### Merge on approve
+
+By default, approving a task does everything above and stops — the PR is
+open, ready for review, non-draft, and nobody merges it. A per-project
+setting, **`mergeOnApprove`** (Project Settings; a column on `projects`, no
+install-wide equivalent — same "opt-in per project" posture as
+`defaultReviewAgent`), changes that: approving a task also requests a merge
+for its PR. A related setting, **`autoApprove`**, has a `reviewing` task
+approve itself once its review agent's last verdict was `clean` and CI is
+green — see "Auto-approve" below.
+
+Both default off. `mergeOnApprove` alone still requires a human to click
+Approve; combined with `autoApprove`, the pair gives a fully automatic
+issue-to-merged-`main` pipeline for that project.
+
+**Why merging isn't synchronous.** A merge can't happen inside the approve
+request itself — `main`'s branch protection requires the branch to be up to
+date and its required checks green, and a branch that was just pushed almost
+never satisfies either yet. GitHub's native auto-merge doesn't help either:
+it does not update a behind branch under a `strict` (up-to-date-required)
+protection rule, so relying on it would still need this same update-branch
+step by hand. Approving instead sets `tasks.mergeRequestedAt` (the durable
+_intent_), and a reconciler sweep (`processMergeRequests`,
+task-reconciler.ts) lands the merge asynchronously, once GitHub allows it:
+
+| PR state (`mergeable_state`)     | Sweep action                                                                                                                      |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `clean`                          | Squash-merges (explicit commit title — see the caveat below) and deletes the remote branch                                        |
+| `behind`                         | Updates the branch, waits for the next tick (checks must re-run first)                                                            |
+| `unstable`                       | Backs off and retries — does **not** merge (a non-required check, e.g. this repo's own `test-e2e`, is failing/pending; see below) |
+| `blocked`                        | Backs off and retries — a required check is red or still pending                                                                  |
+| `dirty`                          | Backs off and retries — a real conflict with the base branch, needs a rebase or a human                                           |
+| `unknown` (`mergeable === null`) | Backs off and retries — GitHub is still computing mergeability                                                                    |
+| merged/closed (out of band)      | Clears the merge flag — idempotent no-op                                                                                          |
+
+The sweep never gives up on a retryable state — a conflict becomes
+resolvable the moment someone rebases, and a give-up cap would just strand
+the task the same way an unbounded-wait bug would. A **"Merge now"/"Retry
+merge"** button in the task drawer (`POST /api/tasks/:id/merge`) re-arms the
+sweep immediately for any `done` task with a linked PR, for the conflict/red-
+CI cases that need a human to actually go fix something first.
+
+**Why `unstable` doesn't merge.** `unstable` means a _non-required_ check is
+failing or still running — and this repo deliberately does not require
+`test-e2e` or `codecov/patch` (see the CI/CD section above). Merging on
+`unstable` would silently skip whatever that check was verifying, right after
+a fresh push while e2e is still queued. A human clicking Squash-and-merge on
+GitHub at least sees the red X first; "Merge now" is the equivalent override
+here. The flip side: a non-required check that never reports at all leaves a
+PR `unstable` — and therefore never auto-merging — forever.
+
+**Commit title caveat.** This repo's squash-merge uses the PR title as the
+`main` commit message, and an unprefixed title (no `feat:`/`fix:`/...)
+silently drops out of release-please's changelog. A task's PR title is the
+raw task title, with no Conventional Commits enforcement. The merge sweep
+passes the commit title explicitly so the result is deterministic regardless
+of the repo's own squash-title setting, but it does **not** gate the merge on
+a prefix check — that's this repo's policy, not a Mullion-wide one. This
+matters more with `mergeOnApprove`/`autoApprove` on, since nobody is reading
+the title before it becomes a permanent commit message.
+
+### Auto-approve
+
+With `autoApprove` on, a `reviewing` task approves itself — no human click —
+once **all** of the following hold:
+
+1. Task Master is enabled.
+2. The task's current review round has actually been ingested
+   (`reviewFindingsIngestedSessionId === reviewSessionId` — the _latest_
+   round's verdict, not a stale one from an earlier round).
+3. That round's verdict (`tasks.lastReviewVerdict`, written alongside
+   ingestion by `processReviewingTasks`) is `clean`.
+4. CI on the PR head reads an explicit `success` — via the same
+   PR-plus-Actions-runs lookup the review-agent spawn already uses to wait
+   for CI (`fetchCurrentCiStatus`, factored out of `resolveReviewCi`).
+   **Unlike** that caller, there is no deadline after which auto-approve
+   gives up and proceeds anyway: `in_progress`, no CI found at all, and a
+   thrown lookup all simply mean "not yet," forever. A repo with no CI
+   configured therefore never auto-approves — the right default for a gate
+   whose whole job is to be a gate, not a formality that eventually
+   rubber-stamps itself.
+
+Anything else — no review agent configured on the project (so no verdict is
+ever ingested), `changes-requested`, `inconclusive`, CI red or still
+running — leaves the task in `reviewing` for a human, exactly today's
+behavior. Auto-approving records the transition with `via: "auto-approve"`,
+distinct from a human's `via: "approve"` in the task timeline and on
+`/ws/tasks`.
+
+This makes issue #737 (a second GitHub identity so the review agent's own PR
+review can gate merge) _less_ pressing but doesn't close it: the gate above
+is Mullion's own, enforced before a merge is ever requested — not a GitHub
+required-review.
+
+A remote-hosted task can never auto-approve today: review-findings
+ingestion (step 2 above) is local-only (see `processReviewingTasks`'s own
+doc comment), so `lastReviewVerdict` never gets written for one regardless
+of what its review agent actually found.
+
 ## Worktree lifecycle
 
 A task's worktree lives at `.mullion-worktrees/mullion-task-<id>`, on
-branch `mullion/task-<id>`, created at claim time (not eagerly at task
-creation) and removed only once its task reaches `done` or `failed` —
-never on session death alone — and only when `getGitStatus` reports the
-tree clean; a refusal leaves the path on the task row rather than
-destroying anything with uncommitted work. There is no periodic retry of
-a refused removal, though — the reconciler only polls `claimed`/
-`in_progress` tasks, not `done`/`failed` ones. The only two paths that
-revisit a refused-but-now-clean worktree are a boot-time sweep (below) and
-a re-claim of the same task.
+branch `mullion/task-<id>` — its path is predicted and stamped onto the
+task row at claim/enqueue time (not eagerly at task creation), but not
+actually created on disk until dispatch (task-claim queueing,
+rate-limit-storm fix — see `enqueueTask`/`dispatchClaimedTask`). It's
+removed only once its task reaches `done` or `failed` — never on session
+death alone — and only when `getGitStatus` reports the tree clean; a
+refusal leaves the path on the task row rather than destroying anything
+with uncommitted work. There is no periodic retry of a refused removal,
+though — the reconciler's main sweep only polls `in_progress` tasks (a
+`claimed` row is queued, session-less, and invisible to it by
+construction — see Lifecycle above), not `done`/`failed` ones. The only
+two paths that revisit a refused-but-now-clean worktree are a boot-time
+sweep (below) and a re-claim of the same task.
 
 **`→ failed` removes only the worktree, never the branch (`#483`).** That
 asymmetry is deliberate, not an oversight: the branch is what Retry (see
@@ -1116,14 +1265,11 @@ extensive design comments.
   to one issue number. Without an App configured (the default), every write
   still shares the one install-wide PAT, same as before. The
   cap/budget/kill-switch above are unaffected either way.
-- **`tasks.assignee` is never populated, and PR merges don't read back.**
-  The assignee flow is one-way: on claim, Mullion assigns the linked issue
-  to the integration's own login on GitHub, but nothing ever writes the
-  local `tasks.assignee` column, so it is always null despite being plumbed
-  through the API and rendered in the task detail drawer. Separately, the
-  only read-backs that exist are issue-close and tracking-label removal (see
-  GitHub sync above) — merging the promoted PR does not sync anything back;
-  the task reaches `done` on approve, not on merge.
+- **`tasks.assignee` is never populated.** The assignee flow is one-way: on
+  claim, Mullion assigns the linked issue to the integration's own login on
+  GitHub, but nothing ever writes the local `tasks.assignee` column, so it is
+  always null despite being plumbed through the API and rendered in the task
+  detail drawer.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A re-parenting (or de-parenting) between polls produces no live push
   (`#701`).** Sub-issue hierarchy has no push-based path the way dependency

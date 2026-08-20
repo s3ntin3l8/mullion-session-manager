@@ -42,7 +42,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { claimTask, retryTask } = await import("../../src/services/task-claim.js");
+const { enqueueTask, dispatchClaimedTask, retryTask } =
+  await import("../../src/services/task-claim.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -110,6 +111,26 @@ describe("claimTask", () => {
     return row;
   }
 
+  // Task-claim queueing (rate-limit-storm fix) — the old single-phase
+  // `claimTask` split into `enqueueTask` (reservation, agent resolution,
+  // no-seed-channel refusal) and `dispatchClaimedTask` (worktree creation,
+  // base-ref resolution, session spawn). Most of this describe block's
+  // tests exercise the combined end-to-end behavior the old function had;
+  // this helper reproduces that by running both steps and returning
+  // dispatch's outcome (or enqueue's own failure, unchanged shape, if it
+  // never got that far). Tests that need to inspect the INTERMEDIATE
+  // "claimed but not yet dispatched" state call enqueueTask/
+  // dispatchClaimedTask separately instead.
+  async function claimAndDispatch(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    taskId: number,
+    opts: { auto: boolean; agent?: string | null; reviewAgent?: string | null },
+  ) {
+    const enqueued = await enqueueTask(app, taskId, opts);
+    if (!enqueued.ok) return enqueued;
+    return dispatchClaimedTask(app, taskId);
+  }
+
   function getTask(app: Awaited<ReturnType<typeof buildApp>>, taskId: number) {
     const [row] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
     return row;
@@ -131,13 +152,16 @@ describe("claimTask", () => {
     });
     const task = insertReadyTask(app, projectId, 60);
 
-    const outcome = await claimTask(app, task.id, { auto: true });
+    const outcome = await claimAndDispatch(app, task.id, { auto: true });
 
     expect(outcome).toMatchObject({ ok: false, reason: "no-seed-channel" });
     if (!outcome.ok) expect(outcome.detail).toContain("gemini");
 
-    // The reservation must not be left behind — a refused auto-claim
-    // leaves the task exactly as claimable as before the attempt.
+    // No reservation ever made — enqueueTask's no-seed-channel refusal
+    // returns before its own transaction runs at all, unlike a dispatch
+    // failure (which DOES reserve first, then releases back to "claimed" —
+    // see the release() tests below). The task is exactly as claimable as
+    // before the attempt.
     const row = getTask(app, task.id);
     expect(row.status).toBe("ready");
     expect(row.sessionId).toBeNull();
@@ -157,7 +181,7 @@ describe("claimTask", () => {
     });
     const task = insertReadyTask(app, projectId, 61);
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
@@ -183,7 +207,7 @@ describe("claimTask", () => {
     const task = insertReadyTask(app, projectId, 62, "some details");
     const stashSeedSpy = vi.spyOn(app.pty, "stashSeed");
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.seedDelivered).toBe(true);
@@ -210,31 +234,45 @@ describe("claimTask", () => {
     await app.close();
   });
 
-  it("syncs the claimed transition to GitHub with the just-committed session fields, not stale pre-claim values", async () => {
+  // Task-claim queueing (rate-limit-storm fix) — the old single sync
+  // ("claimed", carrying the just-spawned session's fields) split into TWO:
+  // enqueueTask syncs "claimed" with NO session fields (none exist yet —
+  // that's the whole point of the queue), and dispatchClaimedTask syncs
+  // "in_progress" with the just-committed session fields, mirroring what
+  // the now-removed reconciler "claimed -> in_progress" branch used to sync
+  // before dispatch existed (task-reconciler.ts's own history).
+  it("syncs claimed with no session fields at enqueue, then in_progress with the just-committed session fields at dispatch", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
     const task = insertReadyTask(app, projectId, 62);
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
     expect(outcome.ok).toBe(true);
 
-    expect(mockSyncTaskTransition).toHaveBeenCalledTimes(1);
-    const [, syncedTask, syncedProject, syncedEvent] = mockSyncTaskTransition.mock.calls[0];
-    expect(syncedEvent).toBe("claimed");
-    expect(syncedTask).toMatchObject({
+    expect(mockSyncTaskTransition).toHaveBeenCalledTimes(2);
+    const [, claimedTask, claimedProject, claimedEvent] = mockSyncTaskTransition.mock.calls[0];
+    expect(claimedEvent).toBe("claimed");
+    expect(claimedTask).toMatchObject({ id: task.id, issueNumber: 62, status: "claimed" });
+    expect(claimedTask.sessionId).toBeNull();
+    expect(claimedProject).toMatchObject({ id: projectId });
+
+    const [, dispatchedTask, dispatchedProject, dispatchedEvent] =
+      mockSyncTaskTransition.mock.calls[1];
+    expect(dispatchedEvent).toBe("in_progress");
+    expect(dispatchedTask).toMatchObject({
       id: task.id,
       issueNumber: 62,
-      status: "claimed",
+      status: "in_progress",
       branchName: `mullion/task-${task.id}`,
     });
     // sessionId/worktreePath came from the just-created session record, not
-    // the pre-claim task snapshot (which had neither set) — verifies
+    // the pre-dispatch task snapshot (which had neither set) — verifies
     // task-claim.ts's hand-merged object actually carries the committed
-    // values forward rather than the stale ones from before the claim.
-    expect(syncedTask.sessionId).not.toBeNull();
-    expect(syncedTask.worktreePath).not.toBeNull();
-    expect(syncedProject).toMatchObject({ id: projectId });
+    // values forward rather than the stale ones from before dispatch.
+    expect(dispatchedTask.sessionId).not.toBeNull();
+    expect(dispatchedTask.worktreePath).not.toBeNull();
+    expect(dispatchedProject).toMatchObject({ id: projectId });
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
@@ -249,7 +287,7 @@ describe("claimTask", () => {
     const projectId = await createProject(app, cwd);
     const task = insertReadyTask(app, projectId, 69);
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
     expect(outcome.ok).toBe(true);
 
     const row = getTask(app, task.id);
@@ -259,7 +297,7 @@ describe("claimTask", () => {
     await app.close();
   });
 
-  it("releases the reservation back to ready when worktree creation fails, recording a failureReason", async () => {
+  it("releases the reservation back to claimed (not ready) when worktree creation fails, recording a failureReason", async () => {
     const app = await buildApp();
     // Not a git repo at all — resolveDefaultBaseRef/createWorktree fail
     // deterministically without needing to fake git itself.
@@ -267,14 +305,17 @@ describe("claimTask", () => {
     const projectId = await createProject(app, notARepo);
     const task = insertReadyTask(app, projectId, 62);
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
 
-    // Released, not stranded — retryable, and the concurrency slot isn't
-    // silently leaked forever.
+    // Released to "claimed" (its queue position), not stranded and not
+    // demoted all the way back to "ready" — task-claim.ts's
+    // dispatchClaimedTask's own doc comment: an enqueue was a real,
+    // unconditional commitment. Retryable (task-dispatch.ts's backoff), and
+    // the concurrency slot isn't silently leaked forever.
     const row = getTask(app, task.id);
-    expect(row.status).toBe("ready");
+    expect(row.status).toBe("claimed");
     expect(row.sessionId).toBeNull();
     expect(row.failureReason).toBe("worktree creation failed");
 
@@ -282,23 +323,24 @@ describe("claimTask", () => {
     await app.close();
   });
 
-  it("nulls out a stale seedDelivered on release, so a released task never carries a prior attempt's value forward", async () => {
+  it("nulls out a stale seedDelivered on release, so a released (still-claimed) task never carries a prior attempt's value forward", async () => {
     const app = await buildApp();
     const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "task-claim-test-stale-seed-"));
     const projectId = await createProject(app, notARepo);
     const task = insertReadyTask(app, projectId, 75);
-    // Simulates the (currently untriggered, but legal per task-state.ts)
-    // `failed -> ready` edge landing this same row back in "ready" with a
-    // real prior claim's seedDelivered still on it — belt-and-suspenders,
-    // same posture as the existing worktreePath/branchName/baseSha nulling
-    // just above.
+    // Simulates a hypothetical future path landing this row back in
+    // "claimed" with a real prior dispatch's seedDelivered still on it —
+    // no such path exists today (only dispatchClaimedTask's own commit
+    // block ever writes it), but this is belt-and-suspenders against one
+    // ever reusing this release() path, same posture as the existing
+    // worktreePath/branchName/baseSha nulling just above.
     app.db.update(tasks).set({ seedDelivered: true }).where(eq(tasks.id, task.id)).run();
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
     const row = getTask(app, task.id);
-    expect(row.status).toBe("ready");
+    expect(row.status).toBe("claimed");
     expect(row.seedDelivered).toBeNull();
 
     fs.rmSync(notARepo, { recursive: true, force: true });
@@ -307,7 +349,7 @@ describe("claimTask", () => {
 
   it("404s cleanly for an unknown task id", async () => {
     const app = await buildApp();
-    const outcome = await claimTask(app, 999999, { auto: false });
+    const outcome = await claimAndDispatch(app, 999999, { auto: false });
     expect(outcome).toEqual({ ok: false, reason: "not-found" });
     await app.close();
   });
@@ -318,19 +360,29 @@ describe("claimTask", () => {
     const projectId = await createProject(app, cwd);
     const task = insertReadyTask(app, projectId, 63);
 
-    vi.spyOn(sessionsModule, "createSessionRecord").mockRejectedValueOnce(
+    // Not `...Once` — task-claim queueing (rate-limit-storm fix) means
+    // enqueueTask's own transition unconditionally schedules a deferred
+    // background dispatch attempt (task-dispatch.ts's opportunistic hook)
+    // alongside this test's own explicit dispatchClaimedTask call, and
+    // whichever one reaches createSessionRecord FIRST would otherwise
+    // consume a one-shot mock, leaving the other fall through to the real
+    // implementation nondeterministically. Rejecting unconditionally makes
+    // every call within this test's scope fail the same way, regardless of
+    // which one wins that race.
+    vi.spyOn(sessionsModule, "createSessionRecord").mockRejectedValue(
       new Error("boom: unexpected spawn error"),
     );
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
     if (!outcome.ok) expect(outcome.detail).toContain("boom");
 
-    // Released, not stranded — same contract as the documented
-    // {ok:false} failure paths above, now also covering a thrown error.
+    // Released to "claimed", not stranded — same contract as the
+    // documented {ok:false} failure paths above, now also covering a
+    // thrown error.
     const row = getTask(app, task.id);
-    expect(row.status).toBe("ready");
+    expect(row.status).toBe("claimed");
     expect(row.sessionId).toBeNull();
     expect(row.failureReason).toContain("boom");
 
@@ -349,11 +401,20 @@ describe("claimTask", () => {
     // path below, which must still clear it).
     app.db.update(tasks).set({ baseSha: "deadbeef" }).where(eq(tasks.id, task.id)).run();
 
-    vi.spyOn(sessionsModule, "createSessionRecord").mockRejectedValueOnce(
+    // Not `...Once` — task-claim queueing (rate-limit-storm fix) means
+    // enqueueTask's own transition unconditionally schedules a deferred
+    // background dispatch attempt (task-dispatch.ts's opportunistic hook)
+    // alongside this test's own explicit dispatchClaimedTask call, and
+    // whichever one reaches createSessionRecord FIRST would otherwise
+    // consume a one-shot mock, leaving the other fall through to the real
+    // implementation nondeterministically. Rejecting unconditionally makes
+    // every call within this test's scope fail the same way, regardless of
+    // which one wins that race.
+    vi.spyOn(sessionsModule, "createSessionRecord").mockRejectedValue(
       new Error("boom: unexpected spawn error"),
     );
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
     expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
 
     const row = getTask(app, task.id);
@@ -383,7 +444,7 @@ describe("claimTask", () => {
       });
       expect(leftover).not.toBeNull();
 
-      const outcome = await claimTask(app, task.id, { auto: false });
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
       expect(outcome.ok).toBe(true);
       if (outcome.ok) expect(outcome.session.cwd).toBe(leftover!.path);
@@ -408,7 +469,7 @@ describe("claimTask", () => {
       expect(leftover).not.toBeNull();
       fs.writeFileSync(path.join(leftover!.path, "dirty.txt"), "uncommitted from a stuck attempt");
 
-      const outcome = await claimTask(app, task.id, { auto: false });
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
       expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
       if (!outcome.ok) expect(outcome.detail).toContain("dirty");
@@ -416,7 +477,7 @@ describe("claimTask", () => {
       // Released, retryable — same contract as every other pre-commit
       // failure path.
       const row = getTask(app, task.id);
-      expect(row.status).toBe("ready");
+      expect(row.status).toBe("claimed");
       expect(row.sessionId).toBeNull();
       // The dirty leftover is never destroyed — a human needs to resolve it.
       expect(fs.existsSync(leftover!.path)).toBe(true);
@@ -425,7 +486,7 @@ describe("claimTask", () => {
       await app.close();
     });
 
-    it("stamps worktreePath/branchName into the row at reservation time, before the worktree exists on disk (independent review, PR #476)", async () => {
+    it("stamps status/worktreePath/branchName into the row at dispatch's reservation time, before the worktree exists on disk (independent review, PR #476)", async () => {
       // Closes a race with plugins/task-watcher.ts's boot-time orphan sweep:
       // that sweep treats any on-disk task-worktree directory not
       // referenced by a non-terminal task's worktreePath as an orphan. If
@@ -435,6 +496,14 @@ describe("claimTask", () => {
       // just created. Verified here by inspecting the row from inside a
       // spy on createSessionRecord — i.e. BEFORE the worktree is actually
       // created — and confirming the DB already reflects the claim.
+      //
+      // Task-claim queueing (rate-limit-storm fix) — worktreePath/branchName
+      // are still stamped at ENQUEUE (before this point), but status is now
+      // "in_progress" here, not "claimed": dispatchClaimedTask's own
+      // reservation transaction flips claimed -> in_progress BEFORE calling
+      // createSessionRecord (mirroring the same "DB write precedes disk
+      // write" ordering this test was written to pin, just one level
+      // further down the pipeline now that claim/dispatch are split).
       const app = await buildApp();
       const cwd = createGitRepo();
       const projectId = await createProject(app, cwd);
@@ -449,10 +518,10 @@ describe("claimTask", () => {
           return realCreateSessionRecord(appArg, params);
         });
 
-      const outcome = await claimTask(app, task.id, { auto: false });
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
       expect(outcome.ok).toBe(true);
-      expect(sawDuringSpawn?.status).toBe("claimed");
+      expect(sawDuringSpawn?.status).toBe("in_progress");
       expect(sawDuringSpawn?.worktreePath).toBe(
         `${cwd}/.mullion-worktrees/mullion-task-${task.id}`,
       );
@@ -463,19 +532,26 @@ describe("claimTask", () => {
       await app.close();
     });
 
-    it("clears worktreePath/branchName back to null on release, so a released task never carries a stale path", async () => {
+    // Task-claim queueing (rate-limit-storm fix) — dispatchClaimedTask's
+    // own release() deliberately LEAVES worktreePath/branchName as-is,
+    // reversing the old claimTask's release() behavior this test used to
+    // pin. They're the queue's own predicted path (stamped by enqueueTask,
+    // still correct), needed by the NEXT dispatch attempt's own orphan-
+    // clearing step — nulling them here would just make that next attempt
+    // recompute the identical value.
+    it("leaves worktreePath/branchName in place on release — they're the queue's own predicted path, not stale", async () => {
       const app = await buildApp();
       const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "task-claim-test-release-clear-"));
       const projectId = await createProject(app, notARepo);
       const task = insertReadyTask(app, projectId, 68);
 
-      const outcome = await claimTask(app, task.id, { auto: false });
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
       expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
       const row = getTask(app, task.id);
-      expect(row.status).toBe("ready");
-      expect(row.worktreePath).toBeNull();
-      expect(row.branchName).toBeNull();
+      expect(row.status).toBe("claimed");
+      expect(row.worktreePath).toBe(`${notARepo}/.mullion-worktrees/mullion-task-${task.id}`);
+      expect(row.branchName).toBe(`mullion/task-${task.id}`);
 
       fs.rmSync(notARepo, { recursive: true, force: true });
       await app.close();
@@ -524,7 +600,7 @@ describe("claimTask", () => {
       value: { baseRef: "HEAD", sha: null },
     });
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome.ok).toBe(true);
     // The orphan-clear step and worktree creation both ran through the
@@ -574,7 +650,7 @@ describe("claimTask", () => {
       value: { baseRef: "origin/main", sha: "deadbeefcafe" },
     });
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome.ok).toBe(true);
     const row = getTask(app, task.id);
@@ -633,7 +709,7 @@ describe("claimTask", () => {
       detail: "connection refused",
     });
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome.ok).toBe(true);
     const row = getTask(app, task.id);
@@ -691,7 +767,7 @@ describe("claimTask", () => {
     });
     const warnSpy = vi.spyOn(app.log, "warn");
 
-    const outcome = await claimTask(app, task.id, { auto: false });
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
     expect(outcome.ok).toBe(true);
     // command defaults to "claude" (seed-capable) — a naive
@@ -886,7 +962,12 @@ describe("retryTask (#483)", () => {
     );
     expect(fakeBackend.spawn).toHaveBeenCalled();
     const row = getTask(app, task.id);
-    expect(row.status).toBe("claimed");
+    // Task-claim queueing (rate-limit-storm fix) — retryTask's own
+    // successful commit now lands directly on "in_progress", not "claimed"
+    // (a successfully retried task already has a real, running session by
+    // this point; leaving it at "claimed" would make it invisible to
+    // MULLION_TASK_MAX_CONCURRENT, which only counts "in_progress").
+    expect(row.status).toBe("in_progress");
 
     await app.close();
   });
@@ -963,7 +1044,9 @@ describe("retryTask (#483)", () => {
     );
 
     const row = getTask(app, task.id);
-    expect(row.status).toBe("claimed");
+    // See the earlier remote-hosted retry test's comment — a successful
+    // retry lands on "in_progress" now, not "claimed".
+    expect(row.status).toBe("in_progress");
     expect(row.failureReason).toBeNull();
     expect(row.completedAt).toBeNull();
     expect(row.prUrl).toBeNull();
@@ -1051,6 +1134,9 @@ describe("retryTask (#483)", () => {
       const outcome = await retryTask(app, task.id);
 
       expect(outcome).toMatchObject({ ok: false, reason: "cap", limit: 0 });
+      // `detail` is what routes/tasks.ts forwards as the 429's `message` —
+      // pin it here too, at the source, not only through the HTTP layer.
+      if (!outcome.ok) expect(outcome.detail).toContain("0");
       const row = getTask(app, task.id);
       expect(row.status).toBe("failed");
 

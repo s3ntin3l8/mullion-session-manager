@@ -832,6 +832,8 @@ function ProjectHeader({
               projectId={project.id}
               initialDefaultAgent={project.defaultAgent}
               initialDefaultReviewAgent={project.defaultReviewAgent}
+              initialMergeOnApprove={project.mergeOnApprove}
+              initialAutoApprove={project.autoApprove}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -839,6 +841,8 @@ function ProjectHeader({
                 devServerUrl,
                 defaultAgent,
                 defaultReviewAgent,
+                mergeOnApprove,
+                autoApprove,
                 createDir,
                 gitInit,
               }) =>
@@ -848,6 +852,8 @@ function ProjectHeader({
                   devServerUrl,
                   defaultAgent,
                   defaultReviewAgent,
+                  mergeOnApprove,
+                  autoApprove,
                   createDir,
                   gitInit,
                 })

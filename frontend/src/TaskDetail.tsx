@@ -445,6 +445,11 @@ export function TaskDetail({
 
       <div className="task-detail-footer">
         Created {formatRelativeAge(new Date(task.createdAt).getTime())}
+        {/* Task-claim queueing (rate-limit-storm fix) — queuedAt (joined
+            the queue) and claimedAt (current worker spell started) can now
+            both be present and meaningfully different; show both when they
+            are. */}
+        {task.queuedAt && <> · Queued {formatRelativeAge(new Date(task.queuedAt).getTime())}</>}
         {task.claimedAt && <> · Claimed {formatRelativeAge(new Date(task.claimedAt).getTime())}</>}
         {task.completedAt && (
           <> · Completed {formatRelativeAge(new Date(task.completedAt).getTime())}</>
@@ -676,6 +681,18 @@ function TaskActions({ task }: { task: Task }) {
     );
   }
 
+  // Merge-on-approve — a `done` task with a linked PR may still have a
+  // merge outstanding (mergeRequestedAt set, e.g. an "unstable"/"dirty"/
+  // "blocked" PR state the sweep is backing off and retrying on). Always
+  // rendered so the state/error is visible either way; TaskMergeStatus
+  // itself gates the button on taskMasterEnabled, since the backend route
+  // it calls is gated too (Hermes review, PR #769 — an earlier version of
+  // this comment wrongly claimed the Reject/Give-up "ungated escape hatch"
+  // posture applied here; it doesn't, that route has no such carve-out).
+  if (task.status === "done" && task.prNumber !== null) {
+    return <TaskMergeStatus task={task} />;
+  }
+
   if (task.status !== "reviewing") return null;
 
   if (pendingAction !== null) {
@@ -766,6 +783,62 @@ function TaskActions({ task }: { task: Task }) {
           disabled.
         </span>
       )}
+      {error && <span className="task-detail-error">{error}</span>}
+    </div>
+  );
+}
+
+// Merge-on-approve — renders for a `done` task with a linked PR (see the
+// TaskActions call site above). Three states: no merge ever requested (a
+// human can still merge by hand, or click Merge now to hand it to the
+// sweep), a merge outstanding with no error (the sweep is working it —
+// clean/behind/unknown mergeableState, see task-reconciler.ts's own table),
+// or outstanding with a recorded error (unstable/blocked/dirty — needs a
+// human to actually go fix something, "Retry merge" just re-arms the
+// sweep's backoff, it doesn't retry the SAME failed state any faster).
+function TaskMergeStatus({ task }: { task: Task }) {
+  const { taskMasterEnabled, mergeTask } = useDashboardStore();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pending = task.mergeRequestedAt !== null;
+  // Hermes review, PR #769 — POST /api/tasks/:id/merge is gated on
+  // taskMasterEnabled server-side (routes/tasks.ts, same 403 as approve),
+  // so an enabled button on a disabled install would always fail. Gate it
+  // client-side too, matching Claim/Approve/Retry's own disabledHint
+  // pattern above — this is NOT the Reject/Give-up posture (those routes
+  // are deliberately ungated as the escape hatch out of "reviewing"; merge
+  // has no such carve-out).
+  const disabledHint = !taskMasterEnabled
+    ? "Task Master is disabled — enable it to use this action."
+    : null;
+
+  return (
+    <div className="task-detail-actions">
+      <button
+        className="notif-gate-btn notif-gate-approve"
+        disabled={submitting || !taskMasterEnabled}
+        onClick={async () => {
+          setSubmitting(true);
+          setError(null);
+          try {
+            await mergeTask(task.id);
+          } catch (err) {
+            setError(err instanceof ApiError ? err.message : "Failed to request a merge");
+          } finally {
+            setSubmitting(false);
+          }
+        }}
+      >
+        {pending ? "Retry merge" : "Merge now"}
+      </button>
+      {pending && !task.mergeError && (
+        <span className="task-detail-hint">
+          Merge pending — landing once the branch is up to date and checks are green.
+        </span>
+      )}
+      {task.mergeError && <span className="task-detail-error">{task.mergeError}</span>}
+      {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
       {error && <span className="task-detail-error">{error}</span>}
     </div>
   );

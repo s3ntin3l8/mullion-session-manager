@@ -42,6 +42,11 @@ interface CreateProjectModalProps {
     // devServerUrl above.
     defaultAgent?: string | null;
     defaultReviewAgent?: string | null;
+    // Merge-on-approve / auto-approve — per-project only, no install-wide
+    // tier, same edit-mode-only framing as the two fields above. `null`/
+    // `false` both mean off; the modal always sends a plain boolean.
+    mergeOnApprove?: boolean | null;
+    autoApprove?: boolean | null;
     // Confirm-first directory creation — only ever sent once the user has
     // clicked "Create folder" below, in response to a PROJECT_DIR_MISSING
     // rejection. `gitInit` only has an effect when `createDir` is also set.
@@ -74,6 +79,8 @@ interface CreateProjectModalProps {
   projectId?: number;
   initialDefaultAgent?: string | null;
   initialDefaultReviewAgent?: string | null;
+  initialMergeOnApprove?: boolean | null;
+  initialAutoApprove?: boolean | null;
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -99,6 +106,8 @@ export function CreateProjectModal({
   projectId,
   initialDefaultAgent = null,
   initialDefaultReviewAgent = null,
+  initialMergeOnApprove = null,
+  initialAutoApprove = null,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
@@ -109,6 +118,8 @@ export function CreateProjectModal({
   const [defaultReviewAgent, setDefaultReviewAgent] = useState(
     initialDefaultReviewAgent ?? UNSET_AGENT,
   );
+  const [mergeOnApprove, setMergeOnApprove] = useState(initialMergeOnApprove ?? false);
+  const [autoApprove, setAutoApprove] = useState(initialAutoApprove ?? false);
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
@@ -223,6 +234,8 @@ export function CreateProjectModal({
             ? null
             : defaultReviewAgent
           : undefined,
+        mergeOnApprove: isEdit ? mergeOnApprove : undefined,
+        autoApprove: isEdit ? autoApprove : undefined,
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -455,6 +468,43 @@ export function CreateProjectModal({
               </span>
               <span className="create-modal-field-hint">
                 Optional advisory agent that reviews a task's diff once its worker's turn ends.
+              </span>
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Merge on approve</span>
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={mergeOnApprove}
+                  onChange={(e) => setMergeOnApprove(e.target.checked)}
+                />
+                Merge a task's PR automatically once it's approved
+              </label>
+              <span className="create-modal-field-hint">
+                Approving a task requests a merge; it lands once GitHub's checks are green and the
+                branch is up to date. Off by default — approving still just opens the PR otherwise.
+              </span>
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Auto-approve</span>
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={autoApprove}
+                  onChange={(e) => setAutoApprove(e.target.checked)}
+                />
+                Approve a task automatically on a clean review and green CI
+              </label>
+              <span className="create-modal-field-hint">
+                Needs a review agent configured above — no review agent means no verdict, so a task
+                never auto-approves. Combined with merge on approve, a task can go from claimed to
+                merged with no human click.
               </span>
             </label>
           )}

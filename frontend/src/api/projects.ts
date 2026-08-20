@@ -32,7 +32,16 @@ export const projectsApi = {
   updateProject: (
     id: number,
     patch: Partial<
-      Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
+      Pick<
+        Project,
+        | "name"
+        | "cwd"
+        | "devServerUrl"
+        | "defaultAgent"
+        | "defaultReviewAgent"
+        | "mergeOnApprove"
+        | "autoApprove"
+      >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>
     request<CreateProjectResult>(`/api/projects/${id}`, {
