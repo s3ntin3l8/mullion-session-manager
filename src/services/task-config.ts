@@ -27,6 +27,7 @@ export interface ResolvedTaskMasterConfig {
   budgetMinutes: number;
   progressCommentMinutes: number;
   skipPermissions: boolean;
+  reviewCiWaitMinutes: number;
 }
 
 // Pure — takes plain values rather than a FastifyInstance so the frontend
@@ -52,6 +53,9 @@ export function resolveTaskMaster(
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions
         : taskMaster.skipPermissions === "on",
+    // No sentinel, no env counterpart — settings.ts's own doc comment on
+    // this field explains why.
+    reviewCiWaitMinutes: taskMaster.reviewCiWaitMinutes,
   };
 }
 

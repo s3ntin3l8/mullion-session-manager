@@ -505,6 +505,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         budgetMinutes: -1,
         progressCommentMinutes: -1,
         skipPermissions: "inherit",
+        reviewCiWaitMinutes: 15,
       },
     },
     theme: "dark" as Theme,

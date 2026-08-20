@@ -168,7 +168,10 @@ interface GitHubWorkflowRunApiItem {
   head_sha: string;
 }
 
-function computeCiStatus(runs: GitHubActionsRun[]): GitHubCiStatus {
+// Exported for task-reconciler.ts's review-spawn CI gate (#738 follow-up) —
+// same aggregation the Dock widget's repo-level CI dot and the per-PR status
+// already use, reused rather than reimplemented for a task's own PR head.
+export function computeCiStatus(runs: GitHubActionsRun[]): GitHubCiStatus {
   if (runs.length === 0) return null;
   if (runs.some((r) => r.status !== "completed")) return "in_progress";
   // `skipped`/`cancelled` aren't a pass or a fail — excluding them from the
@@ -508,7 +511,12 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
   }));
 }
 
-async function fetchRunsForHead(
+// Exported for task-reconciler.ts's review-spawn CI gate (#738 follow-up).
+// Never throws (see the try/catch below) — a lookup failure degrades to `[]`
+// the same way it already does for every other caller of this function,
+// which `computeCiStatus([])` reads as `null` ("no signal"), not a failure
+// the caller needs its own try/catch to handle.
+export async function fetchRunsForHead(
   token: string,
   owner: string,
   repo: string,

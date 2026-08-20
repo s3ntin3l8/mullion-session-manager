@@ -12,6 +12,7 @@ export interface ResolvedTaskMasterConfig {
   budgetMinutes: number;
   progressCommentMinutes: number;
   skipPermissions: boolean;
+  reviewCiWaitMinutes: number;
 }
 
 export function resolveTaskMaster(
@@ -33,5 +34,6 @@ export function resolveTaskMaster(
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions
         : taskMaster.skipPermissions === "on",
+    reviewCiWaitMinutes: taskMaster.reviewCiWaitMinutes,
   };
 }

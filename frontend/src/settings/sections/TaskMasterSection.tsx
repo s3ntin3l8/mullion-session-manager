@@ -26,6 +26,7 @@ export function TaskMasterSection() {
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState<number | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
+  const [ciWaitDraft, setCiWaitDraft] = useState<number | null>(null);
 
   return (
     <>
@@ -128,6 +129,25 @@ export function TaskMasterSection() {
         />
       </Row>
       <Row
+        label="Review-agent CI wait"
+        desc="How long the review agent's spawn holds after a task enters review, waiting for CI to report on the PR's head commit (including the moments right after the push, before checks have registered), so the review sees real pass/fail results instead of running before CI even starts. 0 = spawn immediately, never wait. No environment default — this is the one moment a stranded task (CI that will never report, e.g. Actions disabled) needs a live knob rather than an env-var edit."
+      >
+        <NumberField
+          value={ciWaitDraft ?? resolved.reviewCiWaitMinutes}
+          min={0}
+          max={240}
+          width={54}
+          suffix="minutes"
+          onChange={setCiWaitDraft}
+          onCommit={(v) => {
+            setCiWaitDraft(null);
+            updateSettings({
+              taskMaster: { reviewCiWaitMinutes: clampNumberFieldOnCommit(v, 0, 240) },
+            });
+          }}
+        />
+      </Row>
+      <Row
         label="Skip permissions on unattended spawns"
         desc={`Passes the resolved agent's own skip-permissions flag (e.g. --dangerously-skip-permissions) to a claim/auto-claim/retry/review-agent spawn, so an unattended agent doesn't stall at a permission prompt with no one to answer it. Off by default: an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Environment default: ${env.skipPermissions ? "on" : "off"}.`}
       >
@@ -138,7 +158,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Reset to environment defaults"
-        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle, Skip permissions) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim has no env equivalent and is left as-is."
+        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle, Skip permissions) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim and Review-agent CI wait have no env equivalent and are left as-is."
       >
         <SecondaryButton
           onClick={() => {

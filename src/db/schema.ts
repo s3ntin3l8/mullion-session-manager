@@ -368,6 +368,29 @@ export const tasks = sqliteTable(
     // this true/false alongside reviewSessionId, so a promptless review
     // session is visible on the row instead of only in a server log line.
     reviewSeedDelivered: integer("review_seed_delivered", { mode: "boolean" }),
+    // #738 follow-up — the review-agent spawn moved out of the `→
+    // reviewing` transition (task-reconciler.ts's `processPendingReviewSpawns`,
+    // a separate pass gated on `reviewSessionId IS NULL`) so it can hold
+    // until CI reports on the PR's head commit instead of spawning before
+    // the PR even exists. That split needs its own concurrency guard: this
+    // column is a CAS claim written immediately before the spawn's own I/O
+    // (`createSessionRecord`), gated on `status = "reviewing" AND
+    // reviewSessionId IS NULL AND reviewSpawnClaimedAt IS NULL`, so a human
+    // hitting Reject/Give-up mid-spawn can't race a second claim into
+    // existence. That gate also, deliberately, does not protect the CAS
+    // claim's OWN final write — Reject/Give-up/Approve CAS on `status`
+    // alone and know nothing of this column, so one landing while
+    // `createSessionRecord` itself is in flight still wins; the claim's
+    // final write re-checks `status = "reviewing"` too and discards
+    // (terminates) an orphaned spawn rather than recording it. Reset to
+    // null alongside `reviewSessionId` on every fresh `→ reviewing` entry (a
+    // second review round needs its own claim), and cleared back to null on
+    // a failed spawn attempt so the next tick retries. A claim left non-null
+    // by a process crash mid-spawn — nothing else ever clears it — is
+    // reclaimed once it's older than `REVIEW_SPAWN_CLAIM_STALE_MS`
+    // (task-reconciler.ts), rather than the task losing its reviewer
+    // forever to a redeploy that happened at the wrong instant.
+    reviewSpawnClaimedAt: integer("review_spawn_claimed_at", { mode: "timestamp" }),
     // Review-feedback loop — the review agent's own findings, read from the
     // round-suffixed file it wrote (see task-prompt.ts's
     // taskReviewFindingsPath) once its session reaches "finished". Appended

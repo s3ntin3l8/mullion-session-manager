@@ -5,6 +5,9 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { spawn as childProcessSpawn } from "node:child_process";
 import type * as TaskReseedModule from "../../src/services/task-reseed.js";
+import type * as GitHubIntegrationModule from "../../src/services/github-integration.js";
+import type * as GitHubWriteModule from "../../src/services/github-write.js";
+import type * as GitHubModule from "../../src/services/github.js";
 
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
@@ -87,15 +90,39 @@ vi.mock("../../src/services/task-reseed.js", async (importOriginal) => {
 // session-backend.js -> git-worktree.js during file evaluation, which
 // triggers THIS mock's own factory before a plain `const` below it would
 // have run yet, throwing "Cannot access before initialization".
-const { mockResolveHostGitStatus, mockCommitWipChanges } = vi.hoisted(() => ({
+// `vi.hoisted()` for every mock fn declared in this file (not plain
+// top-level `const`s) — matching event-store.test.ts/github-pr-poller.test.ts's
+// own precedent, and test/helpers/mock-pty.ts's doc comment on exactly this
+// failure mode: several of these modules transitively import each other
+// during file evaluation (host-git.js -> ... -> github-integration.js ->
+// github-app.ts -> github.js, etc.), which can trigger a LATER mock
+// factory's closure before an EARLIER plain `const` it references has run —
+// "Cannot access before initialization". Hoisting every mock fn to the very
+// top of the module sidesteps the ordering question entirely.
+const {
+  mockResolveHostGitStatus,
+  mockCommitWipChanges,
+  mockResolveRepoRef,
+  mockResolveGitHubToken,
+  mockGetPullRequestByNumber,
+  mockFetchRunsForHead,
+} = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
+  mockResolveRepoRef: vi.fn(),
+  mockResolveGitHubToken: vi.fn(),
+  mockGetPullRequestByNumber: vi.fn(),
+  mockFetchRunsForHead: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     resolveHostGitStatus: mockResolveHostGitStatus,
+    // #738 follow-up — resolveRepoRef is the first call resolveReviewCi
+    // makes; pass-through wired in below (once the real modules can be
+    // imported), overridden only in the dedicated CI-gating tests.
+    resolveRepoRef: mockResolveRepoRef,
   };
 });
 
@@ -109,6 +136,55 @@ vi.mock("../../src/services/git-worktree.js", async (importOriginal) => {
     commitWipChanges: mockCommitWipChanges,
   };
 });
+
+// #738 follow-up (CI-gated review spawn) — pass-through by default (calls
+// the real implementation, wired in below once the real modules can be
+// imported). Safe for every pre-existing test in this file: no project host
+// config / GitHub integration exists in this test DB, so the real functions
+// naturally resolve to null/[] and processPendingReviewSpawns spawns with no
+// CI context — exactly the pre-#738-followup behavior. Only overridden with
+// `.mockResolvedValueOnce`/`.mockRejectedValueOnce` in the dedicated
+// CI-gating tests below — same posture as mockReseedTaskIfSessionExited.
+vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    resolveGitHubToken: mockResolveGitHubToken,
+  };
+});
+vi.mock("../../src/services/github-write.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getPullRequestByNumber: mockGetPullRequestByNumber,
+  };
+});
+vi.mock("../../src/services/github.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    fetchRunsForHead: mockFetchRunsForHead,
+  };
+});
+
+const actualHostGitModule = await vi.importActual<Record<string, unknown>>(
+  "../../src/services/host-git.js",
+);
+mockResolveRepoRef.mockImplementation(
+  actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+);
+const actualGithubIntegrationModule = await vi.importActual<typeof GitHubIntegrationModule>(
+  "../../src/services/github-integration.js",
+);
+mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+const actualGithubWriteModule = await vi.importActual<typeof GitHubWriteModule>(
+  "../../src/services/github-write.js",
+);
+mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
+const actualGithubModule = await vi.importActual<typeof GitHubModule>(
+  "../../src/services/github.js",
+);
+mockFetchRunsForHead.mockImplementation(actualGithubModule.fetchRunsForHead);
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
@@ -199,6 +275,16 @@ describe("reconcileTasks", () => {
     // .mockResolvedValueOnce from one #722 test can't bleed into the next.
     mockResolveHostGitStatus.mockReset();
     mockCommitWipChanges.mockReset().mockResolvedValue({ committed: false });
+    // #738 follow-up — `.mockClear()`, NOT `.mockReset()`: these four keep
+    // their pass-through-to-the-real-implementation default (wired once,
+    // above, via `.mockImplementation`) across every test; only a leaked
+    // `.mockResolvedValueOnce`/`.mockRejectedValueOnce` needs clearing so it
+    // can't bleed into the next test the way mockResolveHostGitStatus's own
+    // comment describes.
+    mockResolveRepoRef.mockClear();
+    mockResolveGitHubToken.mockClear();
+    mockGetPullRequestByNumber.mockClear();
+    mockFetchRunsForHead.mockClear();
   });
 
   afterEach(() => {
@@ -1897,6 +1983,635 @@ describe("reconcileTasks", () => {
         expect.stringContaining("rolled back the spent auto-return round"),
       );
 
+      await app.close();
+    });
+  });
+
+  // #738 follow-up — the review-agent spawn moved out of the "→ reviewing"
+  // transition into its own pass (processPendingReviewSpawns), gated on CI
+  // reaching a terminal state for the task's PR head commit. These tests
+  // exercise that pass directly rather than through the review-agent
+  // describe block above, whose every existing test relies on there being
+  // no PR (so resolveReviewCi short-circuits to `undefined` and the spawn
+  // still fires in the same tick as the transition) — deliberately
+  // unchanged behavior, not something this new pass needed to touch.
+  describe("CI-gated review spawn (processPendingReviewSpawns)", () => {
+    // claimWithPR below configures mockResolveRepoRef/mockResolveGitHubToken/
+    // mockGetPullRequestByNumber with a fake, persistent `.mockResolvedValue`
+    // (not `Once`) so every task-under-test's own CI lookup resolves
+    // deterministically. That's fine within a given test, but this file
+    // shares ONE DB across its whole run with no per-test reset (module-level
+    // comment above) — a task these tests leave behind (even a successfully
+    // spawned one) can still get re-examined by an UNRELATED later test's own
+    // broad `vi.spyOn(app.pty, "get")` mock, which would then hit these fake
+    // "tok"/"o/r" values instead of the real (harmless, no-op) test-env
+    // defaults, attempting a real GitHub call with fabricated credentials.
+    // Restoring the pass-through default after every test in this block
+    // keeps that fakery from outliving the test that needed it.
+    afterEach(() => {
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+      mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
+    });
+
+    // Local copy of the review-findings-loop describe block's own helper
+    // above (not shared scope) — same "only the given ids are finished"
+    // reasoning.
+    function mockFinishedSessionIds(app: Awaited<ReturnType<typeof buildApp>>, ...ids: number[]) {
+      const finished = new Set(ids.map(String));
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              finished.has(String(id)) ? fakeInfo({ lastTurnEndedAt: Date.now() }) : fakeInfo(),
+          }) as never,
+      );
+    }
+
+    async function claimWithPR(app: Awaited<ReturnType<typeof buildApp>>) {
+      const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
+        app,
+        "claimed",
+        "codex",
+      );
+      app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+      // Targeted, not a blanket "every session is finished" mock (matching
+      // mockFinishedSessionIds' own reasoning above): once a review session
+      // spawns, a blanket mock would make IT look "finished" too on the
+      // very next tick, dragging processReviewingTasks into ingesting it —
+      // and since these tests' GitHub mocks resolve a real-looking repo/PR,
+      // that pass would then attempt a REAL createPullRequestReview network
+      // call. Only the worker session's id is ever "finished" here.
+      mockFinishedSessionIds(app, workerSessionId);
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://x/pull/9",
+        nodeId: "n",
+        draft: true,
+        headSha: "sha1",
+      });
+      return { taskId, workerSessionId };
+    }
+
+    // Hermes review, PR #742 — a null status (no runs) waits exactly like
+    // "in_progress" rather than spawning immediately. `openDraftPRForTask`
+    // and this pass run in the SAME reconcile tick as the → reviewing
+    // transition, so the very first lookup here lands within moments of the
+    // push that created the head commit — GitHub's Actions runs for a
+    // just-pushed commit routinely aren't registered yet, indistinguishable
+    // at lookup time from "this repo has no CI at all." Spawning
+    // immediately on that null would reproduce the exact #213782 incident
+    // this whole change exists to prevent.
+    it("waits when CI resolves to null (no runs yet) and before the deadline, then spawns once it's terminal on a later tick", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([]);
+
+      await reconcileTasks(app);
+
+      let row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      await reconcileTasks(app);
+
+      row = await getTask(app, taskId);
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("spawns anyway once reviewCiWaitMinutes is exceeded, even while CI still resolves to null (no runs)", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: 0 } },
+        });
+        const { taskId } = await claimWithPR(app);
+        mockFetchRunsForHead.mockResolvedValueOnce([]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).not.toBeNull();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: -1 } },
+        });
+        await app.close();
+      }
+    });
+
+    it("spawns in the same tick as the transition once CI is already terminal (failure)", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "failure",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("waits while CI is in_progress and before the deadline, then spawns once it's terminal on a later tick", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        { name: "CI", status: "queued", conclusion: null, htmlUrl: "https://x/1", headSha: "sha1" },
+      ]);
+
+      await reconcileTasks(app);
+
+      let row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull(); // never claimed — nothing to wait for is not the same as failed
+
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      await reconcileTasks(app);
+
+      row = await getTask(app, taskId);
+      expect(row.reviewSessionId).not.toBeNull();
+      // The worker session itself is untouched by any of this — only the
+      // review AGENT'S spawn was gated, not the worker's own completion.
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    it("spawns anyway once reviewCiWaitMinutes is exceeded, even while CI is still in_progress", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: 0 } },
+        });
+        const { taskId } = await claimWithPR(app);
+        mockFetchRunsForHead.mockResolvedValueOnce([
+          {
+            name: "CI",
+            status: "queued",
+            conclusion: null,
+            htmlUrl: "https://x/1",
+            headSha: "sha1",
+          },
+        ]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        // waitMinutes: 0 means "never wait" — `now - reviewingAt` is always
+        // `>= 0`, so the deadline is already past on the very first check.
+        expect(row.reviewSessionId).not.toBeNull();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: -1 } },
+        });
+        await app.close();
+      }
+    });
+
+    // Hermes review, PR #742 (second pass) — a thrown lookup waits up to
+    // the deadline exactly like `in_progress`/`null`, rather than spawning
+    // without CI on the very first failure: a transient network blip or
+    // GitHub not yet being consistent on the brand-new PR, in the exact
+    // just-pushed window, is indistinguishable from "will succeed next
+    // tick," and spawning immediately would reintroduce the #213782 gap.
+    it("waits when the CI lookup itself throws and before the deadline, then spawns once it succeeds on a later tick", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockRejectedValueOnce(new Error("GitHub is down"));
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      let row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId }),
+        expect.stringContaining("CI lookup for review spawn failed — waiting to retry"),
+      );
+
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      await reconcileTasks(app);
+
+      row = await getTask(app, taskId);
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("spawns without CI context once a persistently throwing CI lookup passes the wait deadline", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: 0 } },
+        });
+        const { taskId } = await claimWithPR(app);
+        mockFetchRunsForHead.mockRejectedValueOnce(new Error("GitHub is down"));
+        const warnSpy = vi.spyOn(app.log, "warn");
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).not.toBeNull();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ taskId }),
+          expect.stringContaining("still failing past the wait deadline"),
+        );
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: -1 } },
+        });
+        await app.close();
+      }
+    });
+
+    // The regression guard for the concurrency hazard splitting the spawn
+    // out of the transition's own CAS introduced: a CI lookup is genuine
+    // async work (unlike the old inline spawn, which ran inside the same
+    // CAS'd write as the transition itself), so a human's Reject/Give-up/
+    // Approve can land on this exact task while the lookup is still in
+    // flight. The claim write's own CAS (re-checking status = "reviewing"
+    // AND reviewSessionId/reviewSpawnClaimedAt IS NULL) must refuse rather
+    // than spawn a reviewer for a task that's already moved on.
+    it("refuses to spawn when a concurrent reject flips the task away from reviewing mid-CI-lookup", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockImplementationOnce(async () => {
+        // Simulates a human's Reject landing on this exact task WHILE this
+        // lookup is in flight — the same write routes/tasks.ts's own
+        // reject handler makes, just fired synchronously here instead of
+        // via a real concurrent request.
+        app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, taskId)).run();
+        return [
+          {
+            name: "CI",
+            status: "completed",
+            conclusion: "success",
+            htmlUrl: "https://x/1",
+            headSha: "sha1",
+          },
+        ];
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress"); // the concurrent reject wins
+      expect(row.reviewSessionId).toBeNull(); // no reviewer spawned for it
+
+      await app.close();
+    });
+
+    it("clears the spawn claim on a failed spawn so the next tick retries, rather than leaving the task with no reviewer forever", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      // This test file shares one DB across every test (by design — see its
+      // own module-level comment) and doesn't reset tasks between tests, so
+      // an EARLIER test's own task can still be sitting in "reviewing" with
+      // reviewSessionId null (e.g. "logs and swallows a review agent spawn
+      // failure..." above, whose whole point is that its own failure is
+      // never retried within its own single tick — but processPendingReviewSpawns
+      // now retries it on every LATER test's tick too). A plain
+      // `.mockResolvedValueOnce` on createSessionRecord would fail
+      // whichever task's spawn call happens to run first in that pass's
+      // `Promise.all`, not necessarily this test's own — so this scopes the
+      // one-time failure to THIS test's own project id and delegates every
+      // other call (including any leftover task's real retry) to the real
+      // implementation.
+      const projectId = (await getTask(app, taskId)).projectId;
+      const sessionsModule = await import("../../src/services/session-lifecycle.js");
+      const actualCreateSessionRecord = sessionsModule.createSessionRecord;
+      let failedOnce = false;
+      vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async (a, opts) => {
+        if (!failedOnce && opts.projectId === projectId) {
+          failedOnce = true;
+          return { ok: false, reason: "spawn-failed" };
+        }
+        return actualCreateSessionRecord(a, opts);
+      });
+
+      await reconcileTasks(app);
+
+      let row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+
+      // Second tick — createSessionRecord runs for real this time.
+      await reconcileTasks(app);
+
+      row = await getTask(app, taskId);
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    // Regression guard — spawning a review agent used to be gated on
+    // "enabled" only transitively, by riding along inside the (gated) →
+    // reviewing transition's own write. Splitting the spawn into this
+    // separate pass lost that transitive coverage; must be re-checked
+    // explicitly, same posture as retryStrandedDraftPRs' own "does not
+    // retry while Task Master is disabled" test above.
+    it("does not spawn a review agent while Task Master is disabled, even for a task already in 'reviewing'", async () => {
+      const app = await buildApp();
+      let taskId: number | undefined;
+      try {
+        ({ taskId } = await claimWithPR(app));
+        mockFetchRunsForHead.mockResolvedValueOnce([
+          {
+            name: "CI",
+            status: "queued",
+            conclusion: null,
+            htmlUrl: "https://x/1",
+            headSha: "sha1",
+          },
+        ]);
+        await reconcileTasks(app); // -> reviewing; CI still in_progress, so nothing spawns yet either way
+
+        let row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull();
+
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+
+        await reconcileTasks(app);
+
+        row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull();
+        // The gate must fire before any CI resolution work, not just before
+        // the eventual spawn.
+        expect(mockFetchRunsForHead).toHaveBeenCalledTimes(1);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        // This task is deliberately left "reviewing" with reviewSessionId
+        // still null by design (the whole point of this test) — unlike the
+        // beforeEach sweep above (scoped to `prNumber IS NULL`), it has a
+        // real prNumber and would otherwise survive into every later test's
+        // shared DB, getting reprocessed by their own processPendingReviewSpawns
+        // pass and consuming THEIR single-shot mockFetchRunsForHead queue
+        // entries out from under them (see the module-level sharedDB
+        // comment). Delete it rather than let it outlive this test.
+        if (taskId !== undefined) {
+          getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
+        }
+        await app.close();
+      }
+    });
+
+    // Regression guard for the gap the claim CAS alone doesn't close: it
+    // protects the WRITE that claims the slot, but createSessionRecord
+    // itself (a real spawn, possibly a network round-trip) is real async
+    // work after that claim lands, during which Reject/Give-up/Approve can
+    // still land — they CAS on `status` alone and know nothing of this
+    // claim. The final write must re-check `status = "reviewing"` and
+    // discard (kill) the now-orphaned session rather than recording it onto
+    // a task that has moved on.
+    it("kills the orphaned session when the task leaves 'reviewing' while its review agent is still spawning", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+
+      const projectId = (await getTask(app, taskId)).projectId;
+      const sessionsModule = await import("../../src/services/session-lifecycle.js");
+      const actualCreateSessionRecord = sessionsModule.createSessionRecord;
+      vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async (a, opts) => {
+        if (opts.projectId === projectId) {
+          // Simulates a human's Reject landing on this exact task WHILE
+          // this spawn's own I/O is in flight — the same write
+          // routes/tasks.ts's own reject handler makes, just fired
+          // synchronously here instead of via a real concurrent request.
+          app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, taskId)).run();
+        }
+        return actualCreateSessionRecord(a, opts);
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress"); // the concurrent reject wins
+      expect(row.reviewSessionId).toBeNull(); // never recorded onto a task that moved on
+      expect(terminateSpy).toHaveBeenCalledWith(expect.any(String));
+      // killSession, not a bare backend.terminate — the orphaned session's
+      // own row must flip to "killed" too, or the exited-session reconciler
+      // would later surface it as a crashed session with no task behind it.
+      const [orphanedSession] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, Number(terminateSpy.mock.calls[0]?.[0])))
+        .all();
+      expect(orphanedSession?.status).toBe("killed");
+
+      await app.close();
+    });
+
+    // Regression guard for the gap the `changes === 0` branch above doesn't
+    // cover: a throw AFTER createSessionRecord already succeeded (a DB
+    // error on the CAS update, or resolveSeedDelivered itself throwing)
+    // used to fall into the generic `catch`, which only cleared the claim —
+    // `result` was scoped inside the `try`, unreachable from there, so the
+    // already-spawned session was never killed (Hermes review, PR #742).
+    it("kills the orphaned session when a later step throws after createSessionRecord already succeeded", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+
+      const taskAgentResolveModule = await import("../../src/services/task-agent-resolve.js");
+      const resolveSeedDeliveredSpy = vi
+        .spyOn(taskAgentResolveModule, "resolveSeedDelivered")
+        .mockImplementation(() => {
+          throw new Error("boom");
+        });
+
+      try {
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull(); // the throw happened before this write
+        expect(row.reviewSpawnClaimedAt).toBeNull(); // cleared by the catch block
+        expect(terminateSpy).toHaveBeenCalledWith(expect.any(String));
+        const [orphanedSession] = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, Number(terminateSpy.mock.calls[0]?.[0])))
+          .all();
+        expect(orphanedSession?.status).toBe("killed");
+      } finally {
+        resolveSeedDeliveredSpy.mockRestore();
+        // This task is deliberately left "reviewing" + reviewSessionId null
+        // with a real prNumber — same shared-DB leak hazard as the
+        // "disabled" test's own cleanup above.
+        getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
+        await app.close();
+      }
+    });
+
+    // Regression guard for a claim abandoned by a process crash/redeploy
+    // between the claim write and either outcome — nothing else ever clears
+    // reviewSpawnClaimedAt in that case, so without a staleness reclaim the
+    // task would lose its reviewer forever.
+    it("reclaims a review-spawn claim abandoned by a crashed prior attempt once it's stale", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        { name: "CI", status: "queued", conclusion: null, htmlUrl: "https://x/1", headSha: "sha1" },
+      ]);
+      // -> reviewing; CI still in_progress, so this tick never claims —
+      // reviewSpawnClaimedAt starts genuinely null, not just unset.
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).reviewSpawnClaimedAt).toBeNull();
+
+      // Simulates a prior attempt's process dying right after claiming the
+      // slot but before spawning or clearing it.
+      app.db
+        .update(tasks)
+        .set({ reviewSpawnClaimedAt: new Date(Date.now() - 11 * 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("does not reclaim a review-spawn claim that's still within the staleness window", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        { name: "CI", status: "queued", conclusion: null, htmlUrl: "https://x/1", headSha: "sha1" },
+      ]);
+      await reconcileTasks(app); // -> reviewing, waits on CI, never claimed
+
+      app.db
+        .update(tasks)
+        .set({ reviewSpawnClaimedAt: new Date(Date.now() - 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+
+      // Same reasoning as the "disabled" test's own cleanup above: this
+      // task is deliberately left "reviewing" + reviewSessionId null with a
+      // real prNumber, which the beforeEach sweep (scoped to `prNumber IS
+      // NULL`) won't catch — left behind, it'd be reprocessed by whichever
+      // later test's reconcileTasks() call runs next, consuming THAT test's
+      // own single-shot mockFetchRunsForHead queue entry out from under it.
+      getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
       await app.close();
     });
   });

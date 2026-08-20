@@ -1,12 +1,12 @@
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
-import { createSessionRecord } from "./session-lifecycle.js";
+import { createSessionRecord, killSession } from "./session-lifecycle.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
@@ -29,11 +29,15 @@ import {
   taskReviewFindingsPath,
   parseReviewFindings,
   renderReviewFindingsMarkdown,
+  type ReviewCiInfo,
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
-import { resolveHostGitStatus } from "./host-git.js";
+import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges } from "./git-worktree.js";
+import { resolveGitHubToken } from "./github-integration.js";
+import { getPullRequestByNumber } from "./github-write.js";
+import { computeCiStatus, fetchRunsForHead } from "./github.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -58,21 +62,33 @@ import { commitWipChanges } from "./git-worktree.js";
  * `reviewSeedDelivered: false` on the task row, so a seedless review
  * session is visible without grepping logs — see the column's own doc
  * comment in schema.ts.
+ *
+ * Actually spawning — this function — is called only once
+ * `processPendingReviewSpawns` below has already resolved a CI verdict (or
+ * decided there's none to wait for) and CAS-claimed the slot. Unlike the
+ * old inline version, a failed spawn now clears its own claim
+ * (`clearReviewSpawnClaim`) so the next tick retries rather than leaving
+ * the task with no reviewer forever — see schema.ts's
+ * `reviewSpawnClaimedAt` doc comment.
  */
-async function maybeSpawnReviewAgent(
+async function spawnReviewAgentNow(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   skipPermissions: boolean,
+  reviewCommand: string,
+  ci: ReviewCiInfo | undefined,
 ): Promise<void> {
   if (!task.worktreePath) return;
-  const reviewCommand = resolveReviewAgentCommand(app, {
-    taskReviewAgent: task.reviewAgent,
-    issueBody: task.body,
-    projectDefaultReviewAgent: project.defaultReviewAgent,
-  });
-  if (reviewCommand === null) return;
-
+  // Hoisted out of the `try` (Hermes review, PR #742) — a throw AFTER
+  // createSessionRecord succeeds (a DB error on the CAS update below, or
+  // resolveSeedDelivered itself throwing) used to fall into the generic
+  // `catch`, which only cleared the claim and had no way to reach the
+  // session it had just created — left "active" and untracked, it would
+  // surface later at the exited-session reconciler as a mystery crash with
+  // no task behind it, same failure mode the `changes === 0` branch below
+  // exists to prevent for the "task moved on" case.
+  let spawnedSessionId: number | undefined;
   try {
     // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
     // worker spawns: SessionStart's `additionalContext` (stashSeed's only
@@ -89,7 +105,7 @@ async function maybeSpawnReviewAgent(
       task.id,
       task.reviewRounds,
     );
-    const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath });
+    const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath, ci });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
@@ -102,8 +118,10 @@ async function maybeSpawnReviewAgent(
         { taskId: task.id, reviewCommand, reason: result.reason },
         "task reconcile: review agent spawn failed",
       );
+      clearReviewSpawnClaim(app, task.id);
       return;
     }
+    spawnedSessionId = result.row.id;
     // Same version-skew guard as task-claim.ts's own — see
     // resolveSeedDelivered's doc comment.
     const seedDelivered = resolveSeedDelivered(
@@ -119,18 +137,313 @@ async function maybeSpawnReviewAgent(
           : "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
       );
     }
-    app.db
+    // CAS on `status = "reviewing"`, not just `id` — the claim slot
+    // (`reviewSpawnClaimedAt`) only protects against a second
+    // `processPendingReviewSpawns` pass racing this one; it says nothing
+    // about Reject/Give-up/Approve, which CAS on `status` alone and don't
+    // know this claim exists. `createSessionRecord` above is a real spawn
+    // (possibly a network round-trip to a remote host), long enough for one
+    // of those routes to land while it's in flight. If the task has moved
+    // on, attaching `reviewSessionId` here would leave a live, untracked
+    // session pointed at a worktree Approve may already be deleting —
+    // discard it instead of recording it.
+    const updated = app.db
       .update(tasks)
       .set({ reviewSessionId: result.row.id, reviewSeedDelivered: seedDelivered })
-      .where(eq(tasks.id, task.id))
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
       .run();
+    if (updated.changes === 0) {
+      app.log.warn(
+        { taskId: task.id, reviewSessionId: result.row.id },
+        "task reconcile: task left 'reviewing' while its review agent was spawning — killing the orphaned session",
+      );
+      // killSession, not a bare backend.terminate — this session was never
+      // attached to the task (the write above just refused), so nothing
+      // else will ever flip its `sessions` row to "killed." Left "active",
+      // the exited-session reconciler would find the now-dead process later
+      // and surface it as a crashed session with no task, agent, or
+      // worktree behind it — a live "kill" here folds that into the normal
+      // human-initiated-kill path instead of inventing a new terminal state
+      // for it.
+      await killSession(app, result.row.id);
+      return;
+    }
     app.log.info(
       { taskId: task.id, reviewSessionId: result.row.id, reviewCommand, seedDelivered },
       "task reconcile: review agent spawned",
     );
   } catch (err) {
     app.log.warn({ err, taskId: task.id, reviewCommand }, "task reconcile: review agent threw");
+    clearReviewSpawnClaim(app, task.id);
+    if (spawnedSessionId !== undefined) {
+      await killSession(app, spawnedSessionId).catch((killErr: unknown) => {
+        app.log.warn(
+          { err: killErr, taskId: task.id, reviewSessionId: spawnedSessionId },
+          "task reconcile: failed to kill the orphaned review session after a post-spawn throw",
+        );
+      });
+    }
   }
+}
+
+// Guarded on `reviewSessionId IS NULL` — if some other path already landed a
+// real session between the failure and this write (shouldn't happen, given
+// the CAS claim, but this is a cheap belt-and-suspenders match for the
+// discipline every other write in this file already follows), this must not
+// clobber it back to an unspawned-looking state.
+function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
+  app.db
+    .update(tasks)
+    .set({ reviewSpawnClaimedAt: null })
+    .where(and(eq(tasks.id, taskId), isNull(tasks.reviewSessionId)))
+    .run();
+}
+
+/**
+ * Resolves the CI signal for a task's PR head commit, or reports that the
+ * caller should wait and re-check next tick. Never throws — a resolution
+ * failure (no repo, no token, the PR/runs lookup itself throwing) waits up
+ * to the same deadline as `in_progress`/`null` below, then degrades to
+ * `undefined` (spawn with no CI context at all, the pre-#738-followup
+ * behavior) past it, rather than blocking the spawn forever. The reviewer
+ * must never be the thing a task gets stuck on.
+ *
+ * `undefined` also covers the case with nothing to check in the first
+ * place: an issue-only task, or one whose draft PR hasn't opened yet.
+ *
+ * `null` (Hermes review, #742) waits too, same as `"in_progress"` — not
+ * "proceed." `openDraftPRForTask` and this pass's own call both run inside
+ * the SAME reconcile tick as the `→ reviewing` transition (`maybeOpenDraftPR`
+ * above, then `processPendingReviewSpawns` at the very end of
+ * `reconcileTasks`), so the very first lookup here almost always lands
+ * within a second or two of the push that created the head commit —
+ * GitHub's Actions runs for a just-pushed commit routinely aren't registered
+ * yet, so `fetchRunsForHead` returns `[]` and `computeCiStatus` returns
+ * `null` indistinguishably from "this repo genuinely has no CI." Treating
+ * `null` as "proceed" on that very first check reproduces the #213782
+ * incident this whole change exists to fix: the reviewer spawns before a
+ * real check has even registered, let alone failed. Waiting on `null` the
+ * same as `in_progress` costs nothing for a no-CI repo — it just spawns at
+ * the deadline instead of instantly — and is what actually closes the gap
+ * for the common case of a CI-having repo whose runs simply haven't shown
+ * up yet.
+ */
+async function resolveReviewCi(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  waitMinutes: number,
+  now: number,
+): Promise<"wait" | ReviewCiInfo | undefined> {
+  if (task.prNumber === null) return undefined;
+
+  try {
+    const repoRef = await resolveRepoRef(app, project);
+    if (!repoRef) return undefined;
+    // "read" scope (#489's least-privilege split) — this only ever reads
+    // the PR and its Actions runs, never writes.
+    const token = await resolveGitHubToken(app, repoRef, "read");
+    if (!token) return undefined;
+    const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+    const runs = await fetchRunsForHead(token, repoRef.owner, repoRef.repo, pr.headSha);
+    const status = computeCiStatus(runs);
+    const runSummaries = runs.map((r) => ({
+      name: r.name,
+      conclusion: r.conclusion,
+      htmlUrl: r.htmlUrl,
+    }));
+
+    if (status !== "in_progress" && status !== null) {
+      return { headSha: pr.headSha, status, runs: runSummaries };
+    }
+
+    // `waitMinutes === 0` disables waiting entirely — `now - reviewingAt`
+    // is always `>= 0`, so this deadline is already "past" on the very
+    // first check, same effect as never having entered this branch at all.
+    // `reviewingAt` is set in the very same DB write that put this task in
+    // "reviewing" (both `→ reviewing` transition sites), so it's never
+    // actually null here — the `?? now` is defensive, not load-bearing.
+    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
+    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
+    if (!pastDeadline) return "wait";
+    return {
+      headSha: pr.headSha,
+      status,
+      runs: runSummaries,
+      note:
+        status === null
+          ? `no CI checks found after the ${waitMinutes}-minute wait`
+          : `still running after the ${waitMinutes}-minute wait`,
+    };
+  } catch (err) {
+    // Same reasoning as the `null`-status branch above (Hermes review, PR
+    // #742, second pass) — a thrown lookup (a transient network blip, or
+    // GitHub not yet consistent on the brand-new PR) in the exact
+    // just-pushed window is indistinguishable from "will succeed on the
+    // next tick," and spawning without CI on the very first failure would
+    // reintroduce the same #213782 gap this whole change exists to close.
+    // Wait up to the same deadline; past it (a persistently broken
+    // repo/token, not a blip), fall through to "spawn without CI" exactly
+    // as before — this lookup must never be the reason a task wedges in
+    // "reviewing" forever.
+    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
+    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
+    if (!pastDeadline) {
+      app.log.warn(
+        { err, taskId: task.id, prNumber: task.prNumber },
+        "task reconcile: CI lookup for review spawn failed — waiting to retry",
+      );
+      return "wait";
+    }
+    app.log.warn(
+      { err, taskId: task.id, prNumber: task.prNumber },
+      "task reconcile: CI lookup for review spawn still failing past the wait deadline — spawning without it",
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Spawns the review agent for every "reviewing" task that doesn't have one
+ * yet (`reviewSessionId IS NULL`) — a separate pass from the `→ reviewing`
+ * transition itself (both call sites below now only clear
+ * `reviewSessionId`/`reviewSeedDelivered`/`reviewSpawnClaimedAt`, they no
+ * longer spawn inline), so the spawn can hold until CI reports on the PR's
+ * head commit instead of firing before the PR even exists — the gap a live
+ * run against branchdam (#213782) exposed: the reviewer was spawned 5s
+ * before the draft PR was opened, so it could never have seen CI regardless
+ * of how long it waited on its own.
+ *
+ * Runs every tick this task's status/reviewSessionId match, independent of
+ * the claimed/in_progress pass below — same reasoning as
+ * `processReviewingTasks`/`retryStrandedDraftPRs` above.
+ *
+ * No first-deploy backfill concern: this selects on `reviewSessionId IS
+ * NULL`, and every task that reached "reviewing" under the OLD inline-spawn
+ * code already has a non-null `reviewSessionId` from that spawn. The only
+ * rows this pass ever sees are ones that entered "reviewing" under this new
+ * code (deliberately null) or ones whose original spawn attempt failed
+ * under the old code (already stuck with no reviewer today) — never a burst
+ * of already-reviewed tasks.
+ */
+// A claim survives only as long as the in-process work between claiming it
+// and either spawning or clearing it (clearReviewSpawnClaim's own catch
+// paths) — a process crash/redeploy mid-claim leaves it stuck non-null
+// forever with no other code path that ever clears it (unlike
+// reviewSessionId, nothing outside this pass's own CAS reads it). 10 minutes
+// is generous relative to what's actually in that window (one CI lookup,
+// one spawn), so a claim still standing past it is treated as abandoned and
+// reclaimed on the next tick rather than the task quietly losing its
+// reviewer forever to a redeploy that happened at the wrong instant.
+const REVIEW_SPAWN_CLAIM_STALE_MS = 10 * 60_000;
+
+async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  // Same gate as the "→ reviewing" transition itself (Hermes review, PR
+  // #480) used to cover transitively, back when it spawned the reviewer
+  // inline: spawning a review-agent session is new autonomous work — a real
+  // PTY session, optionally with skip-permissions — not the "already
+  // claimed/in_progress" progression `pty.ts`'s ungated-tick comment carves
+  // out. Splitting the spawn into this separate pass (#738 follow-up) lost
+  // that transitive coverage; restored explicitly here, same posture as
+  // `retryStrandedDraftPRs` above. A task left waiting here when disabled
+  // still has reject/give-up as an escape hatch (both deliberately ungated,
+  // same reasoning as the transition-site comment above) and picks up its
+  // reviewer normally on the next tick once re-enabled.
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(and(eq(tasks.status, "reviewing"), isNull(tasks.reviewSessionId)))
+    .all();
+  if (rows.length === 0) return;
+
+  const now = Date.now();
+
+  // Host-grouped and concurrent, same shape as retryStrandedDraftPRs above
+  // — a CI lookup or a spawn on one host must not serialize behind a slow
+  // or unreachable one. Unlike that pass, no per-task backoff state: every
+  // waiting task resolves in at most `reviewCiWaitMinutes` /
+  // `reconcileIntervalSeconds` ticks (2 GitHub calls each) — bounded and
+  // self-terminating once it spawns, not an unbounded retry a backoff would
+  // need to tame. That IS a real, if modest, standing cost at the default
+  // 15-minute wait: a repo with no CI configured at all polls for the full
+  // window on every task with a PR (null now waits too — see
+  // resolveReviewCi's own doc comment), not just one whose CI is genuinely
+  // `in_progress`. Acceptable at this tool's scale (a handful of concurrent
+  // tasks, well under GitHub's rate limits); revisit with real backoff if
+  // that scale assumption ever changes.
+  const byHost = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const group = byHost.get(row.project.hostId) ?? [];
+    group.push(row);
+    byHost.set(row.project.hostId, group);
+  }
+
+  await Promise.all(
+    [...byHost.values()].map(async (hostRows) => {
+      for (const { task, project } of hostRows) {
+        if (!task.worktreePath) continue;
+        const reviewCommand = resolveReviewAgentCommand(app, {
+          taskReviewAgent: task.reviewAgent,
+          issueBody: task.body,
+          projectDefaultReviewAgent: project.defaultReviewAgent,
+        });
+        // No reviewer configured for this task — never spawn one, exactly
+        // the pre-#738-followup behavior. Cheap check, done before any
+        // network call.
+        if (reviewCommand === null) continue;
+
+        const ci = await resolveReviewCi(
+          app,
+          task,
+          project,
+          resolvedTaskMaster.reviewCiWaitMinutes,
+          now,
+        );
+        if (ci === "wait") continue;
+
+        // Claim the slot immediately before the spawn's own I/O (the CI
+        // lookup above is read-only — nothing to protect there) — CAS
+        // re-checks status/reviewSessionId/reviewSpawnClaimedAt all still
+        // match what was read at the top of this pass, so a concurrent
+        // reject/give-up/approve that landed while the CI lookup was in
+        // flight wins outright instead of racing a spawn into existence
+        // for a task that's already moved on. See schema.ts's
+        // `reviewSpawnClaimedAt` doc comment. A claim older than
+        // REVIEW_SPAWN_CLAIM_STALE_MS is treated as abandoned (a prior
+        // attempt's process died mid-claim) and reclaimable, same as a null
+        // one — see that constant's own doc comment.
+        const claimed = app.db
+          .update(tasks)
+          .set({ reviewSpawnClaimedAt: new Date(now) })
+          .where(
+            and(
+              eq(tasks.id, task.id),
+              eq(tasks.status, "reviewing"),
+              isNull(tasks.reviewSessionId),
+              or(
+                isNull(tasks.reviewSpawnClaimedAt),
+                lt(tasks.reviewSpawnClaimedAt, new Date(now - REVIEW_SPAWN_CLAIM_STALE_MS)),
+              ),
+            ),
+          )
+          .run();
+        if (claimed.changes === 0) continue;
+
+        await spawnReviewAgentNow(
+          app,
+          task,
+          project,
+          resolvedTaskMaster.skipPermissions,
+          reviewCommand,
+          ci,
+        );
+      }
+    }),
+  );
 }
 
 // #722's investigation, RC5 — session-status.ts's `derived.status ===
@@ -905,131 +1218,225 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(inArray(tasks.status, ["claimed", "in_progress"]))
     .all();
-  if (rows.length === 0) return;
+  // `if (rows.length > 0) { ... }`, NOT an early `return` — processPendingReviewSpawns
+  // below must run every tick regardless of whether anything is
+  // claimed/in_progress (same reasoning as processReviewingTasks/
+  // retryStrandedDraftPRs at the top of this function), or a task sitting
+  // in "reviewing" waiting on CI with nothing else going on would never get
+  // re-checked once its wait window ends.
+  if (rows.length > 0) {
+    const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+    // Settings-backed override of MULLION_TASK_BUDGET_MINUTES (Task Master
+    // Settings UI follow-up) — see task-config.ts's doc comment. Resolved
+    // once per pass and reused below for maybeSpawnReviewAgent's own gate.
+    const resolvedTaskMaster = resolveTaskMasterConfig(app);
+    const budgetMinutes = resolvedTaskMaster.budgetMinutes;
 
-  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  // Settings-backed override of MULLION_TASK_BUDGET_MINUTES (Task Master
-  // Settings UI follow-up) — see task-config.ts's doc comment. Resolved
-  // once per pass and reused below for maybeSpawnReviewAgent's own gate.
-  const resolvedTaskMaster = resolveTaskMasterConfig(app);
-  const budgetMinutes = resolvedTaskMaster.budgetMinutes;
+    const byHost = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const group = byHost.get(row.project.hostId) ?? [];
+      group.push(row);
+      byHost.set(row.project.hostId, group);
+    }
 
-  const byHost = new Map<string, typeof rows>();
-  for (const row of rows) {
-    const group = byHost.get(row.project.hostId) ?? [];
-    group.push(row);
-    byHost.set(row.project.hostId, group);
-  }
+    await Promise.all(
+      [...byHost.entries()].map(async ([hostId, hostRows]) => {
+        const backend = resolveBackend(app, hostId);
+        let liveMap: Record<string, SessionInfo | null>;
+        try {
+          liveMap = await backend.liveStatus(
+            hostRows.map((r) => String(r.session.id)),
+            idleThresholdMs,
+          );
+        } catch (err) {
+          app.log.warn({ hostId, err }, "task reconcile: host unreachable, skipping its tasks");
+          return;
+        }
 
-  await Promise.all(
-    [...byHost.entries()].map(async ([hostId, hostRows]) => {
-      const backend = resolveBackend(app, hostId);
-      let liveMap: Record<string, SessionInfo | null>;
-      try {
-        liveMap = await backend.liveStatus(
-          hostRows.map((r) => String(r.session.id)),
-          idleThresholdMs,
-        );
-      } catch (err) {
-        app.log.warn({ hostId, err }, "task reconcile: host unreachable, skipping its tasks");
-        return;
-      }
+        for (const row of hostRows) {
+          const { task, session, project } = row;
+          const now = new Date();
 
-      for (const row of hostRows) {
-        const { task, session, project } = row;
-        const now = new Date();
-
-        // Budget check first — an expired task is failed regardless of
-        // what its session is currently doing. 0 = unlimited (opt out).
-        if (budgetMinutes > 0) {
-          const deadline = new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000);
-          if (now > deadline) {
-            const updated = app.db
-              .update(tasks)
-              .set({
-                status: "failed",
-                failureReason: `budget exceeded after ${budgetMinutes} minutes`,
-                completedAt: now,
-              })
-              .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["claimed", "in_progress"])))
-              .run();
-            if (updated.changes > 0) {
-              recordTaskTransition(app, {
-                taskId: task.id,
-                projectId: project.id,
-                // Narrowed by the WHERE clause above (`inArray(..., ["claimed", "in_progress"])`).
-                from: task.status as "claimed" | "in_progress",
-                to: "failed",
-                via: "budget-exceeded",
-                context: { sessionId: session.id, budgetMinutes },
-              });
-              await backend.terminate(String(session.id)).catch((err) => {
-                app.log.warn(
-                  { err, taskId: task.id, sessionId: session.id },
-                  "task reconcile: failed to terminate over-budget session",
-                );
-              });
-              await syncTaskTransition(
-                app,
-                {
-                  ...task,
+          // Budget check first — an expired task is failed regardless of
+          // what its session is currently doing. 0 = unlimited (opt out).
+          if (budgetMinutes > 0) {
+            const deadline = new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000);
+            if (now > deadline) {
+              const updated = app.db
+                .update(tasks)
+                .set({
                   status: "failed",
                   failureReason: `budget exceeded after ${budgetMinutes} minutes`,
                   completedAt: now,
-                },
-                project,
-                "failed",
-              );
-              // 6.8/#283 — best-effort; a dirty tree is left in place for
-              // inspection rather than retried forever (see
-              // removeWorktreeIfClean's own doc comment on why "dirty" is
-              // the only real refusal condition it has).
-              if (task.worktreePath) {
-                await backend.removeWorktreeIfClean(task.worktreePath, project.cwd).catch((err) => {
+                })
+                .where(
+                  and(eq(tasks.id, task.id), inArray(tasks.status, ["claimed", "in_progress"])),
+                )
+                .run();
+              if (updated.changes > 0) {
+                recordTaskTransition(app, {
+                  taskId: task.id,
+                  projectId: project.id,
+                  // Narrowed by the WHERE clause above (`inArray(..., ["claimed", "in_progress"])`).
+                  from: task.status as "claimed" | "in_progress",
+                  to: "failed",
+                  via: "budget-exceeded",
+                  context: { sessionId: session.id, budgetMinutes },
+                });
+                await backend.terminate(String(session.id)).catch((err) => {
                   app.log.warn(
-                    { err, taskId: task.id, worktreePath: task.worktreePath },
-                    "task reconcile: removeWorktreeIfClean threw after budget failure",
+                    { err, taskId: task.id, sessionId: session.id },
+                    "task reconcile: failed to terminate over-budget session",
                   );
                 });
+                await syncTaskTransition(
+                  app,
+                  {
+                    ...task,
+                    status: "failed",
+                    failureReason: `budget exceeded after ${budgetMinutes} minutes`,
+                    completedAt: now,
+                  },
+                  project,
+                  "failed",
+                );
+                // 6.8/#283 — best-effort; a dirty tree is left in place for
+                // inspection rather than retried forever (see
+                // removeWorktreeIfClean's own doc comment on why "dirty" is
+                // the only real refusal condition it has).
+                if (task.worktreePath) {
+                  await backend
+                    .removeWorktreeIfClean(task.worktreePath, project.cwd)
+                    .catch((err) => {
+                      app.log.warn(
+                        { err, taskId: task.id, worktreePath: task.worktreePath },
+                        "task reconcile: removeWorktreeIfClean threw after budget failure",
+                      );
+                    });
+                }
+              }
+              continue;
+            }
+          }
+
+          // A key this reachable host's response omitted is "unknown," not
+          // "idle" — same posture as session-reconciler.ts's own
+          // "alive === undefined -> skip, don't guess" rule.
+          const info = liveMap[String(session.id)];
+          if (info === undefined) continue;
+
+          const derived = deriveSessionStatus({
+            dbStatus: session.status,
+            info: defaultDeriveStatusInfo(info),
+          });
+
+          // The session already exited — #282's hook in
+          // session-reconciler.ts owns flipping this task to failed (it runs
+          // against the session row directly, and needs to coordinate with
+          // worktree cleanup); this pass must not race it with a conflicting
+          // write, so it just leaves an exited-session task alone.
+          if (derived.status === "exited") continue;
+
+          if (task.status === "claimed") {
+            // Hermes review, PR #480 (second pass) — entering "reviewing" is
+            // gated on "enabled" entirely, not just the review-agent spawn
+            // below. approve/reject are BOTH gated on the same flag (they
+            // write real GitHub state — PR creation, re-seeding a session),
+            // so a task that reached "reviewing" while disabled would be
+            // stuck there with no way to resolve it until re-enabled. Leaving
+            // it in claimed/in_progress instead keeps it reachable by the
+            // still-ungated budget force-fail below, and it picks up the
+            // normal reviewing transition on the next tick once re-enabled.
+            if (
+              derived.status === "finished" &&
+              resolvedTaskMaster.enabled &&
+              turnFinishedSinceClaim(info, task)
+            ) {
+              const gate = await checkReviewingGate(app, task, project, info);
+              if (!gate.ok) {
+                await failReviewingGate(
+                  app,
+                  task,
+                  session,
+                  project,
+                  backend,
+                  "claimed",
+                  gate.failureReason,
+                  now,
+                );
+                continue;
+              }
+              const updated = app.db
+                .update(tasks)
+                .set({
+                  status: "reviewing",
+                  startedAt: task.startedAt ?? now,
+                  reviewingAt: now,
+                  // #738 follow-up — the spawn moved out of this transition
+                  // into processPendingReviewSpawns below (it needs to wait
+                  // on CI, which doesn't exist yet the instant this fires).
+                  // Nulled here, not left alone: a second "→ reviewing" entry
+                  // (after an auto-returned round) would otherwise carry the
+                  // FIRST round's reviewSessionId/claim marker forward, and
+                  // that pass only ever looks at tasks where they're null.
+                  reviewSessionId: null,
+                  reviewSeedDelivered: null,
+                  reviewSpawnClaimedAt: null,
+                })
+                .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
+                .run();
+              if (updated.changes > 0) {
+                recordTaskTransition(app, {
+                  taskId: task.id,
+                  projectId: project.id,
+                  from: "claimed",
+                  to: "reviewing",
+                  via: "reconcile",
+                });
+                await syncTaskTransition(
+                  app,
+                  {
+                    ...task,
+                    status: "reviewing",
+                    startedAt: task.startedAt ?? now,
+                    reviewingAt: now,
+                  },
+                  project,
+                  "reviewing",
+                  { diffStat: await computeTaskDiffStat(app, task, project) },
+                );
+                await maybeOpenDraftPR(app, task, project);
+              }
+            } else if (derived.status !== "idle" && derived.status !== "finished") {
+              const updated = app.db
+                .update(tasks)
+                .set({ status: "in_progress", startedAt: now })
+                .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
+                .run();
+              if (updated.changes > 0) {
+                recordTaskTransition(app, {
+                  taskId: task.id,
+                  projectId: project.id,
+                  from: "claimed",
+                  to: "in_progress",
+                  via: "reconcile",
+                });
+                await syncTaskTransition(
+                  app,
+                  { ...task, status: "in_progress", startedAt: now },
+                  project,
+                  "in_progress",
+                );
               }
             }
-            continue;
-          }
-        }
-
-        // A key this reachable host's response omitted is "unknown," not
-        // "idle" — same posture as session-reconciler.ts's own
-        // "alive === undefined -> skip, don't guess" rule.
-        const info = liveMap[String(session.id)];
-        if (info === undefined) continue;
-
-        const derived = deriveSessionStatus({
-          dbStatus: session.status,
-          info: defaultDeriveStatusInfo(info),
-        });
-
-        // The session already exited — #282's hook in
-        // session-reconciler.ts owns flipping this task to failed (it runs
-        // against the session row directly, and needs to coordinate with
-        // worktree cleanup); this pass must not race it with a conflicting
-        // write, so it just leaves an exited-session task alone.
-        if (derived.status === "exited") continue;
-
-        if (task.status === "claimed") {
-          // Hermes review, PR #480 (second pass) — entering "reviewing" is
-          // gated on "enabled" entirely, not just the review-agent spawn
-          // below. approve/reject are BOTH gated on the same flag (they
-          // write real GitHub state — PR creation, re-seeding a session),
-          // so a task that reached "reviewing" while disabled would be
-          // stuck there with no way to resolve it until re-enabled. Leaving
-          // it in claimed/in_progress instead keeps it reachable by the
-          // still-ungated budget force-fail below, and it picks up the
-          // normal reviewing transition on the next tick once re-enabled.
-          if (
+          } else if (
+            task.status === "in_progress" &&
             derived.status === "finished" &&
             resolvedTaskMaster.enabled &&
             turnFinishedSinceClaim(info, task)
           ) {
+            // See the matching gate/comment on the claimed -> reviewing
+            // branch above — same "don't strand it in reviewing" reasoning.
             const gate = await checkReviewingGate(app, task, project, info);
             if (!gate.ok) {
               await failReviewingGate(
@@ -1038,7 +1445,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 session,
                 project,
                 backend,
-                "claimed",
+                "in_progress",
                 gate.failureReason,
                 now,
               );
@@ -1046,101 +1453,52 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             }
             const updated = app.db
               .update(tasks)
-              .set({ status: "reviewing", startedAt: task.startedAt ?? now, reviewingAt: now })
-              .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
+              .set({
+                status: "reviewing",
+                reviewingAt: now,
+                // See the matching claimed -> reviewing branch above for why
+                // these are nulled here rather than left alone.
+                reviewSessionId: null,
+                reviewSeedDelivered: null,
+                reviewSpawnClaimedAt: null,
+              })
+              .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
               .run();
             if (updated.changes > 0) {
               recordTaskTransition(app, {
                 taskId: task.id,
                 projectId: project.id,
-                from: "claimed",
+                from: "in_progress",
                 to: "reviewing",
                 via: "reconcile",
               });
               await syncTaskTransition(
                 app,
-                {
-                  ...task,
-                  status: "reviewing",
-                  startedAt: task.startedAt ?? now,
-                  reviewingAt: now,
-                },
+                { ...task, status: "reviewing", reviewingAt: now },
                 project,
                 "reviewing",
                 { diffStat: await computeTaskDiffStat(app, task, project) },
               );
               await maybeOpenDraftPR(app, task, project);
-              await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
             }
-          } else if (derived.status !== "idle" && derived.status !== "finished") {
-            const updated = app.db
-              .update(tasks)
-              .set({ status: "in_progress", startedAt: now })
-              .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
-              .run();
-            if (updated.changes > 0) {
-              recordTaskTransition(app, {
-                taskId: task.id,
-                projectId: project.id,
-                from: "claimed",
-                to: "in_progress",
-                via: "reconcile",
-              });
-              await syncTaskTransition(
-                app,
-                { ...task, status: "in_progress", startedAt: now },
-                project,
-                "in_progress",
-              );
-            }
-          }
-        } else if (
-          task.status === "in_progress" &&
-          derived.status === "finished" &&
-          resolvedTaskMaster.enabled &&
-          turnFinishedSinceClaim(info, task)
-        ) {
-          // See the matching gate/comment on the claimed -> reviewing
-          // branch above — same "don't strand it in reviewing" reasoning.
-          const gate = await checkReviewingGate(app, task, project, info);
-          if (!gate.ok) {
-            await failReviewingGate(
-              app,
-              task,
-              session,
-              project,
-              backend,
-              "in_progress",
-              gate.failureReason,
-              now,
-            );
-            continue;
-          }
-          const updated = app.db
-            .update(tasks)
-            .set({ status: "reviewing", reviewingAt: now })
-            .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
-            .run();
-          if (updated.changes > 0) {
-            recordTaskTransition(app, {
-              taskId: task.id,
-              projectId: project.id,
-              from: "in_progress",
-              to: "reviewing",
-              via: "reconcile",
-            });
-            await syncTaskTransition(
-              app,
-              { ...task, status: "reviewing", reviewingAt: now },
-              project,
-              "reviewing",
-              { diffStat: await computeTaskDiffStat(app, task, project) },
-            );
-            await maybeOpenDraftPR(app, task, project);
-            await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
           }
         }
-      }
-    }),
-  );
+      }),
+    );
+  }
+
+  // Deliberately LAST, not alongside processReviewingTasks/
+  // retryStrandedDraftPRs above: this needs to see tasks that transitioned
+  // into "reviewing" during the claimed/in_progress loop just above, in
+  // THIS SAME tick — the exact "freshly re-spawned session, not yet visible
+  // to an earlier pass in the same call" ordering hazard
+  // processReviewingTasks's own mockFinishedSessionIds doc comment
+  // describes, just for the opposite pass. Running it first would only ever
+  // see reviewing tasks left over from a PRIOR tick, and a task's own
+  // "→ reviewing" transition — which is what actually nulls
+  // reviewSessionId — hasn't happened yet at that point in this function.
+  // One call covers both: a same-tick transition AND a leftover task a
+  // previous tick decided to "wait" on (still `reviewSessionId IS NULL`
+  // either way) — no separate leftover-specific pass needed.
+  await processPendingReviewSpawns(app);
 }

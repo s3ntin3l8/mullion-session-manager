@@ -26,6 +26,7 @@ describe("resolveTaskMaster", () => {
       budgetMinutes: 120,
       progressCommentMinutes: 15,
       skipPermissions: false,
+      reviewCiWaitMinutes: 15,
     });
   });
 
@@ -66,6 +67,13 @@ describe("resolveTaskMaster", () => {
       resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, autoClaimPaused: true }, ENV_DEFAULTS)
         .autoClaimPaused,
     ).toBe(true);
+  });
+
+  it("passes reviewCiWaitMinutes through unconditionally — no sentinel, no env counterpart", () => {
+    expect(
+      resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, reviewCiWaitMinutes: 0 }, ENV_DEFAULTS)
+        .reviewCiWaitMinutes,
+    ).toBe(0);
   });
 
   it("resolves skipPermissions: on/off as a real override regardless of the env default", () => {
