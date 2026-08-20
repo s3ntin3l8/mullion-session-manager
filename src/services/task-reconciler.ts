@@ -1158,11 +1158,14 @@ async function attemptAutoApprove(
       { taskId: task.id, prNumber: task.prNumber, prUrl: outcome.task.prUrl },
       "task reconcile: auto-approved",
     );
-    // No explicit retry-state cleanup needed here (unlike the merge
-    // sweep's clearMergeState) — the task's status just flipped to "done",
-    // dropping it out of this sweep's own `status = "reviewing"` WHERE
-    // clause on the next tick, so this entry simply never gets read again.
-    // Same reasoning as retryStrandedDraftPRs' own comment on this point.
+    // Hermes review, PR #768 — drop the retry-state entry rather than
+    // leaving it to linger until the 500-cap evicts it (same fix as the
+    // merge sweep's own clearMergeState, PR #763's Hermes finding). Not
+    // strictly load-bearing the way it was there (this task's status just
+    // flipped to "done", dropping it out of this sweep's own `status =
+    // "reviewing"` WHERE clause on the next tick regardless), but keeping
+    // the map to live-in-flight candidates only is worth the one line.
+    autoApproveRetryState.delete(task.id);
     return;
   }
 
@@ -1171,7 +1174,9 @@ async function attemptAutoApprove(
       // A human approved/rejected in the same window — silent no-op, not
       // an error. The task's status already changed out from under this
       // sweep's own WHERE clause, so — same reasoning as the success case
-      // above — nothing needs cleaning up here either.
+      // above — this entry would never be read again regardless, but drop
+      // it now rather than waiting on the eviction cap.
+      autoApproveRetryState.delete(task.id);
       return;
     case "dirty-tree":
       // A review agent leaving a scratch file behind looks permanent but
@@ -1194,6 +1199,7 @@ async function attemptAutoApprove(
         "task reconcile: auto-approve not supported for this task's host",
       );
       return;
+    case "no-worktree":
     case "no-repo":
     case "no-token":
     case "push-failed":
@@ -1205,6 +1211,19 @@ async function attemptAutoApprove(
         "task reconcile: auto-approve attempt failed — retrying",
       );
       return;
+    default: {
+      // Hermes review, PR #768 — exhaustiveness guard: if ApproveOutcome's
+      // failure-reason union ever grows, this line fails to typecheck
+      // instead of silently falling through the switch with no log and no
+      // named disposition, the exact gap the missing "no-worktree" case
+      // above was.
+      const exhaustiveCheck: never = outcome;
+      app.log.warn(
+        { taskId: task.id, outcome: exhaustiveCheck },
+        "task reconcile: auto-approve failed with an unrecognized reason — retrying",
+      );
+      return;
+    }
   }
 }
 

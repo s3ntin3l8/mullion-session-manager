@@ -1848,6 +1848,37 @@ describe("reconcileTasks", () => {
 
       await app.close();
     });
+
+    // Hermes review, PR #768 — attemptAutoApprove's switch on
+    // ApproveOutcome's failure reasons originally omitted "no-worktree"
+    // entirely (no case, no default), so it fell through silently: no log,
+    // no named disposition, directly contradicting the function's own
+    // "every reason needs a named disposition" contract. Proves the task
+    // stays in "reviewing" (retried, not marked failed) and that the
+    // disposition is now actually logged.
+    it("backs off and logs on a 'no-worktree' promotion failure, instead of falling through silently", async () => {
+      const app = await buildApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockPromoteTaskToPR.mockResolvedValueOnce({
+        ok: false,
+        reason: "no-worktree",
+        detail: "Task has no worktree to promote",
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, reason: "no-worktree" }),
+        "task reconcile: auto-approve attempt failed — retrying",
+      );
+
+      await app.close();
+    });
   });
 
   // #722's investigation (task 213765) — a `stop_failure` (rate-limit,
