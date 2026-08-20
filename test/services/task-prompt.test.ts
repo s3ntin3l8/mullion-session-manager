@@ -8,6 +8,7 @@ import {
   taskReviewFindingsPath,
   parseReviewFindings,
   renderReviewFindingsMarkdown,
+  severityPrefix,
   type TaskPromptTask,
 } from "../../src/services/task-prompt.js";
 
@@ -338,6 +339,19 @@ describe("parseReviewFindings", () => {
   it("treats valid JSON with an unrecognized verdict value as freeform text", () => {
     const parsed = parseReviewFindings(JSON.stringify({ verdict: "looks fine", summary: "s" }));
     expect(parsed.verdict).toBe("changes-requested");
+  });
+});
+
+// Hermes review, PR #736 — shared between this file's own bullet renderer
+// and task-github-sync.ts's inline-anchor comment body, so the two can't
+// silently drift into different severity styling.
+describe("severityPrefix", () => {
+  it("renders a bracketed prefix with a trailing space for a recognized severity", () => {
+    expect(severityPrefix("blocker")).toBe("[blocker] ");
+  });
+
+  it("renders nothing for null", () => {
+    expect(severityPrefix(null)).toBe("");
   });
 });
 

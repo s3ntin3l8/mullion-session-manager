@@ -709,9 +709,7 @@ describe("task-github-sync", () => {
         {
           body: "## Round 1\n\nOne errcheck failure.",
           commitId: "abc123",
-          comments: [
-            { path: "a.go", line: 42, side: "RIGHT", body: "**[major]** unchecked error" },
-          ],
+          comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "[major] unchecked error" }],
         },
       );
     });
