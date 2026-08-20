@@ -23,6 +23,16 @@ import {
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt } from "./task-prompt.js";
 
+// Shared by claimTask's and retryTask's identical "cap" branches (Hermes
+// review, PR #765) — the limit shown here is always the RESOLVED value
+// (env default, possibly overridden by Settings → Task Master; see
+// task-config.ts), so this deliberately doesn't name either knob: whichever
+// one the deployment actually used is what set `limit`, not necessarily
+// MULLION_TASK_MAX_CONCURRENT.
+function capDetail(limit: number): string {
+  return `At capacity: ${limit} task(s) already running`;
+}
+
 export type ClaimTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
   | {
@@ -160,7 +170,6 @@ export async function claimTask(
 
   if (!reservation.reserved) {
     if ("capped" in reservation && reservation.capped) {
-      const detail = `At capacity: ${maxConcurrent} task(s) already running (MULLION_TASK_MAX_CONCURRENT)`;
       // Previously silent — the "cap" outcome short-circuits before the
       // reservation transaction writes anything, so there was no status
       // change for recordTaskTransition to log and no other signal at all.
@@ -168,7 +177,7 @@ export async function claimTask(
       // actual from/to transition) makes a capped claim visible without
       // inventing a transition that never happened.
       app.log.info({ taskId, limit: maxConcurrent, auto: opts.auto }, "task claim: at capacity");
-      return { ok: false, reason: "cap", limit: maxConcurrent, detail };
+      return { ok: false, reason: "cap", limit: maxConcurrent, detail: capDetail(maxConcurrent) };
     }
     return {
       ok: false,
@@ -526,12 +535,11 @@ export async function retryTask(
 
   if (!reservation.reserved) {
     if ("capped" in reservation && reservation.capped) {
-      const detail = `At capacity: ${maxConcurrent} task(s) already running (MULLION_TASK_MAX_CONCURRENT)`;
       // See claimTask's identical branch above for why this is logged here
       // rather than via recordTaskTransition — the reservation transaction
       // short-circuited before any status changed.
       app.log.info({ taskId, limit: maxConcurrent }, "task retry: at capacity");
-      return { ok: false, reason: "cap", limit: maxConcurrent, detail };
+      return { ok: false, reason: "cap", limit: maxConcurrent, detail: capDetail(maxConcurrent) };
     }
     if ("noBranch" in reservation && reservation.noBranch) {
       return {
