@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.39](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.38...v0.2.39) (2026-08-20)
+
+
+### Bug Fixes
+
+* failed GitHub-linked task can't be removed once its mullion-task label is lost ([#743](https://github.com/s3ntin3l8/mullion-session-manager/issues/743)) ([ef6be18](https://github.com/s3ntin3l8/mullion-session-manager/commit/ef6be18b1a7918b69957c793fde13e3f34588ee6))
+
 ## [0.2.38](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.37...v0.2.38) (2026-08-20)
 
 
