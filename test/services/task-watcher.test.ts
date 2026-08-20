@@ -59,6 +59,11 @@ vi.mock("../../src/services/task-claim.js", () => ({
 
 vi.mock("../../src/services/task-dispatch.js", () => ({
   dispatchQueuedTasks: mockDispatchQueuedTasks,
+  // app.ts calls this unconditionally at buildApp() time (must register the
+  // onClose hook before the app starts — see registerDispatchCleanup's own
+  // doc comment in task-dispatch.ts for why it can't be done lazily), so
+  // this module mock needs a no-op stand-in too, not just dispatchQueuedTasks.
+  registerDispatchCleanup: vi.fn(),
 }));
 
 // #490a — the read-back's unlabel half calls getIssueState directly and

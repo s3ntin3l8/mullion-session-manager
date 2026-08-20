@@ -72,7 +72,7 @@ export interface WorkerPreambleOptions {
   /** `settings.taskMaster.budgetMinutes`; `0` means unlimited, in which
    * case the budget line is omitted rather than promising "0 minutes". */
   budgetMinutes: number;
-  /** `claimTask`'s own `opts.auto`. Gates ONE bullet: the instruction not
+  /** `enqueueTask`'s own `opts.auto`. Gates ONE bullet: the instruction not
    * to stop and ask. A human who clicked Claim is sitting right there, and
    * telling that agent to decide unilaterally suppresses exactly the
    * check-in a manual claim wants. Everything else in the preamble applies
