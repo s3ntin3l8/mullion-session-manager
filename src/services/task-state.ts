@@ -18,7 +18,9 @@ export { TASK_STATUSES, type TaskStatus };
  * in_progress -> reviewing, failed    (agent's turn ended / session died)
  * reviewing   -> done, in_progress, failed  (approve / reject / give up)
  * done        -> (terminal)
- * failed      -> backlog, ready       (explicit human retry)
+ * failed      -> backlog, ready       (explicit human retry, or an
+ *                                       automatic relabel-resurrection —
+ *                                       see upsertIssueTask, task-watcher.ts)
  *
  * `claimed -> reviewing` (skipping `in_progress`) is a real, reachable edge,
  * not a shortcut for convenience: the reconciler (task-reconciler.ts) polls

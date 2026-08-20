@@ -1527,12 +1527,78 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("records an inconclusive entry and stays in reviewing when the review agent wrote no findings file", async () => {
+    // Task Master trial 220921 / PR #743's incident — a "finished" review
+    // session with no findings file yet must NOT be ingested as
+    // inconclusive the instant that's observed: the review prompt now asks
+    // the agent to run the repo's whole verification gate before writing
+    // anything, so a few minutes of silence is normal. Only once the
+    // review SESSION (not the current turn) has been alive past
+    // REVIEW_FINDINGS_GRACE_MS is a still-missing file treated as
+    // genuinely absent — see that constant's own doc comment.
+    it("does NOT ingest a 'finished' review with no findings file yet — still within the grace window", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId } = await claimIntoReviewing(app, "codex");
+      // Deliberately no writeFindings call, and the review session was just
+      // created by claimIntoReviewing above — well within the grace window.
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // The regression guard this whole PR exists for: task 220921 / PR
+    // #743's real incident — a review agent's genuine `verdict: "clean"`
+    // file landed 21 seconds after a tick had already observed "finished"
+    // with no file yet. Before this PR, that first tick would have latched
+    // `reviewFindingsIngestedSessionId` immediately and permanently,
+    // making the real file (written on tick 2 here) unreadable forever.
+    it("ingests the REAL findings file on a later tick, after an earlier tick observed 'finished' with no file yet", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+
+      // Tick 1 — "finished", no file yet, still within the grace window:
+      // must NOT latch anything (pinned by the test just above too).
+      await reconcileTasks(app);
+      const afterTick1 = await getTask(app, taskId);
+      expect(afterTick1.reviewFindings).toBeNull();
+      expect(afterTick1.reviewFindingsIngestedSessionId).toBeNull();
+
+      // The real review finishes its work and writes its verdict — this is
+      // the "21 seconds later" moment from the actual incident.
+      writeFindings(app, taskId, 0, JSON.stringify({ verdict: "clean", summary: "All good." }));
+
+      // Tick 2 — the SAME review session, now with a real file on disk.
+      await reconcileTasks(app);
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toContain("All good.");
+      expect(row.reviewFindings).not.toContain("inconclusive");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    it("records an inconclusive entry once the grace window elapses with still no findings file", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       // Deliberately no writeFindings call — the prompt now tells the agent
       // to ALWAYS write the file, so a missing one can no longer be read as
-      // a confident "clean" review; it's reported as inconclusive instead.
+      // a confident "clean" review; it's reported as inconclusive instead,
+      // once the review session has been alive long enough that the file
+      // genuinely isn't coming.
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
 
       await reconcileTasks(app);
 
@@ -1542,6 +1608,75 @@ describe("reconcileTasks", () => {
       expect(row.reviewFindings).toContain("inconclusive");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // Hermes review, PR #754 — grace-elapsed alone must not be enough for a
+    // session that's demonstrably still doing something. A genuinely slow
+    // verification-gate run (severity "busy": working/compacting/subagent/
+    // background) past 30 minutes is not a hung session; ingesting it as
+    // inconclusive would permanently latch reviewFindingsIngestedSessionId
+    // out from under a real verdict that's still coming — new-vs-main
+    // behavior main never had (main never ingested a still-active session
+    // at all), and the exact dead end this PR exists to fix, just
+    // relocated to the 30-minute mark.
+    it("does NOT ingest past the grace window while the session is still actively working", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ activity: "working" })
+                : fakeInfo(),
+          }) as never,
+      );
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // The genuinely-stuck counterpart to the "still working" test above —
+    // a session that's gone quiet (never latched "finished," not
+    // "working"/"busy" either) past the grace window IS treated as
+    // "nothing more is coming," but with wording that doesn't falsely
+    // claim it "finished" (Hermes review, PR #754's other finding).
+    it("ingests past the grace window with a third, non-'finished' wording when the session has gone quiet without ever finishing", async () => {
+      const app = await buildApp();
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () => (String(id) === String(reviewSessionId) ? fakeInfo() : fakeInfo()),
+          }) as never,
+      );
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toContain("produced no findings file within the expected time");
+      expect(row.reviewFindings).not.toContain("finished but wrote no findings file");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
 
       await app.close();
     });
@@ -1821,7 +1956,15 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
-      it("is NOT ingested (and stays available for a later tick) when no findings file exists — avoids a false 'no findings' for a killed/crashed session", async () => {
+      // Task Master trial 220921 / PR #743's fix, PR 4 of 4 — "exited" is
+      // now an unconditional usable signal (see `isUsableSignal`'s own doc
+      // comment in task-reconciler.ts): a session that has genuinely exited
+      // can't write anything more no matter how long is waited, so there's
+      // nothing to gain by NOT ingesting it. This closes a pre-existing gap
+      // this test used to pin the OPPOSITE of: a killed/crashed session
+      // with no findings file used to leave the task stalled in "reviewing"
+      // silently forever, with no comment ever posted at all.
+      it("IS ingested as inconclusive when no findings file exists for a killed/crashed session — no more silent-forever stall", async () => {
         const app = await buildApp();
         const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
         // Deliberately no writeFindings call.
@@ -1843,8 +1986,8 @@ describe("reconcileTasks", () => {
         await reconcileTasks(app);
 
         const row = await getTask(app, taskId);
-        expect(row.reviewFindings).toBeNull();
-        expect(row.reviewFindingsIngestedSessionId).toBeNull();
+        expect(row.reviewFindings).toContain("inconclusive");
+        expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
 
         await app.close();
       });
@@ -2139,6 +2282,47 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    // Task Master trial 220921 / PR #743 — `unlinkFindingsFileIfPresent` used
+    // to run only at INGEST time, so a leftover from a prior same-round
+    // attempt (round-suffixed, not per-attempt — see
+    // `taskReviewFindingsPath`'s own doc comment on why round-suffixing
+    // alone doesn't cover this) would sit on disk until the NEXT review
+    // agent's own turn ends, at which point it would be read as if it were
+    // this fresh attempt's real output. `spawnReviewAgentNow` now unlinks it
+    // before the fresh agent even starts, closing that window entirely.
+    it("unlinks a stale round-N findings file at spawn time, before the fresh review agent writes anything", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      const sessionsDir = path.dirname(app.pty.hookSocketPath);
+      const findingsPath = taskReviewFindingsPath(sessionsDir, taskId, 0);
+      fs.mkdirSync(path.dirname(findingsPath), { recursive: true });
+      fs.writeFileSync(
+        findingsPath,
+        JSON.stringify({
+          verdict: "clean",
+          summary: "STALE — left over from a prior attempt at this same round.",
+        }),
+      );
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(fs.existsSync(findingsPath)).toBe(false);
 
       await app.close();
     });

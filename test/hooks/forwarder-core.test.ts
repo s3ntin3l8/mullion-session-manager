@@ -1782,8 +1782,50 @@ describe("mapCodexUserPromptSubmit (issue: extend surfaced session statuses)", (
 });
 
 describe("mapAgyEvent (issue #253)", () => {
-  it("maps Stop to progress:done (in an array)", () => {
-    expect(mapAgyEvent("Stop", {})).toEqual([{ kind: "progress", phase: "done" }]);
+  // fullyIdle is verified live against the installed agy binary (agy
+  // 1.1.15) — a real Stop payload on this host carried `"fullyIdle": true`
+  // with exactly this key/casing, matching agy's own bundled
+  // docs/hooks.md. See the Stop case's own doc comment in
+  // forwarder-core.mjs for the full incident this fixes (Task Master trial
+  // 220921 / PR #743).
+  it("maps Stop with no fullyIdle field to progress:done with an EMPTY backgroundTasks (older agy build, unchanged finished-ness)", () => {
+    expect(mapAgyEvent("Stop", {})).toEqual([
+      { kind: "progress", phase: "done", backgroundTasks: [] },
+    ]);
+  });
+
+  it("maps Stop with fullyIdle: true to progress:done with an EMPTY backgroundTasks", () => {
+    expect(mapAgyEvent("Stop", { fullyIdle: true })).toEqual([
+      { kind: "progress", phase: "done", backgroundTasks: [] },
+    ]);
+  });
+
+  it("maps Stop with fullyIdle: false to progress:done with ONE synthesized outstanding entry — must not read as finished", () => {
+    expect(mapAgyEvent("Stop", { fullyIdle: false })).toEqual([
+      {
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          {
+            id: "agy-background",
+            type: "background",
+            status: "running",
+            description: "agy reported outstanding background tasks",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("a fullyIdle: false Stop followed by a fullyIdle: true Stop clears back to an empty backgroundTasks", () => {
+    const busy = mapAgyEvent("Stop", { fullyIdle: false });
+    const idleAgain = mapAgyEvent("Stop", { fullyIdle: true });
+
+    expect(busy[0].backgroundTasks).toHaveLength(1);
+    // Explicit [], not an omitted field — hook-handlers.ts's "absent ≠
+    // cleared" rule means only an EXPLICIT empty array actually clears a
+    // previously-latched outstanding set.
+    expect(idleAgain[0].backgroundTasks).toEqual([]);
   });
 
   it("returns null for PostToolUse when payload lacks toolCall info", () => {
@@ -2023,7 +2065,9 @@ describe("buildForwarderMessage", () => {
   });
 
   it("dispatches to the agy dialect", () => {
-    expect(buildForwarderMessage("agy", "Stop", {})).toEqual([{ kind: "progress", phase: "done" }]);
+    expect(buildForwarderMessage("agy", "Stop", {})).toEqual([
+      { kind: "progress", phase: "done", backgroundTasks: [] },
+    ]);
   });
 
   it("returns null for an unknown agent", () => {

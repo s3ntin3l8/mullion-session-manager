@@ -50,6 +50,14 @@ export const LABEL_REVIEWING = "mullion-reviewing";
 export const LABEL_DONE = "mullion-done";
 const ACTIVE_LABELS = [LABEL_CLAIMED, LABEL_REVIEWING];
 
+// Exported so task-watcher.ts's upsertIssueTask can recognize (and only
+// resurrect) a task that failed for THIS specific reason — a task that
+// failed because its issue was closed (the other trigger routed through
+// syncUnlabeledIssueToLocal below, see its own doc comment) must not spring
+// back to ready/backlog just because the label happens to be present again.
+export const FAILURE_REASON_LABEL_LOST = "GitHub issue lost its tracking label";
+export const FAILURE_REASON_ISSUE_CLOSED = "GitHub issue was closed";
+
 export type TaskSyncEvent =
   "claimed" | "in_progress" | "reviewing" | "done" | "failed" | "rejected";
 
@@ -423,11 +431,28 @@ export async function syncClosedIssueToLocal(
  * existing "closed while claimed" precedent in `syncClosedIssueToLocal`
  * above. `failed`/`done` tasks never reach here at all (excluded upstream
  * by both callers).
+ *
+ * `failureReason` defaults to the label-lost wording — the webhook
+ * `unlabeled` caller always means that and never passes an override. The
+ * poll loop's read-back (`task-watcher.ts`) is the one caller that can tell
+ * the two triggers apart (it already has the `getIssueState` result), and
+ * passes `FAILURE_REASON_ISSUE_CLOSED` explicitly when the issue is
+ * confirmed closed rather than just unlabeled — previously both cases
+ * shared one string, which made every "closed" failure read as a label
+ * problem and, worse, was indistinguishable from upsertIssueTask's own
+ * label-lost-resurrection check below.
  */
 export async function syncUnlabeledIssueToLocal(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRef,
+  // Narrowed to the two known reasons, not a bare `string` — a third ad-hoc
+  // caller-supplied string would silently defeat upsertIssueTask's exact
+  // match on FAILURE_REASON_LABEL_LOST (task-watcher.ts's relabel-
+  // resurrection guard) without this catching it at compile time.
+  failureReason:
+    | typeof FAILURE_REASON_LABEL_LOST
+    | typeof FAILURE_REASON_ISSUE_CLOSED = FAILURE_REASON_LABEL_LOST,
 ): Promise<void> {
   if (task.status !== "backlog" && task.status !== "ready") {
     app.log.debug(
@@ -438,7 +463,6 @@ export async function syncUnlabeledIssueToLocal(
   }
 
   const now = new Date();
-  const failureReason = "GitHub issue lost its tracking label";
   // Status-guarded, same reasoning as syncClosedIssueToLocal above — the
   // caller's snapshot of `task` may be stale by the time this write lands.
   const updated = app.db

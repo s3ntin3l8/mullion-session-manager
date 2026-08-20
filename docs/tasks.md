@@ -45,13 +45,18 @@ title, spec (issue body), and the final PR link.
   An issue that loses the `mullion-task` label (or closes) while its task
   is still `backlog`/`ready` is **not** left untouched: the task fails
   rather than sitting in `ready` forever eligible for auto-claim on an
-  issue that's no longer trackable. A task that's already
-  `claimed`/`in_progress`/`reviewing` — real work behind it, a worktree,
-  maybe a branch — is left strictly alone either way; silently failing it
-  out from under a label removal would be destructive. Both the webhook
-  `unlabeled`/`closed` handlers and the poll loop's own read-back apply
-  this identically, via one shared function, so the two can't produce
-  different outcomes for the same issue.
+  issue that's no longer trackable. The recorded `failureReason`
+  distinguishes the two triggers — `"GitHub issue lost its tracking
+label"` vs. `"GitHub issue was closed"` — even though both route
+  through the same shared function (`syncUnlabeledIssueToLocal`,
+  `task-github-sync.ts`), so a closed issue doesn't misreport as a label
+  problem. A task that's already `claimed`/`in_progress`/`reviewing` —
+  real work behind it, a worktree, maybe a branch — is left strictly
+  alone either way; silently failing it out from under a label removal
+  would be destructive. Both the webhook `unlabeled`/`closed` handlers
+  and the poll loop's own read-back apply this identically, via one
+  shared function, so the two can't produce different outcomes for the
+  same issue.
 
   A task that failed this way was never claimed, so it has no preserved
   branch — Retry (`failed → backlog`/`ready`, below) can't resume it
@@ -74,6 +79,22 @@ title, spec (issue body), and the final PR link.
   never-claimed `failed` task whose issue is **still** tracked (a genuine
   lost-label failure with the label put back, say) — use Retry for the
   claimed case, or re-fix the label/issue for the never-claimed one.
+
+  A label-lost failure — never a close — also self-heals on its own,
+  without needing the delete-and-recreate path above: if the same issue
+  is re-sighted still open and labeled again, and the task never had a
+  branch or worktree (i.e. it failed while still `backlog`/`ready`),
+  `upsertIssueTask` (`task-watcher.ts`) springs it back to
+  `ready`/`backlog` automatically on the next poll tick or `labeled`
+  webhook delivery — no separate trigger needed, since it lands on the
+  same shared ingest path every re-sighting already goes through.
+  Deliberately local-only: no comment is posted and nothing is restored
+  on the issue itself, so its last comment still reads "Task failed:
+  GitHub issue lost its tracking label" after recovery. Retry (`failed →
+claimed`, below) does not help here in practice even though the table
+  allows `failed → backlog`/`ready`: Retry requires a preserved
+  `mullion/task-<id>` branch, which a task that failed while still
+  `backlog`/`ready` never had.
 
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has
@@ -189,10 +210,12 @@ failed      → backlog, ready
   branch survives a failure) into a fresh worktree and spawns a new session
   there, so committed-but-unfinished work isn't lost. This is a dedicated
   route (`POST /api/tasks/:id/retry`), not the `failed → backlog`/`ready`
-  table edges — those two remain legal but still have no separate trigger,
+  table edges — those two remain legal but have their own separate,
+  automatic trigger too (relabel-resurrection, see GitHub sync above),
   since retry supersedes the two-step "flip to ready, then claim" flow they
-  would have required. Gated on Task Master being enabled, same as Claim,
-  since it also spawns a session.
+  would otherwise have required for a task Retry can actually resume.
+  Gated on Task Master being enabled, same as Claim, since it also spawns
+  a session.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
@@ -614,19 +637,34 @@ reviewing` transition itself — `task-reconciler.ts`'s
   crash/redeploy (nothing else ever clears it) is reclaimed once it's older
   than 10 minutes.
 
-- **Write an explicit verdict.** The reviewer is told to ALWAYS write a
-  round-suffixed file outside the worktree (`task-prompt.ts`'s
+- **Write an explicit verdict, atomically.** The reviewer is told to ALWAYS
+  write a round-suffixed file outside the worktree (`task-prompt.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
   block approve's own clean-tree check), as JSON:
   `{verdict: "clean" | "changes-requested", summary, findings: [{path, line,
-side, severity, body}]}`. `parseReviewFindings` tolerantly falls back to
-  `changes-requested` (the whole file as `summary`, no anchored findings) for
-  anything that isn't valid JSON in that shape — an agent that ignores the
-  contract must never silently read as a clean review. A missing or empty
-  file is treated as **inconclusive**, not "no findings" and not "clean": the
-  review may not have happened at all (a crash, a killed session, or an
-  agent that ignored the instruction), so `task-reconciler.ts` posts it as
-  such rather than a confident "nothing wrong here."
+side, severity, body}]}` — written to a temp file and moved into place as
+  the last step, not written directly, so a reconcile tick can never
+  observe a torn/partial write. `parseReviewFindings` tolerantly falls back
+  to `changes-requested` (the whole file as `summary`, no anchored findings)
+  for anything that isn't valid JSON in that shape — an agent that ignores
+  the contract must never silently read as a clean review.
+
+  A missing file is treated as **inconclusive**, not "no findings" and not
+  "clean" — but not on the very first tick that observes it missing.
+  `task-reconciler.ts`'s `processReviewingTasks` only accepts a missing file
+  as genuinely absent once the review session has either `exited` (nothing
+  more can ever be written) or been alive past `REVIEW_FINDINGS_GRACE_MS`
+  (30 minutes, since the reviewer now runs the repo's own verification gate
+  before writing anything — several minutes of silence is normal, not
+  evidence of a crash). Before this fix
+  (Task Master trial 220921 / PR #743's incident), a `finished` turn-end
+  with no file yet was ingested as inconclusive immediately, and durably —
+  `reviewFindingsIngestedSessionId` latched permanently, so a real verdict
+  file that landed moments later could never be read. The findings file is
+  also unlinked at spawn time (`spawnReviewAgentNow`), not only once
+  ingested, so a leftover from a prior same-round attempt is never
+  re-ingested as this attempt's fresh output.
+
 - **Post as an actual GitHub PR review**, not a plain conversation comment.
   Once the review session's turn ends, `task-reconciler.ts`'s
   `processReviewingTasks` reads the verdict back and

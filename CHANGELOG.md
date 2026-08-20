@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.38](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.37...v0.2.38) (2026-08-20)
+
+
+### Bug Fixes
+
+* **hooks:** agy's outstanding background work must not read as "finished" ([#753](https://github.com/s3ntin3l8/mullion-session-manager/issues/753)) ([484408a](https://github.com/s3ntin3l8/mullion-session-manager/commit/484408a50f7aa1a8d37b2ca2b099d6ee368bacb3))
+* **hooks:** one unreadable agy config file must not disable its whole managed install ([#749](https://github.com/s3ntin3l8/mullion-session-manager/issues/749)) ([7b896ea](https://github.com/s3ntin3l8/mullion-session-manager/commit/7b896ead7e856c6f0c897f84bea35f8390530695))
+* **tasks:** make an inconclusive review recoverable, not a permanent dead end ([#754](https://github.com/s3ntin3l8/mullion-session-manager/issues/754)) ([811e024](https://github.com/s3ntin3l8/mullion-session-manager/commit/811e02468ada7cc2b7551f18372cb4037fcc8acc))
+* **tasks:** pin agy's execution mode so an unattended agent can write files ([#752](https://github.com/s3ntin3l8/mullion-session-manager/issues/752)) ([98cd0f7](https://github.com/s3ntin3l8/mullion-session-manager/commit/98cd0f75284ad7d2d3a6ce988bad0b52235b6685))
+
+## [0.2.37](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.36...v0.2.37) (2026-08-20)
+
+
+### Bug Fixes
+
+* **tasks:** resurrect a relabeled task that auto-failed for losing its tracking label ([#748](https://github.com/s3ntin3l8/mullion-session-manager/issues/748)) ([009f1ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/009f1ae79a29cea9ac7dfe7b2abda44713f296e2))
+
 ## [0.2.36](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.35...v0.2.36) (2026-08-20)
 
 

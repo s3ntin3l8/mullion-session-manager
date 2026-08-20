@@ -139,7 +139,7 @@ describe("getSkipPermissionFlag", () => {
     expect(getSkipPermissionFlag("codex")).toBe("--dangerously-bypass-approvals-and-sandbox");
     expect(getSkipPermissionFlag("opencode")).toBe("--auto");
     expect(getSkipPermissionFlag("gemini")).toBe("--approval-mode yolo");
-    expect(getSkipPermissionFlag("agy")).toBe("--dangerously-skip-permissions");
+    expect(getSkipPermissionFlag("agy")).toBe("--dangerously-skip-permissions --mode accept-edits");
     expect(getSkipPermissionFlag("aider")).toBe("--yes");
   });
 
