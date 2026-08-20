@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
 import type * as ApiModule from "./api/index.js";
+import { ApiError } from "./api/index.js";
 import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api/index.js";
 
 let tasks: Task[];
@@ -914,8 +915,8 @@ describe("TaskDetail merge-on-approve status", () => {
     expect(screen.queryByRole("button", { name: "Retry merge" })).toBeNull();
   });
 
-  it("shows an error when mergeTask rejects", async () => {
-    mergeTask.mockRejectedValueOnce(new Error("Task Master disabled"));
+  it("shows a generic error when mergeTask rejects with a plain Error", async () => {
+    mergeTask.mockRejectedValueOnce(new Error("network down"));
     tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
@@ -925,12 +926,36 @@ describe("TaskDetail merge-on-approve status", () => {
     expect(screen.getByText("Failed to request a merge")).toBeInTheDocument();
   });
 
-  it("Merge now is not gated on taskMasterEnabled — it only re-arms the sweep's backoff", () => {
+  // Hermes review, PR #769 (suggestion) — the real 403 path is an ApiError
+  // carrying the backend's own message, not a plain Error; surfaced
+  // verbatim the same way DeleteTaskAction/other actions in this file do.
+  it("surfaces the ApiError message when mergeTask rejects with one (e.g. the server's 403)", async () => {
+    mergeTask.mockRejectedValueOnce(
+      new ApiError("Task Master is disabled (deploy-time default or a Settings override)", 403),
+    );
+    tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Merge now" }));
+
+    expect(
+      screen.getByText("Task Master is disabled (deploy-time default or a Settings override)"),
+    ).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #769 — the backend route this button calls (POST
+  // /api/tasks/:id/merge) is gated on taskMasterEnabled exactly like
+  // approve is (routes/tasks.ts), so an enabled button on a disabled
+  // install would always 403. This replaces an earlier, incorrect version
+  // of this test that asserted the opposite.
+  it("gates Merge now on taskMasterEnabled, like Claim/Approve/Retry — the backend route is gated too", () => {
     taskMasterEnabled = false;
     tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Merge now" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Merge now" })).toBeDisabled();
+    expect(screen.getByText(/Task Master is disabled/)).toBeInTheDocument();
   });
 });
 
