@@ -8,6 +8,7 @@ import { canTransition, recordTaskTransition, type TaskStatus } from "../service
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
+import { resetMergeBackoff } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend } from "../services/session-backend.js";
 
@@ -664,6 +665,16 @@ export async function tasksRoute(app: FastifyInstance) {
         completedAt: new Date(),
         prUrl: promotion.prUrl,
         prNumber: promotion.prNumber,
+        // Merge-on-approve — read from `promotion.prNumber`, not
+        // `existing.prNumber`: the latter can still be null here (the draft
+        // PR open at "-> reviewing" is best-effort and can have failed), but
+        // `promotion` above is awaited and guaranteed non-null on `ok: true`.
+        // The reconciler's processMergeRequests sweep (task-reconciler.ts)
+        // picks this up and lands the merge asynchronously once GitHub
+        // allows it — never inline here, since main's branch protection
+        // requires an up-to-date branch and green checks that a
+        // just-pushed commit almost never has yet.
+        mergeRequestedAt: project.mergeOnApprove ? new Date() : null,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
       .returning()
@@ -692,6 +703,40 @@ export async function tasksRoute(app: FastifyInstance) {
     // benefit. Fire-and-forget.
     void syncTaskTransition(app, updated, project, "done", { prUrl: updated.prUrl ?? undefined });
     cleanupTaskWorktree(app, updated, project);
+    return updated;
+  });
+
+  // Merge-on-approve — "Merge now" / "Retry merge". Re-arms the merge sweep
+  // (task-reconciler.ts's processMergeRequests) rather than merging inline:
+  // the same branch-protection reasoning as approve above applies here too
+  // (an up-to-date branch + green required checks a fresh click can't
+  // guarantee synchronously), so this only sets intent and resets the
+  // sweep's own backoff so the next tick attempts it immediately instead of
+  // waiting out whatever interval it was already on.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/merge", async (request, reply) => {
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
+    }
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+    if (existing.status !== "done") {
+      return reply.conflict(`Cannot request a merge for a task in status "${existing.status}"`);
+    }
+    if (existing.prNumber === null) {
+      return reply.conflict("Task has no linked pull request to merge");
+    }
+
+    const [updated] = app.db
+      .update(tasks)
+      .set({ mergeRequestedAt: new Date(), mergeError: null })
+      .where(eq(tasks.id, taskId))
+      .returning()
+      .all();
+    resetMergeBackoff(taskId);
     return updated;
   });
 
