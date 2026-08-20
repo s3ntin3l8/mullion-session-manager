@@ -13,6 +13,8 @@ const mockSetAssignees = vi.fn();
 const mockCloseIssue = vi.fn();
 const mockGetIssueState = vi.fn();
 const mockGetRemoteHostClient = vi.fn();
+const mockGetPullRequestByNumber = vi.fn();
+const mockCreatePullRequestReview = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
@@ -28,6 +30,8 @@ vi.mock("../../src/services/github-write.js", () => ({
   setAssignees: mockSetAssignees,
   closeIssue: mockCloseIssue,
   getIssueState: mockGetIssueState,
+  getPullRequestByNumber: mockGetPullRequestByNumber,
+  createPullRequestReview: mockCreatePullRequestReview,
 }));
 // #484 — computeTaskDiffStat's remote-hosted branch dispatches to
 // getRemoteHostClient(app, hostId).resolveGitDiffStats(...); mocked so
@@ -665,27 +669,110 @@ describe("task-github-sync", () => {
   });
 
   describe("postReviewFindingsComment", () => {
-    it("comments on the PR when one exists, not the issue", async () => {
-      mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "https://github.com/o/r/issues/5#c1" });
+    beforeEach(() => {
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: true,
+        headSha: "abc123",
+      });
+      mockCreatePullRequestReview.mockResolvedValue({
+        id: 555,
+        htmlUrl: "https://github.com/o/r/pull/9#pullrequestreview-555",
+      });
+    });
+
+    it("posts an actual PR review, with each finding as an inline anchored comment, when a PR exists", async () => {
       const task = baseTask({ issueNumber: 5, prNumber: 9 });
 
-      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+      await postReviewFindingsComment(app, task, project, {
+        body: "## Round 1\n\nOne errcheck failure.\n\n- **a.go:42** — unchecked error",
+        reviewSummary: "## Round 1\n\nOne errcheck failure.",
+        findings: [
+          { path: "a.go", line: 42, side: "RIGHT", severity: "major", body: "unchecked error" },
+        ],
+      });
 
-      expect(mockCreateComment).toHaveBeenCalledWith(
+      expect(mockCreateComment).not.toHaveBeenCalled();
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledWith(
         "ghp_token",
         repoRef.owner,
         repoRef.repo,
         9,
-        "## Round 1\n\nfindings",
+      );
+      expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        9,
+        {
+          body: "## Round 1\n\nOne errcheck failure.",
+          commitId: "abc123",
+          comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "[major] unchecked error" }],
+        },
       );
     });
 
-    it("falls back to the issue when the task has no PR yet", async () => {
+    it("posts the full body with no inline comments when there are no findings to anchor", async () => {
+      const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+      await postReviewFindingsComment(app, task, project, {
+        body: "## Round 1\n\nReview agent finished but wrote no findings file — treat this review as inconclusive.",
+      });
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        9,
+        {
+          body: "## Round 1\n\nReview agent finished but wrote no findings file — treat this review as inconclusive.",
+          commitId: "abc123",
+          comments: undefined,
+        },
+      );
+    });
+
+    it("retries with findings folded into the body when GitHub rejects the inline anchors (422)", async () => {
+      const { GitHubApiError } = await import("../../src/services/github.js");
+      mockCreatePullRequestReview
+        .mockRejectedValueOnce(new GitHubApiError("Validation Failed", 422))
+        .mockResolvedValueOnce({
+          id: 556,
+          htmlUrl: "https://github.com/o/r/pull/9#pullrequestreview-556",
+        });
+      const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+      await postReviewFindingsComment(app, task, project, {
+        body: "## Round 1\n\nOne errcheck failure.\n\n- **a.go:42** — unchecked error",
+        reviewSummary: "## Round 1\n\nOne errcheck failure.",
+        findings: [
+          { path: "a.go", line: 42, side: "RIGHT", severity: null, body: "unchecked error" },
+        ],
+      });
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
+      expect(mockCreatePullRequestReview).toHaveBeenLastCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        9,
+        {
+          body: "## Round 1\n\nOne errcheck failure.\n\n- **a.go:42** — unchecked error",
+          commitId: "abc123",
+        },
+      );
+    });
+
+    it("falls back to an issue comment when the task has no PR yet", async () => {
       mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "https://github.com/o/r/issues/5#c1" });
       const task = baseTask({ issueNumber: 5, prNumber: null });
 
-      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+      await postReviewFindingsComment(app, task, project, { body: "## Round 1\n\nfindings" });
 
+      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
       expect(mockCreateComment).toHaveBeenCalledWith(
         "ghp_token",
         repoRef.owner,
@@ -698,23 +785,28 @@ describe("task-github-sync", () => {
     it("is a no-op when the task has neither a PR nor a linked issue", async () => {
       const task = baseTask({ issueNumber: null, prNumber: null });
 
-      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+      await postReviewFindingsComment(app, task, project, { body: "## Round 1\n\nfindings" });
 
       expect(mockResolveRepoRef).not.toHaveBeenCalled();
       expect(mockCreateComment).not.toHaveBeenCalled();
+      expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 
     it("is a no-op when no GitHub token is connected", async () => {
       mockGetToken.mockReturnValue(null);
       const task = baseTask({ issueNumber: 5, prNumber: 9 });
 
-      await postReviewFindingsComment(app, task, project, "## Round 1\n\nfindings");
+      await postReviewFindingsComment(app, task, project, { body: "## Round 1\n\nfindings" });
 
-      expect(mockCreateComment).not.toHaveBeenCalled();
+      expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 
-    it("records a sync error, never throws, when the comment write fails", async () => {
-      mockCreateComment.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+    it("falls back to an issue comment when posting the review fails but the task also has a linked issue", async () => {
+      mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      mockCreateComment.mockResolvedValue({
+        id: 1,
+        htmlUrl: "https://github.com/o/r/issues/910#c1",
+      });
       const [row0] = app.db
         .insert(tasks)
         .values({ projectId, issueNumber: 910, prNumber: 9, title: "t", status: "reviewing" })
@@ -722,15 +814,75 @@ describe("task-github-sync", () => {
         .all();
 
       await expect(
-        postReviewFindingsComment(app, row0, project, "## Round 1\n\nfindings"),
+        postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
       ).resolves.toBeUndefined();
 
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        repoRef.owner,
+        repoRef.repo,
+        910,
+        "## Round 1\n\nfindings",
+      );
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
+      expect(row.githubSyncError).toBeNull();
+    });
+
+    it("records the fallback's own error when both the PR review and the issue-comment fallback fail", async () => {
+      mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      mockCreateComment.mockRejectedValue(new Error("issue comment also rejected"));
+      const [row0] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber: 912, prNumber: 9, title: "t", status: "reviewing" })
+        .returning()
+        .all();
+
+      await expect(
+        postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
+      ).resolves.toBeUndefined();
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
+      expect(row.githubSyncError).toContain("issue comment also rejected");
+    });
+
+    it("records a sync error, never throws, when posting the review fails and there's no linked issue to fall back to", async () => {
+      mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      const [row0] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber: null, prNumber: 9, title: "t", status: "reviewing" })
+        .returning()
+        .all();
+
+      await expect(
+        postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
+      ).resolves.toBeUndefined();
+
+      expect(mockCreateComment).not.toHaveBeenCalled();
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
       expect(row.githubSyncError).toContain("insufficient scope");
     });
 
+    // The review-subagent's finding on this PR: GitHubWriteScopeError
+    // EXTENDS GitHubApiError, so `err instanceof GitHubApiError` alone
+    // can't distinguish a 403 scope failure from a 422 anchor rejection —
+    // only the `statusCode === 422` check does. This pins that a 403 never
+    // triggers the drop-anchors-and-retry path (a second POST with the
+    // same doomed token would just 403 again).
+    it("does not retry a 403 the way it retries a 422 — a scope failure isn't an anchor problem", async () => {
+      const { GitHubApiError } = await import("../../src/services/github.js");
+      mockCreatePullRequestReview.mockRejectedValue(new GitHubApiError("insufficient scope", 403));
+      const task = baseTask({ issueNumber: null, prNumber: 9 });
+
+      await postReviewFindingsComment(app, task, project, {
+        body: "## Round 1\n\nOne finding.",
+        reviewSummary: "## Round 1\n\nOne finding.",
+        findings: [{ path: "a.go", line: 42, side: "RIGHT", severity: null, body: "b" }],
+      });
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    });
+
     it("clears a previously-recorded sync error on a successful post", async () => {
-      mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "https://github.com/o/r/issues/5#c1" });
       const [row0] = app.db
         .insert(tasks)
         .values({
@@ -744,7 +896,7 @@ describe("task-github-sync", () => {
         .returning()
         .all();
 
-      await postReviewFindingsComment(app, row0, project, "## Round 1\n\nfindings");
+      await postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" });
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
       expect(row.githubSyncError).toBeNull();

@@ -11,6 +11,7 @@ import {
   getPullRequestByNumber,
   closePullRequest,
   markPullRequestReadyForReview,
+  createPullRequestReview,
   GitHubWriteScopeError,
 } from "../../src/services/github-write.js";
 import { GitHubApiError } from "../../src/services/github.js";
@@ -173,12 +174,13 @@ describe("github-write service", () => {
     );
   });
 
-  it("getPullRequestByNumber GETs /pulls/:number and returns number/htmlUrl/nodeId", async () => {
+  it("getPullRequestByNumber GETs /pulls/:number and returns number/htmlUrl/nodeId/headSha", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, {
         number: 9,
         html_url: "https://github.com/owner/repo/pull/9",
         node_id: "PR_node9",
+        head: { sha: "abc123" },
       }),
     );
     const result = await getPullRequestByNumber("tok", "owner", "repo", 9);
@@ -186,11 +188,121 @@ describe("github-write service", () => {
       number: 9,
       htmlUrl: "https://github.com/owner/repo/pull/9",
       nodeId: "PR_node9",
+      headSha: "abc123",
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.github.com/repos/owner/repo/pulls/9",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("createPullRequestReview POSTs a COMMENT-event review with anchored comments", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, {
+        id: 555,
+        html_url: "https://github.com/owner/repo/pull/9#pullrequestreview-555",
+      }),
+    );
+    const result = await createPullRequestReview("tok", "owner", "repo", 9, {
+      body: "## Round 1\n\nOne finding.",
+      commitId: "abc123",
+      comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "unchecked error" }],
+    });
+    expect(result).toEqual({
+      id: 555,
+      htmlUrl: "https://github.com/owner/repo/pull/9#pullrequestreview-555",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9/reviews",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          body: "## Round 1\n\nOne finding.",
+          commit_id: "abc123",
+          event: "COMMENT",
+          comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "unchecked error" }],
+        }),
+      }),
+    );
+  });
+
+  it("posts undefined comments when none are given", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, {
+        id: 556,
+        html_url: "https://github.com/owner/repo/pull/9#pullrequestreview-556",
+      }),
+    );
+    await createPullRequestReview("tok", "owner", "repo", 9, {
+      body: "Review complete — no findings.",
+      commitId: "abc123",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9/reviews",
+      expect.objectContaining({
+        body: JSON.stringify({
+          body: "Review complete — no findings.",
+          commit_id: "abc123",
+          event: "COMMENT",
+          comments: undefined,
+        }),
+      }),
+    );
+  });
+
+  // Hermes review, PR #738 — an empty `comments` array (not `undefined`)
+  // survives JSON.stringify (only `undefined` properties are dropped), and
+  // GitHub 422s a review whose `comments` key is present but empty.
+  it("treats an empty comments array the same as none, not as an empty comments key", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 557, html_url: "u" }));
+    await createPullRequestReview("tok", "owner", "repo", 9, {
+      body: "b",
+      commitId: "abc123",
+      comments: [],
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).comments).toBeUndefined();
+  });
+
+  // Hermes review, PR #738 — GitHub's own documented default for a review
+  // comment's `side` is "RIGHT", so omitting it (rather than us guessing a
+  // default) does exactly what a caller who deliberately left it out wants,
+  // with no risk of second-guessing a LEFT-only anchor on a deleted line.
+  it("omits side entirely when a comment doesn't set one, rather than defaulting it", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 558, html_url: "u" }));
+    await createPullRequestReview("tok", "owner", "repo", 9, {
+      body: "b",
+      commitId: "abc123",
+      comments: [{ path: "a.go", line: 1, body: "b" }],
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).comments).toEqual([
+      { path: "a.go", line: 1, body: "b" },
+    ]);
+  });
+
+  // The self-review constraint createPullRequestReview's own doc comment
+  // documents: only COMMENT is ever sent, since GitHub 422s APPROVE/
+  // REQUEST_CHANGES from a PR's own author. This test just pins that no
+  // caller can accidentally widen `event` — there's no parameter for it.
+  it("never sends an event other than COMMENT", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 1, html_url: "u" }));
+    await createPullRequestReview("tok", "owner", "repo", 9, { body: "b", commitId: "c" });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).event).toBe("COMMENT");
+  });
+
+  it("createPullRequestReview maps a 422 to a plain GitHubApiError (caller does the retry-without-anchors fallback)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      textResponse(422, "Validation Failed: line must be part of the diff"),
+    );
+    await expect(
+      createPullRequestReview("tok", "owner", "repo", 9, {
+        body: "b",
+        commitId: "c",
+        comments: [{ path: "a.go", line: 9999, body: "out of diff" }],
+      }),
+    ).rejects.toThrow(GitHubApiError);
   });
 
   it("closePullRequest PATCHes state: closed on the pull, not the issue, endpoint", async () => {
