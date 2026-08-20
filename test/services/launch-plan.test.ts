@@ -361,6 +361,16 @@ describe("buildLaunchPlan — skip-permissions handling", () => {
 
     expect(plan.argv.at(-1)).toBe("claude --settings /tmp/x.json --dangerously-skip-permissions");
   });
+
+  // Task Master trial 220921 / PR #743 — agy's flag is TWO tokens, not one:
+  // --dangerously-skip-permissions alone leaves agy's own sticky, global
+  // "plan" execution mode in effect, which silently blocks every
+  // write_to_file (including a review agent's own findings-file write).
+  // See SKIP_PERMISSION_FLAGS' own doc comment for the live verification.
+  it("on, agy: appends BOTH the permission flag and --mode accept-edits", () => {
+    const plan = buildLaunchPlan(baseSession({ command: "agy", skipPermissions: true }));
+    expect(plan.argv.at(-1)).toBe("agy --dangerously-skip-permissions --mode accept-edits");
+  });
 });
 
 describe("buildLaunchPlan — initial-prompt composition", () => {

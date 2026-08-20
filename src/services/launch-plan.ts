@@ -44,7 +44,23 @@ export const SKIP_PERMISSION_FLAGS: Record<string, string> = {
   codex: "--dangerously-bypass-approvals-and-sandbox",
   opencode: "--auto",
   gemini: "--approval-mode yolo",
-  agy: "--dangerously-skip-permissions",
+  // `--mode accept-edits` alongside the permission flag, not just the
+  // permission flag alone (Task Master trial 220921 / PR #743's incident):
+  // agy has a SEPARATE, sticky, global execution mode
+  // (~/.gemini/antigravity-cli/settings.json's `agentMode`) that
+  // `--dangerously-skip-permissions` does nothing to override — a host left
+  // in "plan" mode (the trial's actual state) makes agy refuse every
+  // `write_to_file`, including the review agent's own findings-file write,
+  // with no error surfaced anywhere Mullion can see. Verified live on this
+  // host: `agy --dangerously-skip-permissions --mode accept-edits -i='…'`,
+  // the exact argv shape `initialPromptArgs` below produces, both skips the
+  // permission prompts AND successfully writes a file on its first attempt
+  // (a plan-mode session's Create only ever succeeds by accident, falling
+  // back to a shell heredoc plan mode happens to still allow — see the
+  // trial's own scrollback). `--mode` takes an explicit session-scoped
+  // value per `agy --help`, so this never depends on — or mutates — the
+  // user's own global `agentMode` default.
+  agy: "--dangerously-skip-permissions --mode accept-edits",
   aider: "--yes",
 };
 
