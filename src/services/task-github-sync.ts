@@ -38,7 +38,7 @@ import {
   createPullRequestReview,
 } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
-import type { ReviewFinding } from "./task-prompt.js";
+import { severityPrefix, type ReviewFinding } from "./task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
@@ -547,7 +547,7 @@ export async function postReviewFindingsComment(
               path: f.path,
               line: f.line,
               side: f.side,
-              body: f.severity ? `**[${f.severity}]** ${f.body}` : f.body,
+              body: `${severityPrefix(f.severity)}${f.body}`,
             }))
           : [];
       try {

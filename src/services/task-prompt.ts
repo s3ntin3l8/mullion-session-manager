@@ -291,6 +291,15 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
   return { verdict: "changes-requested", summary: trimmed, findings: [] };
 }
 
+/** `"[severity] "`, or `""` when the reviewer gave none — the one piece of
+ * finding-rendering shared between this file's own bullet form and
+ * `task-github-sync.ts`'s inline-anchor comment body, so the two don't
+ * silently drift into different styling for the same field (Hermes review,
+ * PR #736). */
+export function severityPrefix(severity: ReviewFinding["severity"]): string {
+  return severity ? `[${severity}] ` : "";
+}
+
 /** Renders a parsed verdict back into the plain-text form the review
  * comment and the review-feedback re-seed prompt both already expect —
  * summary prose, then each anchored finding as a `path:line` bullet,
@@ -299,10 +308,9 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
  * `ParsedReviewFindings.findings` directly instead. */
 export function renderReviewFindingsMarkdown(parsed: ParsedReviewFindings): string {
   if (parsed.findings.length === 0) return parsed.summary;
-  const bullets = parsed.findings.map((f) => {
-    const prefix = f.severity ? `[${f.severity}] ` : "";
-    return `- ${prefix}**${f.path}:${f.line}** — ${f.body}`;
-  });
+  const bullets = parsed.findings.map(
+    (f) => `- ${severityPrefix(f.severity)}**${f.path}:${f.line}** — ${f.body}`,
+  );
   return [parsed.summary, "", ...bullets].join("\n");
 }
 
