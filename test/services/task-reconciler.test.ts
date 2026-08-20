@@ -1612,6 +1612,75 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Hermes review, PR #754 — grace-elapsed alone must not be enough for a
+    // session that's demonstrably still doing something. A genuinely slow
+    // verification-gate run (severity "busy": working/compacting/subagent/
+    // background) past 30 minutes is not a hung session; ingesting it as
+    // inconclusive would permanently latch reviewFindingsIngestedSessionId
+    // out from under a real verdict that's still coming — new-vs-main
+    // behavior main never had (main never ingested a still-active session
+    // at all), and the exact dead end this PR exists to fix, just
+    // relocated to the 30-minute mark.
+    it("does NOT ingest past the grace window while the session is still actively working", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ activity: "working" })
+                : fakeInfo(),
+          }) as never,
+      );
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // The genuinely-stuck counterpart to the "still working" test above —
+    // a session that's gone quiet (never latched "finished," not
+    // "working"/"busy" either) past the grace window IS treated as
+    // "nothing more is coming," but with wording that doesn't falsely
+    // claim it "finished" (Hermes review, PR #754's other finding).
+    it("ingests past the grace window with a third, non-'finished' wording when the session has gone quiet without ever finishing", async () => {
+      const app = await buildApp();
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () => (String(id) === String(reviewSessionId) ? fakeInfo() : fakeInfo()),
+          }) as never,
+      );
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toContain("produced no findings file within the expected time");
+      expect(row.reviewFindings).not.toContain("finished but wrote no findings file");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+
+      await app.close();
+    });
+
     // The regression guard Change 1 exists for. Under the old "a findings
     // file means act on it" rule, always writing a file (this prompt's own
     // change) would have made a clean review indistinguishable from one

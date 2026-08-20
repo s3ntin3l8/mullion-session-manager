@@ -857,6 +857,15 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
 // evidence of a crash. `derived.status === "exited"` still ingests
 // immediately regardless of this window — a session that has genuinely
 // exited can't write anything more no matter how long is waited.
+//
+// This window alone is NOT sufficient, though (Hermes review, PR #754):
+// crossing it while the session is demonstrably still active
+// (`derived.severity === "busy"` — working/compacting/subagent/background)
+// must not conclude "nothing is coming" either — a slow verification suite
+// genuinely still running past 30 minutes would otherwise hit the exact
+// same permanent-latch dead end this constant exists to fix, just relocated
+// here instead of at 21 seconds. See `isUsableSignal`'s own comment for the
+// busy exclusion this pairs with.
 const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
 
 /**
@@ -1042,22 +1051,43 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // this long with no findings file and hasn't even reached
         // "finished" once is itself the failure worth surfacing (a hung or
         // runaway session), not a reason to keep waiting silently forever.
+        //
+        // Hermes review, PR #754 — grace-elapsed alone isn't enough: a
+        // session with `severity === "busy"` (working/compacting/subagent/
+        // background — session-status.ts's own grouping) is DEMONSTRABLY
+        // still doing something, e.g. genuinely still running the repo's
+        // verification gate past 30 minutes on a slow suite. Ingesting that
+        // as inconclusive would permanently latch `reviewFindingsIngestedSessionId`
+        // out from under a real verdict that's still coming — the exact
+        // dead end this PR exists to fix, just relocated to the 30-minute
+        // mark, and worse than main: main never ingested a still-active
+        // session at all. Only a session that has gone quiet (idle,
+        // blocked on a human, erroring, or genuinely `finished`) past the
+        // grace window, or `exited` outright, is treated as "nothing more
+        // is coming."
         const isUsableSignal =
           parsed !== null
             ? derived.status === "finished" || derived.status === "exited"
             : derived.status === "exited" ||
-              now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS;
+              (derived.severity !== "busy" &&
+                now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS);
         if (!isUsableSignal) continue;
 
         const roundLabel = `## Round ${task.reviewRounds + 1}`;
-        // A killed/crashed session (`exited`, now unconditionally usable —
-        // see `isUsableSignal`'s own doc comment) never "finished" anything.
-        // Saying so on a real, human-visible GitHub PR review would be a
-        // false claim about what actually happened to the session.
+        // Hermes review, PR #754 — wording keyed on `derived.status`
+        // itself, not just "was it exited," so a session ingested via the
+        // grace-elapsed branch above (which — per the comment on
+        // `isUsableSignal` — can be `finished`, `idle`, an `awaiting_*`
+        // block, or an error state, never `busy`) never gets a claim about
+        // what happened to it that isn't true. A killed/crashed session
+        // (`exited`) never "finished" anything; a merely quiet-but-not-
+        // finished session didn't either.
         const noFindingsReason =
           derived.status === "exited"
             ? "Review agent ended without writing a findings file"
-            : "Review agent finished but wrote no findings file";
+            : derived.status === "finished"
+              ? "Review agent finished but wrote no findings file"
+              : "Review agent produced no findings file within the expected time";
         const commentBody = parsed
           ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
           : `${roundLabel}\n\n${noFindingsReason} — treat this review as inconclusive.`;
