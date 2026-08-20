@@ -98,6 +98,17 @@ export function useWorkspacePersistence({
   const persistIfChanged = useCallback((workspaceId: number, serialized: SerializedDockview) => {
     const json = JSON.stringify(serialized);
     if (lastPersistedRef.current.get(workspaceId) === json) return;
+    // Marked persisted optimistically, before the request resolves — matches
+    // this save path's existing no-error-handling posture (saveWorkspaceLayout
+    // itself catches and only console.error's a failed PATCH; store/slices/
+    // workspaces.ts's own saveWorkspaceLayout never rejects, so there is no
+    // failure signal to react to here without changing that shared
+    // function's contract for every other caller). A PATCH that fails
+    // silently means this blob won't be retried until the layout genuinely
+    // changes again — an accepted, pre-existing gap, not one this dedupe
+    // introduces (the un-deduped autosave had the exact same silent-failure
+    // posture; it just wrote the same landed-on-server assumption every
+    // 800ms regardless).
     lastPersistedRef.current.set(workspaceId, json);
     void useDashboardStore
       .getState()
