@@ -569,6 +569,14 @@ Two independent choices are resolved per task, most-specific tier wins:
    for the review agent — it's opt-in per project/task, not a new global
    default.
 
+   This becomes load-bearing, not just advisory, once a project's
+   `autoApprove` setting is on (see "Auto-approve" under Task → PR promotion
+   below): auto-approve's gate requires an ingested `clean` verdict, which
+   only exists if a review agent actually ran. No review agent configured on
+   a project means that project's tasks can never auto-approve, by design —
+   the same "opt-in, no global default" posture above, just with a
+   consequence attached now.
+
 Both directives are matched case-insensitively on their own line (a
 document that merely _mentions_ "Agent: claude" in prose isn't picked up).
 An unrecognized agent name at any tier is logged and falls through to the
@@ -1036,10 +1044,9 @@ open, ready for review, non-draft, and nobody merges it. A per-project
 setting, **`mergeOnApprove`** (Project Settings; a column on `projects`, no
 install-wide equivalent — same "opt-in per project" posture as
 `defaultReviewAgent`), changes that: approving a task also requests a merge
-for its PR. A related setting, `autoApprove`, exists alongside it on the same
-schema for a follow-up that has a `reviewing` task approve itself once its
-review agent's last verdict was `clean` and CI is green — not yet wired up
-to any behavior.
+for its PR. A related setting, **`autoApprove`**, has a `reviewing` task
+approve itself once its review agent's last verdict was `clean` and CI is
+green — see "Auto-approve" below.
 
 Both default off. `mergeOnApprove` alone still requires a human to click
 Approve; combined with `autoApprove`, the pair gives a fully automatic
@@ -1090,6 +1097,44 @@ of the repo's own squash-title setting, but it does **not** gate the merge on
 a prefix check — that's this repo's policy, not a Mullion-wide one. This
 matters more with `mergeOnApprove`/`autoApprove` on, since nobody is reading
 the title before it becomes a permanent commit message.
+
+### Auto-approve
+
+With `autoApprove` on, a `reviewing` task approves itself — no human click —
+once **all** of the following hold:
+
+1. Task Master is enabled.
+2. The task's current review round has actually been ingested
+   (`reviewFindingsIngestedSessionId === reviewSessionId` — the _latest_
+   round's verdict, not a stale one from an earlier round).
+3. That round's verdict (`tasks.lastReviewVerdict`, written alongside
+   ingestion by `processReviewingTasks`) is `clean`.
+4. CI on the PR head reads an explicit `success` — via the same
+   PR-plus-Actions-runs lookup the review-agent spawn already uses to wait
+   for CI (`fetchCurrentCiStatus`, factored out of `resolveReviewCi`).
+   **Unlike** that caller, there is no deadline after which auto-approve
+   gives up and proceeds anyway: `in_progress`, no CI found at all, and a
+   thrown lookup all simply mean "not yet," forever. A repo with no CI
+   configured therefore never auto-approves — the right default for a gate
+   whose whole job is to be a gate, not a formality that eventually
+   rubber-stamps itself.
+
+Anything else — no review agent configured on the project (so no verdict is
+ever ingested), `changes-requested`, `inconclusive`, CI red or still
+running — leaves the task in `reviewing` for a human, exactly today's
+behavior. Auto-approving records the transition with `via: "auto-approve"`,
+distinct from a human's `via: "approve"` in the task timeline and on
+`/ws/tasks`.
+
+This makes issue #737 (a second GitHub identity so the review agent's own PR
+review can gate merge) _less_ pressing but doesn't close it: the gate above
+is Mullion's own, enforced before a merge is ever requested — not a GitHub
+required-review.
+
+A remote-hosted task can never auto-approve today: review-findings
+ingestion (step 2 above) is local-only (see `processReviewingTasks`'s own
+doc comment), so `lastReviewVerdict` never gets written for one regardless
+of what its review agent actually found.
 
 ## Worktree lifecycle
 
