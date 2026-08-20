@@ -104,6 +104,11 @@ interface UpdateProjectBody {
   // tier — see task-agent-resolve.ts).
   defaultAgent?: string | null;
   defaultReviewAgent?: string | null;
+  // Per-project only, no install-wide tier — same posture as
+  // defaultReviewAgent above. `null`/`false` = off; default-off matters,
+  // see schema.ts's own doc comment on these two columns.
+  mergeOnApprove?: boolean | null;
+  autoApprove?: boolean | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -140,6 +145,8 @@ const updateProjectSchema = {
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
       defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      mergeOnApprove: { type: ["boolean", "null"] },
+      autoApprove: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -2021,6 +2028,8 @@ export async function projectsRoute(app: FastifyInstance) {
         autoFetch,
         defaultAgent,
         defaultReviewAgent,
+        mergeOnApprove,
+        autoApprove,
         createDir,
         gitInit,
       } = request.body;
@@ -2071,10 +2080,12 @@ export async function projectsRoute(app: FastifyInstance) {
         devServerUrl === undefined &&
         autoFetch === undefined &&
         defaultAgent === undefined &&
-        defaultReviewAgent === undefined
+        defaultReviewAgent === undefined &&
+        mergeOnApprove === undefined &&
+        autoApprove === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, or defaultReviewAgent must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, or autoApprove must be provided.",
         );
       }
 
@@ -2128,6 +2139,8 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(autoFetch !== undefined ? { autoFetch } : {}),
           ...(defaultAgent !== undefined ? { defaultAgent } : {}),
           ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
+          ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
+          ...(autoApprove !== undefined ? { autoApprove } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()
