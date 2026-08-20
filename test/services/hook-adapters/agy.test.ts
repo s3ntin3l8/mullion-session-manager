@@ -147,6 +147,32 @@ describe("mergeAgyHooks (issue #253)", () => {
     expect(() => mergeAgyHooks(ctx(), flatPath)).toThrow(/cannot parse/);
     expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
   });
+
+  // Task Master trial 220921 / PR #743's incident — agy itself creates a
+  // 0-byte hooks.json/mcp_config.json/settings.json ahead of ever writing
+  // real content into it, and `JSON.parse("")` throws with no `code`
+  // property, which used to fall through the ENOENT-only guard and abort.
+  // An empty file has nothing to preserve, so it must merge exactly like a
+  // missing one — NOT throw like the malformed-JSON case just above.
+  it("treats a 0-byte hooks.json the same as a missing one, not as malformed JSON", () => {
+    const flatPath = path.join(dir, "hooks.json");
+    writeFileSync(flatPath, "");
+
+    expect(() => mergeAgyHooks(ctx(), flatPath)).not.toThrow();
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written[MULLION_HOOK_NAME]).toBeDefined();
+  });
+
+  it("treats a whitespace-only hooks.json the same as a missing one", () => {
+    const flatPath = path.join(dir, "hooks.json");
+    writeFileSync(flatPath, "  \n\t\n");
+
+    expect(() => mergeAgyHooks(ctx(), flatPath)).not.toThrow();
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written[MULLION_HOOK_NAME]).toBeDefined();
+  });
 });
 
 // agy's own folder-trust prompt ("Do you trust the contents of this
@@ -229,6 +255,21 @@ describe("mergeAgyTrustedWorkspace", () => {
       /cannot parse/,
     );
     expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
+  });
+
+  // Task Master trial 220921 / PR #743 — see mergeAgyHooks' matching test
+  // above for the full incident. This is the highest-stakes of the three:
+  // an empty settings.json wrongly treated as unparseable is exactly what
+  // used to skip pre-trusting the worktree and leave an unattended review
+  // agent blocked on agy's own interactive folder-trust prompt.
+  it("treats a 0-byte settings.json the same as a missing one, not as malformed JSON", () => {
+    const flatPath = path.join(dir, "settings.json");
+    writeFileSync(flatPath, "");
+
+    expect(() => mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", flatPath)).not.toThrow();
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.trustedWorkspaces).toContain("/home/bjoern/projects/foo");
   });
 
   // Hermes review, PR #573 — valid JSON with a wrong-shaped
@@ -372,6 +413,19 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
 
     expect(() => mergeAgyMcpConfig(ctx(), flatPath)).toThrow(/cannot parse/);
     expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
+  });
+
+  // Task Master trial 220921 / PR #743's actual incident — the live host's
+  // ~/.gemini/config/mcp_config.json was exactly this: 0 bytes, created by
+  // agy itself before this fix ever touched it.
+  it("treats a 0-byte mcp_config.json the same as a missing one, not as malformed JSON", () => {
+    const flatPath = path.join(dir, "mcp_config.json");
+    writeFileSync(flatPath, "");
+
+    expect(() => mergeAgyMcpConfig(ctx(), flatPath)).not.toThrow();
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.mcpServers.mullion).toBeDefined();
   });
 
   it("handles a file that exists but has no mcpServers key", () => {

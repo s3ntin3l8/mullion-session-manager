@@ -97,3 +97,106 @@ describe("agyAdapter.prepareLaunch managedInstall gating (Hermes review, PR #573
     expect(trustedWorkspacesWriteCalls()).toHaveLength(0);
   });
 });
+
+function hooksWriteCalls() {
+  return mockWriteFileSync.mock.calls.filter(([path]) => String(path).includes("hooks.json"));
+}
+
+function mcpConfigWriteCalls() {
+  return mockWriteFileSync.mock.calls.filter(([path]) => String(path).includes("mcp_config.json"));
+}
+
+// Task Master trial 220921 / PR #743's actual incident: a real host's
+// ~/.gemini/config/mcp_config.json was unreadable in a way that threw
+// (empty-file tolerance is covered separately in agy.test.ts — this suite
+// only cares about managedInstall's OWN behavior once one step throws for
+// any reason at all), which used to abort every later step in the same
+// `managedInstall` call — most importantly mergeAgyTrustedWorkspace,
+// leaving an unattended review agent blocked on agy's own interactive
+// folder-trust prompt for its whole lifetime. These tests lock in that each
+// step is now independently guarded, run in trust-first order, and that a
+// failure is still surfaced (not swallowed silently down to zero signal).
+describe("agyAdapter.prepareLaunch managedInstall independent step guarding (trial 220921 / PR #743)", () => {
+  beforeEach(() => {
+    mockWriteFileSync.mockClear();
+    mockReadFileSync.mockClear();
+    mockMkdirSync.mockClear();
+    vi.spyOn(os, "homedir").mockReturnValue("/tmp/PROBE_HOME");
+  });
+
+  it("still pre-trusts the cwd and writes hooks.json when mcp_config.json is unreadable", async () => {
+    mockReadFileSync.mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("mcp_config.json")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const ctx = baseCtx({
+      skipPermissions: true,
+      cwd: "/srv/repo/.mullion-worktrees/mullion-task-220921",
+    });
+
+    await expect(agyAdapter.prepareLaunch(ctx).managedInstall?.()).rejects.toThrow();
+
+    // The whole point of the fix: the trust write and the hooks write both
+    // still happened, even though mcp_config.json's step threw.
+    expect(trustedWorkspacesWriteCalls()).toHaveLength(1);
+    expect(hooksWriteCalls()).toHaveLength(1);
+    expect(mcpConfigWriteCalls()).toHaveLength(0);
+  });
+
+  it("still writes hooks.json and mcp_config.json when the trust write itself throws", async () => {
+    mockReadFileSync.mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("antigravity-cli/settings.json")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const ctx = baseCtx({
+      skipPermissions: true,
+      cwd: "/srv/repo/.mullion-worktrees/mullion-task-220921",
+    });
+
+    await expect(agyAdapter.prepareLaunch(ctx).managedInstall?.()).rejects.toThrow();
+
+    expect(trustedWorkspacesWriteCalls()).toHaveLength(0);
+    expect(hooksWriteCalls()).toHaveLength(1);
+    expect(mcpConfigWriteCalls()).toHaveLength(1);
+  });
+
+  it("still rejects (so applyHookAdapters' own failure log still fires) when only one step fails", async () => {
+    mockReadFileSync.mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("mcp_config.json")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const ctx = baseCtx({ skipPermissions: true, cwd: "/srv/repo/x" });
+
+    await expect(agyAdapter.prepareLaunch(ctx).managedInstall?.()).rejects.toThrow(
+      /EACCES|permission denied/,
+    );
+  });
+
+  it("runs the trust write BEFORE hooks/MCP wiring (order, not just independence)", async () => {
+    // Explicit reset — mockClear() (in beforeEach) does not remove a prior
+    // test's mockImplementation override, and this test needs every read to
+    // resolve to "missing" (the ordinary case) rather than inherit an
+    // earlier test's EACCES-on-one-path behavior.
+    mockReadFileSync.mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const order: string[] = [];
+    mockWriteFileSync.mockImplementation((filePath: unknown) => {
+      const p = String(filePath);
+      if (p.includes("antigravity-cli/settings.json")) order.push("trust");
+      else if (p.includes("mcp_config.json")) order.push("mcp");
+      else if (p.includes("hooks.json")) order.push("hooks");
+    });
+    const ctx = baseCtx({ skipPermissions: true, cwd: "/srv/repo/x" });
+
+    await agyAdapter.prepareLaunch(ctx).managedInstall?.();
+
+    expect(order[0]).toBe("trust");
+  });
+});
