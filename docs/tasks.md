@@ -544,25 +544,47 @@ it CAN do:
 
 - **Wait for CI before it even starts.** The spawn is decoupled from the `→
 reviewing` transition itself — `task-reconciler.ts`'s
-  `processPendingReviewSpawns` is a separate pass, run every reconcile tick,
-  that spawns the review agent for any `reviewing` task with no
+  `processPendingReviewSpawns` is a separate pass, run every reconcile tick
+  (gated on `settings.taskMaster.enabled`, same as the transition it used to
+  ride along inside — a review-agent spawn is new autonomous work, not the
+  "already claimed/in_progress" progression the reconcile tick stays ungated
+  for), that spawns the review agent for any `reviewing` task with no
   `reviewSessionId` yet. This exists because the transition and the draft PR
   open aren't atomic: a reviewer spawned inline at the transition would run
   before the PR — and therefore CI — exists at all. If the task has a PR,
   this pass resolves CI on its head commit (`github.ts`'s
-  `fetchRunsForHead`/`computeCiStatus`) and holds until it reaches a
-  terminal state, up to `settings.taskMaster.reviewCiWaitMinutes` (default
-  15; `0` disables waiting — no env-var counterpart, since this is the one
-  knob a stranded task on a repo with no CI needs live rather than a
-  restart). Past the deadline, or on any resolution failure (no repo, no
-  token, the lookup itself failing), it spawns anyway rather than let CI
-  awareness become the reason a task never gets reviewed — a missing/failed
-  check just means the reviewer sees no CI context instead of real
-  pass/fail results. A CAS on `tasks.reviewSpawnClaimedAt`, claimed
-  immediately before the spawn's own I/O, keeps a concurrent
-  Reject/Give-up/Approve from racing a reviewer into existence for a task
-  that's already moved on; a failed spawn clears its own claim so the next
-  tick retries.
+  `fetchRunsForHead`/`computeCiStatus`) and holds — on `in_progress`
+  **and** on `null` (no runs registered yet, indistinguishable at lookup
+  time from "this repo has no CI at all" — the very first lookup happens
+  within moments of the push that created the head commit, before GitHub
+  has necessarily registered the Actions run) — up to
+  `settings.taskMaster.reviewCiWaitMinutes` (default 15; `0` disables
+  waiting — no env-var counterpart, since this is the one knob a stranded
+  task on a repo with no CI needs live rather than a restart). Past the
+  deadline, or on any resolution failure (no repo, no token, the lookup
+  itself failing), it spawns anyway rather than let CI awareness become the
+  reason a task never gets reviewed — a missing/failed check just means the
+  reviewer sees no CI context instead of real pass/fail results. Waiting on
+  `null` too means a repo with no CI configured at all now costs up to
+  `reviewCiWaitMinutes` worth of polling (two GitHub calls per tick) before
+  its first review spawns, instead of spawning instantly — a deliberate
+  tradeoff (Hermes review, PR #742) given this pass has no per-task backoff,
+  acceptable at this tool's scale.
+
+  A CAS on `tasks.reviewSpawnClaimedAt`, claimed immediately before the
+  spawn's own I/O, keeps a concurrent Reject/Give-up/Approve from racing a
+  reviewer into existence for a task that's already moved on — but only for
+  the claim _write_ itself; `createSessionRecord` is real async work after
+  that (possibly a network round-trip to a remote host), so the _final_
+  write that records the new `reviewSessionId` re-checks `status =
+"reviewing"` too, and kills (`killSession`, not a bare backend
+  `terminate` — the row must flip to `"killed"` or the exited-session
+  reconciler surfaces it later as an unexplained crash) the session outright
+  if the task moved on while it was spawning. A failed spawn clears its own
+  claim so the next tick retries; a claim abandoned mid-flight by a process
+  crash/redeploy (nothing else ever clears it) is reclaimed once it's older
+  than 10 minutes.
+
 - **Write an explicit verdict.** The reviewer is told to ALWAYS write a
   round-suffixed file outside the worktree (`task-prompt.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
@@ -770,7 +792,7 @@ mapping each one to its Settings key and explaining what it actually gates.
 | Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops new claims; tasks already `claimed`/`in_progress` are unaffected. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long `processPendingReviewSpawns` (see below) holds a `reviewing` task whose PR has CI still `in_progress` before spawning the review agent anyway. `0` disables waiting — the reviewer spawns immediately regardless of CI state. No env-var counterpart: this is the one knob a task stranded on a repo whose CI will never report needs adjustable live, not only at process restart.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long `processPendingReviewSpawns` (see below) holds a `reviewing` task whose PR has CI still `in_progress` **or** not yet registered (`null` — indistinguishable at lookup time from "no CI at all") before spawning the review agent anyway. `0` disables waiting — the reviewer spawns immediately regardless of CI state. No env-var counterpart: this is the one knob a task stranded on a repo whose CI will never report needs adjustable live, not only at process restart. A repo with no CI configured costs up to this long in polling before its first review spawns (no per-task backoff) — see the review-agent section's own note.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 No separate control for dependency-aware claiming (`#667`) — a
 zero-dependency issue costs nothing extra to begin with, so there's

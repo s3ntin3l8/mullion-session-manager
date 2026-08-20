@@ -130,7 +130,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Review-agent CI wait"
-        desc="How long the review agent's spawn holds after a task enters review, waiting for CI to report on the PR's head commit, so the review sees real pass/fail results instead of running before CI even starts. 0 = spawn immediately, never wait. No environment default — this is the one moment a stranded task (CI that will never report, e.g. Actions disabled) needs a live knob rather than an env-var edit."
+        desc="How long the review agent's spawn holds after a task enters review, waiting for CI to report on the PR's head commit (including the moments right after the push, before checks have registered), so the review sees real pass/fail results instead of running before CI even starts. 0 = spawn immediately, never wait. No environment default — this is the one moment a stranded task (CI that will never report, e.g. Actions disabled) needs a live knob rather than an env-var edit."
       >
         <NumberField
           value={ciWaitDraft ?? resolved.reviewCiWaitMinutes}

@@ -1,12 +1,12 @@
 import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
-import { createSessionRecord } from "./session-lifecycle.js";
+import { createSessionRecord, killSession } from "./session-lifecycle.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
@@ -127,11 +127,37 @@ async function spawnReviewAgentNow(
           : "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
       );
     }
-    app.db
+    // CAS on `status = "reviewing"`, not just `id` — the claim slot
+    // (`reviewSpawnClaimedAt`) only protects against a second
+    // `processPendingReviewSpawns` pass racing this one; it says nothing
+    // about Reject/Give-up/Approve, which CAS on `status` alone and don't
+    // know this claim exists. `createSessionRecord` above is a real spawn
+    // (possibly a network round-trip to a remote host), long enough for one
+    // of those routes to land while it's in flight. If the task has moved
+    // on, attaching `reviewSessionId` here would leave a live, untracked
+    // session pointed at a worktree Approve may already be deleting —
+    // discard it instead of recording it.
+    const updated = app.db
       .update(tasks)
       .set({ reviewSessionId: result.row.id, reviewSeedDelivered: seedDelivered })
-      .where(eq(tasks.id, task.id))
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
       .run();
+    if (updated.changes === 0) {
+      app.log.warn(
+        { taskId: task.id, reviewSessionId: result.row.id },
+        "task reconcile: task left 'reviewing' while its review agent was spawning — killing the orphaned session",
+      );
+      // killSession, not a bare backend.terminate — this session was never
+      // attached to the task (the write above just refused), so nothing
+      // else will ever flip its `sessions` row to "killed." Left "active",
+      // the exited-session reconciler would find the now-dead process later
+      // and surface it as a crashed session with no task, agent, or
+      // worktree behind it — a live "kill" here folds that into the normal
+      // human-initiated-kill path instead of inventing a new terminal state
+      // for it.
+      await killSession(app, result.row.id);
+      return;
+    }
     app.log.info(
       { taskId: task.id, reviewSessionId: result.row.id, reviewCommand, seedDelivered },
       "task reconcile: review agent spawned",
@@ -165,6 +191,23 @@ function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
  *
  * `undefined` also covers the case with nothing to check in the first
  * place: an issue-only task, or one whose draft PR hasn't opened yet.
+ *
+ * `null` (Hermes review, #742) waits too, same as `"in_progress"` — not
+ * "proceed." `openDraftPRForTask` and this pass's own call both run inside
+ * the SAME reconcile tick as the `→ reviewing` transition (`maybeOpenDraftPR`
+ * above, then `processPendingReviewSpawns` at the very end of
+ * `reconcileTasks`), so the very first lookup here almost always lands
+ * within a second or two of the push that created the head commit —
+ * GitHub's Actions runs for a just-pushed commit routinely aren't registered
+ * yet, so `fetchRunsForHead` returns `[]` and `computeCiStatus` returns
+ * `null` indistinguishably from "this repo genuinely has no CI." Treating
+ * `null` as "proceed" on that very first check reproduces the #213782
+ * incident this whole change exists to fix: the reviewer spawns before a
+ * real check has even registered, let alone failed. Waiting on `null` the
+ * same as `in_progress` costs nothing for a no-CI repo — it just spawns at
+ * the deadline instead of instantly — and is what actually closes the gap
+ * for the common case of a CI-having repo whose runs simply haven't shown
+ * up yet.
  */
 async function resolveReviewCi(
   app: FastifyInstance,
@@ -191,15 +234,16 @@ async function resolveReviewCi(
       htmlUrl: r.htmlUrl,
     }));
 
-    if (status !== "in_progress") return { headSha: pr.headSha, status, runs: runSummaries };
+    if (status !== "in_progress" && status !== null) {
+      return { headSha: pr.headSha, status, runs: runSummaries };
+    }
 
     // `waitMinutes === 0` disables waiting entirely — `now - reviewingAt`
     // is always `>= 0`, so this deadline is already "past" on the very
-    // first check, same effect as never having entered the `in_progress`
-    // branch at all. `reviewingAt` is set in the very same DB write that
-    // put this task in "reviewing" (both `→ reviewing` transition sites),
-    // so it's never actually null here — the `?? now` is defensive, not
-    // load-bearing.
+    // first check, same effect as never having entered this branch at all.
+    // `reviewingAt` is set in the very same DB write that put this task in
+    // "reviewing" (both `→ reviewing` transition sites), so it's never
+    // actually null here — the `?? now` is defensive, not load-bearing.
     const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
     const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
     if (!pastDeadline) return "wait";
@@ -207,7 +251,10 @@ async function resolveReviewCi(
       headSha: pr.headSha,
       status,
       runs: runSummaries,
-      note: `still running after the ${waitMinutes}-minute wait`,
+      note:
+        status === null
+          ? `no CI checks found after the ${waitMinutes}-minute wait`
+          : `still running after the ${waitMinutes}-minute wait`,
     };
   } catch (err) {
     app.log.warn(
@@ -241,7 +288,32 @@ async function resolveReviewCi(
  * under the old code (already stuck with no reviewer today) — never a burst
  * of already-reviewed tasks.
  */
+// A claim survives only as long as the in-process work between claiming it
+// and either spawning or clearing it (clearReviewSpawnClaim's own catch
+// paths) — a process crash/redeploy mid-claim leaves it stuck non-null
+// forever with no other code path that ever clears it (unlike
+// reviewSessionId, nothing outside this pass's own CAS reads it). 10 minutes
+// is generous relative to what's actually in that window (one CI lookup,
+// one spawn), so a claim still standing past it is treated as abandoned and
+// reclaimed on the next tick rather than the task quietly losing its
+// reviewer forever to a redeploy that happened at the wrong instant.
+const REVIEW_SPAWN_CLAIM_STALE_MS = 10 * 60_000;
+
 async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  // Same gate as the "→ reviewing" transition itself (Hermes review, PR
+  // #480) used to cover transitively, back when it spawned the reviewer
+  // inline: spawning a review-agent session is new autonomous work — a real
+  // PTY session, optionally with skip-permissions — not the "already
+  // claimed/in_progress" progression `pty.ts`'s ungated-tick comment carves
+  // out. Splitting the spawn into this separate pass (#738 follow-up) lost
+  // that transitive coverage; restored explicitly here, same posture as
+  // `retryStrandedDraftPRs` above. A task left waiting here when disabled
+  // still has reject/give-up as an escape hatch (both deliberately ungated,
+  // same reasoning as the transition-site comment above) and picks up its
+  // reviewer normally on the next tick once re-enabled.
+  if (!resolvedTaskMaster.enabled) return;
+
   const rows = app.db
     .select({ task: tasks, project: projects })
     .from(tasks)
@@ -250,14 +322,21 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
     .all();
   if (rows.length === 0) return;
 
-  const resolvedTaskMaster = resolveTaskMasterConfig(app);
   const now = Date.now();
 
   // Host-grouped and concurrent, same shape as retryStrandedDraftPRs above
   // — a CI lookup or a spawn on one host must not serialize behind a slow
-  // or unreachable one. Unlike that pass, no per-task backoff state: a CI
-  // check is cheap relative to a git push, and there's no failure mode here
-  // that benefits from anything more than "try again next tick."
+  // or unreachable one. Unlike that pass, no per-task backoff state: every
+  // waiting task resolves in at most `reviewCiWaitMinutes` /
+  // `reconcileIntervalSeconds` ticks (2 GitHub calls each) — bounded and
+  // self-terminating once it spawns, not an unbounded retry a backoff would
+  // need to tame. That IS a real, if modest, standing cost at the default
+  // 15-minute wait: a repo with no CI configured at all polls for the full
+  // window on every task with a PR (null now waits too — see
+  // resolveReviewCi's own doc comment), not just one whose CI is genuinely
+  // `in_progress`. Acceptable at this tool's scale (a handful of concurrent
+  // tasks, well under GitHub's rate limits); revisit with real backoff if
+  // that scale assumption ever changes.
   const byHost = new Map<string, typeof rows>();
   for (const row of rows) {
     const group = byHost.get(row.project.hostId) ?? [];
@@ -295,7 +374,10 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         // reject/give-up/approve that landed while the CI lookup was in
         // flight wins outright instead of racing a spawn into existence
         // for a task that's already moved on. See schema.ts's
-        // `reviewSpawnClaimedAt` doc comment.
+        // `reviewSpawnClaimedAt` doc comment. A claim older than
+        // REVIEW_SPAWN_CLAIM_STALE_MS is treated as abandoned (a prior
+        // attempt's process died mid-claim) and reclaimable, same as a null
+        // one — see that constant's own doc comment.
         const claimed = app.db
           .update(tasks)
           .set({ reviewSpawnClaimedAt: new Date(now) })
@@ -304,7 +386,10 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
               eq(tasks.id, task.id),
               eq(tasks.status, "reviewing"),
               isNull(tasks.reviewSessionId),
-              isNull(tasks.reviewSpawnClaimedAt),
+              or(
+                isNull(tasks.reviewSpawnClaimedAt),
+                lt(tasks.reviewSpawnClaimedAt, new Date(now - REVIEW_SPAWN_CLAIM_STALE_MS)),
+              ),
             ),
           )
           .run();

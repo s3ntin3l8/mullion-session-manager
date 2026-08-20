@@ -309,7 +309,12 @@ export interface AppSettings {
     skipPermissions: "inherit" | "on" | "off";
     // #738 follow-up — how long the review-agent spawn (task-reconciler.ts's
     // processPendingReviewSpawns) waits for CI to reach a terminal state on
-    // the task's PR head before spawning anyway. Plain number, NOT one of
+    // the task's PR head before spawning anyway. Also waits on `null`
+    // (no runs registered yet — Hermes review, PR #742), not just
+    // `"in_progress"`: the very first lookup happens within moments of the
+    // push that created the head commit, before GitHub has necessarily
+    // registered the Actions run, so `null` there is indistinguishable from
+    // "this repo has no CI at all" without waiting. Plain number, NOT one of
     // the "inherit"-sentinel fields above: those exist only for fields with
     // an env-var counterpart (MULLION_TASK_*), and this one has none — a
     // repo with Actions disabled or no workflows needs `0` (spawn

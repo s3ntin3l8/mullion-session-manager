@@ -2057,18 +2057,68 @@ describe("reconcileTasks", () => {
       return { taskId, workerSessionId };
     }
 
-    it("spawns in the same tick as the transition when CI resolves to null (no runs)", async () => {
+    // Hermes review, PR #742 — a null status (no runs) waits exactly like
+    // "in_progress" rather than spawning immediately. `openDraftPRForTask`
+    // and this pass run in the SAME reconcile tick as the → reviewing
+    // transition, so the very first lookup here lands within moments of the
+    // push that created the head commit — GitHub's Actions runs for a
+    // just-pushed commit routinely aren't registered yet, indistinguishable
+    // at lookup time from "this repo has no CI at all." Spawning
+    // immediately on that null would reproduce the exact #213782 incident
+    // this whole change exists to prevent.
+    it("waits when CI resolves to null (no runs yet) and before the deadline, then spawns once it's terminal on a later tick", async () => {
       const app = await buildApp();
       const { taskId } = await claimWithPR(app);
       mockFetchRunsForHead.mockResolvedValueOnce([]);
 
       await reconcileTasks(app);
 
-      const row = await getTask(app, taskId);
+      let row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      await reconcileTasks(app);
+
+      row = await getTask(app, taskId);
       expect(row.reviewSessionId).not.toBeNull();
 
       await app.close();
+    });
+
+    it("spawns anyway once reviewCiWaitMinutes is exceeded, even while CI still resolves to null (no runs)", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: 0 } },
+        });
+        const { taskId } = await claimWithPR(app);
+        mockFetchRunsForHead.mockResolvedValueOnce([]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).not.toBeNull();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { reviewCiWaitMinutes: -1 } },
+        });
+        await app.close();
+      }
     });
 
     it("spawns in the same tick as the transition once CI is already terminal (failure)", async () => {
@@ -2263,6 +2313,202 @@ describe("reconcileTasks", () => {
       row = await getTask(app, taskId);
       expect(row.reviewSessionId).not.toBeNull();
 
+      await app.close();
+    });
+
+    // Regression guard — spawning a review agent used to be gated on
+    // "enabled" only transitively, by riding along inside the (gated) →
+    // reviewing transition's own write. Splitting the spawn into this
+    // separate pass lost that transitive coverage; must be re-checked
+    // explicitly, same posture as retryStrandedDraftPRs' own "does not
+    // retry while Task Master is disabled" test above.
+    it("does not spawn a review agent while Task Master is disabled, even for a task already in 'reviewing'", async () => {
+      const app = await buildApp();
+      let taskId: number | undefined;
+      try {
+        ({ taskId } = await claimWithPR(app));
+        mockFetchRunsForHead.mockResolvedValueOnce([
+          {
+            name: "CI",
+            status: "queued",
+            conclusion: null,
+            htmlUrl: "https://x/1",
+            headSha: "sha1",
+          },
+        ]);
+        await reconcileTasks(app); // -> reviewing; CI still in_progress, so nothing spawns yet either way
+
+        let row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull();
+
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+
+        await reconcileTasks(app);
+
+        row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull();
+        // The gate must fire before any CI resolution work, not just before
+        // the eventual spawn.
+        expect(mockFetchRunsForHead).toHaveBeenCalledTimes(1);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        // This task is deliberately left "reviewing" with reviewSessionId
+        // still null by design (the whole point of this test) — unlike the
+        // beforeEach sweep above (scoped to `prNumber IS NULL`), it has a
+        // real prNumber and would otherwise survive into every later test's
+        // shared DB, getting reprocessed by their own processPendingReviewSpawns
+        // pass and consuming THEIR single-shot mockFetchRunsForHead queue
+        // entries out from under them (see the module-level sharedDB
+        // comment). Delete it rather than let it outlive this test.
+        if (taskId !== undefined) {
+          getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
+        }
+        await app.close();
+      }
+    });
+
+    // Regression guard for the gap the claim CAS alone doesn't close: it
+    // protects the WRITE that claims the slot, but createSessionRecord
+    // itself (a real spawn, possibly a network round-trip) is real async
+    // work after that claim lands, during which Reject/Give-up/Approve can
+    // still land — they CAS on `status` alone and know nothing of this
+    // claim. The final write must re-check `status = "reviewing"` and
+    // discard (kill) the now-orphaned session rather than recording it onto
+    // a task that has moved on.
+    it("kills the orphaned session when the task leaves 'reviewing' while its review agent is still spawning", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+
+      const projectId = (await getTask(app, taskId)).projectId;
+      const sessionsModule = await import("../../src/services/session-lifecycle.js");
+      const actualCreateSessionRecord = sessionsModule.createSessionRecord;
+      vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async (a, opts) => {
+        if (opts.projectId === projectId) {
+          // Simulates a human's Reject landing on this exact task WHILE
+          // this spawn's own I/O is in flight — the same write
+          // routes/tasks.ts's own reject handler makes, just fired
+          // synchronously here instead of via a real concurrent request.
+          app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, taskId)).run();
+        }
+        return actualCreateSessionRecord(a, opts);
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress"); // the concurrent reject wins
+      expect(row.reviewSessionId).toBeNull(); // never recorded onto a task that moved on
+      expect(terminateSpy).toHaveBeenCalledWith(expect.any(String));
+      // killSession, not a bare backend.terminate — the orphaned session's
+      // own row must flip to "killed" too, or the exited-session reconciler
+      // would later surface it as a crashed session with no task behind it.
+      const [orphanedSession] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, Number(terminateSpy.mock.calls[0]?.[0])))
+        .all();
+      expect(orphanedSession?.status).toBe("killed");
+
+      await app.close();
+    });
+
+    // Regression guard for a claim abandoned by a process crash/redeploy
+    // between the claim write and either outcome — nothing else ever clears
+    // reviewSpawnClaimedAt in that case, so without a staleness reclaim the
+    // task would lose its reviewer forever.
+    it("reclaims a review-spawn claim abandoned by a crashed prior attempt once it's stale", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        { name: "CI", status: "queued", conclusion: null, htmlUrl: "https://x/1", headSha: "sha1" },
+      ]);
+      // -> reviewing; CI still in_progress, so this tick never claims —
+      // reviewSpawnClaimedAt starts genuinely null, not just unset.
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).reviewSpawnClaimedAt).toBeNull();
+
+      // Simulates a prior attempt's process dying right after claiming the
+      // slot but before spawning or clearing it.
+      app.db
+        .update(tasks)
+        .set({ reviewSpawnClaimedAt: new Date(Date.now() - 11 * 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("does not reclaim a review-spawn claim that's still within the staleness window", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimWithPR(app);
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        { name: "CI", status: "queued", conclusion: null, htmlUrl: "https://x/1", headSha: "sha1" },
+      ]);
+      await reconcileTasks(app); // -> reviewing, waits on CI, never claimed
+
+      app.db
+        .update(tasks)
+        .set({ reviewSpawnClaimedAt: new Date(Date.now() - 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      mockFetchRunsForHead.mockResolvedValueOnce([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).toBeNull();
+
+      // Same reasoning as the "disabled" test's own cleanup above: this
+      // task is deliberately left "reviewing" + reviewSessionId null with a
+      // real prNumber, which the beforeEach sweep (scoped to `prNumber IS
+      // NULL`) won't catch — left behind, it'd be reprocessed by whichever
+      // later test's reconcileTasks() call runs next, consuming THAT test's
+      // own single-shot mockFetchRunsForHead queue entry out from under it.
+      getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
       await app.close();
     });
   });

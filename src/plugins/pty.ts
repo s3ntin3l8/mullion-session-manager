@@ -218,9 +218,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // one-click Settings action, not just a restart-time env edit) and
       // its time budget stops being enforced, it never progresses past
       // claimed/in_progress, and it permanently occupies a concurrency-cap
-      // slot — the exact opposite of what a safety toggle should do. Cheap
-      // when there's nothing to reconcile: `reconcileTasks` returns
-      // immediately when no task is claimed/in_progress.
+      // slot — the exact opposite of what a safety toggle should do.
+      // `reconcileTasks` itself still checks "enabled" per-pass wherever a
+      // pass would do new autonomous work (the → reviewing transition,
+      // `retryStrandedDraftPRs`, `processPendingReviewSpawns`'s review-agent
+      // spawn) — this outer call is ungated only so the always-safe passes
+      // (budget force-fail, status sync) still run while those are skipped.
       if (!taskReconcileRunning) {
         taskReconcileRunning = true;
         reconcileTasks(app)
