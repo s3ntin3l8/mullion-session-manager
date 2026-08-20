@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.37](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.36...v0.2.37) (2026-08-20)
+
+
+### Bug Fixes
+
+* **tasks:** resurrect a relabeled task that auto-failed for losing its tracking label ([#748](https://github.com/s3ntin3l8/mullion-session-manager/issues/748)) ([009f1ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/009f1ae79a29cea9ac7dfe7b2abda44713f296e2))
+
 ## [0.2.36](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.35...v0.2.36) (2026-08-20)
 
 
