@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.36](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.35...v0.2.36) (2026-08-20)
+
+
+### Features
+
+* **tasks:** give the review agent an explicit verdict contract ([#733](https://github.com/s3ntin3l8/mullion-session-manager/issues/733)) ([6e5b82c](https://github.com/s3ntin3l8/mullion-session-manager/commit/6e5b82c2774b98e8ec03b4bee220205b098e1191))
+* **tasks:** hold the review agent until CI reports on the PR head ([#742](https://github.com/s3ntin3l8/mullion-session-manager/issues/742)) ([bdb9137](https://github.com/s3ntin3l8/mullion-session-manager/commit/bdb9137c3059fcf11415ede2a41abd49101d11b9))
+* **tasks:** post the review agent's findings as a real PR review ([#738](https://github.com/s3ntin3l8/mullion-session-manager/issues/738)) ([da47e4e](https://github.com/s3ntin3l8/mullion-session-manager/commit/da47e4e8a16f2a507712918d9cc37915dc898923))
+
+
+### Bug Fixes
+
+* paint the pane-header attention ring above the opaque tabs ([#732](https://github.com/s3ntin3l8/mullion-session-manager/issues/732)) ([86ac24b](https://github.com/s3ntin3l8/mullion-session-manager/commit/86ac24bbe72cb28a94d5ebe822c19eeaf66f8eaf))
+* target the PTY's constant floor, not the echoed geometry, in the narrow-pane font fit ([0ca132e](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ca132ee95a5223781bcf8fff9ab921db635c1ba))
+* **tasks:** tell the worker to run the repo's verification gate ([#731](https://github.com/s3ntin3l8/mullion-session-manager/issues/731)) ([bf0441e](https://github.com/s3ntin3l8/mullion-session-manager/commit/bf0441e010ff64481f0a494971957801dfcccf5c))
+
 ## [0.2.35](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.34...v0.2.35) (2026-08-19)
 
 
