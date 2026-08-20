@@ -147,24 +147,65 @@
   background: color-mix(in srgb, var(--ring) 6%, transparent);
   box-shadow: inset 2px 0 0 var(--ring);
 }
-/* Issue: attention ring doesn't cover the whole pane header — cmuxRing (the
-   halo previously animated on .pane-tab.attention-ring directly) is clipped
-   by dockview's own .dv-tabs-container/.dv-groupview (both overflow:
-   hidden) before it can ever reach the split-right/split-down buttons in
-   the same header's .dv-right-actions-container, a sibling .pane-tab could
-   never visually cross into anyway. Painting the ring on the whole header
-   row instead — the nearest ancestor common to both the tab strip and the
-   right-actions area — makes it actually cover the whole header, and the
-   INSET-only cmuxRingHeader/cmuxAttnBurstHeader keyframes (tokens.css) mean
-   it can never be clipped by that overflow regardless of where in the grid
-   this header sits. `.cmux-root` anchors it for the same reasons as this
-   file's own .dv-tab overrides above. Two rules (rather than one combined
-   selector), same "PaneTab.tsx toggles just the JUST_FIRED_ATTENTION_MS
-   modifier" reasoning the old per-tab pair had. */
+/* Issue: the header attention ring is invisible except around the split
+   buttons. PR #709 (b944a3c) moved the halo off .pane-tab onto this header
+   row as the row's OWN inset box-shadow — correct element, wrong paint
+   layer. An inset box-shadow paints above the element's own background but
+   BELOW every descendant's background, and every .dv-tab here has an opaque
+   one (dockview's --dv-*-tab-background-color, remapped to
+   var(--mullion-chrome-bg) in sidebar.css) spanning the full header height
+   (.dv-tabs-container { height: 100% } + default align-items: stretch).
+   With singleTabMode="fullwidth" (App.tsx) a lone tab flex-grows across the
+   whole strip, so the ring's only visible region was the transparent
+   .dv-void-container + .dv-right-actions-container gap — the stray emerald
+   stubs flanking the split buttons that were reported as "looks weird".
+   Fix: repaint it as an ::after overlay so it sits ABOVE those opaque tab
+   backgrounds. Exactly the trick .panel-body-highlight::after below uses,
+   for the identical reason (PR #313's bug — see its comment).
+   `position: absolute` is load-bearing beyond anchoring: `inset: 0` only
+   has an effect on an out-of-flow element, so without it this ::after
+   couldn't become a full-header overlay at all.
+   z-index 6: .dv-tabs-container's own `transform: translate3d(0,0,0)` (a GPU
+   hack, dockview.css) already makes it a stacking context, so dockview's
+   z-index:5 inter-tab dividers/focus outlines and its z-index:2 sticky
+   pinned tabs are sealed inside it and any positive value would clear them —
+   6 is chosen so this stays correct if dockview ever drops that transform.
+   It only has to clear elements genuinely inside .dockview-container's own
+   stacking order (e.g. .panel-body-highlight::after's z-index: 10, a
+   different pane's subtree, below); .pane-tab-overflow-menu (z-index: 20)
+   is portaled to document.body (PaneActionsMenu.tsx/KebabMenu.tsx) and is
+   kept untinted by .dockview-container's `isolation: isolate` (sidebar.css)
+   sealing dockview's internal z-indexes into their own context, not by any
+   numeric comparison with this ::after's z-index.
+   The `position: relative` and the ::after are deliberately scoped to the
+   same `:has()` state rather than applied to every header: outside attention
+   there is nothing to anchor, and the header keeps dockview's own (static)
+   paint order. The two selectors below must stay in sync. Deliberately NO
+   z-index on this header element itself: `position: relative` with
+   `z-index: auto` doesn't create a stacking context, so .pane-tab-overflow-
+   menu (portaled to document.body with position:fixed, but the stylesheet's
+   own dead position:absolute/top:31px still assumes no ancestor stacking
+   context) can't get trapped behind an adjacent pane.
+   pointer-events: none keeps the split/close/kebab buttons and tab drag
+   working through the overlay. Two rules (not one combined selector), same
+   "PaneTab.tsx toggles just the JUST_FIRED_ATTENTION_MS modifier" reasoning
+   the old per-tab pair had; the keyframes themselves are reused verbatim —
+   an inset shadow on an `inset: 0` overlay is geometrically identical to one
+   on the header itself. `.cmux-root` anchors these for the same reasons as
+   xterm.css's own .dv-tab overrides. */
 .cmux-root .dv-tabs-and-actions-container:has(.pane-tab.attention-ring) {
+  position: relative;
+}
+.cmux-root .dv-tabs-and-actions-container:has(.pane-tab.attention-ring)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
   animation: cmuxRingHeader 2.4s ease-in-out infinite;
 }
-.cmux-root .dv-tabs-and-actions-container:has(.pane-tab.attention-ring.attention-just-fired) {
+.cmux-root
+  .dv-tabs-and-actions-container:has(.pane-tab.attention-ring.attention-just-fired)::after {
   animation: cmuxAttnBurstHeader 1.6s ease-out;
 }
 .pane-tab.highlight-flash {
@@ -176,6 +217,9 @@
    underneath that child and is never actually seen — confirmed live, this
    was PR #313's original bug. The parent's `position: relative` (App.tsx's
    TerminalPanelWrapper) is what anchors this absolutely-positioned overlay.
+   (The pane-header attention ring above hit the identical bug — an opaque
+   child painting over an inset box-shadow — and was fixed the same way; see
+   its own `::after` rules above.)
    pointer-events: none keeps the terminal clickable/scrollable through it.
    Runs ~1.1s — longer than .pane-tab.highlight-flash's 0.4s tab-flash
    counterpart, so it's actually perceptible now that it's visible at all —

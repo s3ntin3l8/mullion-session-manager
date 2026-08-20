@@ -129,10 +129,17 @@ body {
    the split-right/split-down buttons in .dv-right-actions-container — a
    sibling of .dv-tabs-container a per-tab shadow could never visually cross
    into anyway. This is INSET-only (unlike that per-tab version's mix of
-   inset+outset layers), specifically so it can never be clipped by an
-   ancestor's overflow regardless of where in the grid a given header sits:
-   an inset box-shadow only ever paints inside the element's own border box,
-   so there is nothing for .dv-groupview's overflow to clip. Layer order
+   inset+outset layers) for two reasons. First, an inset box-shadow only ever
+   paints inside the element's own border box, so there is nothing for
+   .dv-groupview's overflow to clip regardless of where in the grid a given
+   header sits. Second — and this is the one that actually matters for
+   visibility — the shadow is consumed by an `::after` overlay on the header
+   row (terminal.css's `:has()` rules), not by the header element's own
+   `box-shadow`: the header row's own opaque `.dv-tab` children paint OVER an
+   inset shadow set directly on the header (the same PR #313 failure
+   `.panel-body-highlight::after` below documents), so the overlay — stacked
+   above those children via z-index — is what makes the ring actually visible
+   across the whole header, not the inset geometry alone. Layer order
    (first-listed paints on top) gives a "sharp line + softer glow" look,
    glowing inward rather than outward. Only the ring itself moves here — the
    tint and left-edge accent bar (`.pane-tab.attention-ring`'s own
@@ -160,9 +167,10 @@ body {
    value so the handoff has no visible jump. Same inset-only reasoning as
    cmuxRingHeader's own comment above — no `inset 2px 0 0` left-edge layer
    (that accent is specific to the single attention tab, not the whole
-   header — see `.pane-tab.attention-ring`'s own box-shadow, terminal.css),
-   and the pulsing halo grows inward via increasing inset spread rather than
-   outward, so .dv-groupview's overflow: hidden can never clip it. */
+   header — see `.pane-tab.attention-ring`'s own box-shadow, terminal.css) —
+   and, same as cmuxRingHeader, painted via the header row's `::after`
+   overlay (terminal.css) rather than the header's own box-shadow, so it
+   isn't occluded by the opaque `.dv-tab` children it pulses behind. */
 @keyframes cmuxAttnBurstHeader {
   0% {
     box-shadow:
