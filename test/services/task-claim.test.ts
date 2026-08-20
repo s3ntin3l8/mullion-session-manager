@@ -1051,6 +1051,9 @@ describe("retryTask (#483)", () => {
       const outcome = await retryTask(app, task.id);
 
       expect(outcome).toMatchObject({ ok: false, reason: "cap", limit: 0 });
+      // `detail` is what routes/tasks.ts forwards as the 429's `message` —
+      // pin it here too, at the source, not only through the HTTP layer.
+      if (!outcome.ok) expect(outcome.detail).toContain("0");
       const row = getTask(app, task.id);
       expect(row.status).toBe("failed");
 
