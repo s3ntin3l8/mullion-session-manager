@@ -612,19 +612,34 @@ reviewing` transition itself — `task-reconciler.ts`'s
   crash/redeploy (nothing else ever clears it) is reclaimed once it's older
   than 10 minutes.
 
-- **Write an explicit verdict.** The reviewer is told to ALWAYS write a
-  round-suffixed file outside the worktree (`task-prompt.ts`'s
+- **Write an explicit verdict, atomically.** The reviewer is told to ALWAYS
+  write a round-suffixed file outside the worktree (`task-prompt.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
   block approve's own clean-tree check), as JSON:
   `{verdict: "clean" | "changes-requested", summary, findings: [{path, line,
-side, severity, body}]}`. `parseReviewFindings` tolerantly falls back to
-  `changes-requested` (the whole file as `summary`, no anchored findings) for
-  anything that isn't valid JSON in that shape — an agent that ignores the
-  contract must never silently read as a clean review. A missing or empty
-  file is treated as **inconclusive**, not "no findings" and not "clean": the
-  review may not have happened at all (a crash, a killed session, or an
-  agent that ignored the instruction), so `task-reconciler.ts` posts it as
-  such rather than a confident "nothing wrong here."
+side, severity, body}]}` — written to a temp file and moved into place as
+  the last step, not written directly, so a reconcile tick can never
+  observe a torn/partial write. `parseReviewFindings` tolerantly falls back
+  to `changes-requested` (the whole file as `summary`, no anchored findings)
+  for anything that isn't valid JSON in that shape — an agent that ignores
+  the contract must never silently read as a clean review.
+
+  A missing file is treated as **inconclusive**, not "no findings" and not
+  "clean" — but not on the very first tick that observes it missing.
+  `task-reconciler.ts`'s `processReviewingTasks` only accepts a missing file
+  as genuinely absent once the review session has either `exited` (nothing
+  more can ever be written) or been alive past `REVIEW_FINDINGS_GRACE_MS`
+  (30 minutes, since the reviewer now runs the repo's own verification gate
+  before writing anything — several minutes of silence is normal, not
+  evidence of a crash). Before this fix
+  (Task Master trial 220921 / PR #743's incident), a `finished` turn-end
+  with no file yet was ingested as inconclusive immediately, and durably —
+  `reviewFindingsIngestedSessionId` latched permanently, so a real verdict
+  file that landed moments later could never be read. The findings file is
+  also unlinked at spawn time (`spawnReviewAgentNow`), not only once
+  ingested, so a leftover from a prior same-round attempt is never
+  re-ingested as this attempt's fresh output.
+
 - **Post as an actual GitHub PR review**, not a plain conversation comment.
   Once the review session's turn ends, `task-reconciler.ts`'s
   `processReviewingTasks` reads the verdict back and
