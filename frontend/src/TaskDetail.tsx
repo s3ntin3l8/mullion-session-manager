@@ -675,6 +675,16 @@ function TaskActions({ task }: { task: Task }) {
     );
   }
 
+  // Merge-on-approve — a `done` task with a linked PR may still have a
+  // merge outstanding (mergeRequestedAt set, e.g. an "unstable"/"dirty"/
+  // "blocked" PR state the sweep is backing off and retrying on). Rendered
+  // regardless of taskMasterEnabled: "Merge now" only re-arms the sweep's
+  // own backoff, it doesn't spawn/promote anything new the flag is meant to
+  // gate — same posture as Reject/Give-up staying ungated above.
+  if (task.status === "done" && task.prNumber !== null) {
+    return <TaskMergeStatus task={task} />;
+  }
+
   if (task.status !== "reviewing") return null;
 
   if (pendingAction !== null) {
@@ -765,6 +775,51 @@ function TaskActions({ task }: { task: Task }) {
           disabled.
         </span>
       )}
+      {error && <span className="task-detail-error">{error}</span>}
+    </div>
+  );
+}
+
+// Merge-on-approve — renders for a `done` task with a linked PR (see the
+// TaskActions call site above). Three states: no merge ever requested (a
+// human can still merge by hand, or click Merge now to hand it to the
+// sweep), a merge outstanding with no error (the sweep is working it —
+// clean/behind/unknown mergeableState, see task-reconciler.ts's own table),
+// or outstanding with a recorded error (unstable/blocked/dirty — needs a
+// human to actually go fix something, "Retry merge" just re-arms the
+// sweep's backoff, it doesn't retry the SAME failed state any faster).
+function TaskMergeStatus({ task }: { task: Task }) {
+  const { mergeTask } = useDashboardStore();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pending = task.mergeRequestedAt !== null;
+
+  return (
+    <div className="task-detail-actions">
+      <button
+        className="notif-gate-btn notif-gate-approve"
+        disabled={submitting}
+        onClick={async () => {
+          setSubmitting(true);
+          setError(null);
+          try {
+            await mergeTask(task.id);
+          } catch (err) {
+            setError(err instanceof ApiError ? err.message : "Failed to request a merge");
+          } finally {
+            setSubmitting(false);
+          }
+        }}
+      >
+        {pending ? "Retry merge" : "Merge now"}
+      </button>
+      {pending && !task.mergeError && (
+        <span className="task-detail-hint">
+          Merge pending — landing once the branch is up to date and checks are green.
+        </span>
+      )}
+      {task.mergeError && <span className="task-detail-error">{task.mergeError}</span>}
       {error && <span className="task-detail-error">{error}</span>}
     </div>
   );

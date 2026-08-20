@@ -147,6 +147,12 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
+    mergeTask: async (id) => {
+      const task = await api.mergeTask(id);
+      void get().refreshTasks();
+      return task;
+    },
+
     rejectTask: async (id, feedback) => {
       const task = await api.rejectTask(id, feedback);
       // A reject can re-seed a fresh session in the same worktree

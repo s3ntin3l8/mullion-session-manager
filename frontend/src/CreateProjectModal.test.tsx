@@ -275,7 +275,68 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       devServerUrl: null,
       defaultAgent: "claude",
       defaultReviewAgent: null,
+      mergeOnApprove: false,
+      autoApprove: false,
     });
+  });
+
+  it("passes mergeOnApprove/autoApprove through to onCreate on save, toggled on", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /Merge a task's PR automatically once it's approved/ }),
+    );
+    await user.click(
+      screen.getByRole("checkbox", { name: /Approve a task automatically on a clean review/ }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "mullion",
+      cwd: "/home/x/mullion",
+      hostId: undefined,
+      devServerUrl: null,
+      defaultAgent: null,
+      defaultReviewAgent: null,
+      mergeOnApprove: true,
+      autoApprove: true,
+    });
+  });
+
+  it("pre-fills mergeOnApprove/autoApprove from the project's current values", () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialMergeOnApprove={true}
+        initialAutoApprove={true}
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(
+      screen.getByRole("checkbox", { name: /Merge a task's PR automatically once it's approved/ }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Approve a task automatically on a clean review/ }),
+    ).toBeChecked();
   });
 });
 
@@ -493,6 +554,8 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       devServerUrl: "3000",
       defaultAgent: null,
       defaultReviewAgent: null,
+      mergeOnApprove: false,
+      autoApprove: false,
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
