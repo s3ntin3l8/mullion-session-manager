@@ -22,6 +22,8 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { upsertIssueTask } = await import("../../src/services/task-watcher.js");
+const { FAILURE_REASON_LABEL_LOST, FAILURE_REASON_ISSUE_CLOSED } =
+  await import("../../src/services/task-github-sync.js");
 const { eq, and } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-watcher-ingest-test-${process.pid}.db`);
@@ -316,6 +318,205 @@ describe("upsertIssueTask (#490a)", () => {
       const row = rowFor(916);
       expect(row.subIssueTotal).toBe(4);
       expect(row.subIssueCompleted).toBe(0);
+    });
+  });
+
+  // Relabel-resurrection — a task auto-failed by syncUnlabeledIssueToLocal
+  // for losing the tracking label springs back to ready/backlog the moment
+  // a re-sighting confirms the label is present again. Real-DB tests, same
+  // reasoning as #701 above: the CASE WHEN guard relies on SQLite's
+  // ON-CONFLICT "bare column reads the pre-update value" semantics.
+  describe("relabel resurrection", () => {
+    function rowFor(issueNumber: number) {
+      return app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issueNumber)))
+        .get()!;
+    }
+
+    function failTask(
+      issueNumber: number,
+      overrides: { failureReason?: string; branchName?: string; worktreePath?: string } = {},
+    ) {
+      app.db
+        .update(tasks)
+        .set({
+          status: "failed",
+          failureReason: overrides.failureReason ?? FAILURE_REASON_LABEL_LOST,
+          completedAt: new Date(),
+          branchName: overrides.branchName,
+          worktreePath: overrides.worktreePath,
+        })
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issueNumber)))
+        .run();
+    }
+
+    it("resurrects a label-lost failed task to ready on re-sighting", () => {
+      upsertIssueTask(app, projectId, {
+        number: 950,
+        title: "Comes back",
+        body: null,
+        htmlUrl: "https://x/950",
+      });
+      failTask(950);
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 950,
+        title: "Comes back",
+        body: null,
+        htmlUrl: "https://x/950",
+      });
+
+      const row = rowFor(950);
+      expect(row.status).toBe("ready");
+      expect(row.failureReason).toBeNull();
+      expect(row.completedAt).toBeNull();
+      expect(mockBroadcastTaskEvent).toHaveBeenCalledExactlyOnceWith({
+        taskId: row.id,
+        projectId,
+        kind: "transition",
+        from: "failed",
+        to: "ready",
+        ts: expect.any(Number),
+      });
+    });
+
+    it("resurrects to backlog, not ready, when the body carries Manual: true", () => {
+      upsertIssueTask(app, projectId, {
+        number: 951,
+        title: "Manual task",
+        body: "## Notes\n\nManual: true\n",
+        htmlUrl: "https://x/951",
+      });
+      failTask(951);
+
+      upsertIssueTask(app, projectId, {
+        number: 951,
+        title: "Manual task",
+        body: "## Notes\n\nManual: true\n",
+        htmlUrl: "https://x/951",
+      });
+
+      expect(rowFor(951).status).toBe("backlog");
+    });
+
+    it("does not resurrect a task that failed because its issue was closed", () => {
+      upsertIssueTask(app, projectId, {
+        number: 952,
+        title: "Was closed",
+        body: null,
+        htmlUrl: "https://x/952",
+      });
+      failTask(952, { failureReason: FAILURE_REASON_ISSUE_CLOSED });
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 952,
+        title: "Was closed",
+        body: null,
+        htmlUrl: "https://x/952",
+      });
+
+      expect(rowFor(952).status).toBe("failed");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
+    });
+
+    // The mirror of the case above, but with a real column ALSO changing on
+    // re-sighting — the ingest upsert's own `where` clause fires (title
+    // changed) independently of resurrection, since resurrection is a
+    // separate, independently-guarded UPDATE. Confirms the two don't get
+    // confused: an ordinary title-changing re-sighting must not resurrect a
+    // closed-reason failed task just because the main upsert wrote.
+    it("does not resurrect a closed-reason failed task even when its title also changes", () => {
+      upsertIssueTask(app, projectId, {
+        number: 956,
+        title: "Was closed",
+        body: null,
+        htmlUrl: "https://x/956",
+      });
+      failTask(956, { failureReason: FAILURE_REASON_ISSUE_CLOSED });
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 956,
+        title: "Was closed (retitled)",
+        body: null,
+        htmlUrl: "https://x/956",
+      });
+
+      const row = rowFor(956);
+      expect(row.status).toBe("failed");
+      expect(row.title).toBe("Was closed (retitled)");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
+    });
+
+    it("does not resurrect a label-lost task that has a branch (real work behind it)", () => {
+      upsertIssueTask(app, projectId, {
+        number: 953,
+        title: "Had a branch",
+        body: null,
+        htmlUrl: "https://x/953",
+      });
+      failTask(953, { branchName: "mullion/task-953" });
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 953,
+        title: "Had a branch",
+        body: null,
+        htmlUrl: "https://x/953",
+      });
+
+      expect(rowFor(953).status).toBe("failed");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
+    });
+
+    it("does not resurrect a label-lost task that has a worktree (real work behind it)", () => {
+      upsertIssueTask(app, projectId, {
+        number: 954,
+        title: "Had a worktree",
+        body: null,
+        htmlUrl: "https://x/954",
+      });
+      failTask(954, { worktreePath: "/tmp/mullion-task-954" });
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 954,
+        title: "Had a worktree",
+        body: null,
+        htmlUrl: "https://x/954",
+      });
+
+      expect(rowFor(954).status).toBe("failed");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
+    });
+
+    it("does not resurrect a task in a non-failed status", () => {
+      upsertIssueTask(app, projectId, {
+        number: 955,
+        title: "Fine as-is",
+        body: null,
+        htmlUrl: "https://x/955",
+      });
+      app.db
+        .update(tasks)
+        .set({ status: "claimed" })
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, 955)))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 955,
+        title: "Fine as-is (retitled)",
+        body: null,
+        htmlUrl: "https://x/955",
+      });
+
+      expect(rowFor(955).status).toBe("claimed");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
     });
   });
 });

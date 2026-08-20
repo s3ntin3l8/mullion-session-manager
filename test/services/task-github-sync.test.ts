@@ -666,6 +666,28 @@ describe("task-github-sync", () => {
       expect(row.status).toBe("claimed");
       expect(mockCreateComment).not.toHaveBeenCalled();
     });
+
+    // The poll loop's read-back (task-watcher.ts) is the one caller that can
+    // tell "closed" and "unlabeled" apart — it passes the reason explicitly
+    // once it has confirmed via getIssueState. Previously both shared one
+    // string, which misreported every closed-issue failure as a label
+    // problem and was indistinguishable from upsertIssueTask's own
+    // relabel-resurrection check (task-watcher.ts).
+    it("records a caller-supplied failure reason instead of the label-lost default", async () => {
+      const task = insertTask("ready", 421);
+      await syncUnlabeledIssueToLocal(app, task, project, "GitHub issue was closed");
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe("GitHub issue was closed");
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        "test-owner",
+        "test-repo",
+        421,
+        expect.stringContaining("GitHub issue was closed"),
+      );
+    });
   });
 
   describe("postReviewFindingsComment", () => {

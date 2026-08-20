@@ -467,6 +467,171 @@ describe("webhook routes", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
+    // A "labeled" delivery can land on an issue that is already closed
+    // (closing an issue doesn't strip its other labels, and a stray
+    // relabel can fire on a closed issue too) — must not ingest a brand
+    // new task for a dead issue, and must not let upsertIssueTask's
+    // relabel-resurrection check (task-watcher.ts) spring a previously
+    // label-lost `failed` task on THIS issue back to `ready`.
+    it("ignores a labeled event on an already-closed issue", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-closed");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-ingest-closed", cwd })
+        .returning()
+        .all();
+
+      const payload = issuesPayload({
+        repository: { full_name: "acme/widgets-closed", open_issues_count: 0 },
+        issue: {
+          number: 45,
+          title: "Already closed",
+          body: null,
+          html_url: "https://github.com/acme/widgets-closed/issues/45",
+          state: "closed",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const found = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
+        .all();
+      expect(found).toHaveLength(0);
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    // Relabel-resurrection (upsertIssueTask, task-watcher.ts) driven
+    // through the webhook path — the same "labeled" delivery this
+    // describe block's first test uses for fresh ingest also re-sights an
+    // EXISTING task, and that's what resurrects a label-lost `failed` one.
+    it("resurrects a label-lost failed task to ready via a 'labeled' delivery", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-relabel");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-relabel-p1", cwd })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 46,
+          title: "Comes back",
+          status: "failed",
+          failureReason: "GitHub issue lost its tracking label",
+          completedAt: new Date(),
+        })
+        .run();
+
+      const payload = issuesPayload({
+        repository: { full_name: "acme/widgets-relabel", open_issues_count: 1 },
+        issue: {
+          number: 46,
+          title: "Comes back",
+          body: null,
+          html_url: "https://github.com/acme/widgets-relabel/issues/46",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [task] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 46)))
+        .all();
+      expect(task.status).toBe("ready");
+      expect(task.failureReason).toBeNull();
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    // The `issue.state !== "closed"` guard added alongside the resurrection
+    // check must ALSO cover this case: a "labeled" delivery on an issue
+    // that's meanwhile closed must not spring a previously label-lost
+    // `failed` task back to `ready`.
+    it("does not resurrect a label-lost failed task when the 'labeled' delivery's issue is closed", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-relabel-closed");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-relabel-p2", cwd })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 47,
+          title: "Stays dead",
+          status: "failed",
+          failureReason: "GitHub issue lost its tracking label",
+          completedAt: new Date(),
+        })
+        .run();
+
+      const payload = issuesPayload({
+        repository: { full_name: "acme/widgets-relabel-closed", open_issues_count: 0 },
+        issue: {
+          number: 47,
+          title: "Stays dead",
+          body: null,
+          html_url: "https://github.com/acme/widgets-relabel-closed/issues/47",
+          state: "closed",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [task] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 47)))
+        .all();
+      expect(task.status).toBe("failed");
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
     it("does not ingest when Task Master is disabled", async () => {
       delete process.env.MULLION_TASK_MASTER_ENABLED;
       const cwd = createMatchingGitRepo("acme", "widgets-disabled");

@@ -44,14 +44,34 @@ title, spec (issue body), and the final PR link.
 
   An issue that loses the `mullion-task` label (or closes) while its task
   is still `backlog`/`ready` is **not** left untouched: the task fails
-  (reversible via Retry) rather than sitting in `ready` forever eligible
-  for auto-claim on an issue that's no longer trackable. A task that's
-  already `claimed`/`in_progress`/`reviewing` — real work behind it, a
-  worktree, maybe a branch — is left strictly alone either way; silently
-  failing it out from under a label removal would be destructive. Both the
-  webhook `unlabeled`/`closed` handlers and the poll loop's own read-back
-  apply this identically, via one shared function, so the two can't
-  produce different outcomes for the same issue.
+  rather than sitting in `ready` forever eligible for auto-claim on an
+  issue that's no longer trackable. The recorded `failureReason`
+  distinguishes the two triggers — `"GitHub issue lost its tracking
+label"` vs. `"GitHub issue was closed"` — even though both route
+  through the same shared function (`syncUnlabeledIssueToLocal`,
+  `task-github-sync.ts`), so a closed issue doesn't misreport as a label
+  problem. A task that's already `claimed`/`in_progress`/`reviewing` —
+  real work behind it, a worktree, maybe a branch — is left strictly
+  alone either way; silently failing it out from under a label removal
+  would be destructive. Both the webhook `unlabeled`/`closed` handlers
+  and the poll loop's own read-back apply this identically, via one
+  shared function, so the two can't produce different outcomes for the
+  same issue.
+
+  A label-lost failure — never a close — self-heals: if the same issue
+  is re-sighted still open and labeled again, and the task never had a
+  branch or worktree (i.e. it failed while still `backlog`/`ready`),
+  `upsertIssueTask` (`task-watcher.ts`) springs it back to
+  `ready`/`backlog` automatically on the next poll tick or `labeled`
+  webhook delivery — no separate trigger needed, since it lands on the
+  same shared ingest path every re-sighting already goes through.
+  Deliberately local-only: no comment is posted and nothing is restored
+  on the issue itself, so its last comment still reads "Task failed:
+  GitHub issue lost its tracking label" after recovery. Retry (`failed →
+claimed`, below) does not help here in practice even though the table
+  allows `failed → backlog`/`ready`: Retry requires a preserved
+  `mullion/task-<id>` branch, which a task that failed while still
+  `backlog`/`ready` never had.
 
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has
@@ -165,10 +185,12 @@ failed      → backlog, ready
   branch survives a failure) into a fresh worktree and spawns a new session
   there, so committed-but-unfinished work isn't lost. This is a dedicated
   route (`POST /api/tasks/:id/retry`), not the `failed → backlog`/`ready`
-  table edges — those two remain legal but still have no separate trigger,
+  table edges — those two remain legal but have their own separate,
+  automatic trigger too (relabel-resurrection, see GitHub sync above),
   since retry supersedes the two-step "flip to ready, then claim" flow they
-  would have required. Gated on Task Master being enabled, same as Claim,
-  since it also spawns a session.
+  would otherwise have required for a task Retry can actually resume.
+  Gated on Task Master being enabled, same as Claim, since it also spawns
+  a session.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same

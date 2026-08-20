@@ -64,6 +64,10 @@ vi.mock("../../src/services/github-write.js", () => ({
 vi.mock("../../src/services/task-github-sync.js", () => ({
   syncClosedIssueToLocal: mockSyncClosedIssueToLocal,
   syncUnlabeledIssueToLocal: mockSyncUnlabeledIssueToLocal,
+  // Relabel-resurrection — task-watcher.ts imports these two reason
+  // constants (not just the two functions above) from this module.
+  FAILURE_REASON_LABEL_LOST: "GitHub issue lost its tracking label",
+  FAILURE_REASON_ISSUE_CLOSED: "GitHub issue was closed",
 }));
 
 import { startTaskWatcher } from "../../src/services/task-watcher.js";
@@ -550,6 +554,7 @@ describe("startTaskWatcher", () => {
         app,
         expect.objectContaining({ id: 5, issueNumber: 100 }),
         { cwd: "/tmp/one", hostId: "local" },
+        "GitHub issue lost its tracking label",
       );
 
       cleanup();
@@ -583,7 +588,7 @@ describe("startTaskWatcher", () => {
     // autoClaimReadyTasks() to spawn a real agent on an already-closed
     // issue. syncUnlabeledIssueToLocal's own decision (fail backlog/ready)
     // is exactly right here too, so this case shares that same call.
-    it("also syncs a ready task when the confirm check shows the issue is closed (not just genuinely unlabeled)", async () => {
+    it("also syncs a ready task when the confirm check shows the issue is closed (not just genuinely unlabeled), recording the closed-specific reason", async () => {
       mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
@@ -593,10 +598,15 @@ describe("startTaskWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(1);
 
+      // Distinct from the genuinely-unlabeled case above — previously both
+      // shared one reason string, misreporting a closed issue as a label
+      // problem (and making the two indistinguishable to a downstream
+      // relabel-resurrection check).
       expect(mockSyncUnlabeledIssueToLocal).toHaveBeenCalledWith(
         app,
         expect.objectContaining({ id: 7, issueNumber: 102 }),
         { cwd: "/tmp/one", hostId: "local" },
+        "GitHub issue was closed",
       );
 
       cleanup();
