@@ -52,6 +52,45 @@ export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
 }
 
 /**
+ * Task-claim queueing (rate-limit-storm fix) — a generic transition-listener
+ * registry, so task-dispatch.ts can react to "a slot may have just freed, or
+ * a task just joined the queue" without this module importing anything
+ * FROM task-dispatch.ts/task-claim.ts. Those two modules both already import
+ * FROM this one (recordTaskTransition, CONCURRENCY_CAPPED_STATUSES); an
+ * import the other way would be a cycle. task-dispatch.ts instead registers
+ * itself here at its own module load time (a top-level side-effecting
+ * `registerTaskTransitionListener(...)` call), which app.ts's plugin
+ * registration guarantees has run before any request is served.
+ *
+ * `app` is passed to every listener at CALL time, not captured at
+ * registration time — this module-level list is shared across every
+ * `FastifyInstance` a process creates (each test file's own `buildApp()`
+ * included), so a listener must never assume it closes over "the" app.
+ *
+ * Best-effort: a throwing listener must never break the transition it's
+ * reacting to (the DB write already committed by the time this runs) — each
+ * is wrapped and logged individually, same posture as syncTaskTransition's
+ * own "never propagate a side-effect failure back to the caller" rule.
+ */
+type TaskTransitionListener = (
+  app: FastifyInstance,
+  params: { taskId: number; projectId: number; from: TaskStatus; to: TaskStatus; via: string },
+) => void;
+
+const transitionListeners: TaskTransitionListener[] = [];
+
+export function registerTaskTransitionListener(listener: TaskTransitionListener): void {
+  transitionListeners.push(listener);
+}
+
+/** Test-only reset — the listener list is module-level and would otherwise
+ * accumulate duplicate registrations across test files that re-import
+ * task-dispatch.ts (each with its own now-stale `app` expectations). */
+export function resetTaskTransitionListenersForTests(): void {
+  transitionListeners.length = 0;
+}
+
+/**
  * #488 — the single chokepoint every task status write should call through:
  * logs the transition (structured, matching the shape each call site used
  * individually before this existed) and broadcasts it on the `/ws/tasks`
@@ -87,11 +126,27 @@ export function recordTaskTransition(
     to: params.to,
     ts: Date.now(),
   });
+  for (const listener of transitionListeners) {
+    try {
+      listener(app, params);
+    } catch (err) {
+      app.log.error({ err, taskId: params.taskId }, "task transition listener threw");
+    }
+  }
 }
 
 /** Statuses that hold a live worker session and therefore consume a slot in
  * the MULLION_TASK_MAX_CONCURRENT cap and the reconciler's own polling
- * filter (task-reconciler.ts's SELECT) — backlog/ready haven't spawned
- * anything yet, and reviewing's worker turn is already over, so neither
- * occupies a slot. */
-export const CONCURRENCY_CAPPED_STATUSES: readonly TaskStatus[] = ["claimed", "in_progress"];
+ * filter (task-reconciler.ts's SELECT). `claimed` is deliberately EXCLUDED
+ * (task-claim queueing, rate-limit-storm fix) even though it can hold real
+ * resources once dispatched-and-then-released-back — a "claimed" row is, by
+ * construction, either freshly queued (no session at all) or a brief
+ * mid-dispatch window; either way it must never reject a human's claim
+ * click with a 429, which is the whole point of the queue existing.
+ * `reviewing` is excluded for a different reason: a review awaiting manual
+ * approval must not hold a slot indefinitely, and an in-flight review agent
+ * has no enforceable cap anyway — its spawn (task-reconciler.ts's
+ * maybeSpawnReviewAgent) is fire-and-forget off an already-committed
+ * transition, so refusing to spawn it would just strand it, never actually
+ * bound anything. Backlog/ready haven't spawned anything yet either way. */
+export const CONCURRENCY_CAPPED_STATUSES: readonly TaskStatus[] = ["in_progress"];

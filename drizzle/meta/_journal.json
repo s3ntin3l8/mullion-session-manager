@@ -302,6 +302,13 @@
       "when": 1787238070383,
       "tag": "0042_clammy_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1787242912312,
+      "tag": "0043_tense_silvermane",
+      "breakpoints": true
     }
   ]
 }

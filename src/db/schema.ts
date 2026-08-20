@@ -591,6 +591,19 @@ export const tasks = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
+    // The queue-then-dispatch split (rate-limit-storm fix) — stamped the
+    // moment a task enters "claimed" (manual claim/retry unconditionally,
+    // auto-claim only when it believes there's room), i.e. when the task
+    // joins the queue. `claimedAt` below is stamped separately, only once a
+    // worker session actually spawns — so a task that sits queued for hours
+    // isn't force-failed by the budget reaper the instant it starts (that
+    // reaper measures from `claimedAt`, never `queuedAt`). Never cleared
+    // once set; a queued-then-dispatched task keeps this as a lifecycle
+    // audit timestamp distinct from "when did its current spell start."
+    queuedAt: integer("queued_at", { mode: "timestamp" }),
+    // Stamped at DISPATCH (the reservation transaction that flips
+    // "claimed" -> "in_progress"), not at claim/retry/enqueue time — see
+    // queuedAt above. Null while a task sits queued with no session yet.
     claimedAt: integer("claimed_at", { mode: "timestamp" }),
     // 6.2 — lifecycle audit + the input to the per-task time-budget
     // deadline math (see task-reconciler.ts).
