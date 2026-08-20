@@ -444,6 +444,11 @@ export function TaskDetail({
 
       <div className="task-detail-footer">
         Created {formatRelativeAge(new Date(task.createdAt).getTime())}
+        {/* Task-claim queueing (rate-limit-storm fix) — queuedAt (joined
+            the queue) and claimedAt (current worker spell started) can now
+            both be present and meaningfully different; show both when they
+            are. */}
+        {task.queuedAt && <> · Queued {formatRelativeAge(new Date(task.queuedAt).getTime())}</>}
         {task.claimedAt && <> · Claimed {formatRelativeAge(new Date(task.claimedAt).getTime())}</>}
         {task.completedAt && (
           <> · Completed {formatRelativeAge(new Date(task.completedAt).getTime())}</>

@@ -5,7 +5,15 @@ const mockListLabeledIssues = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
 const mockResolveRepoRef = vi.hoisted(() => vi.fn());
 const mockGetStoredSettings = vi.hoisted(() => vi.fn());
-const mockClaimTask = vi.hoisted(() => vi.fn());
+// Task-claim queueing (rate-limit-storm fix) — task-watcher.ts's auto-claim
+// sweep calls enqueueTask now, not the removed claimTask (see task-claim.ts's
+// enqueueTask/dispatchClaimedTask split). dispatchQueuedTasks is also
+// mocked, separately — pollOnce's periodic dispatch call is task-dispatch.ts's
+// own concern (covered in test/services/task-claim.test.ts's dispatch
+// coverage), not something this file's auto-claim tests need to exercise for
+// real.
+const mockEnqueueTask = vi.hoisted(() => vi.fn());
+const mockDispatchQueuedTasks = vi.hoisted(() => vi.fn());
 const mockGetIssueState = vi.hoisted(() => vi.fn());
 const mockSyncClosedIssueToLocal = vi.hoisted(() => vi.fn());
 const mockSyncUnlabeledIssueToLocal = vi.hoisted(() => vi.fn());
@@ -46,7 +54,16 @@ vi.mock("../../src/services/settings.js", () => ({
 }));
 
 vi.mock("../../src/services/task-claim.js", () => ({
-  claimTask: mockClaimTask,
+  enqueueTask: mockEnqueueTask,
+}));
+
+vi.mock("../../src/services/task-dispatch.js", () => ({
+  dispatchQueuedTasks: mockDispatchQueuedTasks,
+  // app.ts calls this unconditionally at buildApp() time (must register the
+  // onClose hook before the app starts — see registerDispatchCleanup's own
+  // doc comment in task-dispatch.ts for why it can't be done lazily), so
+  // this module mock needs a no-op stand-in too, not just dispatchQueuedTasks.
+  registerDispatchCleanup: vi.fn(),
 }));
 
 // #490a — the read-back's unlabel half calls getIssueState directly and
@@ -236,8 +253,10 @@ describe("startTaskWatcher", () => {
         progressCommentMinutes: -1,
       },
     });
-    mockClaimTask.mockReset();
-    mockClaimTask.mockResolvedValue({ ok: true });
+    mockEnqueueTask.mockReset();
+    mockEnqueueTask.mockResolvedValue({ ok: true });
+    mockDispatchQueuedTasks.mockReset();
+    mockDispatchQueuedTasks.mockResolvedValue(undefined);
     mockGetIssueState.mockReset();
     mockSyncClosedIssueToLocal.mockReset();
     mockSyncClosedIssueToLocal.mockResolvedValue(undefined);
@@ -712,8 +731,8 @@ describe("startTaskWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(mockClaimTask).toHaveBeenCalledWith(app, 10, { auto: true });
-      expect(mockClaimTask).toHaveBeenCalledWith(app, 11, { auto: true });
+      expect(mockEnqueueTask).toHaveBeenCalledWith(app, 10, { auto: true });
+      expect(mockEnqueueTask).toHaveBeenCalledWith(app, 11, { auto: true });
 
       cleanup();
       vi.useRealTimers();
@@ -728,7 +747,7 @@ describe("startTaskWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(mockClaimTask).toHaveBeenCalledWith(app, 20, { auto: true });
+      expect(mockEnqueueTask).toHaveBeenCalledWith(app, 20, { auto: true });
 
       cleanup();
       vi.useRealTimers();
@@ -752,35 +771,46 @@ describe("startTaskWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(mockClaimTask).not.toHaveBeenCalled();
+      expect(mockEnqueueTask).not.toHaveBeenCalled();
 
       cleanup();
       vi.useRealTimers();
     });
 
-    it("logs a cap outcome at debug, not warn — expected once an install is at capacity", async () => {
+    // Task-claim queueing (rate-limit-storm fix) — enqueueTask never
+    // returns a "cap" outcome (queueing is unconditional; see
+    // task-claim.ts's own doc comment on why manual claim and auto-claim
+    // queue in different places). Auto-claim instead paces ITSELF with a
+    // local pre-count (`occupied` — both `claimed` and `in_progress`, NOT
+    // the same set CONCURRENCY_CAPPED_STATUSES exports now) computed BEFORE
+    // trying any candidate, so this replaces the old "cap outcome logs at
+    // debug" test with the thing that actually happens at capacity: the
+    // sweep skips entirely, without calling enqueueTask even once.
+    it("skips the sweep entirely via its own local pre-count once occupied reaches maxConcurrent — no enqueueTask call at all", async () => {
       mockResolveGitHubToken.mockReturnValue(null);
-      mockClaimTask.mockResolvedValue({ ok: false, reason: "cap", limit: 2 });
       const readyTasks = [{ id: 40 }];
-      const app = mockApp([], [], [], readyTasks);
+      // app.config.MULLION_TASK_MAX_CONCURRENT is 2 in this mock app — two
+      // already-occupied rows means zero room left.
+      const inFlightRows = [{ id: 900 }, { id: 901 }];
+      const app = mockApp([], [], [], readyTasks, [], inFlightRows);
       vi.useFakeTimers();
       const cleanup = startTaskWatcher(app);
 
       await vi.advanceTimersByTimeAsync(60_000);
 
+      expect(mockEnqueueTask).not.toHaveBeenCalled();
       expect(app.log.debug).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId: 40, reason: "cap" }),
-        expect.stringContaining("auto-claim"),
+        expect.objectContaining({ occupied: 2, maxConcurrent: 2 }),
+        expect.stringContaining("at capacity"),
       );
-      expect(app.log.warn).not.toHaveBeenCalled();
 
       cleanup();
       vi.useRealTimers();
     });
 
-    it("logs a non-cap failure outcome at warn", async () => {
+    it("logs an enqueue failure outcome at warn", async () => {
       mockResolveGitHubToken.mockReturnValue(null);
-      mockClaimTask.mockResolvedValue({ ok: false, reason: "no-seed-channel" });
+      mockEnqueueTask.mockResolvedValue({ ok: false, reason: "no-seed-channel" });
       const readyTasks = [{ id: 41 }];
       const app = mockApp([], [], [], readyTasks);
       vi.useFakeTimers();
@@ -797,9 +827,9 @@ describe("startTaskWatcher", () => {
       vi.useRealTimers();
     });
 
-    it("isolates a claimTask rejection on one task so a sibling still gets attempted", async () => {
+    it("isolates an enqueueTask rejection on one task so a sibling still gets attempted", async () => {
       mockResolveGitHubToken.mockReturnValue(null);
-      mockClaimTask.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ ok: true });
+      mockEnqueueTask.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ ok: true });
       const readyTasks = [{ id: 50 }, { id: 51 }];
       const app = mockApp([], [], [], readyTasks);
       vi.useFakeTimers();
@@ -807,7 +837,7 @@ describe("startTaskWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(mockClaimTask).toHaveBeenCalledTimes(2);
+      expect(mockEnqueueTask).toHaveBeenCalledTimes(2);
       expect(app.log.error).toHaveBeenCalledWith(
         expect.objectContaining({ taskId: 50 }),
         expect.stringContaining("threw unexpectedly"),

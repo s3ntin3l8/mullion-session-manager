@@ -66,6 +66,12 @@ vi.mock("../../src/services/task-promote.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+// Task-claim queueing (rate-limit-storm fix) — claim now only ENQUEUES
+// (202, no session yet); dispatchClaimedTask is the exported primitive
+// that actually spawns one. In production this runs off task-dispatch.ts's
+// fire-and-forget hook shortly after; tests call it directly and awaited,
+// for determinism.
+const { dispatchClaimedTask } = await import("../../src/services/task-claim.js");
 
 const tmpDb = path.join(os.tmpdir(), `tasks-route-test-${process.pid}.db`);
 
@@ -332,24 +338,42 @@ describe("tasks route", () => {
       return row;
     }
 
-    it("creates a worktree, spawns a session there, and marks the task claimed", async () => {
+    it("queues the task, then dispatch creates a worktree, spawns a session there, and marks the task in_progress", async () => {
       const app = await buildApp();
       const cwd = createGitRepo();
       const projectId = await createProjectWithGitRepo(app, cwd);
       const task = insertTask(app, projectId, 42);
 
+      // Task-claim queueing (rate-limit-storm fix) — claim itself only
+      // enqueues (202, no session yet); the worktree/session-spawn side
+      // effects the old single-phase claim asserted here now belong to
+      // dispatchClaimedTask, called explicitly below for determinism (in
+      // production it runs off task-dispatch.ts's fire-and-forget hook).
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
-      expect(res.statusCode).toBe(201);
-      const session = res.json();
-      expect(session.projectId).toBe(projectId);
+      expect(res.statusCode).toBe(202);
+      const queued = res.json();
+      expect(queued.status).toBe("claimed");
+      expect(queued.sessionId).toBeNull();
+      expect(queued.queuedAt).not.toBeNull();
+      expect(queued.claimedAt).toBeNull();
       // Branch/worktree dir is derived from task.id, not issueNumber
       // (Hermes review, PR #471) — issueNumber is nullable now (6.9), so
       // branching on it would collide every local task onto the same dir.
-      expect(session.cwd).toBe(path.join(cwd, ".mullion-worktrees", `mullion-task-${task.id}`));
+      const predictedCwd = path.join(cwd, ".mullion-worktrees", `mullion-task-${task.id}`);
+      expect(queued.worktreePath).toBe(predictedCwd);
+      // Predicted, not yet real — nothing on disk until dispatch runs.
+      expect(fs.existsSync(predictedCwd)).toBe(false);
+
+      const outcome = await dispatchClaimedTask(app, task.id);
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error("unreachable");
+      const session = outcome.session;
+      expect(session.projectId).toBe(projectId);
+      expect(session.cwd).toBe(predictedCwd);
       expect(fs.existsSync(session.cwd)).toBe(true);
 
       const listed = await app.inject({ method: "GET", url: "/api/tasks" });
-      const claimed = (
+      const dispatched = (
         listed.json() as {
           id: number;
           status: string;
@@ -358,13 +382,13 @@ describe("tasks route", () => {
           branchName: string | null;
         }[]
       ).find((t) => t.id === task.id);
-      expect(claimed).toMatchObject({
-        status: "claimed",
+      expect(dispatched).toMatchObject({
+        status: "in_progress",
         sessionId: session.id,
         worktreePath: session.cwd,
         branchName: `mullion/task-${task.id}`,
       });
-      expect((claimed as { claimedAt: string | null }).claimedAt).not.toBeNull();
+      expect((dispatched as { claimedAt: string | null }).claimedAt).not.toBeNull();
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
@@ -381,26 +405,22 @@ describe("tasks route", () => {
         app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` }),
       ]);
 
-      // Exactly one request wins (201), always cleanly — the reservation
-      // (task-claim.ts's claimTask, 6.2/#215) happens inside one atomic
-      // transaction BEFORE any worktree/git operation runs, so the loser
-      // never reaches `git worktree add` at all; it fails the reservation
-      // itself and 409s immediately. This is strictly tighter than the
-      // thin slice's original race (Hermes review, PR #280), where the
-      // loser could get either a 409 from the optimistic-lock UPDATE or a
-      // 502 from a git-level branch-name collision depending on timing —
-      // reservation-first eliminates that ambiguity entirely.
-      const winner = first.statusCode === 201 ? first : second;
-      const loser = first.statusCode === 201 ? second : first;
-      expect(winner.statusCode).toBe(201);
+      // Exactly one request wins (202), always cleanly — the reservation
+      // (task-claim.ts's enqueueTask) happens inside one atomic transaction
+      // gated on status === "ready", so the loser fails the reservation
+      // itself and 409s immediately, never racing a worktree/git operation
+      // at all (enqueue never touches disk — see enqueueTask's own doc
+      // comment).
+      const winner = first.statusCode === 202 ? first : second;
+      const loser = first.statusCode === 202 ? second : first;
+      expect(winner.statusCode).toBe(202);
       expect(loser.statusCode).toBe(409);
 
       const listed = await app.inject({ method: "GET", url: "/api/tasks" });
-      const claimed = (listed.json() as { id: number; sessionId: number; status: string }[]).find(
+      const claimed = (listed.json() as { id: number; status: string }[]).find(
         (t) => t.id === task.id,
       );
       expect(claimed?.status).toBe("claimed");
-      expect(claimed?.sessionId).toBe(winner.json().id);
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
@@ -420,7 +440,7 @@ describe("tasks route", () => {
       const task = insertTask(app, projectId, 43);
 
       const first = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
-      expect(first.statusCode).toBe(201);
+      expect(first.statusCode).toBe(202);
 
       const second = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
       expect(second.statusCode).toBe(409);
@@ -429,7 +449,12 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("no longer hard-rejects a task on a remote-hosted project (6.8/#283) — an unreachable host now 502s from the proxy attempt itself, not an upfront 400", async () => {
+    // Task-claim queueing (rate-limit-storm fix) — enqueue never touches the
+    // host at all anymore (that's dispatch's job), so a remote-hosted
+    // project's claim ALWAYS 202s regardless of reachability; the old "no
+    // longer hard-rejects... 502s from the proxy attempt itself" behavior
+    // now lives entirely inside dispatchClaimedTask, called explicitly here.
+    it("queues unconditionally on a remote-hosted project; dispatch is what discovers the host is unreachable and releases back to claimed, not ready", async () => {
       const app = await buildApp();
 
       const host = await app.inject({
@@ -447,15 +472,19 @@ describe("tasks route", () => {
       const task = insertTask(app, projectId, 44);
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
-      // The host itself is unreachable (port 1) — claim now genuinely tries
-      // the SessionBackend proxy (clearOrphanedTaskWorktree) instead of
-      // refusing before ever attempting it, and surfaces a gateway failure
-      // rather than a hard client-side rejection.
-      expect(res.statusCode).toBe(502);
+      expect(res.statusCode).toBe(202);
+      expect(res.json().status).toBe("claimed");
 
-      // Released, not stranded.
+      const outcome = await dispatchClaimedTask(app, task.id);
+      expect(outcome.ok).toBe(false);
+
+      // Released back to "claimed" (its queue position), not "ready" —
+      // dispatchClaimedTask's own doc comment: an enqueue was a real,
+      // unconditional commitment; a transient dispatch failure shouldn't
+      // cost the task its place in line. task-dispatch.ts's backoff is what
+      // keeps this from being retried in a tight loop in production.
       const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
-      expect(check.json().status).toBe("ready");
+      expect(check.json().status).toBe("claimed");
 
       await app.close();
     });
@@ -520,24 +549,16 @@ describe("tasks route", () => {
       }
     });
 
-    it("429s once MULLION_TASK_MAX_CONCURRENT is reached, releasing nothing for the loser (6.2/#215)", async () => {
-      // This suite shares one DB across the whole file and never releases
-      // a claimed task's session between tests, so earlier tests' still-
-      // "claimed" rows already occupy some of the cap by the time this
-      // runs — count what's already in flight FIRST (config is read once
-      // at buildApp() time, so this has to happen before the env var
-      // below is set) and set the cap to exactly "in flight + 1" rather
-      // than a fixed low number, so this test is robust to how many prior
-      // tests happened to run first.
-      const probeApp = await buildApp();
-      const before = (await probeApp.inject({ method: "GET", url: "/api/tasks" })).json() as {
-        status: string;
-      }[];
-      await probeApp.close();
-      const inFlight = before.filter(
-        (t) => t.status === "claimed" || t.status === "in_progress",
-      ).length;
-      process.env.MULLION_TASK_MAX_CONCURRENT = String(inFlight + 1);
+    // Task-claim queueing (rate-limit-storm fix) — this is the deliverable:
+    // a manual claim past the concurrency cap used to 429 (the two tests
+    // this replaces, "429s once MULLION_TASK_MAX_CONCURRENT is reached" and
+    // "...settings.taskMaster.maxConcurrent..."). Now it queues
+    // unconditionally regardless of capacity — the cap only applies at
+    // dispatch, which is never on this route's own call stack. See
+    // test/services/task-claim.test.ts for dispatchClaimedTask's own "cap"
+    // outcome coverage (the thing that replaced this route ever seeing 429).
+    it("queues past MULLION_TASK_MAX_CONCURRENT instead of 429ing — the cap no longer applies to claim at all", async () => {
+      process.env.MULLION_TASK_MAX_CONCURRENT = "1";
       try {
         const app = await buildApp();
         const cwd = createGitRepo();
@@ -546,81 +567,19 @@ describe("tasks route", () => {
         const second = insertTask(app, projectId, 51);
 
         const firstRes = await app.inject({ method: "POST", url: `/api/tasks/${first.id}/claim` });
-        expect(firstRes.statusCode).toBe(201);
+        expect(firstRes.statusCode).toBe(202);
 
         const secondRes = await app.inject({
           method: "POST",
           url: `/api/tasks/${second.id}/claim`,
         });
-        expect(secondRes.statusCode).toBe(429);
-        // `message` is what the frontend actually renders (client.ts falls
-        // back to a generic "<path> failed with 429" whenever it's absent)
-        // — pin it, not just the machine-readable fields, so a regression
-        // back to a message-less body is caught here.
-        const secondBody = secondRes.json();
-        expect(secondBody).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
-        expect(secondBody.message).toContain(String(inFlight + 1));
-
-        // The capped task is untouched — still ready, not stuck in some
-        // half-claimed state.
-        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
-        const stillReady = (listed.json() as { id: number; status: string }[]).find(
-          (t) => t.id === second.id,
-        );
-        expect(stillReady?.status).toBe("ready");
+        expect(secondRes.statusCode).toBe(202);
+        expect(secondRes.json().status).toBe("claimed");
 
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();
       } finally {
         process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
-      }
-    });
-
-    // Independent review, PR #480 — proves the settings override actually
-    // reaches task-claim.ts's cap check (task-config.ts's resolver), not
-    // just that the pure resolver function returns the right number. The
-    // env var stays generous (1000) so only the settings override could be
-    // responsible for a 429 here.
-    it("429s once settings.taskMaster.maxConcurrent is reached, overriding a generous env default", async () => {
-      process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
-      const app = await buildApp();
-      const before = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as {
-        status: string;
-      }[];
-      const inFlight = before.filter(
-        (t) => t.status === "claimed" || t.status === "in_progress",
-      ).length;
-      await app.inject({
-        method: "PATCH",
-        url: "/api/settings",
-        payload: { taskMaster: { maxConcurrent: inFlight + 1 } },
-      });
-      try {
-        const cwd = createGitRepo();
-        const projectId = await createProjectWithGitRepo(app, cwd);
-        const first = insertTask(app, projectId, 52);
-        const second = insertTask(app, projectId, 53);
-
-        const firstRes = await app.inject({ method: "POST", url: `/api/tasks/${first.id}/claim` });
-        expect(firstRes.statusCode).toBe(201);
-
-        const secondRes = await app.inject({
-          method: "POST",
-          url: `/api/tasks/${second.id}/claim`,
-        });
-        expect(secondRes.statusCode).toBe(429);
-        const secondBody = secondRes.json();
-        expect(secondBody).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
-        expect(secondBody.message).toContain(String(inFlight + 1));
-
-        fs.rmSync(cwd, { recursive: true, force: true });
-      } finally {
-        await app.inject({
-          method: "PATCH",
-          url: "/api/settings",
-          payload: { taskMaster: { maxConcurrent: -1 } },
-        });
-        await app.close();
       }
     });
 
@@ -647,7 +606,14 @@ describe("tasks route", () => {
         .all();
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${row.id}/claim` });
-      expect(res.statusCode).toBe(201);
+      expect(res.statusCode).toBe(202);
+
+      // agentCommand is stamped at DISPATCH, not enqueue (task-claim
+      // queueing, rate-limit-storm fix) — enqueue only checks resolution
+      // succeeds enough to decide no-seed-channel for an auto claim; it
+      // never persists the result.
+      const outcome = await dispatchClaimedTask(app, row.id);
+      expect(outcome.ok).toBe(true);
 
       const listed = await app.inject({ method: "GET", url: "/api/tasks" });
       const claimed = (listed.json() as { id: number; agentCommand: string | null }[]).find(
@@ -659,7 +625,7 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("still claims manually with an agent that has no seed channel, marking seedDelivered false", async () => {
+    it("still claims manually with an agent that has no seed channel, marking seedDelivered false once dispatched", async () => {
       const app = await buildApp();
       const cwd = createGitRepo();
       const projectId = await createProjectWithGitRepo(app, cwd);
@@ -675,8 +641,16 @@ describe("tasks route", () => {
       const task = insertTask(app, projectId, 53);
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
-      expect(res.statusCode).toBe(201);
-      expect(res.json().seedDelivered).toBe(false);
+      expect(res.statusCode).toBe(202);
+      // seedDelivered isn't known until dispatch actually spawns something
+      // — enqueue's own no-seed-channel refusal only applies to `auto`
+      // claims (task-claim.ts's enqueueTask), and this is a manual one, so
+      // it queues fine with a still-null seedDelivered.
+      expect(res.json().seedDelivered).toBeNull();
+
+      const outcome = await dispatchClaimedTask(app, task.id);
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
@@ -754,8 +728,13 @@ describe("tasks route", () => {
       );
 
       const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      // Task-claim queueing (rate-limit-storm fix) — a successful retry now
+      // lands directly on "in_progress", not "claimed" (see task-claim.ts's
+      // retryTask — a "claimed" row is defined everywhere else as
+      // session-less/queued, and a retry already has a real, running
+      // session by this point).
       expect(check.json()).toMatchObject({
-        status: "claimed",
+        status: "in_progress",
         branchName: task.branchName,
         failureReason: null,
         completedAt: null,
@@ -835,7 +814,7 @@ describe("tasks route", () => {
 
       const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
       expect(check.json()).toMatchObject({
-        status: "claimed",
+        status: "in_progress",
         agent: "codex",
         reviewAgent: "none",
         agentCommand: "codex",
@@ -2177,7 +2156,12 @@ describe("tasks route", () => {
         url: `/api/tasks/${task.id}/claim`,
         payload: { agent: "codex", reviewAgent: "none" },
       });
-      expect(res.statusCode).toBe(201);
+      expect(res.statusCode).toBe(202);
+
+      // agentCommand is stamped at dispatch, not enqueue — called directly
+      // and awaited for determinism (see the claim describe block above).
+      const outcome = await dispatchClaimedTask(app, task.id);
+      expect(outcome.ok).toBe(true);
 
       const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
       expect(check.json()).toMatchObject({

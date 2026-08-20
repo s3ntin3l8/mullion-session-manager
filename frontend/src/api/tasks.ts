@@ -56,12 +56,14 @@ export const tasksApi = {
 
   deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
 
-  // Claims a ready task: creates an isolated worktree, spawns the resolved
-  // agent there seeded with the issue/task as its prompt, and returns the
-  // spawned Session — same response shape createSession returns, plus
-  // whether the seed prompt was actually delivered.
+  // Task-claim queueing (rate-limit-storm fix) — claiming a ready task now
+  // unconditionally QUEUES it (status -> "claimed") and returns the task
+  // row, not a spawned Session. Dispatch (creating the worktree, spawning
+  // the agent) happens asynchronously once a concurrency slot is free —
+  // watch the task's own status via refreshTasks()/`/ws/tasks` rather than
+  // this response for when it actually starts.
   claimTask: (id: number, opts?: { agent?: string | null; reviewAgent?: string | null }) =>
-    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/claim`, {
+    request<Task>(`/api/tasks/${id}/claim`, {
       method: "POST",
       body: opts ? JSON.stringify(opts) : undefined,
     }),

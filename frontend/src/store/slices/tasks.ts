@@ -131,14 +131,16 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
     },
 
     claimTask: async (id, opts) => {
-      const session = await api.claimTask(id, opts);
-      // Best-effort (Hermes review, PR #281): the claim itself already
-      // succeeded and the caller already has `session` to open directly —
-      // a transient failure in these follow-up refreshes must not surface
-      // as "claim failed" when it actually succeeded, which would show a
-      // contradictory "session opened AND claim failed" UI.
+      const task = await api.claimTask(id, opts);
+      // Task-claim queueing (rate-limit-storm fix) — claim now only queues;
+      // no session exists yet to open, so refreshSessions() here is a no-op
+      // in the common case (kept anyway — harmless, and covers the rare
+      // case dispatch already ran by the time this response lands). Still
+      // best-effort (Hermes review, PR #281 — same reasoning as before): a
+      // transient refresh failure must not surface as "claim failed" when
+      // the queue write already succeeded.
       void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
-      return session;
+      return task;
     },
 
     approveTask: async (id) => {

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { claimTask, retryTask } from "../services/task-claim.js";
+import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
@@ -131,6 +131,11 @@ const TASK_ROW_COLUMNS = {
   seedDelivered: tasks.seedDelivered,
   reviewSessionId: tasks.reviewSessionId,
   reviewSeedDelivered: tasks.reviewSeedDelivered,
+  // Task-claim queueing (rate-limit-storm fix) — the frontend's own
+  // "review in flight vs. awaiting your approval" predicate compares this
+  // against reviewSessionId (see TaskCard.tsx); wasn't previously exposed
+  // to any API response.
+  reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
   reviewFindings: tasks.reviewFindings,
   reviewRounds: tasks.reviewRounds,
   worktreePath: tasks.worktreePath,
@@ -155,6 +160,10 @@ const TASK_ROW_COLUMNS = {
   subIssueCompleted: tasks.subIssueCompleted,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
+  // Task-claim queueing (rate-limit-storm fix) — when the task JOINED the
+  // queue, distinct from claimedAt below (when its current worker spell
+  // actually started). See task-claim.ts's enqueueTask/dispatchClaimedTask.
+  queuedAt: tasks.queuedAt,
   claimedAt: tasks.claimedAt,
   startedAt: tasks.startedAt,
   reviewingAt: tasks.reviewingAt,
@@ -236,17 +245,27 @@ export async function tasksRoute(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+  // Shared by GET /api/tasks/:id below and claim's own 202 response
+  // (task-claim queueing, rate-limit-storm fix) — a queued/dispatched task
+  // now returns its row, not a session, so it needs the exact same
+  // shape/withBlockedState treatment the detail view already gets, not a
+  // second, drifting definition of "what a task looks like over the wire."
+  function selectTaskRow(taskId: number) {
     const [row] = app.db
       .select(TASK_ROW_COLUMNS)
       .from(tasks)
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .where(eq(tasks.id, taskId))
       .all();
+    return row ? withBlockedState(row) : null;
+  }
+
+  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const row = selectTaskRow(taskId);
     if (!row) return reply.notFound();
-    return withBlockedState(row);
+    return row;
   });
 
   function getProjectOr404(projectId: number) {
@@ -484,18 +503,27 @@ export async function tasksRoute(app: FastifyInstance) {
 
   // Phase 6 (6.2/#215) — thin wrapper over task-claim.ts's shared
   // orchestration (also used by task-watcher.ts's auto-claim sweep), which
-  // owns the reservation-first/concurrency-cap/agent-resolution/seed logic.
-  // This handler's only job is mapping ClaimTaskOutcome to an HTTP
-  // response.
+  // owns the agent-resolution/seed logic. This handler's only job is
+  // mapping EnqueueTaskOutcome to an HTTP response.
+  //
+  // Task-claim queueing (rate-limit-storm fix) — claiming now unconditionally
+  // ENQUEUES the task (status -> "claimed") and returns 202, rather than
+  // reserving-and-spawning synchronously and returning 201 with the new
+  // session. A manual claim can therefore no longer 429 on the concurrency
+  // cap at all — see task-claim.ts's enqueueTask/dispatchClaimedTask split.
+  // Dispatch (the actual worktree/session spawn) happens asynchronously,
+  // off task-dispatch.ts's opportunistic hook or its periodic sweep; the
+  // caller observes it via GET /api/tasks (or /ws/tasks) once it happens,
+  // not synchronously on this response.
   //
   // Task-Master-enabled-gated (independent review, PR #471; settings
   // override added by the Settings UI follow-up — see task-config.ts):
-  // claiming spawns an agent — the roadmap's Flag semantics decision names
-  // this endpoint explicitly as autonomous behavior the gate must cover,
-  // unlike the local board's create/edit/drag routes above. Before this
-  // check, a task created via the (deliberately un-gated) local board with
-  // `status: "ready"` could reach claim with Task Master off — the exact
-  // bypass the gate exists to prevent.
+  // claiming queues real autonomous work — the roadmap's Flag semantics
+  // decision names this endpoint explicitly as autonomous behavior the gate
+  // must cover, unlike the local board's create/edit/drag routes above.
+  // Before this check, a task created via the (deliberately un-gated) local
+  // board with `status: "ready"` could reach claim with Task Master off —
+  // the exact bypass the gate exists to prevent.
   app.post<{ Params: { id: string }; Body: ClaimTaskBody }>(
     "/api/tasks/:id/claim",
     { schema: claimTaskSchema },
@@ -509,7 +537,7 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
       const body = request.body ?? {};
-      const outcome = await claimTask(app, taskId, {
+      const outcome = await enqueueTask(app, taskId, {
         auto: false,
         agent: body.agent,
         reviewAgent: body.reviewAgent,
@@ -520,21 +548,13 @@ export async function tasksRoute(app: FastifyInstance) {
             return reply.notFound();
           case "not-ready":
             return reply.conflict(outcome.detail ?? "Task is not ready");
-          case "cap":
-            return reply
-              .code(429)
-              .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
-          case "worktree-failed":
-            return reply.badGateway(outcome.detail ?? "Failed to create a worktree for this task");
-          case "spawn-failed":
-            return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
           case "no-seed-channel":
             return reply.badRequest(outcome.detail ?? "Resolved agent can't receive a seed prompt");
         }
       }
 
-      reply.code(201);
-      return { ...outcome.session, seedDelivered: outcome.seedDelivered };
+      reply.code(202);
+      return selectTaskRow(taskId);
     },
   );
 

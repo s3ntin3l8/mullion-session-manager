@@ -839,6 +839,13 @@ export interface Task {
   // (some agents, e.g. OpenCode, can't — the session still spawns, just
   // with no instructions). See TaskDetail.tsx's review card.
   reviewSeedDelivered: boolean | null;
+  // Task-claim queueing (rate-limit-storm fix) — the reviewSessionId whose
+  // findings have already been read and acted on. `reviewSessionId !==
+  // reviewFindingsIngestedSessionId` means a review agent is still running;
+  // equal (or reviewSessionId null) means either awaiting your manual
+  // approve/reject, or there was never a review agent at all. See
+  // TaskCard.tsx's "review in flight" label.
+  reviewFindingsIngestedSessionId: number | null;
   // The review agent's own findings, captured once its session finishes —
   // appended across rounds under a "## Round N" header, never replaced.
   // Null until the first round is ingested (no review agent configured,
@@ -916,6 +923,12 @@ export interface Task {
   subIssueCompleted: number | null;
   createdAt: string;
   updatedAt: string;
+  // Task-claim queueing (rate-limit-storm fix) — when the task joined the
+  // queue (status -> "claimed"), distinct from claimedAt below. See
+  // TaskCard.tsx's age-chip logic.
+  queuedAt: string | null;
+  // When the CURRENT worker spell started (dispatch, not enqueue) — null
+  // while a task sits queued with no session yet.
   claimedAt: string | null;
   startedAt: string | null;
   reviewingAt: string | null;

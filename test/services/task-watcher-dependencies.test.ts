@@ -14,7 +14,15 @@ import crypto from "node:crypto";
 import type * as GitHubIntegrationModule from "../../src/services/github-integration.js";
 import type * as GitHubModule from "../../src/services/github.js";
 
-const mockClaimTask = vi.hoisted(() => vi.fn());
+// Task-claim queueing (rate-limit-storm fix) — task-watcher.ts's auto-claim
+// sweep calls enqueueTask now, not the removed claimTask. dispatchQueuedTasks
+// is also mocked — pollOnce's own periodic dispatch call would otherwise run
+// for real against this file's real (buildApp()) app/DB, attempting a real
+// PTY spawn this file never mocks (only "the claim spawn itself," i.e. the
+// enqueue-time no-seed-channel gate, was ever mocked out here — see the
+// file's own header comment).
+const mockEnqueueTask = vi.hoisted(() => vi.fn());
+const mockDispatchQueuedTasks = vi.hoisted(() => vi.fn());
 const mockResolveRepoRef = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
 const mockListLabeledIssues = vi.hoisted(() => vi.fn());
@@ -22,7 +30,15 @@ const mockGetIssueState = vi.hoisted(() => vi.fn());
 const mockListBlockedByIssues = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/task-claim.js", () => ({
-  claimTask: mockClaimTask,
+  enqueueTask: mockEnqueueTask,
+}));
+vi.mock("../../src/services/task-dispatch.js", () => ({
+  dispatchQueuedTasks: mockDispatchQueuedTasks,
+  // app.ts calls this unconditionally at buildApp() time (must register the
+  // onClose hook before the app starts — see registerDispatchCleanup's own
+  // doc comment in task-dispatch.ts for why it can't be done lazily), so
+  // this module mock needs a no-op stand-in too, not just dispatchQueuedTasks.
+  registerDispatchCleanup: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", () => ({
   resolveRepoRef: mockResolveRepoRef,
@@ -80,8 +96,10 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
   });
 
   beforeEach(() => {
-    mockClaimTask.mockReset();
-    mockClaimTask.mockResolvedValue({ ok: true });
+    mockEnqueueTask.mockReset();
+    mockEnqueueTask.mockResolvedValue({ ok: true });
+    mockDispatchQueuedTasks.mockReset();
+    mockDispatchQueuedTasks.mockResolvedValue(undefined);
     mockResolveRepoRef.mockReset();
     mockResolveRepoRef.mockResolvedValue({ owner: "test-owner", repo: "test-repo" });
     mockResolveGitHubToken.mockReset();
@@ -173,7 +191,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
   // Checking the non-`app` args is both sufficient and avoids that getter
   // entirely.
   function expectClaimedWith(taskId: number) {
-    expect(mockClaimTask).toHaveBeenCalledWith(expect.anything(), taskId, { auto: true });
+    expect(mockEnqueueTask).toHaveBeenCalledWith(expect.anything(), taskId, { auto: true });
   }
 
   // The one sweep tick every test below drives — see the file header for
@@ -245,7 +263,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
     await runOneSweep();
 
     expect(mockListBlockedByIssues).toHaveBeenCalledTimes(1);
-    expect(mockClaimTask).not.toHaveBeenCalled();
+    expect(mockEnqueueTask).not.toHaveBeenCalled();
     const row = getTask(taskId);
     expect(row.status).toBe("backlog");
     expect(row.blockedByCheckedAt).not.toBeNull();
@@ -288,7 +306,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
     // pass, running right after in the same tick, must skip it rather than
     // fetching it again.
     expect(mockListBlockedByIssues).toHaveBeenCalledTimes(1);
-    expect(mockClaimTask).not.toHaveBeenCalled();
+    expect(mockEnqueueTask).not.toHaveBeenCalled();
     expect(getTask(taskId).blockedByCheckedAt).toBeNull();
 
     await vi.advanceTimersByTimeAsync(1_000);
@@ -330,7 +348,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
     // autoClaimReadyTasks' own capacity pre-count bails before its loop
     // ever runs, so it makes zero calls and attempts zero claims — this is
     // unchanged from before this pass existed.
-    expect(mockClaimTask).not.toHaveBeenCalled();
+    expect(mockEnqueueTask).not.toHaveBeenCalled();
     // resolveStaleTaskBlockers is deliberately NOT capacity-gated (resolving
     // a blocker for display purposes has nothing to do with concurrency
     // slots), so it still resolves this row in the same sweep.
@@ -351,7 +369,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
     await runOneSweep();
 
     expect(mockListBlockedByIssues).not.toHaveBeenCalled();
-    expect(mockClaimTask).not.toHaveBeenCalled();
+    expect(mockEnqueueTask).not.toHaveBeenCalled();
     expect(getTask(taskId).status).toBe("ready");
   });
 
@@ -377,7 +395,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
     await runOneSweep();
 
     expect(mockListBlockedByIssues).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo", 4);
-    expect(mockClaimTask).not.toHaveBeenCalled();
+    expect(mockEnqueueTask).not.toHaveBeenCalled();
     const row = getTask(taskId);
     expect(row.status).toBe("ready");
     expect(JSON.parse(row.blockedBy!)).toEqual([
@@ -424,7 +442,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
 
     await runOneSweep();
 
-    const order = mockClaimTask.mock.calls.map((call) => call[1]);
+    const order = mockEnqueueTask.mock.calls.map((call) => call[1]);
     expect(order.indexOf(first)).toBeLessThan(order.indexOf(second));
   });
 
@@ -500,7 +518,7 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
 
     await runOneSweep();
 
-    expect(mockClaimTask).not.toHaveBeenCalled();
+    expect(mockEnqueueTask).not.toHaveBeenCalled();
     expect(mockListBlockedByIssues).toHaveBeenCalledTimes(10);
     expect(debugSpy).toHaveBeenCalledWith(
       expect.objectContaining({ checked: 10 }),

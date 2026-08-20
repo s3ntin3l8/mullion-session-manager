@@ -1883,99 +1883,21 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // write, so it just leaves an exited-session task alone.
           if (derived.status === "exited") continue;
 
-          if (task.status === "claimed") {
-            // Hermes review, PR #480 (second pass) — entering "reviewing" is
-            // gated on "enabled" entirely, not just the review-agent spawn
-            // below. approve/reject are BOTH gated on the same flag (they
-            // write real GitHub state — PR creation, re-seeding a session),
-            // so a task that reached "reviewing" while disabled would be
-            // stuck there with no way to resolve it until re-enabled. Leaving
-            // it in claimed/in_progress instead keeps it reachable by the
-            // still-ungated budget force-fail below, and it picks up the
-            // normal reviewing transition on the next tick once re-enabled.
-            if (
-              derived.status === "finished" &&
-              resolvedTaskMaster.enabled &&
-              turnFinishedSinceClaim(info, task)
-            ) {
-              const gate = await checkReviewingGate(app, task, project, info);
-              if (!gate.ok) {
-                await failReviewingGate(
-                  app,
-                  task,
-                  session,
-                  project,
-                  backend,
-                  "claimed",
-                  gate.failureReason,
-                  now,
-                );
-                continue;
-              }
-              const updated = app.db
-                .update(tasks)
-                .set({
-                  status: "reviewing",
-                  startedAt: task.startedAt ?? now,
-                  reviewingAt: now,
-                  // #738 follow-up — the spawn moved out of this transition
-                  // into processPendingReviewSpawns below (it needs to wait
-                  // on CI, which doesn't exist yet the instant this fires).
-                  // Nulled here, not left alone: a second "→ reviewing" entry
-                  // (after an auto-returned round) would otherwise carry the
-                  // FIRST round's reviewSessionId/claim marker forward, and
-                  // that pass only ever looks at tasks where they're null.
-                  reviewSessionId: null,
-                  reviewSeedDelivered: null,
-                  reviewSpawnClaimedAt: null,
-                })
-                .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
-                .run();
-              if (updated.changes > 0) {
-                recordTaskTransition(app, {
-                  taskId: task.id,
-                  projectId: project.id,
-                  from: "claimed",
-                  to: "reviewing",
-                  via: "reconcile",
-                });
-                await syncTaskTransition(
-                  app,
-                  {
-                    ...task,
-                    status: "reviewing",
-                    startedAt: task.startedAt ?? now,
-                    reviewingAt: now,
-                  },
-                  project,
-                  "reviewing",
-                  { diffStat: await computeTaskDiffStat(app, task, project) },
-                );
-                await maybeOpenDraftPR(app, task, project);
-              }
-            } else if (derived.status !== "idle" && derived.status !== "finished") {
-              const updated = app.db
-                .update(tasks)
-                .set({ status: "in_progress", startedAt: now })
-                .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
-                .run();
-              if (updated.changes > 0) {
-                recordTaskTransition(app, {
-                  taskId: task.id,
-                  projectId: project.id,
-                  from: "claimed",
-                  to: "in_progress",
-                  via: "reconcile",
-                });
-                await syncTaskTransition(
-                  app,
-                  { ...task, status: "in_progress", startedAt: now },
-                  project,
-                  "in_progress",
-                );
-              }
-            }
-          } else if (
+          // A "claimed" task's own reconciliation (both "-> reviewing" on a
+          // fast-finishing first turn, and "-> in_progress" on any other
+          // real activity) used to live here. Task-claim queueing
+          // (rate-limit-storm fix) removed it as dead code: "claimed" is now
+          // the queue state (task-claim.ts's enqueueTask/dispatchClaimedTask
+          // split), so a "claimed" row never has a session — `rows`/
+          // `hostRows` above are built from an INNER JOIN on `sessions`,
+          // which such a row can never satisfy. Dispatch itself now flips
+          // "claimed" -> "in_progress" synchronously (inside its own
+          // reservation transaction, task-claim.ts), so a task with a live
+          // session is always already "in_progress" by the time this sweep
+          // could ever observe it — the "claimed -> reviewing" direct edge
+          // (task-state.ts's transition table) stays legal for the type
+          // system but is unreachable via this path now.
+          if (
             task.status === "in_progress" &&
             derived.status === "finished" &&
             resolvedTaskMaster.enabled &&

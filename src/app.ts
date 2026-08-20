@@ -57,6 +57,7 @@ import { browserCookiesRoute } from "./routes/browser-cookies.js";
 import { browserUrlsRoute } from "./routes/browser-urls.js";
 import { tasksRoute } from "./routes/tasks.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
+import { registerDispatchCleanup } from "./services/task-dispatch.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -311,6 +312,12 @@ export async function buildApp() {
   await app.register(hooksPlugin);
   await app.register(githubPRPollerPlugin);
   await app.register(taskWatcherPlugin);
+  // Must run before the app starts (see registerDispatchCleanup's own doc
+  // comment — `app.addHook` throws once Fastify considers the instance
+  // "started", which happens on the very first request/inject) — not a
+  // plugin itself, just the eager `onClose` registration task-dispatch.ts's
+  // opportunistic sweep needs to track and cancel its own pending timers.
+  registerDispatchCleanup(app);
   await app.register(webhookReconcilerPlugin);
   await app.register(gitFetcherPlugin);
   await app.register(hostHeartbeatPlugin);

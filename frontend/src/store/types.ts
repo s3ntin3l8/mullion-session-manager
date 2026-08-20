@@ -274,13 +274,14 @@ export interface TasksSlice {
     },
   ) => Promise<Task>;
   deleteTask: (id: number) => Promise<void>;
-  // Claims a ready task (spawns a session into an isolated worktree, seeds
-  // it with the issue/task as its prompt) and returns the spawned Session so
-  // the caller can open it, mirroring createSession's own return shape.
+  // Task-claim queueing (rate-limit-storm fix) — queues a ready task
+  // (status -> "claimed") and returns the updated Task row. Dispatch (the
+  // actual worktree/session spawn) happens asynchronously; watch the task's
+  // status via refreshTasks()/the /ws/tasks channel for when it starts.
   claimTask: (
     id: number,
     opts?: { agent?: string | null; reviewAgent?: string | null },
-  ) => Promise<Session>;
+  ) => Promise<Task>;
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
   approveTask: (id: number) => Promise<Task>;
   // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
