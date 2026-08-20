@@ -206,7 +206,7 @@ describe("github-write service", () => {
     const result = await createPullRequestReview("tok", "owner", "repo", 9, {
       body: "## Round 1\n\nOne finding.",
       commitId: "abc123",
-      comments: [{ path: "a.go", line: 42, body: "unchecked error" }],
+      comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "unchecked error" }],
     });
     expect(result).toEqual({
       id: 555,
@@ -226,7 +226,7 @@ describe("github-write service", () => {
     );
   });
 
-  it("createPullRequestReview defaults an omitted side to RIGHT and posts undefined comments when none are given", async () => {
+  it("posts undefined comments when none are given", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(201, {
         id: 556,
@@ -248,6 +248,37 @@ describe("github-write service", () => {
         }),
       }),
     );
+  });
+
+  // Hermes review, PR #738 — an empty `comments` array (not `undefined`)
+  // survives JSON.stringify (only `undefined` properties are dropped), and
+  // GitHub 422s a review whose `comments` key is present but empty.
+  it("treats an empty comments array the same as none, not as an empty comments key", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 557, html_url: "u" }));
+    await createPullRequestReview("tok", "owner", "repo", 9, {
+      body: "b",
+      commitId: "abc123",
+      comments: [],
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).comments).toBeUndefined();
+  });
+
+  // Hermes review, PR #738 — GitHub's own documented default for a review
+  // comment's `side` is "RIGHT", so omitting it (rather than us guessing a
+  // default) does exactly what a caller who deliberately left it out wants,
+  // with no risk of second-guessing a LEFT-only anchor on a deleted line.
+  it("omits side entirely when a comment doesn't set one, rather than defaulting it", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 558, html_url: "u" }));
+    await createPullRequestReview("tok", "owner", "repo", 9, {
+      body: "b",
+      commitId: "abc123",
+      comments: [{ path: "a.go", line: 1, body: "b" }],
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).comments).toEqual([
+      { path: "a.go", line: 1, body: "b" },
+    ]);
   });
 
   // The self-review constraint createPullRequestReview's own doc comment

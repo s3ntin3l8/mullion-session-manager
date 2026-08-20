@@ -433,12 +433,23 @@ export async function createPullRequestReview(
       body: params.body,
       commit_id: params.commitId,
       event: "COMMENT",
-      comments: params.comments?.map((c) => ({
-        path: c.path,
-        line: c.line,
-        side: c.side ?? "RIGHT",
-        body: c.body,
-      })),
+      // Hermes review, PR #738: an empty `comments` array (not `undefined`)
+      // survives JSON.stringify and GitHub 422s a review whose `comments`
+      // key is present but empty — this caller's own contract guards it
+      // today (task-github-sync.ts never passes an empty array), but this
+      // makes it safe for a future one that might.
+      comments:
+        params.comments && params.comments.length > 0
+          ? params.comments.map((c) => ({
+              path: c.path,
+              line: c.line,
+              // Omitted (not defaulted) when the caller doesn't set it —
+              // GitHub's own default is "RIGHT", so there's no case where
+              // guessing here does anything a bare omission wouldn't.
+              side: c.side,
+              body: c.body,
+            }))
+          : undefined,
     },
   );
   return { id: result.id, htmlUrl: result.html_url };
