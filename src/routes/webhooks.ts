@@ -35,6 +35,7 @@ interface GitHubIssuePayload {
   title?: string;
   body?: string | null;
   html_url?: string;
+  state?: "open" | "closed";
   labels?: Array<{ name?: string }>;
   // #667 — present on the same "issues" webhook payload as the REST issue
   // object (verified live during planning); read only for the
@@ -280,6 +281,18 @@ export async function webhookRoutes(app: FastifyInstance) {
                   (action === "labeled" || action === "opened") &&
                   issue.title !== undefined &&
                   issue.html_url !== undefined &&
+                  // `state !== "closed"` (not `state === "open"`) so a
+                  // payload that genuinely omits `state` still ingests —
+                  // GitHub always sends it on real issue payloads, this is
+                  // just fail-open for an unexpected/legacy shape rather
+                  // than silently dropping delivery. What this DOES stop:
+                  // labeling an already-closed issue can fire "labeled" too
+                  // (closing doesn't remove other labels), which previously
+                  // both created a brand-new `ready` task for a dead issue
+                  // AND — once upsertIssueTask's relabel-resurrection check
+                  // landed — could have sprung a `failed` label-lost task
+                  // for a MEANWHILE-closed issue back to `ready`.
+                  issue.state !== "closed" &&
                   (issue.labels ?? []).some((l) => l.name === taskLabel)
                 ) {
                   upsertIssueTask(app, projectId, {

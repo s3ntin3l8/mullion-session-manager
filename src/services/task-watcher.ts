@@ -9,8 +9,18 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { claimTask } from "./task-claim.js";
-import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "./task-github-sync.js";
-import { canTransition, CONCURRENCY_CAPPED_STATUSES, type TaskStatus } from "./task-state.js";
+import {
+  syncClosedIssueToLocal,
+  syncUnlabeledIssueToLocal,
+  FAILURE_REASON_LABEL_LOST,
+  FAILURE_REASON_ISSUE_CLOSED,
+} from "./task-github-sync.js";
+import {
+  canTransition,
+  recordTaskTransition,
+  CONCURRENCY_CAPPED_STATUSES,
+  type TaskStatus,
+} from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import {
   dependencyGate,
@@ -128,15 +138,23 @@ function isManualOnly(body: string | null): boolean {
 export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: TaskIssue): void {
   // #490a — checked BEFORE the write so a genuinely new task can be told
   // apart from a re-sighting update (even a real one, where a column
-  // actually changed) for the /ws/tasks broadcast below. Cheap: the same
-  // (projectId, issueNumber) pair the upsert's own conflict target already
-  // indexes on.
-  const existed =
-    app.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
-      .get() !== undefined;
+  // actually changed) for the /ws/tasks broadcast below. Widened beyond a
+  // bare existence check (originally just `{ id }`) to also carry what the
+  // relabel-resurrection check right below needs — one query either way,
+  // same (projectId, issueNumber) pair the upsert's own conflict target
+  // already indexes on.
+  const existingRow = app.db
+    .select({
+      id: tasks.id,
+      status: tasks.status,
+      failureReason: tasks.failureReason,
+      branchName: tasks.branchName,
+      worktreePath: tasks.worktreePath,
+    })
+    .from(tasks)
+    .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
+    .get();
+  const existed = existingRow !== undefined;
 
   const initialStatus = isManualOnly(issue.body) ? "backlog" : "ready";
 
@@ -229,6 +247,69 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
   // change" — both leave `row` populated.
   if (!existed && row) {
     broadcastTaskEvent({ taskId: row.id, projectId, kind: "ingested", ts: Date.now() });
+    return;
+  }
+
+  // Relabel-resurrection — a task that previously auto-failed because its
+  // GitHub issue lost the `mullion-task` label
+  // (`syncUnlabeledIssueToLocal`, task-github-sync.ts) self-heals the
+  // moment a sighting here confirms the label is present again, closing
+  // the loop that otherwise left a re-added label a silent no-op (the
+  // upsert above never touches `status` on a re-sighting). A DELIBERATE
+  // separate, status-guarded UPDATE — not folded into the upsert's own
+  // `set`/`where` above — for two reasons: it keeps the ingest write's
+  // `set` clause free of a `status` column entirely (so an ordinary
+  // re-sighting can never touch status, matching every other column's
+  // documented "durable subset only" rule), and the guarded
+  // `.where(...).run(); if (changes === 0) return;` shape is this exact
+  // file's own established idiom for "did my specific condition actually
+  // still hold at write time" (`syncClosedIssueToLocal`/
+  // `syncUnlabeledIssueToLocal`, task-github-sync.ts) — so the `changes`
+  // count is the definitive, race-safe signal for whether resurrection
+  // actually happened, not an inference from before/after status that
+  // could be confounded by an unrelated concurrent write.
+  //
+  // Scoped narrowly, mirroring `syncUnlabeledIssueToLocal`'s own "leave
+  // anything with real work behind it alone" posture:
+  //  - the EXACT label-lost failure reason, not FAILURE_REASON_ISSUE_CLOSED
+  //    — a closed issue re-gaining the label must NOT reopen it, since
+  //    listLabeledIssues (the poll path) never surfaces a closed issue in
+  //    the first place and the webhook path guards issue.state separately
+  //    (routes/webhooks.ts) — this condition is the second, belt-and-
+  //    suspenders line of defense against resurrecting a closed one.
+  //  - no branch/worktree — a task that was ever claimed has real work and
+  //    its own cleanup story; this must never short-circuit that.
+  if (
+    existingRow !== undefined &&
+    existingRow.status === "failed" &&
+    existingRow.failureReason === FAILURE_REASON_LABEL_LOST &&
+    existingRow.branchName === null &&
+    existingRow.worktreePath === null
+  ) {
+    const resurrectableStatus = isManualOnly(issue.body) ? "backlog" : "ready";
+    const resurrected = app.db
+      .update(tasks)
+      .set({ status: resurrectableStatus, failureReason: null, completedAt: null })
+      .where(
+        and(
+          eq(tasks.id, existingRow.id),
+          eq(tasks.status, "failed" satisfies TaskStatus),
+          eq(tasks.failureReason, FAILURE_REASON_LABEL_LOST),
+          isNull(tasks.branchName),
+          isNull(tasks.worktreePath),
+        ),
+      )
+      .run();
+    if (resurrected.changes > 0) {
+      recordTaskTransition(app, {
+        taskId: existingRow.id,
+        projectId,
+        from: "failed",
+        to: resurrectableStatus,
+        via: "github-sync-relabeled",
+        context: { issueNumber: issue.number },
+      });
+    }
   }
 }
 
@@ -245,10 +326,14 @@ const STARTUP_STAGGER_MS = 2_000;
  * inserts a new row (see `initialStatusFor` for the backlog-vs-ready
  * default), a repeat sighting updates only the durable subset
  * (title/body/htmlUrl) an issue is authoritative for, per the roadmap's
- * reconciliation rule — `status`, `boardOrder`, and every runtime column
- * are never touched by this sync, so a task the user has already dragged,
- * claimed, or advanced is never reset by the next poll. The unique index
- * on `tasks` drives the conflict target, not a last-seen cursor.
+ * reconciliation rule — `boardOrder` and every runtime column are never
+ * touched by this sync, so a task the user has already dragged, claimed, or
+ * advanced is never reset by the next poll. `status` is untouched too EXCEPT
+ * for one narrow, self-inflicted case this sync itself created: a task it
+ * auto-failed for losing the tracking label springs back to ready/backlog
+ * the moment a re-sighting confirms the label is back — see
+ * `upsertIssueTask`'s own `canResurrect` doc comment. The unique index on
+ * `tasks` drives the conflict target, not a last-seen cursor.
  *
  * #484 — resolves each project's repo via `resolveRepoRef(app, {cwd,
  * hostId})` (host-aware: a local call reads `.git/config` directly, a
@@ -436,8 +521,15 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
             repoRef.repo,
             task.issueNumber!,
           );
-          if (state === "closed" || (state === "open" && !labels.includes(label))) {
-            await syncUnlabeledIssueToLocal(app, task, projectRef);
+          if (state === "closed") {
+            // Closed is closed regardless of the label — record the true
+            // reason (previously this shared the label-lost string with the
+            // branch below, which was misleading AND made a closed task
+            // indistinguishable from a label-lost one for upsertIssueTask's
+            // relabel-resurrection check).
+            await syncUnlabeledIssueToLocal(app, task, projectRef, FAILURE_REASON_ISSUE_CLOSED);
+          } else if (state === "open" && !labels.includes(label)) {
+            await syncUnlabeledIssueToLocal(app, task, projectRef, FAILURE_REASON_LABEL_LOST);
           }
         } catch (err) {
           app.log.warn(
