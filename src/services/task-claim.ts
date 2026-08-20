@@ -160,7 +160,15 @@ export async function claimTask(
 
   if (!reservation.reserved) {
     if ("capped" in reservation && reservation.capped) {
-      return { ok: false, reason: "cap", limit: maxConcurrent };
+      const detail = `At capacity: ${maxConcurrent} task(s) already running (MULLION_TASK_MAX_CONCURRENT)`;
+      // Previously silent — the "cap" outcome short-circuits before the
+      // reservation transaction writes anything, so there was no status
+      // change for recordTaskTransition to log and no other signal at all.
+      // A plain app.log call (not recordTaskTransition, which asserts an
+      // actual from/to transition) makes a capped claim visible without
+      // inventing a transition that never happened.
+      app.log.info({ taskId, limit: maxConcurrent, auto: opts.auto }, "task claim: at capacity");
+      return { ok: false, reason: "cap", limit: maxConcurrent, detail };
     }
     return {
       ok: false,
@@ -518,7 +526,12 @@ export async function retryTask(
 
   if (!reservation.reserved) {
     if ("capped" in reservation && reservation.capped) {
-      return { ok: false, reason: "cap", limit: maxConcurrent };
+      const detail = `At capacity: ${maxConcurrent} task(s) already running (MULLION_TASK_MAX_CONCURRENT)`;
+      // See claimTask's identical branch above for why this is logged here
+      // rather than via recordTaskTransition — the reservation transaction
+      // short-circuited before any status changed.
+      app.log.info({ taskId, limit: maxConcurrent }, "task retry: at capacity");
+      return { ok: false, reason: "cap", limit: maxConcurrent, detail };
     }
     if ("noBranch" in reservation && reservation.noBranch) {
       return {

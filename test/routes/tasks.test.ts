@@ -553,7 +553,13 @@ describe("tasks route", () => {
           url: `/api/tasks/${second.id}/claim`,
         });
         expect(secondRes.statusCode).toBe(429);
-        expect(secondRes.json()).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
+        // `message` is what the frontend actually renders (client.ts falls
+        // back to a generic "<path> failed with 429" whenever it's absent)
+        // — pin it, not just the machine-readable fields, so a regression
+        // back to a message-less body is caught here.
+        const secondBody = secondRes.json();
+        expect(secondBody).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
+        expect(secondBody.message).toContain(String(inFlight + 1));
 
         // The capped task is untouched — still ready, not stuck in some
         // half-claimed state.
@@ -603,7 +609,9 @@ describe("tasks route", () => {
           url: `/api/tasks/${second.id}/claim`,
         });
         expect(secondRes.statusCode).toBe(429);
-        expect(secondRes.json()).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
+        const secondBody = secondRes.json();
+        expect(secondBody).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
+        expect(secondBody.message).toContain(String(inFlight + 1));
 
         fs.rmSync(cwd, { recursive: true, force: true });
       } finally {
