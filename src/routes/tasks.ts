@@ -431,50 +431,59 @@ export async function tasksRoute(app: FastifyInstance) {
   // have the watcher re-create it on the next poll, per its insert-or-
   // update sync) that haven't been claimed yet.
   //
-  // #729 — a `failed` GitHub-linked task is the one deliberate exception:
-  // a task auto-failed by `syncUnlabeledIssueToLocal` (issue lost the
-  // `mullion-task` label, or closed, while still backlog/ready) has no
-  // worktree/branch, so Retry can't recover it (`no-worktree`) and it was
-  // otherwise permanently orphaned — neither refusal above has an escape
-  // hatch for it. Deleting it is only durable if the watcher genuinely
-  // won't re-create the row on its next sweep, so this re-checks the
-  // linked issue's CURRENT state via `isIssueStillTrackable` (the same
+  // #729 — a `failed` GitHub-linked task that was NEVER claimed is the one
+  // deliberate exception: auto-failed by `syncUnlabeledIssueToLocal` (issue
+  // lost the `mullion-task` label, or closed, while still backlog/ready),
+  // it has no `branchName`, so Retry can't recover it (`no-worktree`,
+  // task-claim.ts's retryTask) and it was otherwise permanently orphaned —
+  // neither refusal above has an escape hatch for it. Gated on
+  // `branchName === null`, not just `status === "failed"`: a task that WAS
+  // claimed carries a real worktree/branch Retry CAN resume from, and its
+  // issue can independently end up closed/unlabeled later (at promote time,
+  // a maintainer tidying labels, ...) — deleting that row would silently
+  // discard recoverable work with no cascade to clean up the worktree it
+  // points at. That branch check alone also closes off any race with a
+  // concurrent Retry: retryTask requires a non-null `branchName` too, so
+  // nothing can move a `branchName === null`, `failed` row forward while
+  // this handler's own GitHub round-trip is in flight.
+  //
+  // Deleting the never-claimed case is only durable if the watcher
+  // genuinely won't re-create the row on its next sweep, so this re-checks
+  // the linked issue's CURRENT state via `isIssueStillTrackable` (the same
   // "closed, or open-but-unlabeled" definition the watcher's own read-back
   // uses) rather than trusting the failure reason alone — the issue could
-  // have been reopened/relabeled since the task failed. Any other
-  // GitHub-linked status (including a `failed` task whose issue is STILL
-  // tracked, e.g. failed from session death) keeps the original refusal:
-  // deleting that would race the watcher re-ingesting it.
-  //
-  // The condition here is "GitHub-linked and failed", not "never claimed" —
-  // a task that WAS claimed (real worktree/branch behind it) can also fail
-  // and then have its issue's label removed independently, after the fact.
-  // cleanupTaskWorktree below (same fire-and-forget helper every other
-  // terminal transition in this file already uses) covers that case; it's
-  // a no-op for the never-claimed, no-worktree case #729 actually
-  // describes.
+  // have been reopened/relabeled since the task failed. The final delete is
+  // additionally status-guarded (same "the row may have moved since this
+  // handler's own read" reasoning task-github-sync.ts's own writes use) —
+  // belt-and-braces given the GitHub round-trip above already makes this
+  // route's read-then-write window unusually wide.
   app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
     const existing = getLocalTaskOr404(taskId);
     if (!existing) return reply.notFound();
 
-    let project: typeof projects.$inferSelect | null = null;
     if (existing.issueNumber !== null) {
       if (existing.status !== "failed") {
         return reply.conflict("Cannot delete a task linked to a GitHub issue");
       }
-      project = getProjectOr404(existing.projectId);
+      if (existing.branchName !== null) {
+        return reply.conflict(
+          "Cannot delete: this task has a preserved branch — use Retry to resume it",
+        );
+      }
+      const project = getProjectOr404(existing.projectId);
       if (!project) return reply.notFound();
       const trackable = await isIssueStillTrackable(app, existing, {
         cwd: project.cwd,
         hostId: project.hostId,
       });
       if (trackable !== false) {
+        const label = app.config.MULLION_TASK_LABEL;
         return reply.conflict(
           trackable === undefined
-            ? "Could not confirm the linked GitHub issue is no longer tracked — try again, or use Retry"
-            : "Cannot delete: the linked GitHub issue is still open and labeled mullion-task — remove the label or close the issue first, or use Retry",
+            ? "Could not confirm the linked GitHub issue is no longer tracked — try again"
+            : `Cannot delete: the linked GitHub issue is still open and labeled "${label}" — remove the label or close the issue first`,
         );
       }
     } else if (!LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus)) {
@@ -483,8 +492,13 @@ export async function tasksRoute(app: FastifyInstance) {
       );
     }
 
-    app.db.delete(tasks).where(eq(tasks.id, taskId)).run();
-    if (project) cleanupTaskWorktree(app, existing, project);
+    const deleted = app.db
+      .delete(tasks)
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, existing.status)))
+      .run();
+    if (deleted.changes === 0) {
+      return reply.conflict("Task changed since this check — refresh and try again");
+    }
     reply.code(204);
   });
 

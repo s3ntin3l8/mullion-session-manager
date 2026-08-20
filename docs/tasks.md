@@ -58,18 +58,22 @@ title, spec (issue body), and the final PR link.
   (`no-worktree`), which used to leave it permanently orphaned: not local
   (so the delete route refused it), and past `backlog`/`ready` (so did the
   delete route's other guard). `DELETE /api/tasks/:id` (#729) carves out
-  exactly this case: a `failed` GitHub-linked task can be deleted once a
-  fresh read of the linked issue confirms it's genuinely no longer
-  trackable (closed, or open but missing the label) — the same check the
-  read-back above uses, so deleting it can't race the watcher into
-  re-creating the row on its next sweep. A `failed` task whose issue is
-  **still** tracked (e.g. failed from session death, not a lost label)
-  keeps the original refusal; use Retry for that one instead. The delete
-  guard is "GitHub-linked and failed", not "never claimed" — a task that
-  WAS claimed (a real worktree/branch behind it) can also fail and then
-  have its issue's label removed independently; the delete route runs the
-  same worktree cleanup every other terminal transition already does, so
-  that case doesn't leave an orphaned worktree/branch behind either.
+  exactly this case: a `failed` GitHub-linked task with **no preserved
+  branch** (`branchName === null`) can be deleted once a fresh read of the
+  linked issue confirms it's genuinely no longer trackable (closed, or open
+  but missing the label) — the same check the read-back above uses, so
+  deleting it can't race the watcher into re-creating the row on its next
+  sweep. The `branchName === null` condition matters on its own, separately
+  from the issue check: a task that WAS claimed carries a real
+  worktree/branch Retry CAN resume from, and its linked issue can
+  independently end up closed/unlabeled later (at promote time, a
+  maintainer tidying labels, ...) — deleting that row would silently
+  discard recoverable work, since nothing cascades to clean up
+  `worktreePath`/`branchName` on a task delete. That task keeps the
+  original refusal regardless of what its issue is doing; so does a
+  never-claimed `failed` task whose issue is **still** tracked (a genuine
+  lost-label failure with the label put back, say) — use Retry for the
+  claimed case, or re-fix the label/issue for the never-claimed one.
 
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has

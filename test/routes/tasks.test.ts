@@ -2107,10 +2107,12 @@ describe("tasks route", () => {
     // #729 — a GitHub-linked task auto-failed by a lost tracking label
     // (syncUnlabeledIssueToLocal) previously had no way out: not local
     // (issueNumber !== null) and past backlog/ready (failed), so it hit
-    // both refusals above forever. These four cases match
-    // isIssueStillTrackable's own contract (task-github-sync.test.ts) at
-    // the route layer: confirmed closed or unlabeled deletes; still
-    // tracked, or unconfirmable, refuses.
+    // both refusals above forever. These cases match isIssueStillTrackable's
+    // own contract (task-github-sync.test.ts) at the route layer — confirmed
+    // closed or unlabeled deletes a never-claimed (`branchName === null`)
+    // task; still tracked, or unconfirmable, refuses — plus the separate
+    // `branchName !== null` guard for a task that WAS claimed and has a
+    // real branch Retry can resume, regardless of what its issue is doing.
     describe("DELETE of a failed GitHub-linked task (#729)", () => {
       async function createLinkedFailedTask(
         app: Awaited<ReturnType<typeof buildApp>>,
@@ -2153,37 +2155,24 @@ describe("tasks route", () => {
         await app.close();
       });
 
-      // #729 — the guard here is "GitHub-linked and failed", not "never
-      // claimed": a task that WAS claimed (a real worktree/branch behind
-      // it) can also end up failed and then have its issue's label removed
-      // independently, after the fact. Same cleanupTaskWorktree fire-and-
-      // forget helper every other terminal transition in this file already
-      // calls (see e.g. the give-up test above) must fire here too, or the
-      // worktree/branch are orphaned on disk once the row is gone.
-      it("cleans up a preserved worktree/branch when deleting a claimed-then-failed task", async () => {
-        const sessionBackendModule = await import("../../src/services/session-backend.js");
-        const realResolveBackend = sessionBackendModule.resolveBackend;
-        const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
-        const resolveBackendSpy = vi
-          .spyOn(sessionBackendModule, "resolveBackend")
-          .mockImplementation((appArg, hostId) => {
-            const real = realResolveBackend(appArg, hostId);
-            return new Proxy(real, {
-              get(target, prop, receiver) {
-                if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
-                const value = Reflect.get(target, prop, receiver);
-                return typeof value === "function" ? value.bind(target) : value;
-              },
-            });
-          });
-
-        const cwd = createGitRepoWithRemote("acme", "widgets-729-cleanup");
+      // #729 (Hermes review) — the earlier version of this fix gated only on
+      // `status === "failed"`, which also admitted a task that WAS claimed:
+      // real worktree/branch behind it, Retry-recoverable, and its issue can
+      // independently end up closed/unlabeled later (at promote time, a
+      // maintainer tidying labels, ...). Deleting that row would silently
+      // discard recoverable work — there's no cascade that cleans up
+      // `worktreePath`/`branchName` on a task delete. `branchName !== null`
+      // refuses it outright, before any GitHub call, regardless of what the
+      // linked issue's current state is (this test's own mocked
+      // getIssueState says "closed" and the delete must still be refused).
+      it("refuses a claimed-then-failed task with a preserved branch, even if its issue is untrackable", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-729-branch");
         const app = await buildApp();
-        await connectPat(app, "ghp_delete_cleanup");
+        await connectPat(app, "ghp_delete_branch");
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "closed", labels: ["mullion-task"] });
+          .mockResolvedValue({ state: "closed", labels: [] });
 
         const projectId = await createProject(app, cwd);
         const [row] = app.db
@@ -2192,7 +2181,7 @@ describe("tasks route", () => {
             projectId,
             issueNumber: 605,
             title: "claimed then died",
-            htmlUrl: "https://github.com/acme/widgets-729-cleanup/issues/605",
+            htmlUrl: "https://github.com/acme/widgets-729-branch/issues/605",
             status: "failed",
             failureReason: "session exited unexpectedly",
             worktreePath: `${cwd}/.mullion-worktrees/mullion-task-605`,
@@ -2202,14 +2191,13 @@ describe("tasks route", () => {
           .all();
 
         const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
-        expect(res.statusCode).toBe(204);
-        expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
-          `${cwd}/.mullion-worktrees/mullion-task-605`,
-          cwd,
-        );
+        expect(res.statusCode).toBe(409);
+        expect(getIssueStateSpy).not.toHaveBeenCalled();
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(true);
 
         getIssueStateSpy.mockRestore();
-        resolveBackendSpy.mockRestore();
         await app.close();
       });
 

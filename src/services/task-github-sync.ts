@@ -473,8 +473,15 @@ export async function syncUnlabeledIssueToLocal(
  * task-watcher.ts:439): answers "would the watcher re-create this task on
  * its next sweep?" without acting on the answer, so the DELETE route
  * (routes/tasks.ts) can gate removing an orphaned `failed` task on the same
- * definition of "no longer trackable" the watcher itself uses, rather than
- * a second, driftable copy of the label check.
+ * definition of "no longer trackable" the watcher itself uses. The
+ * predicate itself is deliberately kept in sync by eyeball (both read
+ * `app.config.MULLION_TASK_LABEL`, both invert to the same boolean) rather
+ * than factored out from the watcher's inline copy: the watcher resolves
+ * `repoRef`/`token` ONCE per sweep and reuses them across every task, while
+ * this resolves both PER CALL — sharing the one-line boolean wouldn't save
+ * the per-task resolve cost the watcher's own loop is structured to avoid,
+ * and this function's actual job (a single on-demand check for one route)
+ * doesn't need that sweep-wide reuse.
  *
  * Returns `false` only when a fresh GitHub read confirms the issue is
  * closed, or open but missing the tracking label — the two cases

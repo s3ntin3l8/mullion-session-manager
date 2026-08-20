@@ -1001,7 +1001,14 @@ describe("TaskDetail delete action", () => {
     expect(deleteTask).toHaveBeenCalledWith(1);
   });
 
-  it("surfaces the server's still-tracked refusal as an inline error", async () => {
+  // The server can refuse a failed GitHub-linked task's delete for several
+  // reasons (still-tracked issue, unconfirmable state, a preserved branch —
+  // see routes/tasks.ts's DELETE guard) — this only asserts the existing
+  // generic-fallback error path (same as the pre-existing "shows an error
+  // when deleteTask rejects" test above) fires for this task shape too, not
+  // any particular server message; `DeleteTaskAction` only surfaces a
+  // rejection's own message for an `ApiError`, never for a plain `Error`.
+  it("shows a generic error when the server refuses to delete a failed GitHub-linked task", async () => {
     deleteTask.mockRejectedValueOnce(new Error("still tracked, use Retry"));
     tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
     const user = userEvent.setup();
