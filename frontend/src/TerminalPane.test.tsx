@@ -835,6 +835,11 @@ describe("TerminalPane WebGL shared-atlas repaint (dock terminal corruption fix)
     // shared atlas for every terminal, including this one, unlike the
     // mount-time sibling repaint above which excludes the mounting pane.
     expect(repaintAllTerminals).toHaveBeenCalledExactlyOnceWith();
+    // Regression coverage for PR #724's narrow-pane font auto-fit: a pane
+    // that was never floored (this one — no geometry echo has ever arrived)
+    // must land on exactly the newly-configured size, not some auto-fit
+    // shrink of it.
+    expect(getLatestTermInstance().options.fontSize).toBe(18);
   });
 
   it("wipes the atlas and repaints on a color scheme change too", async () => {
@@ -2214,6 +2219,55 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
 // the same WS as a GeometryMessage (see that type's own doc comment in
 // ws-protocol.ts) — these tests cover TerminalPane's handler for it.
 describe("TerminalPane geometry sync (issue: small panes/floating windows ignoring input)", () => {
+  // Regression test for PR #724 — the narrow-pane font auto-fit used to
+  // target `geo.cols`/`geo.rows` (this session's CURRENT applied geometry,
+  // which the client's own resizes keep changing) instead of the server's
+  // CONSTANT MIN_TERMINAL_COLS/ROWS floor. On attach, the FIRST geometry
+  // echo can reflect a size from before this client's own resize was
+  // processed (a stale `session.size`, e.g. left over from a previous,
+  // differently-sized attach) — that stale echo used to arm a shrink
+  // against itself, on an ordinary, comfortably-wide docked pane that was
+  // never anywhere near the real 40x10 floor. Reproduces the real attach
+  // frame order (routes/terminal.ts's attachSocketToSession): a stale
+  // geometry echo sent before this client's own resize is processed, then a
+  // second echo confirming what the client actually asked for.
+  it("does not shrink the font for a normal pane, even when the first geometry echo is stale and larger than the pane", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    // This pane's real, font-independent natural fit — flat/font-oblivious
+    // on purpose (unlike the font-aware mock further down in this describe
+    // block) so this test isolates the arming bug from the shrink-ratio
+    // math computeFitFontSize.test.ts already covers on its own.
+    getLatestFitAddonInstance().proposeDimensions.mockReturnValue({ cols: 90, rows: 30 });
+
+    // Stale echo: larger than this pane's own 90x30 fit — e.g. a previous,
+    // wider attach's applied size, arriving before the server has processed
+    // this client's own resize.
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 126, rows: 42, minCols: 40, minRows: 10 }),
+        });
+      }
+    });
+    // On origin/main (pre-fix) this is ~10 — computeFitFontSize's ratio math
+    // shrinking against the stale 126x42 "target." Asserted here (not just
+    // at the end) because the bug is a transient-but-real mis-shrink, not
+    // merely a final divergent value — see this test's own header comment.
+    expect(getLatestTermInstance().options.fontSize).toBe(14);
+
+    // Second echo: the server confirming the resize this client actually
+    // sent for its own 90x30 fit.
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 90, rows: 30, minCols: 40, minRows: 10 }),
+        });
+      }
+    });
+    expect(getLatestTermInstance().options.fontSize).toBe(14);
+  });
+
   it("resizes xterm to the server's applied geometry and flags the pane as too small when it exceeds what fits", () => {
     stubFakeWebSocket(true);
     // Simulates a pane whose viewport only fits a 20x8 grid — smaller than
@@ -2225,7 +2279,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
 
@@ -2275,7 +2331,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
 
@@ -2324,7 +2382,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
     const term = getLatestTermInstance();
@@ -2357,7 +2417,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
 
@@ -2379,11 +2441,52 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
 
     expect(screen.getByText("Pane too small")).toBeInTheDocument();
+  });
+
+  // mullion-reviewer, PR "target the PTY floor" — fitFloorRef is now set
+  // from every pane's very first geometry echo (it's just the constant
+  // floor), so applyFontFit runs on every settings/theme change for every
+  // pane, INCLUDING a `display:none` one dockview keeps mounted (a restored
+  // workspace's inactive tabs — see the settings-sync effect's own comment
+  // on that). FitAddon.proposeDimensions() reads `getComputedStyle(...)
+  // .width/height` via parseInt, which resolves to NaN (not undefined) for
+  // such a container — a case the `!proposed` check alone doesn't catch.
+  // Without the Number.isFinite guards (both here and inside
+  // computeFitFontSize), NaN would flow through the ratio math and back out
+  // as the font size, which `fontSize === term.options.fontSize` can never
+  // match (NaN !== NaN) — reapplying on every subsequent settings/theme
+  // change forever, on a pane that was never actually narrow.
+  it("does not corrupt the font when a hidden pane's container reports NaN dimensions on a settings change", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    // Establishes fitFloorRef (any valid echo does, post-fix) without
+    // implying the pane is actually too small.
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+        });
+      }
+    });
+
+    // Simulates FitAddon.proposeDimensions() on a `display:none` container.
+    getLatestFitAddonInstance().proposeDimensions.mockReturnValue({ cols: NaN, rows: NaN });
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, fontSize: 18 } },
+      }));
+    });
+
+    expect(getLatestTermInstance().options.fontSize).toBe(18);
   });
 
   // Independent code review, PR #708 — unlike the backend's own
@@ -2421,7 +2524,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
 
@@ -2474,7 +2579,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
     const term = getLatestTermInstance();
@@ -2518,7 +2625,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     });
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
     const term = getLatestTermInstance();
@@ -2568,7 +2677,9 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     });
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "geometry", cols: 40, rows: 10 }) });
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 40, rows: 10, minCols: 40, minRows: 10 }),
+        });
       }
     });
     const term = getLatestTermInstance();

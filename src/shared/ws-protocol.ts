@@ -49,10 +49,36 @@ export interface ExitedMessage {
 // — see attachSocketToSession's own comment for why. The frontend uses it to
 // keep xterm's own grid (and its "pane too small" hint) in sync with the PTY
 // it's actually attached to, rather than the size it asked for.
+//
+// `minCols`/`minRows` mirror pty-manager.ts's own MIN_TERMINAL_COLS/ROWS
+// constants — the floor every session's geometry is clamped to, not this
+// particular session's current (possibly larger) applied size. The frontend
+// needs this as a *stable* narrow-pane font-fit target: targeting `cols`/
+// `rows` instead (this session's current geometry, which the client's own
+// resizes keep changing) closes a feedback loop where each round trip
+// re-arms the fit against its own prior output and the font collapses to a
+// value independent of the user's configured size (see TerminalPane.tsx's
+// `applyFontFit`/`fitFloorRef` for the full story). Sent on every geometry
+// echo rather than a separate one-shot message so the frontend never needs
+// its own fetch/negotiation just to learn a value that's already constant
+// server-side.
+//
+// Optional, not required: `attachSocketToSession` (routes/terminal.ts)
+// always sends both, but `proxyToRemoteAttach` forwards a remote host's
+// frames as an opaque, unvalidated pass-through (see isGeometryMessage's own
+// comment in TerminalPane.tsx) — a remote host still on a pre-this-fix wire
+// format genuinely omits these. Keep this optional so that contract stays
+// honest; TerminalPane.tsx's own `typeof geo.minCols === "number"` runtime
+// guard, not this type, is what actually enforces it — do not "simplify"
+// that guard away by making these fields required, or a version-skewed
+// remote host silently reintroduces the NaN-forever bug this file's own
+// history describes.
 export interface GeometryMessage {
   type: "geometry";
   cols: number;
   rows: number;
+  minCols?: number;
+  minRows?: number;
 }
 
 export type TerminalWSMessage = ResizeMessage | ExitedMessage | GeometryMessage;

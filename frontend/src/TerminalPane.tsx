@@ -137,24 +137,42 @@ export function TerminalPane(props: {
   // floor here — this stays correct regardless of what the backend's floor
   // constants are.
   const [paneTooSmall, setPaneTooSmall] = useState(false);
-  // Narrow-pane font auto-fit — the last known server-applied floor this
-  // pane needs to show, so a smaller font can be tried instead of clipping
-  // the grid (issue: prompt runs off the edge of a pane narrower than the
-  // PTY's MIN_TERMINAL_COLS/ROWS floor). A ref, not state: it's written by
-  // the mount effect's GeometryMessage handler and read by that same
-  // effect's `refit()` — both live inside a `[props.params.sessionId]`
-  // effect whose closures are fixed at mount, so a plain state read there
-  // would always see the value from the render that scheduled the effect,
-  // never a later update. `fitFitRetryTick` below is the actual trigger for
-  // the settings-sync effect (a *separate* effect, which — unlike the mount
-  // effect's own closures — re-reads fresh values on every run) to
-  // re-evaluate the shrink; this ref only carries the *data* that
-  // re-evaluation reads.
-  const fitTargetRef = useRef<{ cols: number; rows: number } | null>(null);
+  // Narrow-pane font auto-fit — the server's MIN_TERMINAL_COLS/ROWS floor
+  // (issue: prompt runs off the edge of a pane narrower than that floor),
+  // learned from the `minCols`/`minRows` carried on every GeometryMessage
+  // echo (see that type's own doc comment in ws-protocol.ts). Deliberately
+  // NOT hardcoded here so this stays correct if the backend's floor
+  // constants ever change. This is a genuine constant for the lifetime of a
+  // connection, unlike the PRE-FIX version of this ref, which held the
+  // echoed `geo.cols`/`geo.rows` themselves (this session's CURRENT applied
+  // geometry) — that version fed the fit's own output back into its next
+  // input: shrinking the font grows the grid xterm reports, which changes
+  // what the next echo carries, which re-arms the "target" to chase the
+  // fit's own prior result. Targeting the floor instead breaks that loop:
+  // the target no longer depends on anything this feature itself produces.
+  // A ref, not state: it's written by the mount effect's GeometryMessage
+  // handler and read by that same effect's `refit()` — both live inside a
+  // `[props.params.sessionId]` effect whose closures are fixed at mount, so
+  // a plain state read there would always see the value from the render
+  // that scheduled the effect, never a later update.
+  const fitFloorRef = useRef<{ cols: number; rows: number } | null>(null);
+  // Whether `applyFontFit` (settings-sync effect below) currently has the
+  // font shrunk below `terminalSettings.fontSize` to fit `fitFloorRef`. This
+  // — not "a floor is known" (fitFloorRef is now non-null for every pane
+  // from its very first geometry echo, floored or not) — is what `refit()`
+  // below gates its `fitRetryTick` bump on: a plain resize/layout event on a
+  // pane that was never shrunk has nothing for the font-fit check to undo,
+  // and re-running the full settings-sync effect (theme rebuild, key-
+  // conflict handler reattach, atlas key recompute) on every ordinary resize
+  // of every pane would be pure waste. Set by `applyFontFit` itself, not
+  // derived from `term.options.fontSize !== terminalSettings.fontSize`,
+  // since a real settings change makes that comparison true too.
+  const fontFitActiveRef = useRef(false);
   // Bumped whenever there's a reason to re-run the settings-sync effect's
   // font-fit check without any real settings/theme change — see
-  // fitTargetRef's own comment. Value is never read, only its identity
-  // (React re-runs a dependent effect on any change to a primitive dep).
+  // fitFloorRef's/fontFitActiveRef's own comments. Value is never read, only
+  // its identity (React re-runs a dependent effect on any change to a
+  // primitive dep).
   const [fitRetryTick, setFitRetryTick] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Exposes the mount effect's own upload-and-inject logic to the "attach
@@ -549,14 +567,20 @@ export function TerminalPane(props: {
       // Narrow-pane font auto-fit — a genuine grid-size change (this line is
       // only reached once the two checks above have ruled out a no-op) is
       // the one signal that can mean "the pane grew enough that the settings-
-      // sync effect's font-fit check (fitTargetRef) should run again," not
-      // just "the server floored something new" (the geometry handler below
-      // covers that case directly). Without this, a pane that grows via a
-      // pure resize — no settings/theme change involved — would stay stuck
-      // at a previously-shrunk font forever, since nothing else re-triggers
-      // that effect. Gated on fitTargetRef so this is a no-op for the
-      // (overwhelmingly common) pane that has never been floored.
-      if (fitTargetRef.current) setFitRetryTick((tick) => tick + 1);
+      // sync effect's font-fit check should run again and possibly restore
+      // the configured font," not just "the server floored something new"
+      // (the geometry handler below covers that case directly). Without
+      // this, a pane that grows via a pure resize — no settings/theme change
+      // involved — would stay stuck at a previously-shrunk font forever,
+      // since nothing else re-triggers that effect. Gated on
+      // fontFitActiveRef, NOT fitFloorRef — fitFloorRef is set from every
+      // pane's very first geometry echo (it's just the constant server
+      // floor), so gating on it would make this fire on every resize of
+      // every pane, floored or not. fontFitActiveRef is only true while a
+      // shrink from a PRIOR run of applyFontFit is actually in effect, which
+      // keeps this a no-op for the (overwhelmingly common) pane that has
+      // never been shrunk.
+      if (fontFitActiveRef.current) setFitRetryTick((tick) => tick + 1);
     };
     refitRef.current = refit;
 
@@ -944,21 +968,28 @@ export function TerminalPane(props: {
         // instead of immediately trying to fight this back down.
         if (isGeometryMessage(parsed)) {
           const geo = parsed;
+          // Narrow-pane font auto-fit — fitFloorRef holds the server's
+          // constant MIN_TERMINAL_COLS/ROWS floor (see that ref's own
+          // comment for why this must be the floor, not `geo.cols`/
+          // `geo.rows` themselves — those are this session's CURRENT
+          // applied geometry, which the client's own resizes below keep
+          // changing, and targeting a moving value like that is what fed
+          // the pre-fix feedback loop). `typeof` guards degrade a stale
+          // browser tab talking to a pre-floor-echo server safely: the
+          // fields are simply absent, fitFloorRef stays null, and the
+          // narrow-pane fit is inert rather than throwing.
+          if (typeof geo.minCols === "number" && typeof geo.minRows === "number") {
+            fitFloorRef.current = { cols: geo.minCols, rows: geo.minRows };
+          }
           if (geo.cols !== term.cols || geo.rows !== term.rows) {
             term.resize(geo.cols, geo.rows);
             lastCols = geo.cols;
             lastRows = geo.rows;
-            // Narrow-pane font auto-fit — this branch only runs when the
-            // server's applied geometry actually differs from what this
-            // client itself last asked for, i.e. a genuine floor override
-            // (as opposed to an echo merely confirming a resize this client
-            // initiated) — see fitTargetRef's own comment for why that
-            // distinction is what keeps this from oscillating: recording the
-            // floor here, unconditionally, on every ordinary echo (including
-            // ones that just confirm what was already sent) would re-arm the
-            // font-fit check every reconnect even on a pane that was never
-            // actually too small.
-            fitTargetRef.current = { cols: geo.cols, rows: geo.rows };
+            // A genuine floor override (as opposed to an echo merely
+            // confirming a resize this client initiated) is the signal that
+            // the settings-sync effect's font-fit check should (re-)run —
+            // this is the trigger for ENTERING a shrunk state; `refit()`
+            // above handles the trigger for LEAVING one.
             setFitRetryTick((tick) => tick + 1);
           }
           // Hermes review, PR #708 — proposeDimensions() returns undefined
@@ -1287,9 +1318,10 @@ export function TerminalPane(props: {
     // fresh mount, where there's no previous key to differ from, never
     // triggers a repaint storm here).
     // Narrow-pane font auto-fit (issue: prompt clipped on a pane under the
-    // PTY's MIN_TERMINAL_COLS/ROWS floor) — fitTargetRef holds the last
-    // known server-applied floor this pane needs to show (set by the mount
-    // effect's GeometryMessage handler). `term.options.fontSize` was just
+    // PTY's MIN_TERMINAL_COLS/ROWS floor) — fitFloorRef holds the server's
+    // constant floor (set by the mount effect's GeometryMessage handler; see
+    // that ref's own comment for why this must be the floor and not this
+    // session's own current geometry). `term.options.fontSize` was just
     // reset to the user's configured size above, unconditionally, on every
     // run of this effect — that reset is what makes computeFitFontSize's
     // measurement a fixpoint rather than a ratchet: it always measures from
@@ -1301,8 +1333,8 @@ export function TerminalPane(props: {
     // above — proposeDimensions() needs the real, loaded font's metrics for
     // the ratio math to be accurate, not fallback ones.
     const applyFontFit = () => {
-      const fitTarget = fitTargetRef.current;
-      if (!fitTarget) return;
+      const fitFloor = fitFloorRef.current;
+      if (!fitFloor) return;
       const fitAddon = fitAddonRef.current;
       if (!fitAddon) return;
       const proposed = fitAddon.proposeDimensions();
@@ -1311,8 +1343,13 @@ export function TerminalPane(props: {
       // shrink for this pass rather than falling through to the render
       // floor — an 8px font because a ResizeObserver fired mid-drag would be
       // a visible regression the pane's actual size never actually asked
-      // for; the next real resize/geometry event will retry.
-      if (!proposed) return;
+      // for; the next real resize/geometry event will retry. Also guards
+      // against a defensive but real possibility: a `display:none` or
+      // zero-height container can make `getComputedStyle` report `"auto"`,
+      // which `proposeDimensions()`'s own `parseInt` turns into `NaN` rather
+      // than `undefined` — `NaN` isn't caught by the `!proposed` check above
+      // since the object itself is still defined.
+      if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return;
       // Hermes + independent review — `achievable` (also returned here) is
       // deliberately NOT consulted to skip this shrink: even when the floor
       // can't be fully met, applying `fontSize` (clamped to
@@ -1328,9 +1365,16 @@ export function TerminalPane(props: {
         terminalSettings.fontSize,
         proposed.cols,
         proposed.rows,
-        fitTarget.cols,
-        fitTarget.rows,
+        fitFloor.cols,
+        fitFloor.rows,
       );
+      // Reflects the state this call computes regardless of the no-op guard
+      // just below — `term.options.fontSize` was already reset to
+      // `terminalSettings.fontSize` earlier in this effect, so a no-op here
+      // (fontSize === term.options.fontSize) only ever means "not shrunk";
+      // see refit()'s own comment for why `fontFitActiveRef`, not
+      // `fitFloorRef`, is what gates re-running this check on plain resizes.
+      fontFitActiveRef.current = fontSize < terminalSettings.fontSize;
       if (fontSize === term.options.fontSize) return;
       term.options.fontSize = fontSize;
       // Same atlas invalidation the block above performs for a settings-
