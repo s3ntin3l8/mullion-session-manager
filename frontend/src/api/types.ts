@@ -76,6 +76,16 @@ export interface Project {
   // defaultAgent there is no global-settings fallback — null means "no
   // review agent configured," the unchanged pre-Phase-6 behavior.
   defaultReviewAgent: string | null;
+  // Per-project only, no install-wide tier — same posture as
+  // defaultReviewAgent above. Approving a task also requests a merge for
+  // its PR; the reconciler lands it once GitHub's checks are green and the
+  // branch is up to date. Mirrors src/db/schema.ts's projects.mergeOnApprove.
+  mergeOnApprove: boolean | null;
+  // A "reviewing" task approves itself once its review agent's latest
+  // verdict is "clean" and CI on the PR head is green — no human click.
+  // Needs a review agent configured (defaultReviewAgent above) to ever
+  // produce a verdict at all. Mirrors projects.autoApprove.
+  autoApprove: boolean | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live
@@ -856,6 +866,21 @@ export interface Task {
   // approve creates directly as a fallback for a task that reached
   // "reviewing" before that shipped. Not otherwise rendered in the UI yet.
   prNumber: number | null;
+  // Merge-on-approve — set at approve time when the project's
+  // mergeOnApprove is on, or by a manual "Merge now"/"Retry merge" click.
+  // The reconciler's merge sweep clears this once the PR merges (or is
+  // found already merged/closed). Non-null means a merge is outstanding.
+  mergeRequestedAt: string | null;
+  // The merge sweep's last failure reason (conflicts with main, checks
+  // blocked, ...), independent of mergeRequestedAt itself — a task can have
+  // an outstanding merge request AND a recorded error at the same time
+  // (the sweep keeps retrying). Null means no known problem.
+  mergeError: string | null;
+  // The review agent's most recently ingested verdict — "clean" |
+  // "changes-requested" | "inconclusive" — or null if no round has been
+  // ingested yet. Durable input to auto-approve's gate; not itself the
+  // rendered findings text (see reviewFindings above).
+  lastReviewVerdict: string | null;
   assignee: string | null;
   // Why a task went "failed" — session death, budget exceeded, or spawn
   // failure. Also carries the human's reject feedback while the task is

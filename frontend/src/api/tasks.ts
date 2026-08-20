@@ -69,6 +69,12 @@ export const tasksApi = {
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
   approveTask: (id: number) => request<Task>(`/api/tasks/${id}/approve`, { method: "POST" }),
 
+  // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
+  // with a linked PR; does not merge inline (main's branch protection can't
+  // guarantee that synchronously). See task-reconciler.ts's
+  // processMergeRequests for what actually lands it.
+  mergeTask: (id: number) => request<Task>(`/api/tasks/${id}/merge`, { method: "POST" }),
+
   // reviewing -> in_progress: posts optional feedback, re-seeds a fresh
   // session in the same worktree if the worker's own session already exited.
   rejectTask: (id: number, feedback?: string) =>

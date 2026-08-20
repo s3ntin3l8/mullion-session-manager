@@ -80,7 +80,16 @@ export interface ProjectsSlice {
   updateProject: (
     id: number,
     patch: Partial<
-      Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
+      Pick<
+        Project,
+        | "name"
+        | "cwd"
+        | "devServerUrl"
+        | "defaultAgent"
+        | "defaultReviewAgent"
+        | "mergeOnApprove"
+        | "autoApprove"
+      >
     > &
       CreateProjectDirOptions,
   ) => Promise<CreateProjectResult>;
@@ -274,6 +283,9 @@ export interface TasksSlice {
   ) => Promise<Session>;
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
   approveTask: (id: number) => Promise<Task>;
+  // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
+  // with a linked PR.
+  mergeTask: (id: number) => Promise<Task>;
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its
   // session already exited.
   rejectTask: (id: number, feedback?: string) => Promise<Task>;

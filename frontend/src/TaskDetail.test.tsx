@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
 import type * as ApiModule from "./api/index.js";
+import { ApiError } from "./api/index.js";
 import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api/index.js";
 
 let tasks: Task[];
@@ -14,6 +15,7 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
+const mergeTask = vi.fn(async () => makeTask({}));
 const rejectTask = vi.fn(async () => makeTask({}));
 const retryTask = vi.fn(async () => makeSession({ id: 100 }));
 const giveUpTask = vi.fn(async () => makeTask({}));
@@ -29,6 +31,7 @@ function storeState() {
     taskMasterEnabled,
     claimTask,
     approveTask,
+    mergeTask,
     rejectTask,
     retryTask,
     giveUpTask,
@@ -85,6 +88,9 @@ function makeTask(overrides: Partial<Task>): Task {
     agentCommand: null,
     prUrl: null,
     prNumber: null,
+    mergeRequestedAt: null,
+    mergeError: null,
+    lastReviewVerdict: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
@@ -170,6 +176,7 @@ beforeEach(() => {
   prsByProject = {};
   claimTask.mockClear();
   approveTask.mockClear();
+  mergeTask.mockClear();
   rejectTask.mockClear();
   retryTask.mockClear();
   giveUpTask.mockClear();
@@ -854,6 +861,101 @@ describe("TaskDetail open session", () => {
     tasks = [makeTask({ id: 1, status: "backlog", sessionId: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Open session/ })).toBeNull();
+  });
+});
+
+describe("TaskDetail merge-on-approve status", () => {
+  it("shows Merge now for a done task with a PR and no merge requested yet", async () => {
+    tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Merge now" }));
+    expect(mergeTask).toHaveBeenCalledWith(1);
+  });
+
+  it("shows Retry merge and the pending hint once a merge has been requested", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prNumber: 9,
+        prUrl: "https://x/pull/9",
+        mergeRequestedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Retry merge" })).toBeInTheDocument();
+    expect(screen.getByText(/Merge pending/)).toBeInTheDocument();
+  });
+
+  it("shows the recorded merge error instead of the pending hint", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prNumber: 9,
+        prUrl: "https://x/pull/9",
+        mergeRequestedAt: "2026-01-01T00:00:00.000Z",
+        mergeError: "Conflicts with main — needs manual resolution",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText("Conflicts with main — needs manual resolution")).toBeInTheDocument();
+    expect(screen.queryByText(/Merge pending/)).toBeNull();
+  });
+
+  it("renders nothing for a done task with no linked PR (a local-only task)", () => {
+    tasks = [makeTask({ id: 1, status: "done", prNumber: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Merge now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry merge" })).toBeNull();
+  });
+
+  it("shows a generic error when mergeTask rejects with a plain Error", async () => {
+    mergeTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Merge now" }));
+
+    expect(screen.getByText("Failed to request a merge")).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #769 (suggestion) — the real 403 path is an ApiError
+  // carrying the backend's own message, not a plain Error; surfaced
+  // verbatim the same way DeleteTaskAction/other actions in this file do.
+  it("surfaces the ApiError message when mergeTask rejects with one (e.g. the server's 403)", async () => {
+    mergeTask.mockRejectedValueOnce(
+      new ApiError("Task Master is disabled (deploy-time default or a Settings override)", 403),
+    );
+    tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Merge now" }));
+
+    expect(
+      screen.getByText("Task Master is disabled (deploy-time default or a Settings override)"),
+    ).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #769 — the backend route this button calls (POST
+  // /api/tasks/:id/merge) is gated on taskMasterEnabled exactly like
+  // approve is (routes/tasks.ts), so an enabled button on a disabled
+  // install would always 403. This replaces an earlier, incorrect version
+  // of this test that asserted the opposite.
+  it("gates Merge now on taskMasterEnabled, like Claim/Approve/Retry — the backend route is gated too", () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "done", prNumber: 9, prUrl: "https://x/pull/9" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Merge now" })).toBeDisabled();
+    expect(screen.getByText(/Task Master is disabled/)).toBeInTheDocument();
   });
 });
 
