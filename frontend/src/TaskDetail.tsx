@@ -177,8 +177,19 @@ export function TaskDetail({
             backlog/ready): a locally-created task that turns out to be a
             mistake previously had no way to be removed anywhere in the UI
             at all. Local-board CRUD, so unlike Claim/Approve/Reject this
-            isn't gated on taskMasterEnabled. */}
-        {task.issueNumber === null && (task.status === "backlog" || task.status === "ready") && (
+            isn't gated on taskMasterEnabled.
+            #729 — a `failed` GitHub-linked task is rendered too: shown
+            alongside Retry rather than replacing it, the same "render both,
+            let the server's own guard decide" posture TaskActions already
+            uses for Retry itself (a `failed` task with no preserved branch
+            still shows the button and surfaces the 400 as an inline error
+            rather than hiding it). The server only actually allows the
+            delete once the linked issue is confirmed no longer trackable
+            (see routes/tasks.ts's DELETE handler); otherwise this button's
+            confirm step surfaces that as the same inline error, pointing
+            back at Retry. */}
+        {((task.issueNumber === null && (task.status === "backlog" || task.status === "ready")) ||
+          (task.issueNumber !== null && task.status === "failed")) && (
           <DeleteTaskAction taskId={task.id} />
         )}
       </div>

@@ -58,7 +58,30 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   shared function, so the two can't produce different outcomes for the
   same issue.
 
-  A label-lost failure — never a close — self-heals: if the same issue
+  A task that failed this way was never claimed, so it has no preserved
+  branch — Retry (`failed → backlog`/`ready`, below) can't resume it
+  (`no-worktree`), which used to leave it permanently orphaned: not local
+  (so the delete route refused it), and past `backlog`/`ready` (so did the
+  delete route's other guard). `DELETE /api/tasks/:id` (#729) carves out
+  exactly this case: a `failed` GitHub-linked task with **no preserved
+  branch** (`branchName === null`) can be deleted once a fresh read of the
+  linked issue confirms it's genuinely no longer trackable (closed, or open
+  but missing the label) — the same check the read-back above uses, so
+  deleting it can't race the watcher into re-creating the row on its next
+  sweep. The `branchName === null` condition matters on its own, separately
+  from the issue check: a task that WAS claimed carries a real
+  worktree/branch Retry CAN resume from, and its linked issue can
+  independently end up closed/unlabeled later (at promote time, a
+  maintainer tidying labels, ...) — deleting that row would silently
+  discard recoverable work, since nothing cascades to clean up
+  `worktreePath`/`branchName` on a task delete. That task keeps the
+  original refusal regardless of what its issue is doing; so does a
+  never-claimed `failed` task whose issue is **still** tracked (a genuine
+  lost-label failure with the label put back, say) — use Retry for the
+  claimed case, or re-fix the label/issue for the never-claimed one.
+
+  A label-lost failure — never a close — also self-heals on its own,
+  without needing the delete-and-recreate path above: if the same issue
   is re-sighted still open and labeled again, and the task never had a
   branch or worktree (i.e. it failed while still `backlog`/`ready`),
   `upsertIssueTask` (`task-watcher.ts`) springs it back to
@@ -83,10 +106,12 @@ claimed`, below) does not help here in practice even though the table
   plain PATCH endpoint while the task's **current** status is `backlog` or
   `ready` (linkage isn't checked here — a linked task still sitting in
   `ready` can be dragged back to `backlog`). Deleting a task outright is
-  the one operation gated on both conditions together: still
-  `backlog`/`ready` **and** no linked issue. Once a task is claimed, or
-  once it reaches a status past `ready`, the state machine below drives it
-  instead.
+  normally gated on both conditions together: still `backlog`/`ready`
+  **and** no linked issue — with one deliberate exception, a `failed`
+  GitHub-linked task whose issue is confirmed no longer trackable (see the
+  lost-label paragraph above). Once a task is claimed, or once it reaches
+  a status past `ready` (outside that one exception), the state machine
+  below drives it instead.
 
 ## Lifecycle
 
