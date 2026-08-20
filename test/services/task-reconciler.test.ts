@@ -1414,7 +1414,14 @@ describe("reconcileTasks", () => {
       fs.writeFileSync(findingsPath, content);
     }
 
-    it("ingests non-empty findings, appends them, and auto-returns to in_progress exactly once", async () => {
+    // Doubles as the freeform/legacy-text regression test: this findings
+    // file is plain text, not JSON, so it only reaches this behavior via
+    // parseReviewFindings's tolerant fallback to `changes-requested` (see
+    // that function's own doc comment in task-prompt.ts). If a future
+    // change ever narrowed the fallback verdict, this is the test that
+    // would catch it — tied here explicitly so a failure points at the
+    // right place.
+    it("ingests non-empty freeform findings (parsed as changes-requested via the tolerant fallback), appends them, and auto-returns to in_progress exactly once", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(app, taskId, 0, "Fix the null check on line 42.");
@@ -1434,20 +1441,84 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("records a 'no findings' entry and stays in reviewing when the review agent wrote nothing", async () => {
+    it("records an inconclusive entry and stays in reviewing when the review agent wrote no findings file", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
-      // Deliberately no writeFindings call — the prompt tells the agent not
-      // to create the file at all when it has nothing to report.
+      // Deliberately no writeFindings call — the prompt now tells the agent
+      // to ALWAYS write the file, so a missing one can no longer be read as
+      // a confident "clean" review; it's reported as inconclusive instead.
 
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.reviewRounds).toBe(0);
-      expect(row.reviewFindings).toContain("no findings");
+      expect(row.reviewFindings).toContain("inconclusive");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // The regression guard Change 1 exists for. Under the old "a findings
+    // file means act on it" rule, always writing a file (this prompt's own
+    // change) would have made a clean review indistinguishable from one
+    // requesting changes — auto-returning and burning the task's one round
+    // on a worker that has nothing to fix.
+    it("does NOT auto-return, and stays in reviewing, when the review agent's JSON verdict is clean", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({
+          verdict: "clean",
+          summary: "Reviewed the diff and ran the test suite; no issues found.",
+        }),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("no issues found");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    it("auto-returns exactly once, and renders anchored findings, when the review agent's JSON verdict is changes-requested", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({
+          verdict: "changes-requested",
+          summary: "One errcheck failure.",
+          findings: [
+            {
+              path: "cmd/branchdam/main_test.go",
+              line: 669,
+              body: "occupied.Close()'s error return is unchecked.",
+            },
+          ],
+        }),
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(row.reviewRounds).toBe(1);
+      expect(row.reviewFindings).toContain("cmd/branchdam/main_test.go:669");
+      expect(row.reviewFindings).toContain("error return is unchecked");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).not.toBe(workerSessionId);
 
       await app.close();
     });
@@ -1752,6 +1823,49 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
       expect(row.reviewRounds).toBe(0);
       expect(row.reviewFindings).toContain("Possibly a partial review");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
+
+      await app.close();
+    });
+
+    // Coverage gap flagged in this PR's own review: every other "exited"
+    // test above uses freeform text, which the tolerant fallback always
+    // parses as changes-requested — none of them actually exercise a
+    // genuine JSON `verdict: "clean"` on a non-"finished" session. Auto-
+    // return is already gated on `derived.status === "finished"`
+    // independent of the verdict, so this can't currently misfire — this
+    // test pins that guarantee explicitly rather than leaving it implicit.
+    it("ingests and comments a JSON 'clean' verdict from an exited review session, and does not auto-return", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({ verdict: "clean", summary: "Looked clean right before the crash." }),
+      );
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ endedReason: "process-exit", exitCode: 0 })
+                : fakeInfo(),
+          }) as never,
+      );
+      app.db
+        .update(sessions)
+        .set({ status: "exited" })
+        .where(eq(sessions.id, reviewSessionId))
+        .run();
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("Looked clean right before the crash.");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
 
