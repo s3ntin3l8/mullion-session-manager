@@ -554,6 +554,25 @@ export const tasks = sqliteTable(
     // separate column from githubSyncError, which clearGithubSyncError would
     // otherwise clobber independently of this sweep's own state.
     mergeError: text("merge_error"),
+    // #758 — how many times the merge sweep has spawned a worker to resolve
+    // a real conflict (`dirty` mergeableState) with the base branch. A
+    // deliberately SEPARATE counter/cap from `autoReturnRounds` above: this
+    // never transitions the task out of `done` (there is no outgoing edge
+    // from `done` — task-state.ts), so `autoReturnTask`'s CAS-on-"reviewing"
+    // mechanism doesn't apply here, only the same shape (bounded counter,
+    // give-up once spent). Never reset. See `attemptAutoRebase`
+    // (task-reconciler.ts) for the cap.
+    rebaseAttempts: integer("rebase_attempts").notNull().default(0),
+    // #758 — set when an auto-rebase worker is spawned, read back on the
+    // next merge-sweep tick to decide "is an attempt already in flight" —
+    // NOT session-exited detection, because a Task Master worker is told to
+    // stay running after it finishes (see buildTaskMasterPreamble), so a
+    // still-"active" session is the COMMON case for a finished attempt, not
+    // a signal one is still working. A timestamp older than
+    // REBASE_ATTEMPT_STALE_MS is treated as abandoned, mirroring
+    // REVIEW_SPAWN_CLAIM_STALE_MS's own reclaim reasoning. Cleared once the
+    // merge sweep leaves the `dirty` state (clearMergeState).
+    rebaseStartedAt: integer("rebase_started_at", { mode: "timestamp" }),
     // Auto-approve — the review agent's most recently ingested verdict
     // ("clean" | "changes-requested" | "inconclusive"), written alongside
     // reviewFindingsIngestedSessionId in task-reconciler.ts's

@@ -596,3 +596,42 @@ export function buildReviewFeedbackPrompt(
   const feedback = `An automated review of your work found the following:\n\n${opts.findings}`;
   return `${preamble}${SECTION_BREAK}${feedback}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
+
+/**
+ * The auto-rebase worker's prompt (`task-reconciler.ts`'s `attemptAutoRebase`,
+ * #758) — sent when a `done` task's PR has a real conflict with its base
+ * branch. Unlike every other prompt this module builds, this one must
+ * countermand two lines of `buildTaskMasterPreamble` explicitly rather than
+ * just add to it:
+ *
+ * - "Do not switch, rebase onto, or create another branch" is about branch
+ *   IDENTITY (so Mullion can find `branchName` to push it) — replaying
+ *   `branchName`'s own commits onto a newer base via `git rebase` keeps the
+ *   worker on the same branch the whole time, so it doesn't actually violate
+ *   that rule, but it reads like it might, so this spells out why it doesn't.
+ * - "Mullion pushes the branch... do not push it yourself" does NOT hold
+ *   here: Mullion's only push happens once, at the "-> reviewing" transition
+ *   (`task-promote.ts`), and a `done` task never revisits that transition
+ *   (`done` has no outgoing edges — see `task-state.ts`). The merge sweep
+ *   only re-reads GitHub's own `mergeableState` on its next tick; a resolved
+ *   conflict that stays unpushed is invisible to it forever.
+ */
+export function buildRebasePrompt(opts: WorkerPreambleOptions & { baseRef: string }): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const instructions =
+    `Your pull request for ${opts.branchName} has a merge conflict with ${opts.baseRef} that is ` +
+    "blocking it from being merged.\n\n" +
+    `Rebase onto the latest ${opts.baseRef}, resolve every conflict, then re-run the repo's own ` +
+    "verification gate (the same one the instructions above point at) — a conflict resolution " +
+    "that isn't re-verified can silently break something the original change got right.\n\n" +
+    `You are staying ON ${opts.branchName} the whole time — a rebase replays this branch's own ` +
+    "commits onto a newer base, it does not switch to or create another branch, so this does not " +
+    'conflict with the "do not switch, rebase onto, or create another branch" rule above (that ' +
+    "rule is about branch identity, not this operation).\n\n" +
+    'This turn is the one exception to "do not push it yourself": once the rebase is clean and ' +
+    "the gate passes, push with `git push --force-with-lease origin " +
+    `${opts.branchName}\` (not a plain push — ${opts.branchName} already has commits on the ` +
+    "remote). Mullion picks up the result automatically on its next check; do not open or " +
+    "comment on any pull request yourself.";
+  return `${preamble}${SECTION_BREAK}${instructions}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}

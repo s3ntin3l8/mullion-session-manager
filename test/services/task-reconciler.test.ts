@@ -121,6 +121,8 @@ const {
   mockFetchRequiredStatusContexts,
   mockFetchCheckRunsForHead,
   mockCreatePullRequestReview,
+  mockResumeTaskWorktree,
+  mockRemoveWorktree,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
@@ -134,6 +136,13 @@ const {
   mockFetchRequiredStatusContexts: vi.fn(),
   mockFetchCheckRunsForHead: vi.fn(),
   mockCreatePullRequestReview: vi.fn(),
+  // #758 — no pass-through default (unlike commitWipChanges's `{ committed:
+  // false }` no-op default): resumeTaskWorktree/removeWorktree would shell
+  // out to real git against this file's fake "/tmp" project cwds, which
+  // isn't a real repo. Reset to a safe fail-closed default every beforeEach
+  // (see below) and only overridden inside the dedicated auto-rebase block.
+  mockResumeTaskWorktree: vi.fn(),
+  mockRemoveWorktree: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -155,6 +164,8 @@ vi.mock("../../src/services/git-worktree.js", async (importOriginal) => {
   return {
     ...actual,
     commitWipChanges: mockCommitWipChanges,
+    resumeTaskWorktree: mockResumeTaskWorktree,
+    removeWorktree: mockRemoveWorktree,
   };
 });
 
@@ -245,6 +256,7 @@ const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath } =
   await import("../../src/services/task-prompt.js");
+const { deriveWorktreePath } = await import("../../src/services/git-worktree.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
   await import("../../src/services/github-fetch.js");
 
@@ -375,6 +387,11 @@ describe("reconcileTasks", () => {
     mockFetchRequiredStatusContexts.mockClear();
     mockFetchCheckRunsForHead.mockClear();
     mockCreatePullRequestReview.mockClear();
+    // #758 — fail-closed defaults (no pre-existing test's task has
+    // mergeRequestedAt + a "dirty" mergeableState + autoApprove on, so
+    // these are never reached outside the dedicated describe block below).
+    mockResumeTaskWorktree.mockReset().mockResolvedValue(null);
+    mockRemoveWorktree.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -1634,6 +1651,176 @@ describe("reconcileTasks", () => {
       expect(row.mergeError).toContain("Conflicts with main");
 
       await app.close();
+    });
+
+    describe("auto-rebase on a real conflict (#758)", () => {
+      // Mirrors createDoneTaskWithPendingMerge above, plus the fields
+      // attemptAutoRebase needs: branchName/agentCommand (a claimed task
+      // always has both by the time it's "done" — see task-claim.ts's own
+      // reservation transaction), and project.autoApprove defaulted ON
+      // (unlike the bare merge-sweep tests above, which deliberately leave
+      // it off to prove the plain-backoff fallback).
+      async function createDoneTaskWithConflict(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        overrides: Partial<{
+          autoApprove: boolean;
+          branchName: string | null;
+          agentCommand: string | null;
+          rebaseAttempts: number;
+          rebaseStartedAt: Date | null;
+        }> = {},
+      ) {
+        const { autoApprove = true, ...taskOverrides } = overrides;
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = project.json().id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove },
+        });
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            ...taskOverrides,
+          })
+          .returning()
+          .all();
+        return { taskId: row.id, projectId };
+      }
+
+      it("spawns an auto-rebase worker when autoApprove is on", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(1);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(row.sessionId).not.toBeNull();
+        expect(row.worktreePath).toBe("/tmp/.mullion-worktrees/mullion-task-x");
+        expect(row.mergeError).toContain("in progress");
+
+        await app.close();
+      });
+
+      it("clears a stale worktree from a prior attempt before resuming", async () => {
+        const app = await buildApp();
+        await createDoneTaskWithConflict(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        const expectedStalePath = deriveWorktreePath("/tmp", "mullion/task-x");
+        expect(mockRemoveWorktree).toHaveBeenCalledWith(expectedStalePath, "/tmp");
+        // Cleared BEFORE resuming, not after — a second attempt at the same
+        // deterministic path fails outright otherwise (resumeTaskWorktree's
+        // own "target path already exists" refusal).
+        const removeOrder = mockRemoveWorktree.mock.invocationCallOrder[0];
+        const resumeOrder = mockResumeTaskWorktree.mock.invocationCallOrder[0];
+        expect(removeOrder).toBeLessThan(resumeOrder);
+
+        await app.close();
+      });
+
+      it("does not spawn a second worker while one is still in flight", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, {
+          rebaseAttempts: 1,
+          rebaseStartedAt: new Date(),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(1);
+        expect(row.mergeError).toContain("in progress");
+
+        await app.close();
+      });
+
+      it("retries once the previous attempt's window goes stale", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, {
+          rebaseAttempts: 1,
+          rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(2);
+
+        await app.close();
+      });
+
+      it("gives up and falls back to plain conflict backoff once attempts are exhausted", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, { rebaseAttempts: 2 });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        expect(mockRemoveWorktree).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(2);
+        expect(row.mergeRequestedAt).not.toBeNull();
+        expect(row.mergeError).toContain("gave up after 2 attempt(s)");
+
+        await app.close();
+      });
+
+      it("surfaces rather than retries when the branch can't be recreated", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue(null);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        // Not retryable by spawning again — attempts/rebaseStartedAt are left
+        // untouched so a later merge-sweep tick doesn't mistake this for an
+        // in-flight or exhausted attempt; it's surfaced for a human instead.
+        expect(row.rebaseAttempts).toBe(0);
+        expect(row.rebaseStartedAt).toBeNull();
+        expect(row.mergeError).toContain("could not recreate the worktree");
+
+        await app.close();
+      });
     });
 
     it("backs off and retries when a required check is blocked", async () => {
