@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.43](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.42...v0.2.43) (2026-08-21)
+
+
+### Features
+
+* bulk-clear done tasks, optionally deleting merged branches ([#798](https://github.com/s3ntin3l8/mullion-session-manager/issues/798)) ([168b2b5](https://github.com/s3ntin3l8/mullion-session-manager/commit/168b2b5e8ed11b7d0103d57a6a8b86eaecb76ba5))
+
 ## [0.2.42](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.41...v0.2.42) (2026-08-21)
 
 
