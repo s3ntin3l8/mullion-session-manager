@@ -87,6 +87,10 @@ export interface Project {
   // Needs a review agent configured (defaultReviewAgent above) to ever
   // produce a verdict at all. Mirrors projects.autoApprove.
   autoApprove: boolean | null;
+  // #756 — per-project override of the auto-return round cap. Null means
+  // "use the install default" (currently 2). Mirrors
+  // projects.maxAutoReturnRounds.
+  maxAutoReturnRounds: number | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live
@@ -852,10 +856,16 @@ export interface Task {
   // Null until the first round is ingested (no review agent configured,
   // still running, or genuinely found nothing).
   reviewFindings: string | null;
-  // How many times review findings have already driven an automatic
-  // "reviewing -> in_progress" round back to the worker. Bounded at 1 and
-  // never reset — see TaskDetail.tsx's review card.
-  reviewRounds: number;
+  // How many times this task has already driven an automatic
+  // "reviewing -> in_progress" round back to the worker — not just from a
+  // changes-requested review verdict anymore (a red required CI check and
+  // an unresolved PR review comment are later triggers on the same model).
+  // Bounded by a resolved per-project cap (default 2) and never reset —
+  // see TaskDetail.tsx's review card. Renamed from `reviewRounds`.
+  autoReturnRounds: number;
+  // Which trigger most recently spent a round — "review" | "ci" |
+  // "pr-comment". Null until the first auto-return.
+  lastAutoReturnReason: "review" | "ci" | "pr-comment" | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned

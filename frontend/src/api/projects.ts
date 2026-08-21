@@ -41,6 +41,7 @@ export const projectsApi = {
         | "defaultReviewAgent"
         | "mergeOnApprove"
         | "autoApprove"
+        | "maxAutoReturnRounds"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>

@@ -45,6 +45,7 @@ const PROJECT_A: Project = {
   defaultReviewAgent: null,
   mergeOnApprove: null,
   autoApprove: null,
+  maxAutoReturnRounds: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -62,6 +63,7 @@ const PROJECT_B: Project = {
   defaultReviewAgent: null,
   mergeOnApprove: null,
   autoApprove: null,
+  maxAutoReturnRounds: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 

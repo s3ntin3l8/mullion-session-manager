@@ -89,6 +89,7 @@ export interface ProjectsSlice {
         | "defaultReviewAgent"
         | "mergeOnApprove"
         | "autoApprove"
+        | "maxAutoReturnRounds"
       >
     > &
       CreateProjectDirOptions,

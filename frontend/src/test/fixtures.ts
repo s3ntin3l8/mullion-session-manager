@@ -89,6 +89,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     defaultReviewAgent: null,
     mergeOnApprove: null,
     autoApprove: null,
+    maxAutoReturnRounds: null,
     ...overrides,
   };
 }
@@ -110,7 +111,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     reviewSeedDelivered: null,
     reviewFindingsIngestedSessionId: null,
     reviewFindings: null,
-    reviewRounds: 0,
+    autoReturnRounds: 0,
+    lastAutoReturnReason: null,
     worktreePath: null,
     branchName: null,
     baseSha: null,
