@@ -129,9 +129,16 @@ export function resolveReviewAgentCommand(
   }
 
   const globalDefaultReviewAgent = getStoredSettings(app.db).taskMaster.defaultReviewAgent;
-  return globalDefaultReviewAgent && globalDefaultReviewAgent !== "none"
-    ? globalDefaultReviewAgent
-    : null;
+  if (globalDefaultReviewAgent && globalDefaultReviewAgent !== "none") {
+    if ((KNOWN_AGENTS as readonly string[]).includes(globalDefaultReviewAgent)) {
+      return globalDefaultReviewAgent;
+    }
+    app.log.warn(
+      { name: globalDefaultReviewAgent },
+      "[task-agent-resolve] install-wide defaultReviewAgent names an unrecognized agent, resolving to no review agent",
+    );
+  }
+  return null;
 }
 
 /**

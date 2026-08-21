@@ -1139,6 +1139,10 @@ describe("TaskDetail delete action", () => {
       await screen.findAllByRole("option", { name: "Claude Code" });
       const selects = screen.getAllByRole("combobox");
       expect(selects.length).toBe(2);
+      // Hermes review — the resolved "none" default renders capitalized as
+      // "None" in the dropdown label, so it reads as "no review agent" rather
+      // than a lowercase agent name.
+      expect(screen.getByRole("option", { name: "Project default (None)" })).toBeInTheDocument();
 
       await user.selectOptions(selects[0], "claude");
       expect(updateTask).toHaveBeenCalledWith(1, { agent: "claude" });

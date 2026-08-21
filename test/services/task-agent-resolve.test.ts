@@ -210,6 +210,22 @@ describe("resolveReviewAgentCommand", () => {
     expect(command).toBeNull();
   });
 
+  it("resolves an unrecognized install-wide defaultReviewAgent to no review agent, logging a warning — mirrors tiers 1-3 validating against KNOWN_AGENTS", () => {
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { defaultAgent: "claude", defaultReviewAgent: "not-a-real-agent" },
+    });
+    const app = mockApp();
+    const command = resolveReviewAgentCommand(app, {
+      issueBody: null,
+      projectDefaultReviewAgent: null,
+    });
+    expect(command).toBeNull();
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "not-a-real-agent" }),
+      expect.stringContaining("unrecognized agent"),
+    );
+  });
+
   it("lets a per-task or per-project review agent beat the install-wide default", () => {
     mockGetStoredSettings.mockReturnValue({
       taskMaster: { defaultAgent: "claude", defaultReviewAgent: "codex" },
