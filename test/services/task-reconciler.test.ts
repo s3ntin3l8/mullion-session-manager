@@ -478,6 +478,91 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
+  // #772 — a reject-and-re-review cycle leaves the PRIOR round's review
+  // session attached as `task.reviewSessionId` right up until this same
+  // "-> reviewing" transition nulls it. Before this fix, nothing ever
+  // terminated that stale session — it was simply orphaned, still "active"
+  // in the DB with no task row pointing at it anymore.
+  it("kills the prior round's review session when re-entering reviewing (reject-and-re-review)", async () => {
+    const app = await buildApp();
+    const { taskId, projectId } = await createSessionAndTask(app, "in_progress").then(async (r) => {
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, r.taskId)).all();
+      return { ...r, projectId: row.projectId };
+    });
+    const staleReview = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const staleReviewSessionId = staleReview.json().id as number;
+    app.db
+      .update(tasks)
+      .set({ reviewSessionId: staleReviewSessionId })
+      .where(eq(tasks.id, taskId))
+      .run();
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(staleReviewSessionId)) return { toInfo: () => fakeInfo() } as never;
+      return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+    });
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.reviewSessionId).not.toBe(staleReviewSessionId);
+    const { sessions } = await import("../../src/db/schema.js");
+    const [staleRow] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, staleReviewSessionId))
+      .all();
+    expect(staleRow.status).toBe("killed");
+
+    await app.close();
+  });
+
+  it("does not block the '-> reviewing' transition when killing the stale review session fails", async () => {
+    const app = await buildApp();
+    const { taskId, projectId } = await createSessionAndTask(app, "in_progress").then(async (r) => {
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, r.taskId)).all();
+      return { ...r, projectId: row.projectId };
+    });
+    const staleReview = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const staleReviewSessionId = staleReview.json().id as number;
+    app.db
+      .update(tasks)
+      .set({ reviewSessionId: staleReviewSessionId })
+      .where(eq(tasks.id, taskId))
+      .run();
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(staleReviewSessionId)) return { toInfo: () => fakeInfo() } as never;
+      return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+    });
+    const sessionsModule = await import("../../src/services/session-lifecycle.js");
+    const killSpy = vi
+      .spyOn(sessionsModule, "killSession")
+      .mockRejectedValueOnce(new Error("boom"));
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    // Fire-and-forget — flush microtasks before asserting the warn fired.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, reviewSessionId: staleReviewSessionId }),
+      "task reconcile: failed to kill the superseded review session",
+    );
+
+    killSpy.mockRestore();
+    await app.close();
+  });
+
   it("leaves in_progress alone while the session is still actively working", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");
@@ -544,6 +629,11 @@ describe("reconcileTasks", () => {
       expect(row.failureReason).toContain("budget exceeded");
       expect(row.completedAt).not.toBeNull();
       expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+      // #772 — killSession, not a bare backend.terminate: the row itself
+      // must flip to "killed".
+      const { sessions } = await import("../../src/db/schema.js");
+      const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      expect(sessionRow.status).toBe("killed");
 
       await app.close();
     } finally {
@@ -1939,6 +2029,12 @@ describe("reconcileTasks", () => {
       expect(row.failureReason).toContain("mullion/task-999");
       expect(mockCommitWipChanges).toHaveBeenCalledWith("/tmp/mullion-task-worktree");
       expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+      // #772 — killSession, not a bare backend.terminate: the session row
+      // itself must flip to "killed", not linger "active" until the 30s
+      // exited-session reconciler eventually marks it "exited".
+      const { sessions } = await import("../../src/db/schema.js");
+      const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      expect(sessionRow.status).toBe("killed");
 
       await app.close();
     });
