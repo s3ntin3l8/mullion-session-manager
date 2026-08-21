@@ -642,3 +642,49 @@ export function buildRebasePrompt(opts: WorkerPreambleOptions & { baseRef: strin
     "rebase attempt is finished; Mullion notices the push (or the lack of one) on its own.";
   return `${preamble}${SECTION_BREAK}${instructions}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
+
+/** The subset of `PrReviewThreadComment` (github-write.ts) this prompt
+ * needs to render — a local shape rather than importing that module's own
+ * type, matching this module's own "plain string builder, no dependency on
+ * what fetched the data" convention (see `ReviewCiInfo` above for the same
+ * pattern). */
+export interface PrReviewCommentInfo {
+  author: string | null;
+  path: string | null;
+  line: number | null;
+  body: string;
+}
+
+function renderPrReviewComments(comments: PrReviewCommentInfo[]): string {
+  return comments
+    .map((c) => {
+      const location = c.path
+        ? `${c.path}${c.line !== null ? `:${c.line}` : ""}`
+        : "general comment";
+      const who = c.author ? `@${c.author}` : "someone";
+      return `- **${location}** (${who}): ${c.body}`;
+    })
+    .join("\n");
+}
+
+/**
+ * The PR-review-comment auto-return's prompt (`task-reconciler.ts`, #757) —
+ * new GitHub review comments on unresolved threads, delivered the same way
+ * a human's reject feedback or Mullion's own review-agent findings are
+ * (`buildRejectPrompt`/`buildReviewFeedbackPrompt`). Unlike `buildRebasePrompt`,
+ * this needs no countermand of the standard preamble: this trigger goes
+ * through the exact same "reviewing -> in_progress" lifecycle as every other
+ * auto-return (`autoReturnTask`), so Mullion still does the push once the
+ * worker ends its turn — the worker just needs to know what to fix.
+ */
+export function buildPrReviewCommentsPrompt(
+  opts: WorkerPreambleOptions & { comments: PrReviewCommentInfo[] },
+): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const feedback =
+    "New review comments came in on this task's pull request, on threads GitHub still shows as " +
+    `unresolved:\n\n${renderPrReviewComments(opts.comments)}\n\n` +
+    "Address each one, then finish your turn as usual. You don't need to reply on GitHub or " +
+    "resolve the thread yourself — Mullion picks up your commits and re-checks automatically.";
+  return `${preamble}${SECTION_BREAK}${feedback}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}

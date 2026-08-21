@@ -123,6 +123,7 @@ const {
   mockCreatePullRequestReview,
   mockResumeTaskWorktree,
   mockRemoveWorktree,
+  mockFetchPullRequestReviewThreads,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
@@ -143,6 +144,13 @@ const {
   // (see below) and only overridden inside the dedicated auto-rebase block.
   mockResumeTaskWorktree: vi.fn(),
   mockRemoveWorktree: vi.fn(),
+  // #757 — no pass-through default (unlike mockFetchRunsForHead above): the
+  // real implementation hits GitHub's GraphQL endpoint over the network,
+  // which this test file has no business doing. Defaults to an empty
+  // result every beforeEach (see below) so every pre-existing test — none
+  // of which know about #757 — sees no new PR comments, ever. Only the
+  // dedicated describe block below overrides it.
+  mockFetchPullRequestReviewThreads: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -193,6 +201,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     updatePullRequestBranch: mockUpdatePullRequestBranch,
     deleteRemoteBranch: mockDeleteRemoteBranch,
     createPullRequestReview: mockCreatePullRequestReview,
+    fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
   };
 });
 vi.mock("../../src/services/github.js", async (importOriginal) => {
@@ -392,6 +401,12 @@ describe("reconcileTasks", () => {
     // these are never reached outside the dedicated describe block below).
     mockResumeTaskWorktree.mockReset().mockResolvedValue(null);
     mockRemoveWorktree.mockReset().mockResolvedValue(true);
+    // #757 — fail-closed/no-op default: no pre-existing test's task has a
+    // PR + autoApprove on with new review comments, so this is never
+    // reached outside the dedicated describe block below.
+    mockFetchPullRequestReviewThreads
+      .mockReset()
+      .mockResolvedValue({ viewerLogin: null, threads: [], truncated: false });
   });
 
   afterEach(() => {
@@ -2252,6 +2267,7 @@ describe("reconcileTasks", () => {
         agentCommand: string | null;
         autoReturnRounds: number;
         sessionId: number | null;
+        lastPrReviewCommentAt: Date | null;
       }> = {},
     ) {
       const { autoApprove = true, ...taskOverrides } = overrides;
@@ -2752,6 +2768,327 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+    });
+
+    // #757 — new GitHub PR review comments on unresolved threads (excluding
+    // Mullion's own review bot) send a "reviewing" task back to its worker
+    // for one automatic round, same mechanism/cap as #755's red-CI-return.
+    describe("new PR review comments return the task to the worker (#757)", () => {
+      async function createPrCommentCandidate(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        overrides: Parameters<typeof createAutoApproveCandidate>[1] = {},
+      ) {
+        const candidate = await createAutoApproveCandidate(app, {
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          ...overrides,
+        });
+        const workerSession = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId: candidate.projectId, command: "bash" },
+        });
+        app.db
+          .update(tasks)
+          .set({ sessionId: workerSession.json().id })
+          .where(eq(tasks.id, candidate.taskId))
+          .run();
+        return candidate;
+      }
+
+      function thread(
+        isResolved: boolean,
+        author: string | null,
+        body: string,
+        createdAt: string,
+        path: string | null = "src/foo.ts",
+        line: number | null = 42,
+      ) {
+        return {
+          isResolved,
+          comments: [{ author, createdAt, path, line, body }],
+        };
+      }
+
+      it("returns the task when a new unresolved review comment arrives", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+        expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T10:00:00.000Z");
+
+        await app.close();
+      });
+
+      it("does NOT return the task when the thread is resolved", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(true, "octocat", "Already resolved.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("does NOT return the task for a comment already covered by the cursor", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app, {
+          lastPrReviewCommentAt: new Date("2026-08-20T10:00:00Z"),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          // Same timestamp as the cursor — not newer than it.
+          threads: [thread(false, "octocat", "Already answered.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("filters out Mullion's own review comments (matching viewerLogin) — no round for its own output", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "mullion-bot[bot]", "My own findings.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("returns the task even with no review agent configured (gate 2 would otherwise never pass)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app, {
+          reviewFindingsIngestedSessionId: null,
+          lastReviewVerdict: null,
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+
+        await app.close();
+      });
+
+      it("returns the task even when the verdict is inconclusive (gate 3 would otherwise never pass)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app, {
+          lastReviewVerdict: "inconclusive",
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+
+        await app.close();
+      });
+
+      it("posts a cap-reached comment and stays in 'reviewing' once the round budget is spent", async () => {
+        const app = await buildApp();
+        await createPrCommentCandidate(app, { autoReturnRounds: 2 });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "tok",
+          "o",
+          "r",
+          9,
+          expect.objectContaining({ body: expect.stringContaining("round cap (2)") }),
+        );
+
+        // A second tick with the SAME (unchanged) comments must not post a
+        // second cap-reached comment — deduped per round, same as #755's.
+        await reconcileTasks(app);
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+
+        await app.close();
+      });
+
+      // Fresh review, PR #784 — attemptReturnPrCommentsToWorker resolves
+      // its own repoRef/token independently of attemptAutoApprove's own CI
+      // lookup specifically so a REST-side failure (this repo's own
+      // getPullRequestByNumber, a different rate-limit bucket than
+      // GraphQL) doesn't also block PR-comment ingestion. Only a test that
+      // combines BOTH a thrown CI lookup AND a pending new comment can
+      // catch a regression back to the early `return` this fix removed.
+      it("still returns the task for a new PR comment even when the CI lookup itself throws", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockRejectedValue(new Error("network blip"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+
+        await app.close();
+      });
+
+      // Fresh review, PR #784 — resolveGitHubToken must be called with the
+      // SAME scope postReviewFindingsComment itself uses ("write", not
+      // "read"): an installation predating the "read" scope's permissions
+      // 422s a read-scoped mint specifically and falls back to the shared
+      // PAT, while a write-scoped mint for that SAME installation still
+      // succeeds against the App — so a read-scoped call here could
+      // resolve `viewerLogin` to a genuinely different identity than the
+      // one that actually posts Mullion's own review comments, silently
+      // breaking the self-comment filter below. Pinned directly rather
+      // than only via the filtering tests above, which can't distinguish
+      // "the right scope was requested" from "the mock happened to return
+      // a consistent viewerLogin regardless of scope."
+      it("resolves the GitHub token with 'write' scope, matching postReviewFindingsComment's own", async () => {
+        const app = await buildApp();
+        await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockResolveGitHubToken).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          "write",
+        );
+
+        await app.close();
+      });
+
+      it("filters a self-authored comment out of a result that also has a genuine human one, and still returns the task for the human comment", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          // The self-authored comment is the NEWER of the two, deliberately
+          // — if the self-filter were broken (comparing the wrong field, or
+          // applied after the newest-timestamp computation instead of
+          // before it), the cursor would land on 11:00, not 10:00, and this
+          // assertion would actually catch it. Making the human comment the
+          // newer one (as an earlier version of this test did) can't tell
+          // "the filter worked" apart from "Math.max just picked the newer
+          // of the two either way."
+          threads: [
+            thread(false, "mullion-bot[bot]", "My own findings.", "2026-08-20T11:00:00Z"),
+            thread(false, "octocat", "A genuine human comment.", "2026-08-20T10:00:00Z"),
+          ],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+        // The cursor reflects only the genuine (non-self) comment's
+        // timestamp — proves the self comment was excluded before the
+        // newest-timestamp computation, not just before the round-trigger
+        // decision.
+        expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T10:00:00.000Z");
+
+        await app.close();
+      });
+
+      it("advances the cursor to the NEWEST comment across multiple unresolved threads, not the first", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(false, "octocat", "Older comment.", "2026-08-20T08:00:00Z"),
+            thread(false, "octocat", "Newest comment.", "2026-08-20T12:00:00Z"),
+            thread(false, "octocat", "Middle comment.", "2026-08-20T10:00:00Z"),
+          ],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T12:00:00.000Z");
 
         await app.close();
       });

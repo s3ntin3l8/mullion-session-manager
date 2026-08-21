@@ -648,11 +648,13 @@ export async function closePullRequest(
  * Minimal GraphQL POST — this repo's first GraphQL call (every other write
  * in this file is REST). Needed because REST's `PATCH /pulls/:number` has
  * no `draft` field: converting a draft PR to ready-for-review is
- * GraphQL-only (`markPullRequestReadyForReview`). Deliberately not a
- * general-purpose client — one function, used by exactly one caller below,
- * with the same error-shape posture (`GitHubWriteScopeError` on 403/404,
- * `GitHubApiError` otherwise) as every REST helper in this file so a
- * caller can handle both uniformly.
+ * GraphQL-only (`markPullRequestReadyForReview`). Also used by
+ * `fetchPullRequestReviewThreads` below (#757) — resolved/unresolved thread
+ * state has no REST equivalent either. Deliberately not a general-purpose
+ * client library, just a shared low-level POST both callers build their own
+ * query/variables against, with the same error-shape posture
+ * (`GitHubWriteScopeError` on 403/404, `GitHubApiError` otherwise) as every
+ * REST helper in this file so a caller can handle both uniformly.
  */
 async function githubGraphQL<T>(
   token: string,
@@ -723,6 +725,136 @@ export async function markPullRequestReadyForReview(
     }`,
     { id: pullRequestNodeId },
   );
+}
+
+export interface PrReviewThreadComment {
+  /** Null for a deleted/ghost account — GitHub itself allows this. */
+  author: string | null;
+  createdAt: string;
+  /** Null on rare malformed data only — a real inline review comment always
+   * has one; not worth a runtime guard for a case the schema doesn't
+   * actually produce. */
+  path: string | null;
+  line: number | null;
+  body: string;
+}
+
+export interface PrReviewThread {
+  isResolved: boolean;
+  comments: PrReviewThreadComment[];
+}
+
+export interface PrReviewThreadsResult {
+  /** The login of whichever identity `token` authenticates as — an App's
+   * `<slug>[bot]` for an installation token, a human login for a PAT
+   * fallback. Callers use this to filter out the caller's own comments
+   * (Mullion's own review posts as this same identity) without needing to
+   * know or hardcode which auth mode is in play. */
+  viewerLogin: string | null;
+  threads: PrReviewThread[];
+  /** True when either page's `first` bound didn't cover every thread/comment
+   * GitHub actually has — this function has no logger of its own (matching
+   * every other helper in this file), so the caller decides whether/how to
+   * surface it rather than this silently dropping the overflow. */
+  truncated: boolean;
+}
+
+const REVIEW_THREADS_PAGE_SIZE = 100;
+const REVIEW_THREAD_COMMENTS_PAGE_SIZE = 50;
+
+/**
+ * #757 — resolved-vs-unresolved review thread state, REST has no equivalent
+ * for. `first`-bounded on both connections (a task PR is small and
+ * short-lived; full cursor pagination would be a lot of machinery for a
+ * case this workflow doesn't produce) — logs a warning rather than silently
+ * truncating if either count is ever actually hit, so a future PR with more
+ * comments than fit here has a signal something was dropped instead of a
+ * silently incomplete auto-return.
+ */
+export async function fetchPullRequestReviewThreads(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrReviewThreadsResult> {
+  const data = await githubGraphQL<{
+    viewer: { login: string } | null;
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          totalCount: number;
+          nodes: Array<{
+            isResolved: boolean;
+            comments: {
+              totalCount: number;
+              nodes: Array<{
+                author: { login: string } | null;
+                createdAt: string;
+                path: string | null;
+                line: number | null;
+                body: string;
+              }>;
+            };
+          }>;
+        } | null;
+      } | null;
+    } | null;
+  }>(
+    token,
+    `query($owner: String!, $repo: String!, $number: Int!, $threadsFirst: Int!, $commentsFirst: Int!) {
+      viewer { login }
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: $threadsFirst) {
+            totalCount
+            nodes {
+              isResolved
+              comments(first: $commentsFirst) {
+                totalCount
+                nodes {
+                  author { login }
+                  createdAt
+                  path
+                  line
+                  body
+                }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    {
+      owner,
+      repo,
+      number,
+      threadsFirst: REVIEW_THREADS_PAGE_SIZE,
+      commentsFirst: REVIEW_THREAD_COMMENTS_PAGE_SIZE,
+    },
+  );
+
+  const reviewThreads = data.repository?.pullRequest?.reviewThreads;
+  if (!reviewThreads)
+    return { viewerLogin: data.viewer?.login ?? null, threads: [], truncated: false };
+
+  const truncated =
+    reviewThreads.totalCount > reviewThreads.nodes.length ||
+    reviewThreads.nodes.some((t) => t.comments.totalCount > t.comments.nodes.length);
+
+  return {
+    viewerLogin: data.viewer?.login ?? null,
+    threads: reviewThreads.nodes.map((t) => ({
+      isResolved: t.isResolved,
+      comments: t.comments.nodes.map((c) => ({
+        author: c.author?.login ?? null,
+        createdAt: c.createdAt,
+        path: c.path,
+        line: c.line,
+        body: c.body,
+      })),
+    })),
+    truncated,
+  };
 }
 
 /**

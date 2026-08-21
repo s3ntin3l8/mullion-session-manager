@@ -481,6 +481,18 @@ export const tasks = sqliteTable(
     // be re-ingested (and re-commented) on every single tick forever. Null
     // means the current reviewSessionId's output hasn't been processed yet.
     reviewFindingsIngestedSessionId: integer("review_findings_ingested_session_id"),
+    // #757 — the newest GitHub PR review comment (from an unresolved thread,
+    // excluding Mullion's own review bot) already acted on by an auto-return
+    // round. Prevents re-triggering a round for a comment already answered:
+    // a comment thread stays "unresolved" from GitHub's own perspective
+    // until a human clicks Resolve, so without this cursor the SAME
+    // unresolved thread would drive a fresh round on every reconcile tick
+    // forever. Null means no PR-comment round has ever fired for this task.
+    // Advanced only after a round actually starts (autoReturnTask returns
+    // `{ ok: true }`) — never on a lost CAS race, so a losing attempt
+    // doesn't silently skip comments a later, successful attempt still
+    // needs to see.
+    lastPrReviewCommentAt: integer("last_pr_review_comment_at", { mode: "timestamp" }),
     // 6.2/6.8 — durable record of the task's worktree, set at claim time.
     // Previously this existed only as sessions.cwd, with nothing marking it
     // as a worktree or naming its owning task; 6.8's cleanup (clean-check
