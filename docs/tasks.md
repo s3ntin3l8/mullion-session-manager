@@ -1412,6 +1412,39 @@ gap produced before `#760`. It only fully coincides today for hosts
 provisioned identically (e.g. via `deploy/install.sh`), where both sides'
 `sessionsDir` are byte-identical strings.
 
+**New PR review comments return the task to the worker (`#757`).** A human
+leaving inline review comments directly on GitHub — not through Mullion's
+own review agent — is a second real feedback channel Task Master used to
+ignore entirely once a task reached `reviewing`. Hoisted the same way
+`#755`'s CI check is, above steps 2/3, for the identical reason: a project
+with no review agent never writes a verdict, and an `inconclusive` verdict
+never satisfies step 3, so PR comments plus either would otherwise stall
+forever. Resolved-vs-unresolved thread state has no REST equivalent —
+`fetchPullRequestReviewThreads` (`github-write.ts`) is this repo's second
+GraphQL call (after `markPullRequestReadyForReview`), reading
+`reviewThreads { isResolved, comments { author, createdAt, path, line,
+body } }` for the task's PR. Only **unresolved** threads with at least one
+comment newer than `tasks.lastPrReviewCommentAt` trigger a round — GitHub
+leaves a thread unresolved until a human clicks Resolve, so without that
+cursor the same thread would re-trigger a round on every reconcile tick
+forever. The cursor only advances once `autoReturnTask` actually confirms
+the round started, never on a lost CAS race, so a losing attempt can't
+cause a later, successful one to skip comments.
+
+Mullion's own review posts (`postReviewFindingsComment`) are filtered out
+by comparing each comment's author against `viewerLogin` — the identity
+`token` itself authenticates as (an App's `<slug>[bot]` for an installation
+token, a human login for a PAT fallback) — read from the same GraphQL
+response rather than hardcoded, so this can't feed on its own output
+regardless of which auth mode is configured.
+
+Shares `tasks.autoReturnRounds`/`maxAutoReturnRounds` with every other
+auto-return trigger (`reason: "pr-comment"`). Once the cap is spent, one PR
+comment names it, deduped per round (`prCommentCapCommentedRounds`,
+`task-reconciler.ts`) — same posture as `#755`'s own cap-reached comment,
+kept in a separate map since the two triggers can each hit the cap for a
+task independently and post different text.
+
 ## Worktree lifecycle
 
 A task's worktree lives at `.mullion-worktrees/mullion-task-<id>`, on

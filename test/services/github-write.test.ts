@@ -15,6 +15,7 @@ import {
   closePullRequest,
   markPullRequestReadyForReview,
   createPullRequestReview,
+  fetchPullRequestReviewThreads,
   GitHubWriteScopeError,
 } from "../../src/services/github-write.js";
 import { GitHubApiError } from "../../src/services/github.js";
@@ -491,6 +492,113 @@ describe("github-write service", () => {
   it("markPullRequestReadyForReview maps a 403 to GitHubWriteScopeError, same as every REST write", async () => {
     fetchMock.mockResolvedValueOnce(textResponse(403, "Resource not accessible by integration"));
     await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toBeInstanceOf(
+      GitHubWriteScopeError,
+    );
+  });
+
+  it("fetchPullRequestReviewThreads posts a GraphQL query with owner/repo/number and returns viewerLogin plus threads", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: {
+          viewer: { login: "mullion-bot[bot]" },
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                totalCount: 1,
+                nodes: [
+                  {
+                    isResolved: false,
+                    comments: {
+                      totalCount: 1,
+                      nodes: [
+                        {
+                          author: { login: "octocat" },
+                          createdAt: "2026-08-20T10:00:00Z",
+                          path: "src/foo.ts",
+                          line: 42,
+                          body: "Please fix this null check.",
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await fetchPullRequestReviewThreads("tok", "owner", "repo", 9);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.github.com/graphql");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.query).toContain("reviewThreads");
+    expect(body.variables).toEqual({
+      owner: "owner",
+      repo: "repo",
+      number: 9,
+      threadsFirst: 100,
+      commentsFirst: 50,
+    });
+    expect(result).toEqual({
+      viewerLogin: "mullion-bot[bot]",
+      truncated: false,
+      threads: [
+        {
+          isResolved: false,
+          comments: [
+            {
+              author: "octocat",
+              createdAt: "2026-08-20T10:00:00Z",
+              path: "src/foo.ts",
+              line: 42,
+              body: "Please fix this null check.",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("fetchPullRequestReviewThreads returns an empty result when the PR/repo isn't found, without throwing", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { data: { viewer: { login: "mullion-bot[bot]" }, repository: null } }),
+    );
+    const result = await fetchPullRequestReviewThreads("tok", "owner", "repo", 9);
+    expect(result).toEqual({ viewerLogin: "mullion-bot[bot]", threads: [], truncated: false });
+  });
+
+  it("fetchPullRequestReviewThreads sets truncated when a page's totalCount exceeds what was fetched", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: {
+          viewer: { login: "mullion-bot[bot]" },
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                totalCount: 200,
+                nodes: [
+                  {
+                    isResolved: false,
+                    comments: { totalCount: 1, nodes: [] },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    );
+    const result = await fetchPullRequestReviewThreads("tok", "owner", "repo", 9);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("fetchPullRequestReviewThreads maps a 403 to GitHubWriteScopeError, same as every REST write", async () => {
+    fetchMock.mockResolvedValueOnce(textResponse(403, "Resource not accessible by integration"));
+    await expect(fetchPullRequestReviewThreads("tok", "owner", "repo", 9)).rejects.toBeInstanceOf(
       GitHubWriteScopeError,
     );
   });

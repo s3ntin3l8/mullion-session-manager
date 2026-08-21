@@ -33,12 +33,14 @@ import {
   buildReviewFeedbackPrompt,
   buildCiFailurePrompt,
   buildRebasePrompt,
+  buildPrReviewCommentsPrompt,
   taskReviewFindingsPath,
   taskCommitTitlePath,
   parseReviewFindings,
   parseCommitTitle,
   renderReviewFindingsMarkdown,
   type ReviewCiInfo,
+  type PrReviewCommentInfo,
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
@@ -52,6 +54,7 @@ import {
   mergePullRequest,
   updatePullRequestBranch,
   deleteRemoteBranch,
+  fetchPullRequestReviewThreads,
 } from "./github-write.js";
 import {
   computeCiStatus,
@@ -1569,6 +1572,136 @@ async function attemptReturnRedCiToWorker(
   return true;
 }
 
+// #757 — same dedup shape as ciCapCommentedRounds above, kept as a SEPARATE
+// map: the two triggers post different comment text and can each hit the
+// cap for a task independently (a task could have red CI capped in one
+// round and, separately, new PR comments capped in a later round).
+const MAX_PR_COMMENT_CAP_COMMENTED_ENTRIES = 500;
+const prCommentCapCommentedRounds = new Map<number, number>();
+
+/**
+ * #757 — new GitHub PR review comments (unresolved threads, excluding
+ * Mullion's own review posts) send a "reviewing" task back to its worker
+ * for one automatic round, same mechanism as a "changes-requested" review
+ * (`autoReturnTask`, `reason: "pr-comment"`). Hoisted the same way
+ * `attemptReturnRedCiToWorker` is — above `attemptAutoApprove`'s
+ * ingested-verdict/"clean" gates — for the identical reason: a project with
+ * no review agent configured never writes a verdict at all, and an
+ * "inconclusive" verdict never reaches the changes-requested check, so PR
+ * comments plus either of those would otherwise stall in "reviewing"
+ * forever.
+ *
+ * `tasks.lastPrReviewCommentAt` is the whole reason this can't just check
+ * "any unresolved thread exists": a GitHub review thread stays unresolved
+ * until a human clicks Resolve, so without a cursor the SAME thread would
+ * drive a fresh round on every reconcile tick forever. Only advanced once
+ * `autoReturnTask` actually confirms the round started (`{ ok: true }`) —
+ * never on a lost CAS race, so a losing attempt doesn't skip comments a
+ * later, successful attempt still needs to see.
+ *
+ * Resolves its own `repoRef` rather than reusing `attemptAutoApprove`'s own
+ * CI lookup — deliberately decoupled, so a CI-fetch failure (or a project
+ * with no CI runs at all) doesn't also block PR-comment ingestion.
+ */
+async function attemptReturnPrCommentsToWorker(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<boolean> {
+  if (task.prNumber === null) return false;
+  if (task.worktreePath === null || task.agentCommand === null) return false;
+  if (!commandSupportsSeed(task.agentCommand)) return false;
+
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return false;
+  const token = await resolveGitHubToken(app, repoRef, "read");
+  if (!token) return false;
+
+  let result: Awaited<ReturnType<typeof fetchPullRequestReviewThreads>>;
+  try {
+    result = await fetchPullRequestReviewThreads(token, repoRef.owner, repoRef.repo, task.prNumber);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id },
+      "task reconcile: PR review comment fetch failed — waiting to retry",
+    );
+    return false;
+  }
+  if (result.truncated) {
+    app.log.warn(
+      { taskId: task.id, prNumber: task.prNumber },
+      "task reconcile: PR review threads/comments exceeded the fetch page size — some may be missed this round",
+    );
+  }
+
+  const cursor = task.lastPrReviewCommentAt;
+  const newComments = result.threads
+    .filter((t) => !t.isResolved)
+    .flatMap((t) => t.comments)
+    // Excludes Mullion's own review posts (postReviewFindingsComment posts
+    // as this same `viewerLogin` identity) and any comment whose author is
+    // null (a deleted/ghost account — nothing to filter against, but also
+    // nothing a re-seeded worker can usefully be told "from whom").
+    .filter((c) => c.author !== null && c.author !== result.viewerLogin)
+    .filter((c) => cursor === null || new Date(c.createdAt).getTime() > cursor.getTime());
+  if (newComments.length === 0) return false;
+
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return false;
+
+  const newestCommentAt = new Date(
+    Math.max(...newComments.map((c) => new Date(c.createdAt).getTime())),
+  );
+
+  const maxRounds = resolveMaxAutoReturnRounds(project);
+  if (task.autoReturnRounds >= maxRounds) {
+    if (prCommentCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
+    if (
+      !prCommentCapCommentedRounds.has(task.id) &&
+      prCommentCapCommentedRounds.size >= MAX_PR_COMMENT_CAP_COMMENTED_ENTRIES
+    ) {
+      const oldest = prCommentCapCommentedRounds.keys().next().value;
+      if (oldest !== undefined) prCommentCapCommentedRounds.delete(oldest);
+    }
+    prCommentCapCommentedRounds.set(task.id, task.autoReturnRounds);
+    await postReviewFindingsComment(app, task, project, {
+      body: `New review comments came in on this pull request, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
+    });
+    return true;
+  }
+
+  const prompt = buildPrReviewCommentsPrompt({
+    task,
+    branchName: task.branchName ?? `mullion/task-${task.id}`,
+    worktreePath: task.worktreePath,
+    budgetMinutes: resolvedTaskMaster.budgetMinutes,
+    auto: true,
+    // #761 — see task-claim.ts's own comment on this same expression for
+    // the remote-host caveat (#778).
+    commitTitlePath: project.conventionalCommitTitles
+      ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+      : undefined,
+    comments: newComments.map((c): PrReviewCommentInfo => ({
+      author: c.author,
+      path: c.path,
+      line: c.line,
+      body: c.body,
+    })),
+  });
+  const returned = await autoReturnTask(app, task, project, {
+    reason: "pr-comment",
+    seedPrompt: prompt,
+  });
+  if (returned.ok) {
+    app.db
+      .update(tasks)
+      .set({ lastPrReviewCommentAt: newestCommentAt })
+      .where(eq(tasks.id, task.id))
+      .run();
+  }
+  return true;
+}
+
 /**
  * What happens once `approveTask` actually runs — the gate above says WHEN
  * to attempt; this says what to do with each `ApproveOutcome`. In a sweep
@@ -1593,6 +1726,7 @@ async function attemptAutoApprove(
   }
 
   if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
+  if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
 
   if (
     task.reviewFindingsIngestedSessionId === null ||
