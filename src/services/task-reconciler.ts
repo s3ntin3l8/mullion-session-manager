@@ -997,11 +997,15 @@ function clearMergeState(
   // their post-approve null), which nothing else ever cleans up once the
   // conflict resolves and this merges: the task never leaves `done`, so
   // approveTask's own cleanupTaskWorktree/cleanupTaskSessions calls (which
-  // only ever fire on a "-> done" transition) never fire again for it. Both
-  // are no-ops on the (far more common) task that never auto-rebased —
-  // worktreePath/sessionId are already null from approve time — so this is
-  // safe to call unconditionally rather than branching on whether a rebase
-  // ever happened.
+  // only ever fire on a "-> done" transition) never fire again for it. Safe
+  // to call unconditionally on the (far more common) task that never
+  // auto-rebased too — NOT because worktreePath/sessionId are null there
+  // (approveTask never nulls either column; they're stale pointers to
+  // already-removed/killed resources), but because both calls are
+  // independently idempotent on stale-but-non-null values:
+  // removeWorktreeIfClean returns "not-a-repo" on an already-gone
+  // directory, and killSession is a safe no-op on an already-"killed"
+  // session.
   cleanupTaskWorktree(app, task, project);
   cleanupTaskSessions(app, task);
 }
@@ -1061,48 +1065,21 @@ async function attemptAutoRebase(
     const withinWindow = now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS;
     if (withinWindow) {
       // Still within its window — wait for it rather than spawning a second
-      // worker into the same worktree concurrently.
+      // worker into the same worktree concurrently. Deliberately checked
+      // BEFORE the attempts cap below: if this is the last allowed attempt
+      // and it's still in flight, it should be allowed to finish, not be
+      // reported as "gave up" while it may yet succeed.
       recordMergeError(app, task.id, "Conflicts with main — an auto-rebase attempt is in progress");
       return;
     }
-    // Past the window, so treated as abandoned — but "past the window" is a
-    // TIME check, not a liveness check (see REBASE_ATTEMPT_STALE_MS's own
-    // doc comment on why session-exit can't answer "still working" here). A
-    // rebase-and-reverify round genuinely can run long on a large repo
-    // without being stuck. Fresh review, PR #783 — force-removing the
-    // worktree below while that session is still actually alive would yank
-    // the directory out from under a running process, not just leak one.
-    // Terminate it first if it's still active, same posture as
-    // reseedTaskIfSessionExited's own `force: true` path: confirm the kill
-    // succeeded before doing anything destructive to its worktree, and
-    // don't proceed at all if the terminate itself fails.
-    if (task.sessionId !== null) {
-      const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
-      if (session?.status === "active") {
-        try {
-          await backend.terminate(String(task.sessionId));
-          app.db
-            .update(sessions)
-            .set({ status: "killed" })
-            .where(eq(sessions.id, task.sessionId))
-            .run();
-          closeSessionBrowserBindings(app, task.sessionId);
-        } catch (err) {
-          app.log.warn(
-            { err, taskId: task.id, sessionId: task.sessionId },
-            "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
-          );
-          recordMergeError(
-            app,
-            task.id,
-            "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
-          );
-          return;
-        }
-      }
-    }
   }
 
+  // Second review, PR #783 — checked before the stale-attempt termination
+  // below, not after: terminating a possibly-still-working session only to
+  // then immediately give up and never retry into a fresh one would be a
+  // pointless, irreversible kill. A task already at the cap gets no more
+  // attempts either way, so there's nothing to protect by keeping a stale
+  // attempt's session alive past this point.
   if (task.rebaseAttempts >= MAX_REBASE_ATTEMPTS) {
     recordMergeError(
       app,
@@ -1110,6 +1087,47 @@ async function attemptAutoRebase(
       `Conflicts with main — auto-rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s), needs manual resolution`,
     );
     return;
+  }
+
+  if (task.rebaseStartedAt !== null && task.sessionId !== null) {
+    // Reaching here means rebaseStartedAt is past its window (the withinWindow
+    // check above already returned otherwise) and a retry is going to happen
+    // (the cap check above already returned otherwise) — so the previous
+    // attempt is genuinely being superseded, and its session needs
+    // terminating before its worktree is touched. "Past the window" is a
+    // TIME check, not a liveness check (see REBASE_ATTEMPT_STALE_MS's own
+    // doc comment on why session-exit can't answer "still working" here) — a
+    // rebase-and-reverify round genuinely can run long on a large repo
+    // without being stuck. Force-removing the worktree below while that
+    // session is still actually alive would yank the directory out from
+    // under a running process, not just leak one. Terminate it first if it's
+    // still active, same posture as reseedTaskIfSessionExited's own
+    // `force: true` path: confirm the kill succeeded before doing anything
+    // destructive to its worktree, and don't proceed at all if the
+    // terminate itself fails.
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+    if (session?.status === "active") {
+      try {
+        await backend.terminate(String(task.sessionId));
+        app.db
+          .update(sessions)
+          .set({ status: "killed" })
+          .where(eq(sessions.id, task.sessionId))
+          .run();
+        closeSessionBrowserBindings(app, task.sessionId);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, sessionId: task.sessionId },
+          "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
+        );
+        recordMergeError(
+          app,
+          task.id,
+          "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
+        );
+        return;
+      }
+    }
   }
 
   // task.branchName should always be set by this point (retryTask's own

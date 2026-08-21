@@ -1873,6 +1873,73 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // Second review, PR #783 — the cap check must run BEFORE the
+      // stale-attempt termination, not after: a task that's already at the
+      // cap gets no more attempts either way, so terminating a possibly
+      // still-working session only to then immediately give up would be a
+      // pointless, irreversible kill. This is the one case that combination
+      // can actually happen in (stale window + at cap + session still
+      // active) — the previous "gives up..." test above never sets
+      // rebaseStartedAt, so it can't exercise this ordering.
+      it("gives up without terminating a stale attempt's still-active session, once attempts are exhausted", async () => {
+        const app = await buildApp();
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = project.json().id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove: true },
+        });
+        const session = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const staleSessionId = session.json().id as number;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            sessionId: staleSessionId,
+            rebaseAttempts: 2,
+            rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+          })
+          .returning()
+          .all();
+        const taskId = row.id;
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        expect(mockRemoveWorktree).not.toHaveBeenCalled();
+        const staleSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, staleSessionId))
+          .all()[0];
+        expect(staleSession.status).toBe("active");
+        const updatedRow = await getTask(app, taskId);
+        expect(updatedRow.rebaseAttempts).toBe(2);
+        expect(updatedRow.sessionId).toBe(staleSessionId);
+        expect(updatedRow.mergeError).toContain("gave up after 2 attempt(s)");
+
+        await app.close();
+      });
+
       it("surfaces rather than retries when the branch can't be recreated", async () => {
         const app = await buildApp();
         const { taskId } = await createDoneTaskWithConflict(app);

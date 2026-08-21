@@ -141,24 +141,30 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
       ])
       .run();
 
-    await app.ready();
-    // Waits for BOTH removals, not just the orphan's — pruneWorktrees may
-    // process its orphan list in an order/timing where the stale rebase
-    // attempt hasn't been removed yet the instant the sentinel orphan has.
-    await waitUntil(() => !fs.existsSync(orphan!.path) && !fs.existsSync(staleRebase!.path));
+    try {
+      await app.ready();
+      // Waits for BOTH removals, not just the orphan's — pruneWorktrees may
+      // process its orphan list in an order/timing where the stale rebase
+      // attempt hasn't been removed yet the instant the sentinel orphan has.
+      await waitUntil(() => !fs.existsSync(orphan!.path) && !fs.existsSync(staleRebase!.path));
 
-    expect(fs.existsSync(orphan!.path)).toBe(false);
-    expect(fs.existsSync(freshRebase!.path)).toBe(true);
-    expect(fs.existsSync(staleRebase!.path)).toBe(false);
-    fs.rmSync(cwd, { recursive: true, force: true });
-    // Unlike this file's other tests, this project's row is deleted here —
-    // its default ("local") hostId otherwise lingers in the shared tmpDb
-    // and gets swept into a LATER test's own resolveBackend mock (the
-    // "non-transport error" test below mocks resolveBackend to return one
-    // fixed backend for every project, so a leftover local-hosted project
-    // from an earlier test races that test's own `waitUntil` condition).
-    app.db.delete(tasks).where(eq(tasks.projectId, project.id)).run();
-    app.db.delete(projects).where(eq(projects.id, project.id)).run();
+      expect(fs.existsSync(orphan!.path)).toBe(false);
+      expect(fs.existsSync(freshRebase!.path)).toBe(true);
+      expect(fs.existsSync(staleRebase!.path)).toBe(false);
+    } finally {
+      // Unlike this file's other tests, this project's row is deleted here —
+      // its default ("local") hostId otherwise lingers in the shared tmpDb
+      // and gets swept into a LATER test's own resolveBackend mock (the
+      // "non-transport error" test below mocks resolveBackend to return one
+      // fixed backend for every project, so a leftover local-hosted project
+      // from an earlier test races that test's own `waitUntil` condition).
+      // In a `finally` so an assertion failure above still cleans up rather
+      // than cascading into a confusing failure in that later, unrelated
+      // test.
+      app.db.delete(tasks).where(eq(tasks.projectId, project.id)).run();
+      app.db.delete(projects).where(eq(projects.id, project.id)).run();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("never touches a dock-preview worktree — only the mullion-task- naming prefix is in scope", async () => {
