@@ -112,22 +112,34 @@ export function TerminalPane(props: {
   active?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  // PR 6 — @xterm/addon-webgl v0.19.0's own glyph-rendering canvas is sized
-  // wrong from its very first construction whenever devicePixelRatio isn't a
-  // "clean" integer the addon's internal computation expects (confirmed via
-  // live measurement: a 394px-wide, dpr-2.625 phone panel produced a glyph
-  // canvas sized for dpr 2.0 — 788px intrinsic width where dpr-correct would
-  // be 1034px — while xterm CORE's own separate `xterm-link-layer` canvas
-  // correctly used the live 2.625. Reproduced identically across DevTools
-  // zoom levels and across closing/reopening the pane, so this isn't a
-  // staleness/timing race — the addon computes it wrong on every single
-  // construction in that environment. No fixed upstream release exists yet
-  // (0.19.0 is current stable; only unreleased 0.20.0 betas exist). Coarse
-  // pointer, not layout tier — a touchscreen laptop at desktop width has the
-  // same class of display and should get the same, already-battle-tested
-  // fallback: `catch` below already falls back to xterm's default DOM
-  // renderer whenever WebGL construction throws, so skipping the `try` here
-  // entirely reuses that exact path rather than adding a new one. Read once
+  // PR 6 (review corrections applied — see PR #797) — @xterm/addon-webgl
+  // v0.19.0's own MAIN glyph-rendering canvas is sized wrong whenever
+  // devicePixelRatio isn't a "clean" integer the addon's internal
+  // computation expects (confirmed via live measurement: a 394px-wide,
+  // dpr-2.625 phone panel produced a glyph canvas sized for dpr 2.0 — 788px
+  // intrinsic width where dpr-correct would be 1034px). This is an
+  // inconsistency WITHIN the addon, not "core vs. addon": the addon's own
+  // separate `LinkRenderLayer` canvas (class `xterm-link-layer` — defined
+  // and instantiated only inside @xterm/addon-webgl's own bundle, not
+  // xterm core) correctly used the live 2.625 on the same pane, so the
+  // divergence is specifically in the main/glyph render path, not a
+  // core-vs-addon split. The wrong size shows up on the addon's first
+  // ACTIVATION, not raw construction — `new WebglAddon()` itself does
+  // nothing render-relevant; `activate()` defers all canvas setup via
+  // `onWillOpen` until `terminal.element` exists (confirmed in the addon's
+  // own bundle), i.e. effectively at `term.open()`. Reproduced identically
+  // across DevTools zoom levels and across closing/reopening the pane, so
+  // this isn't a staleness/timing race — the addon computes it wrong on
+  // every single activation in that environment. No fixed upstream release
+  // exists yet (0.19.0 is current stable; only unreleased 0.20.0 betas
+  // exist). Coarse pointer (primary pointer type), not layout tier or
+  // "has touch" — a touch-primary device (phone, tablet) matches; a
+  // touchscreen laptop whose primary pointer is still a mouse/trackpad is
+  // `(pointer: fine)` and correctly keeps WebGL, since this bug wasn't
+  // observed there. Already-battle-tested fallback either way: `catch`
+  // below already falls back to xterm's default DOM renderer whenever
+  // WebGL construction throws, so skipping the `try` here entirely reuses
+  // that exact path rather than adding a new one. Read once
   // at mount, not reactively — deliberately frozen even though the hook
   // itself does react to a live pointer-type change (layoutTier.ts's own
   // comment on `useCoarsePointer`, a couple lines above its definition,
