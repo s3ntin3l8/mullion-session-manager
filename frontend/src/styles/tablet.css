@@ -14,14 +14,58 @@
    Imported from index.css AFTER mobile.css — deliberate, not incidental:
    mobile.css's own header comment already declares cascade order
    load-bearing for its eight `!important` declarations, and a phone at
-   <700px matches BOTH mobile.css's `max-width: 699px` query and this
+   <700px matches BOTH mobile.css's `max-width: 699.98px` query and this
    file's `pointer: coarse` one (a real phone's pointer is coarse), so the
    two files' rules for the same element must not conflict. They don't
    today — mobile.css owns width-driven layout (single-pane, sidebar
-   drawer, dock hidden), this file owns touch-target sizing and the key
-   bar — but the import order is what keeps a future rule collision
-   resolving predictably rather than by chance. */
+   drawer, dock hidden), this file owns touch-target sizing, the key bar,
+   and (below) the keyboard-inset shrink those two share — but the import
+   order is what keeps a future rule collision resolving predictably rather
+   than by chance. */
 @media (pointer: coarse) {
+  /* Mobile UI/UX overhaul, item B.2, moved here from mobile.css's own
+     `max-width: 699.98px` block (independent code review) — PR #728's tablet
+     tier gave the key bar itself pointer-coarse gating (`App.tsx`'s
+     `isCoarsePointer`, MobileKeyBar rendered below), but left the ONE rule
+     that actually reads `--kb-inset` behind the width query, so a tablet
+     folded keyboard covered both the key bar and the terminal's prompt
+     line with nothing shrinking `.app` out from under it.
+
+     `.app`'s base rule (app-shell.css) is `position: fixed; inset: 0`, so
+     the fixed shell never reflows when the on-screen keyboard opens;
+     `--kb-inset` (App.tsx's own useVisualViewportInset hook, 0px when the
+     keyboard is closed or the browser reports no visualViewport shrink at
+     all) shrinks it from the bottom instead, so whatever's focused stays
+     above the keyboard rather than hidden behind it. `bottom` alone, not
+     the other three `inset` edges — this only ever needs to reclaim height
+     from the bottom of the shell. TerminalPane's existing ResizeObserver →
+     refit picks up the resulting size change and re-fits the active
+     terminal automatically; no separate wiring needed here.
+
+     Pointer-coarse, not unconditional — matches the gate on the thing this
+     exists to support (the key bar, below), and keeps mouse-driven desktop
+     away from the hook's mobile-Safari-specific quirks. Self-neutralizing
+     either way if it turns out to matter less than expected on a given
+     platform: where the layout viewport already shrinks on its own
+     (Chrome/Android honoring `interactive-widget=resizes-content`,
+     index.html), `--kb-inset` computes to ~0 and this rule is a no-op;
+     where it doesn't, this rule is the fix.
+
+     Known limitation, unchanged from the mobile-only version of this rule
+     (independent code review, PR #615): only `bottom` moves, `top` stays
+     pinned to 0. When iOS's native scroll-into-view pans the visual
+     viewport to keep a focused input visible above the keyboard,
+     `visualViewport.offsetTop` goes positive — folded into --kb-inset's own
+     gap calculation (useVisualViewportInset.ts), so `bottom` shrinks by
+     more than the keyboard alone accounts for, while the toolbar at the top
+     of the now-panned viewport can end up scrolled out of view with no
+     scroll container to bring it back. Not chased further here (same as
+     before this rule moved) — a real fix would need `.app` to track `top`
+     too, which conflicts with the toolbar's own fixed-at-top design. */
+  .app {
+    bottom: var(--kb-inset, 0px);
+  }
+
   /* Tablet tier plan, PR 4 (decided explicitly, per that plan's own
      "Two hazards to design around" section) — terminalInputRegistry.ts's
      own header comment documents a real, known limitation: it resolves a
