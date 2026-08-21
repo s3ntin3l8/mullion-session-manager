@@ -94,7 +94,7 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   Retry to protect: every done task from the normal pipeline has a branch,
   so requiring one to be absent would make this exception dead on arrival.
   Deleting a done task's row only removes Mullion's own record: the closed
-  issue and its PR stay on GitHub untouched — not necessarily *merged*:
+  issue and its PR stay on GitHub untouched — not necessarily _merged_:
   `approveTask` sets `prNumber`/`prUrl` unconditionally but only requests a
   merge when the project has `mergeOnApprove` on (default off), and even
   then the merge sweep is async/best-effort, so a done task's PR is often
