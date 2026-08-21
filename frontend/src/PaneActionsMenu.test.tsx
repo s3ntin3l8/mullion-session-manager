@@ -19,10 +19,23 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 // different rename UI — see PaneActionsMenu.tsx's own comment on why), and
 // the non-terminal-panel (`params: undefined`) case the mobile bar hits for
 // every non-session panel in `dockviewApi.panels`.
+const resetTiledGroupWidths = vi.fn();
+// Untyped (no inline implementation, unlike a `vi.fn(() => true)` initial
+// value would give it) so the `(...args) => fn(...args)` spread wrapper
+// below type-checks the same way resetTiledGroupWidths's own does — an
+// initial implementation narrows vi.fn's inferred signature to that
+// implementation's own arity, which a spread call can't satisfy. Defaults
+// to eligible via beforeEach's own `.mockReturnValue(true)` below, so the
+// existing click-through tests don't each have to opt back in — the
+// dedicated "disabled" describe block overrides it per-test.
+const canResetTiledGroupWidths = vi.fn();
+
 vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
   openBrowserPanePanel: vi.fn(),
   openOrFocusSessionPanel: vi.fn(),
+  resetTiledGroupWidths: (...args: unknown[]) => resetTiledGroupWidths(...args),
+  canResetTiledGroupWidths: (...args: unknown[]) => canResetTiledGroupWidths(...args),
 }));
 
 vi.mock("./api/index.js", () => ({
@@ -131,6 +144,8 @@ beforeEach(() => {
   projects = [];
   promoteSessionMock = vi.fn();
   requestSplit.mockClear();
+  canResetTiledGroupWidths.mockClear();
+  canResetTiledGroupWidths.mockReturnValue(true);
 });
 
 describe("PaneActionsMenu", () => {
@@ -250,6 +265,78 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByText("Split down"));
 
       expect(requestSplit).toHaveBeenCalledWith("session-42", "below");
+    });
+  });
+
+  // Manual repair for the fold/unfold pane-skew bug — offered from every
+  // panel type (no `session` gate), same as "Move" above, since it acts on
+  // the whole tiled grid rather than this specific pane.
+  describe("Reset pane sizes", () => {
+    it("calls resetTiledGroupWidths with the passed-in containerApi, closing the menu", async () => {
+      const user = userEvent.setup();
+      resetTiledGroupWidths.mockClear();
+      render(
+        <PaneActionsMenu
+          api={makeApi({ id: "session-42" })}
+          params={{ sessionId: session.id }}
+          containerApi={CONTAINER_API}
+          onRename={vi.fn()}
+          triggerClassName="pane-tab-btn"
+        />,
+      );
+
+      await user.click(screen.getByTitle("More…"));
+      await user.click(screen.getByText("Reset pane sizes"));
+
+      expect(resetTiledGroupWidths).toHaveBeenCalledWith(CONTAINER_API);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("is still offered on a panel with no resolvable session", async () => {
+      const user = userEvent.setup();
+      render(
+        <PaneActionsMenu
+          api={makeApi({ id: "timeline-1" })}
+          params={undefined}
+          containerApi={CONTAINER_API}
+          onRename={vi.fn()}
+          triggerClassName="pane-tab-btn"
+        />,
+      );
+
+      await user.click(screen.getByTitle("More…"));
+
+      expect(screen.getByText("Reset pane sizes")).toBeInTheDocument();
+    });
+
+    // Independent code review — canResetTiledGroupWidths shares
+    // resetTiledGroupWidths's own eligibility guards (fewer than two tiled
+    // groups, or a multi-row grid), so the menu item disables itself
+    // instead of staying clickable-but-silently-inert when there's nothing
+    // to redistribute.
+    it("disables itself with an explanatory title when canResetTiledGroupWidths is false", async () => {
+      canResetTiledGroupWidths.mockReturnValue(false);
+      resetTiledGroupWidths.mockClear();
+      const user = userEvent.setup();
+      render(
+        <PaneActionsMenu
+          api={makeApi({ id: "session-42" })}
+          params={{ sessionId: session.id }}
+          containerApi={CONTAINER_API}
+          onRename={vi.fn()}
+          triggerClassName="pane-tab-btn"
+        />,
+      );
+
+      await user.click(screen.getByTitle("More…"));
+      const item = screen.getByText("Reset pane sizes").closest("button");
+
+      expect(item).toBeDisabled();
+      expect(item).toHaveAttribute("title", "No skewed row of tiled panes to reset");
+
+      await user.click(item!);
+
+      expect(resetTiledGroupWidths).not.toHaveBeenCalled();
     });
   });
 

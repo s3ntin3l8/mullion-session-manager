@@ -19,6 +19,10 @@ import {
   reseedSessionPanelTitles,
   serializeForPersist,
   applyLayoutPresentation,
+  snapshotTiledGroupWidths,
+  restoreTiledGroupWidths,
+  resetTiledGroupWidths,
+  canResetTiledGroupWidths,
   attentionTransitionPanelIds,
   newChildSessionIds,
   childPanelPosition,
@@ -55,10 +59,34 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
 // leaving it absent (rather than populated) is what pins isTiledGroup to
 // the group's own `api.location`, not a panel-derived fallback that would
 // silently mask a regression back to the old, panels-based implementation.
-function mockGroup(id: string, locationType: "grid" | "floating" = "grid") {
+function mockGroup(
+  id: string,
+  locationType: "grid" | "floating" = "grid",
+  size?: { width: number; height: number },
+) {
+  // width/height are mutable (not a frozen literal) and setSize writes back
+  // into them — snapshotTiledGroupWidths/restoreTiledGroupWidths's own tests
+  // below assert against `.api.width` after a `setSize` call the same way a
+  // real dockview-core GridviewPanel would reflect it (verified against the
+  // installed package: `GridviewPanelApi.setSize` fires `onDidSizeChange`,
+  // which `GridviewPanel`'s own subscriber folds into its live `width`).
+  let width = size?.width ?? 0;
+  let height = size?.height ?? 0;
   return {
     id,
-    api: { location: { type: locationType } },
+    api: {
+      location: { type: locationType },
+      get width() {
+        return width;
+      },
+      get height() {
+        return height;
+      },
+      setSize: vi.fn((event: { width?: number; height?: number }) => {
+        if (event.width !== undefined) width = event.width;
+        if (event.height !== undefined) height = event.height;
+      }),
+    },
     header: { hidden: false },
   } as unknown as DockviewGroupPanel;
 }
@@ -1591,6 +1619,167 @@ describe("applyLayoutPresentation (issue #85; tri-state as of tablet tier plan, 
 
       expect(tiled.header.hidden).toBe(false);
       expect(floating.header.hidden).toBe(false);
+    });
+  });
+});
+
+describe("snapshotTiledGroupWidths / restoreTiledGroupWidths / resetTiledGroupWidths (fold/unfold pane-skew fix)", () => {
+  function mockApiWithGroups(groups: DockviewGroupPanel[]): DockviewApi {
+    return { groups } as unknown as DockviewApi;
+  }
+
+  describe("snapshotTiledGroupWidths", () => {
+    it("captures each tiled group's width as a proportion of the total", () => {
+      const left = mockGroup("left", "grid", { width: 300, height: 600 });
+      const right = mockGroup("right", "grid", { width: 700, height: 600 });
+      const api = mockApiWithGroups([left, right]);
+
+      const snapshot = snapshotTiledGroupWidths(api);
+
+      expect(snapshot.get("left")).toBeCloseTo(0.3);
+      expect(snapshot.get("right")).toBeCloseTo(0.7);
+    });
+
+    it("ignores floating groups", () => {
+      const tiled = mockGroup("tiled", "grid", { width: 500, height: 600 });
+      const floating = mockGroup("floating", "floating", { width: 500, height: 600 });
+      const api = mockApiWithGroups([tiled, floating]);
+
+      const snapshot = snapshotTiledGroupWidths(api);
+
+      expect(snapshot.has("floating")).toBe(false);
+      expect(snapshot.get("tiled")).toBeCloseTo(1);
+    });
+
+    it("returns an empty snapshot when the total width is zero", () => {
+      const api = mockApiWithGroups([mockGroup("a", "grid", { width: 0, height: 0 })]);
+
+      expect(snapshotTiledGroupWidths(api).size).toBe(0);
+    });
+  });
+
+  describe("restoreTiledGroupWidths", () => {
+    it("redistributes the current total width per the snapshotted proportions", () => {
+      // Mirrors the actual bug: a snapshot taken at 50/50 across a
+      // 1000px-wide row, then read back after dockview's own maximize/exit
+      // clamp has already skewed the SAME two groups to 100/900 at whatever
+      // width the grid happens to be at right now (790px here, simulating a
+      // tablet width different from the original 1000px snapshot) — the fix
+      // must redistribute the CURRENT total, not replay the old pixel sizes.
+      const left = mockGroup("left", "grid", { width: 100, height: 600 });
+      const right = mockGroup("right", "grid", { width: 690, height: 600 });
+      const api = mockApiWithGroups([left, right]);
+      const snapshot = new Map([
+        ["left", 0.5],
+        ["right", 0.5],
+      ]);
+
+      restoreTiledGroupWidths(api, snapshot);
+
+      // Only the non-last group gets an explicit setSize (see the function's
+      // own comment on why) — asserting on `left` alone, not `right`, is
+      // deliberate.
+      expect(left.api.setSize).toHaveBeenCalledWith({ width: 395 });
+      expect(right.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("no-ops with fewer than two matching groups", () => {
+      const only = mockGroup("only", "grid", { width: 400, height: 600 });
+      const api = mockApiWithGroups([only]);
+
+      restoreTiledGroupWidths(api, new Map([["only", 1]]));
+
+      expect(only.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("no-ops when the current group count no longer matches the snapshot", () => {
+      // A pane was opened or closed during the phone excursion — the
+      // snapshot describes a layout that no longer exists.
+      const left = mockGroup("left", "grid", { width: 300, height: 600 });
+      const right = mockGroup("right", "grid", { width: 700, height: 600 });
+      const extra = mockGroup("extra", "grid", { width: 0, height: 600 });
+      const api = mockApiWithGroups([left, right, extra]);
+      const snapshot = new Map([
+        ["left", 0.5],
+        ["right", 0.5],
+      ]);
+
+      restoreTiledGroupWidths(api, snapshot);
+
+      expect(left.api.setSize).not.toHaveBeenCalled();
+      expect(right.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("no-ops across multiple rows (mismatched heights) rather than mis-redistributing", () => {
+      const topRow = mockGroup("top", "grid", { width: 300, height: 300 });
+      const bottomRow = mockGroup("bottom", "grid", { width: 700, height: 600 });
+      const api = mockApiWithGroups([topRow, bottomRow]);
+      const snapshot = new Map([
+        ["top", 0.5],
+        ["bottom", 0.5],
+      ]);
+
+      restoreTiledGroupWidths(api, snapshot);
+
+      expect(topRow.api.setSize).not.toHaveBeenCalled();
+      expect(bottomRow.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("no-ops on an empty snapshot", () => {
+      const group = mockGroup("a", "grid", { width: 400, height: 600 });
+      const api = mockApiWithGroups([group]);
+
+      expect(() => restoreTiledGroupWidths(api, new Map())).not.toThrow();
+      expect(group.api.setSize).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("resetTiledGroupWidths", () => {
+    it("distributes an already-skewed row evenly", () => {
+      const left = mockGroup("left", "grid", { width: 100, height: 600 });
+      const middle = mockGroup("middle", "grid", { width: 100, height: 600 });
+      const right = mockGroup("right", "grid", { width: 600, height: 600 });
+      const api = mockApiWithGroups([left, middle, right]);
+
+      resetTiledGroupWidths(api);
+
+      expect(left.api.setSize).toHaveBeenCalledWith({ width: 267 });
+      expect(middle.api.setSize).toHaveBeenCalledWith({ width: 267 });
+      expect(right.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("no-ops with a single tiled group", () => {
+      const only = mockGroup("only", "grid", { width: 800, height: 600 });
+      const api = mockApiWithGroups([only]);
+
+      resetTiledGroupWidths(api);
+
+      expect(only.api.setSize).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("canResetTiledGroupWidths", () => {
+    it("is true for a same-row multi-group layout", () => {
+      const left = mockGroup("left", "grid", { width: 300, height: 600 });
+      const right = mockGroup("right", "grid", { width: 700, height: 600 });
+      const api = mockApiWithGroups([left, right]);
+
+      expect(canResetTiledGroupWidths(api)).toBe(true);
+    });
+
+    it("is false with fewer than two tiled groups", () => {
+      const only = mockGroup("only", "grid", { width: 800, height: 600 });
+      const api = mockApiWithGroups([only]);
+
+      expect(canResetTiledGroupWidths(api)).toBe(false);
+    });
+
+    it("is false across multiple rows (mismatched heights) — must agree with restoreTiledGroupWidths's own no-op", () => {
+      const topRow = mockGroup("top", "grid", { width: 300, height: 300 });
+      const bottomRow = mockGroup("bottom", "grid", { width: 700, height: 600 });
+      const api = mockApiWithGroups([topRow, bottomRow]);
+
+      expect(canResetTiledGroupWidths(api)).toBe(false);
     });
   });
 });

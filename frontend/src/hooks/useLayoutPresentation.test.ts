@@ -75,7 +75,16 @@ function stubBreakpointMedia(initialTier: LayoutTier) {
 function makeMockApi(options: { activePanel?: unknown } = {}) {
   const maximizedGroupListeners: Array<(e: { group: DockviewGroupPanel }) => void> = [];
   const addGroupListeners: Array<(group: DockviewGroupPanel) => void> = [];
-  const groups: Array<{ header: { hidden: boolean } }> = [];
+  const groups: Array<{
+    id: string;
+    header: { hidden: boolean };
+    api: {
+      location: { type: string };
+      width: number;
+      height: number;
+      setSize: ReturnType<typeof vi.fn>;
+    };
+  }> = [];
   const api = {
     groups,
     hasMaximizedGroup: vi.fn(() => false),
@@ -105,13 +114,38 @@ function makeMockApi(options: { activePanel?: unknown } = {}) {
     // panels-derived fallback that would mask a regression back to that
     // broken timing assumption. Pass "floating" to exercise the
     // onDidAddGroup skip-floating path (useLayoutPresentation.ts).
-    addGroup: (locationType: "grid" | "floating" = "grid") => {
+    // `width`/`height`/`id` default to values the pane-skew tests below
+    // override explicitly — every pre-existing call site only ever reads
+    // `.header.hidden`, so these defaults are inert for them. `setSize`
+    // writes back into `width`/`height` the same way `mockGroup` in
+    // panelUtils.test.ts does, mirroring the real dockview-core
+    // GridviewPanel/GridviewPanelApi relationship (see that helper's own
+    // comment).
+    addGroup: (
+      locationType: "grid" | "floating" = "grid",
+      options: { id?: string; width?: number; height?: number } = {},
+    ) => {
+      let width = options.width ?? 0;
+      let height = options.height ?? 0;
       const group = {
+        id: options.id ?? `group-${groups.length + 1}`,
         header: { hidden: false },
-        api: { location: { type: locationType } },
+        api: {
+          location: { type: locationType },
+          get width() {
+            return width;
+          },
+          get height() {
+            return height;
+          },
+          setSize: vi.fn((event: { width?: number; height?: number }) => {
+            if (event.width !== undefined) width = event.width;
+            if (event.height !== undefined) height = event.height;
+          }),
+        },
       };
       groups.push(group);
-      return group as unknown as { header: { hidden: boolean } };
+      return group;
     },
     fireMaximizedGroupChange: (group: { header: { hidden: boolean } }) =>
       maximizedGroupListeners.forEach((cb) =>
@@ -315,6 +349,94 @@ describe("useLayoutPresentation", () => {
       rerender({ layoutMode: "desktop" });
 
       expect(setLayoutTier).toHaveBeenLastCalledWith("desktop");
+    });
+
+    // Pane-skew fix (panelUtils.ts's snapshotTiledGroupWidths/
+    // restoreTiledGroupWidths) — this is the actual fold/unfold repro: two
+    // 50/50 groups on tablet, fold to phone, something (dockview's own
+    // maximize/exit cache, standing in here for the mock's `setSize` calls
+    // between the two events) skews them, unfold back to tablet, and the
+    // restore should redistribute the CURRENT total back to the snapshotted
+    // 50/50 proportions rather than leaving the skew in place.
+    it("restores tiled group widths to their pre-fold proportions on a phone-to-tablet crossing", async () => {
+      const media = stubBreakpointMedia("tablet");
+      const { api, addGroup } = makeMockApi();
+      const left = addGroup("grid", { id: "left", width: 500, height: 600 });
+      const right = addGroup("grid", { id: "right", width: 500, height: 600 });
+      const setLayoutTier = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier }),
+      );
+
+      // Enter phone — the hook snapshots {left: 0.5, right: 0.5} just before
+      // this. Standing in for dockview's own hide-cache clamp (the actual
+      // bug's mechanism, verified against the installed dockview-core —
+      // see panelUtils.ts's own comment), simulate the skew directly: total
+      // width unchanged at 1000, but now 100/900 instead of 500/500.
+      media.setTier("phone");
+      media.phone.dispatchEvent(new Event("change"));
+      left.api.setSize({ width: 100 });
+      right.api.setSize({ width: 900 });
+      left.api.setSize.mockClear();
+      right.api.setSize.mockClear();
+
+      // Exit back to tablet — the restore is deferred one rAF past this.
+      media.setTier("tablet");
+      media.phone.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      // Only the non-last group gets an explicit corrective setSize (see
+      // restoreTiledGroupWidths's own comment on why) — asserting on `left`
+      // alone is deliberate. 0.5 * (100 + 900) = 500, back to the original
+      // pre-fold width despite the skewed 100/900 it was reading from.
+      expect(left.api.setSize).toHaveBeenCalledWith({ width: 500 });
+      expect(right.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("does not snapshot or restore on a tablet-to-desktop crossing that never touched phone", async () => {
+      const media = stubBreakpointMedia("tablet");
+      const { api, addGroup } = makeMockApi();
+      const left = addGroup("grid", { id: "left", width: 500, height: 600 });
+      const right = addGroup("grid", { id: "right", width: 500, height: 600 });
+      const setLayoutTier = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier }),
+      );
+
+      media.setTier("desktop");
+      media.desktop.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      expect(left.api.setSize).not.toHaveBeenCalled();
+      expect(right.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("does not treat mounting directly on phone as an entering-phone transition", async () => {
+      // No prior tier to snapshot FROM — the very first onChange() call on
+      // mount must not be mistaken for a tablet/desktop-to-phone crossing
+      // (prevTierRef's own comment in the hook).
+      const media = stubBreakpointMedia("phone");
+      const { api, addGroup } = makeMockApi({
+        activePanel: { id: "session-1", api: { location: { type: "grid" } } },
+      });
+      const left = addGroup("grid", { id: "left", width: 500, height: 600 });
+      const right = addGroup("grid", { id: "right", width: 500, height: 600 });
+      const setLayoutTier = vi.fn();
+
+      renderHook(() =>
+        useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier }),
+      );
+
+      media.setTier("tablet");
+      media.phone.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      // Nothing was ever snapshotted, so exiting phone must not redistribute
+      // anything either, however the two groups' widths happen to compare.
+      expect(left.api.setSize).not.toHaveBeenCalled();
+      expect(right.api.setSize).not.toHaveBeenCalled();
     });
 
     it("removes both boundary-query change listeners on unmount", () => {

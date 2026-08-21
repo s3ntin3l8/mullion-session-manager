@@ -6,6 +6,7 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
 import {
   GitBranchIcon,
+  GridIcon,
   KillIcon,
   ListIcon,
   MoveIcon,
@@ -15,7 +16,13 @@ import {
   SplitDownIcon,
   SplitRightIcon,
 } from "./ui/icons.js";
-import { openTimelinePanel, openBrowserPanePanel, openOrFocusSessionPanel } from "./panelUtils.js";
+import {
+  openTimelinePanel,
+  openBrowserPanePanel,
+  openOrFocusSessionPanel,
+  resetTiledGroupWidths,
+  canResetTiledGroupWidths,
+} from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
@@ -272,6 +279,15 @@ export function PaneActionsMenu({
     setOverflowPos((pos) => (pos ? { ...pos, right: pos.right + overflowBy } : pos));
   }, [overflowOpen]);
 
+  // Read fresh on every open, not memoized — dockview's own group layout is
+  // live state this component doesn't own, so a value computed once and
+  // cached could disable/enable the "Reset pane sizes" item below against a
+  // layout that's since changed underneath it. Skipped while the menu is
+  // closed since it's only ever read from the (conditionally rendered) menu
+  // content — `canResetTiledGroupWidths` is cheap and pure either way, but
+  // there's no reason to call it on every render of the trigger button.
+  const canReset = overflowOpen && canResetTiledGroupWidths(containerApi);
+
   return (
     <>
       <button
@@ -380,6 +396,36 @@ export function PaneActionsMenu({
             >
               <MoveIcon size={14} style={{ color: "var(--muted)" }} />
               <span style={{ flex: 1 }}>Move (drag tab)</span>
+            </button>
+            {/* Manual repair for the fold/unfold pane-skew bug
+                (snapshotTiledGroupWidths/restoreTiledGroupWidths's own header
+                comment in panelUtils.ts) — dockview's own maximize/exit cache
+                can freeze a tiled group at its 100px minimum, which the fix
+                itself now prevents going forward but can't retroactively
+                repair a workspace that was already skewed before it shipped.
+                No `session` gate — this acts on the whole tiled grid, not
+                this pane specifically, so it's offered from every panel type
+                (including non-terminal ones), same as it's a layout action
+                rather than a session one.
+
+                Disabled (not just a silent no-op click) whenever
+                resetTiledGroupWidths itself has nothing eligible to
+                redistribute — fewer than two tiled groups, or a multi-row
+                grid the same-row heuristic rejects — same
+                disabled+explanatory-title pattern as "Move (drag tab)"
+                above, rather than leaving a user-invoked "repair my layout"
+                action clickable with no way to tell whether it did
+                anything. `canReset` (computed above, once, only while the
+                menu is open) rather than re-deriving it here twice. */}
+            <button
+              className="pane-tab-overflow-item"
+              role="menuitem"
+              disabled={!canReset}
+              title={canReset ? undefined : "No skewed row of tiled panes to reset"}
+              onClick={() => closeMenuAfterAction(() => resetTiledGroupWidths(containerApi))}
+            >
+              <GridIcon size={14} style={{ color: "var(--muted)" }} />
+              <span style={{ flex: 1 }}>Reset pane sizes</span>
             </button>
             {session && (
               <button
