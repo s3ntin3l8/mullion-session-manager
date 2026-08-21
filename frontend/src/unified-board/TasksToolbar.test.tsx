@@ -54,9 +54,12 @@ const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
-const clearDoneTasks = vi.fn(
-  async (): Promise<ClearDoneResult> => ({ deleted: [], failed: [], branches: [], remaining: 0 }),
-);
+const clearDoneTasks = vi.fn(async (): Promise<ClearDoneResult> => ({
+  deleted: [],
+  failed: [],
+  branches: [],
+  remaining: 0,
+}));
 
 function storeState() {
   return {
