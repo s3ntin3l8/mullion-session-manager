@@ -372,4 +372,20 @@
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+
+  /* Mobile handling for create-modal dialogs (CreateProjectModal,
+     CreateGroupModal, CreateHostModal, HostConfigModal, PromoteDialog) —
+     compact padding and full width on phone screens so modals don't lose
+     usable height to desktop top-anchoring or width to fixed margins. */
+  .create-modal-backdrop {
+    padding: 12px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .create-modal {
+    width: 100%;
+    max-width: none;
+  }
 }
