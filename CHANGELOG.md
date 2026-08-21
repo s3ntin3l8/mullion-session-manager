@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.41](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.40...v0.2.41) (2026-08-21)
+
+
+### Features
+
+* distinguish task sessions and hide them from the sidebar by default ([#785](https://github.com/s3ntin3l8/mullion-session-manager/issues/785)) ([9a7590c](https://github.com/s3ntin3l8/mullion-session-manager/commit/9a7590c53f46ac712875ffc9aeb37b21ceacd5ad))
+* **tasks:** allow more than one automatic review-fix round ([#774](https://github.com/s3ntin3l8/mullion-session-manager/issues/774)) ([e760346](https://github.com/s3ntin3l8/mullion-session-manager/commit/e76034612877739a1094c249aa8cb0f0715d0e26))
+* **tasks:** auto-rebase a task branch that conflicts with its base ([#783](https://github.com/s3ntin3l8/mullion-session-manager/issues/783)) ([f8529d9](https://github.com/s3ntin3l8/mullion-session-manager/commit/f8529d9952a2fd5bcb3ed7a0ed28f01566ef1421))
+* **tasks:** ingest GitHub PR review comments ([#757](https://github.com/s3ntin3l8/mullion-session-manager/issues/757)) ([#784](https://github.com/s3ntin3l8/mullion-session-manager/issues/784)) ([b5753bb](https://github.com/s3ntin3l8/mullion-session-manager/commit/b5753bba9a05de74eb1102bc2086ffe5187c71a5))
+* **tasks:** ingest review findings for remote-hosted tasks ([#779](https://github.com/s3ntin3l8/mullion-session-manager/issues/779)) ([ae511c0](https://github.com/s3ntin3l8/mullion-session-manager/commit/ae511c002c01c009a928f0490f056b5a935b4b60))
+* **tasks:** return red CI to the worker ([#755](https://github.com/s3ntin3l8/mullion-session-manager/issues/755)) ([#780](https://github.com/s3ntin3l8/mullion-session-manager/issues/780)) ([97ee8f1](https://github.com/s3ntin3l8/mullion-session-manager/commit/97ee8f1ee0036bf696b3d71e816c76e9acd69d02))
+
+
+### Bug Fixes
+
+* **tasks:** handle GitHub rate limiting (429 / Retry-After) ([#777](https://github.com/s3ntin3l8/mullion-session-manager/issues/777)) ([11e5056](https://github.com/s3ntin3l8/mullion-session-manager/commit/11e5056ca66f9849d4213295cba8e8b85af2c7b9))
+* **tasks:** terminate superseded and completed task sessions ([#773](https://github.com/s3ntin3l8/mullion-session-manager/issues/773)) ([026d8a2](https://github.com/s3ntin3l8/mullion-session-manager/commit/026d8a20c8c71acc4bb3f9e9910ce49a60a66745))
+
 ## [0.2.40](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.39...v0.2.40) (2026-08-21)
 
 
