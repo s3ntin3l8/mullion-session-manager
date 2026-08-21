@@ -16,6 +16,13 @@ import { resolveBackend } from "./session-backend.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord } from "./session-lifecycle.js";
+// Not killSession() here (see the doc comment at its call site below) — but
+// killSession's OTHER two side effects (this one and cleanupPreviewWorktree)
+// still need to happen on a confirmed-successful terminate, or they silently
+// never run for this call site (fresh subagent review, PR #773 follow-up).
+// cleanupPreviewWorktree is a no-op here regardless — a task worker session
+// is never registered in the preview-worktree map — so only this one matters.
+import { closeSessionBrowserBindings } from "./session-browsers.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -82,6 +89,7 @@ export async function reseedTaskIfSessionExited(
         .set({ status: "killed" })
         .where(eq(sessions.id, task.sessionId))
         .run();
+      closeSessionBrowserBindings(app, task.sessionId);
     } catch (err) {
       // Do NOT fall through to spawning anyway — a terminate failure means
       // the old session might still be alive and still writing to this

@@ -6,6 +6,7 @@ import fs from "node:fs";
 const mockCreateSessionRecord = vi.fn();
 const mockTerminate = vi.fn();
 const mockResolveBackend = vi.fn(() => ({ terminate: mockTerminate }));
+const mockCloseSessionBrowserBindings = vi.fn();
 
 vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -13,6 +14,9 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
 });
 vi.mock("../../src/services/session-backend.js", () => ({
   resolveBackend: mockResolveBackend,
+}));
+vi.mock("../../src/services/session-browsers.js", () => ({
+  closeSessionBrowserBindings: mockCloseSessionBrowserBindings,
 }));
 
 const { buildApp } = await import("../../src/app.js");
@@ -171,6 +175,12 @@ describe("reseedTaskIfSessionExited", () => {
     // exited-session reconciler to eventually mark "exited".
     const [oldSessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
     expect(oldSessionRow.status).toBe("killed");
+    // Fresh subagent review, PR #773 follow-up — killSession() isn't used
+    // here (see the comment at the call site), so this side effect has to
+    // be triggered explicitly on the same confirmed-success path, or a
+    // stale session-browser binding lingers forever.
+    expect(mockCloseSessionBrowserBindings).toHaveBeenCalledTimes(1);
+    expect(mockCloseSessionBrowserBindings.mock.calls[0][1]).toBe(sessionId);
   });
 
   it("with force: true — does NOT spawn a second agent when terminate itself fails", async () => {
@@ -201,6 +211,7 @@ describe("reseedTaskIfSessionExited", () => {
     // pass to retry, not silently declare it gone).
     const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
     expect(sessionRow.status).toBe("active");
+    expect(mockCloseSessionBrowserBindings).not.toHaveBeenCalled();
   });
 
   it("logs and does not update the task row when the spawn itself fails", async () => {
