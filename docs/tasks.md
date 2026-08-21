@@ -1487,7 +1487,7 @@ name pattern (`CommandPalette`'s `expandSessionNamePattern`) leaves it
 task session's whole point is a name that reliably identifies which task
 it belongs to — which an OSC update would defeat. Once named, a task
 session is still hidden from the sidebar by default (a new
-`projects.sessions.showTaskSessions` setting, off by default, same
+`settings.sessions.showTaskSessions` setting, off by default, same
 persistence mechanism as `hideEndedSessions`) — reusing
 `taskLinkedSessionIds` (`frontend/src/unifiedBoard.ts`) as the membership
 check. This is a toggle, not a hard exclusion: a `"killed"` task session is
