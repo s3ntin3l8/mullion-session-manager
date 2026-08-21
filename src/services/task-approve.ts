@@ -25,10 +25,19 @@ type ProjectRow = typeof projects.$inferSelect;
 // leaves a dirty/unclear tree in place for a later pass to retry rather
 // than losing anything. Exported — give-up's route (routes/tasks.ts) calls
 // this too, on the same "left reviewing for a terminal state" posture.
+//
+// #775 — `project`'s type is deliberately narrower than the full `ProjectRow`
+// (`{ id?, cwd, hostId }` rather than `typeof projects.$inferSelect`): the
+// body only ever reads `hostId`/`cwd` (structural) and `id` (log field
+// only), and task-github-sync.ts's syncClosedIssueToLocal needs to call this
+// from a lightweight ProjectRef ({ cwd, hostId }, no `id`) without a second
+// full-row fetch — see that file's own comment on why it narrows the same
+// way. Every existing caller passes a full ProjectRow, which satisfies this
+// structurally, so nothing else changes.
 export function cleanupTaskWorktree(
   app: FastifyInstance,
   task: { worktreePath: string | null },
-  project: ProjectRow,
+  project: { id?: number; cwd: string; hostId: string },
 ): void {
   if (!task.worktreePath) return;
   void resolveBackend(app, project.hostId)

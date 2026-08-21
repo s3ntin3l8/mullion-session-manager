@@ -604,6 +604,77 @@ describe("task-github-sync", () => {
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.githubSyncError).toBe("stale error");
     });
+
+    // #775 — the exact gap a fresh-review finding caught pre-#772: this
+    // transition landed the status write and stopped, never cleaning up the
+    // worktree/sessions every other "leave reviewing for good" path already
+    // does. Spy-based rather than end-to-end (this file's own `project`
+    // fixture points at a nonexistent cwd and no `sessions` rows exist) —
+    // the route-level assertion that real sessions actually flip to
+    // "killed" lives in test/routes/webhooks.test.ts's
+    // "syncs a tracked task to done when its issue closes".
+    it("calls cleanupTaskWorktree and cleanupTaskSessions once the transition lands", async () => {
+      mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
+      const taskApproveModule = await import("../../src/services/task-approve.js");
+      const worktreeSpy = vi
+        .spyOn(taskApproveModule, "cleanupTaskWorktree")
+        .mockImplementation(() => {});
+      const sessionsSpy = vi
+        .spyOn(taskApproveModule, "cleanupTaskSessions")
+        .mockImplementation(() => {});
+
+      const task = insertTask("reviewing", 107);
+      await syncClosedIssueToLocal(app, task, project);
+
+      // Not asserting the `app` arg's deep equality here — Fastify's real
+      // instance has a `listeningOrigin` getter that throws when the server
+      // was never actually .listen()ed (this suite only ever .inject()s),
+      // and vitest's call-matcher does a structural comparison that would
+      // trip it. `toBe` (reference identity) sidesteps that safely.
+      expect(worktreeSpy).toHaveBeenCalledTimes(1);
+      expect(worktreeSpy.mock.calls[0][0]).toBe(app);
+      expect(worktreeSpy.mock.calls[0][1]).toEqual(
+        expect.objectContaining({ worktreePath: task.worktreePath }),
+      );
+      expect(worktreeSpy.mock.calls[0][2]).toBe(project);
+      expect(sessionsSpy).toHaveBeenCalledTimes(1);
+      expect(sessionsSpy.mock.calls[0][0]).toBe(app);
+      expect(sessionsSpy.mock.calls[0][1]).toEqual(expect.objectContaining({ id: task.id }));
+
+      worktreeSpy.mockRestore();
+      sessionsSpy.mockRestore();
+    });
+
+    // The CAS-guard regression test: both the issues.closed webhook and the
+    // poll sweep's read-back can call this function for the same issue
+    // close. Only the pass that actually wins the status write (changes > 0)
+    // may run cleanup — a second pass over an already-"done" task must be a
+    // pure no-op, or a session that's supposed to be killed exactly once
+    // gets a second (harmless but wasteful, and log-noisy) kill attempt.
+    it("does not run cleanup again on a second pass over an already-done task", async () => {
+      mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
+      const taskApproveModule = await import("../../src/services/task-approve.js");
+      const worktreeSpy = vi
+        .spyOn(taskApproveModule, "cleanupTaskWorktree")
+        .mockImplementation(() => {});
+      const sessionsSpy = vi
+        .spyOn(taskApproveModule, "cleanupTaskSessions")
+        .mockImplementation(() => {});
+
+      const task = insertTask("reviewing", 108);
+      await syncClosedIssueToLocal(app, task, project);
+      expect(worktreeSpy).toHaveBeenCalledTimes(1);
+      expect(sessionsSpy).toHaveBeenCalledTimes(1);
+
+      // Second pass: same stale `task` snapshot (still "reviewing"), but the
+      // row is now actually "done" — the CAS in the update must lose.
+      await syncClosedIssueToLocal(app, task, project);
+      expect(worktreeSpy).toHaveBeenCalledTimes(1);
+      expect(sessionsSpy).toHaveBeenCalledTimes(1);
+
+      worktreeSpy.mockRestore();
+      sessionsSpy.mockRestore();
+    });
   });
 
   describe("syncUnlabeledIssueToLocal (#490a)", () => {

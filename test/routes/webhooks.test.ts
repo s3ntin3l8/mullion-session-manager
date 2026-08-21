@@ -723,6 +723,19 @@ describe("webhook routes", () => {
         .values({ name: "webhook-ingest-p4", cwd })
         .returning()
         .all();
+      // #775 — a reviewing task always has a live worker session and
+      // usually a review session too; assert both actually get killed by
+      // this path, the exact gap a fresh-review finding caught pre-#772.
+      const worker = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.id, command: "bash" },
+      });
+      const reviewer = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.id, command: "bash" },
+      });
       app.db
         .insert(tasks)
         .values({
@@ -730,6 +743,8 @@ describe("webhook routes", () => {
           issueNumber: 45,
           title: "Reviewing task",
           status: "reviewing",
+          sessionId: worker.json().id,
+          reviewSessionId: reviewer.json().id,
         })
         .run();
 
@@ -766,6 +781,13 @@ describe("webhook routes", () => {
       // for it rather than asserting immediately.
       await waitUntil(() => getRow().status === "done");
       expect(getIssueStateSpy).toHaveBeenCalledWith("ghp_test_token", "acme", "widgets-close", 45);
+
+      const { sessions } = await import("../../src/db/schema.js");
+      await waitUntil(() => {
+        const [w] = app.db.select().from(sessions).where(eq(sessions.id, worker.json().id)).all();
+        const [r] = app.db.select().from(sessions).where(eq(sessions.id, reviewer.json().id)).all();
+        return w.status === "killed" && r.status === "killed";
+      });
 
       getIssueStateSpy.mockRestore();
       await app.close();
