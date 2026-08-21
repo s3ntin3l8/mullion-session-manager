@@ -59,7 +59,12 @@ export function cleanupTaskSessions(
   app: FastifyInstance,
   task: { sessionId: number | null; reviewSessionId: number | null },
 ): void {
-  for (const sessionId of [task.sessionId, task.reviewSessionId]) {
+  // A Set, not a plain pair — sessionId and reviewSessionId are never the
+  // same column-for-column, but nothing enforces that at the type level,
+  // so this stays correct (a single kill, not two) even if that ever
+  // changed. killSession is itself idempotent either way, so this is
+  // belt-and-suspenders, not a correctness fix.
+  for (const sessionId of new Set([task.sessionId, task.reviewSessionId])) {
     if (sessionId === null) continue;
     void killSession(app, sessionId, "detach").catch((err) => {
       app.log.warn({ err, sessionId }, "task cleanup: killSession threw");

@@ -1952,8 +1952,17 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               // session on this path, so without this it's left "active"
               // forever, no longer pointed to by any task row — exactly the
               // orphan this PR exists to stop creating (see #772).
-              // Best-effort, fire-and-forget — a kill failure here must not
-              // block the task's own "-> reviewing" transition.
+              // Best-effort, fire-and-forget — deliberately NOT awaited,
+              // unlike retryTask's/failReviewingGate's own kill calls
+              // (task-claim.ts, above in this file): those run at the END
+              // of their function, with nothing left to do afterward, so
+              // awaiting costs nothing. This one sits in the MIDDLE of the
+              // "-> reviewing" transition, with `recordTaskTransition` and
+              // `syncTaskTransition` still to come — a kill failure must
+              // not block or delay either of those, so it fires and moves
+              // on rather than adding a network round-trip to this task's
+              // own transition. Both postures are correct for where they
+              // sit; this is not an inconsistency to "harmonize" later.
               if (task.reviewSessionId !== null) {
                 void killSession(app, task.reviewSessionId).catch((err) => {
                   app.log.warn(

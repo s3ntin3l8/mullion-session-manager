@@ -521,6 +521,48 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
+  it("does not block the '-> reviewing' transition when killing the stale review session fails", async () => {
+    const app = await buildApp();
+    const { taskId, projectId } = await createSessionAndTask(app, "in_progress").then(async (r) => {
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, r.taskId)).all();
+      return { ...r, projectId: row.projectId };
+    });
+    const staleReview = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const staleReviewSessionId = staleReview.json().id as number;
+    app.db
+      .update(tasks)
+      .set({ reviewSessionId: staleReviewSessionId })
+      .where(eq(tasks.id, taskId))
+      .run();
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(staleReviewSessionId)) return { toInfo: () => fakeInfo() } as never;
+      return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+    });
+    const sessionsModule = await import("../../src/services/session-lifecycle.js");
+    const killSpy = vi
+      .spyOn(sessionsModule, "killSession")
+      .mockRejectedValueOnce(new Error("boom"));
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    // Fire-and-forget — flush microtasks before asserting the warn fired.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, reviewSessionId: staleReviewSessionId }),
+      "task reconcile: failed to kill the superseded review session",
+    );
+
+    killSpy.mockRestore();
+    await app.close();
+  });
+
   it("leaves in_progress alone while the session is still actively working", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");

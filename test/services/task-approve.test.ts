@@ -237,6 +237,30 @@ describe("approveTask", () => {
     await app.close();
   });
 
+  it("logs a warning (without throwing) when killSession itself throws", async () => {
+    const app = await buildApp();
+    const { task, project } = await createProjectAndReviewingTask(app, false, true);
+    const sessionLifecycleModule = await import("../../src/services/session-lifecycle.js");
+    const killSpy = vi
+      .spyOn(sessionLifecycleModule, "killSession")
+      .mockRejectedValue(new Error("boom"));
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    const outcome = await approveTask(app, task, project, "approve");
+    expect(outcome.ok).toBe(true);
+
+    // cleanupTaskSessions is fire-and-forget — flush microtasks so its
+    // rejected promise's .catch() handler has actually run before asserting.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      "task cleanup: killSession threw",
+    );
+
+    killSpy.mockRestore();
+    await app.close();
+  });
+
   it("approve is a no-op on session cleanup when neither session id is set", async () => {
     const app = await buildApp();
     const { task, project } = await createProjectAndReviewingTask(app, false, false);
