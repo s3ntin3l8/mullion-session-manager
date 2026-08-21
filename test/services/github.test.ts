@@ -4,6 +4,7 @@ import {
   getRepoStatus,
   getCacheSizeForTests,
   MAX_CACHE_ENTRIES,
+  fetchRequiredStatusContexts,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -255,5 +256,85 @@ describe("getRepoStatus", () => {
       expect(status.actionsRuns).toEqual([]);
       expect(status.ciStatus).toBeNull();
     });
+  });
+});
+
+// #755 — one owner/repo/branch triple per test, unmocked global cache: this
+// module-scope cache persists across tests in the same process (same
+// pattern getRepoStatus's own prsCache/statusCache already rely on, no
+// reset export exists for those either), so a shared key would let an
+// earlier test's cached result leak into a later one.
+describe("fetchRequiredStatusContexts", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the required contexts from branch protection", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { required_status_checks: { contexts: ["CI", "lint"] } }),
+    );
+    const result = await fetchRequiredStatusContexts("tok", "o", "required-contexts-repo", "main");
+    expect(result).toEqual(["CI", "lint"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repos/o/required-contexts-repo/branches/main/protection"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("returns [] when protection exists but no status checks are required", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { required_status_checks: null }));
+    const result = await fetchRequiredStatusContexts("tok", "o", "no-required-checks-repo", "main");
+    expect(result).toEqual([]);
+  });
+
+  it("returns null (fail closed), not [], on a 403 — the App token lacks administration:read", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
+    const result = await fetchRequiredStatusContexts("tok", "o", "forbidden-repo", "main");
+    expect(result).toBeNull();
+  });
+
+  it("returns null (fail closed) on a 404 — no protection configured, or the branch doesn't exist", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    const result = await fetchRequiredStatusContexts("tok", "o", "no-protection-repo", "main");
+    expect(result).toBeNull();
+  });
+
+  it("returns null (fail closed) on a network failure, never throws", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(
+      fetchRequiredStatusContexts("tok", "o", "network-down-repo", "main"),
+    ).resolves.toBeNull();
+  });
+
+  it("caches a successful lookup — a second call for the same repo/branch makes no further request", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { required_status_checks: { contexts: ["CI"] } }),
+    );
+    await fetchRequiredStatusContexts("tok", "o", "cache-hit-repo", "main");
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    const second = await fetchRequiredStatusContexts("tok", "o", "cache-hit-repo", "main");
+    expect(second).toEqual(["CI"]);
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("does NOT cache a failed lookup — a retry after a 403 makes a fresh request", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 403 }));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { required_status_checks: { contexts: ["CI"] } }),
+    );
+    const first = await fetchRequiredStatusContexts("tok", "o", "retry-after-403-repo", "main");
+    expect(first).toBeNull();
+    const second = await fetchRequiredStatusContexts("tok", "o", "retry-after-403-repo", "main");
+    expect(second).toEqual(["CI"]);
+    expect(fetchMock.mock.calls.length).toBe(2);
   });
 });
