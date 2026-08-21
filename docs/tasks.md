@@ -1467,8 +1467,13 @@ review sessions are killed — `killSession`, so the row actually flips to
 `"killed"`, not left for the 30s exited-session reconciler to eventually
 mark `"exited"` — at every point that supersedes or ends the link: approve
 (human or auto-approve), give-up, Retry (the old worker session, before a
-fresh one is spawned), and every fresh `→ reviewing` entry (the prior
-round's review session, on a reject-and-re-review cycle). Before this,
+fresh one is spawned), every fresh `→ reviewing` entry (the prior round's
+review session, on a reject-and-re-review cycle), and closing the linked
+GitHub issue directly on GitHub instead of through Mullion (`#775`) —
+`syncClosedIssueToLocal`'s `reviewing → done` write, reachable from both the
+`issues.closed` webhook and the poll sweep's read-back, is the one path
+`#772` didn't cover; it's gated on the same CAS the transition itself uses,
+so only the pass that actually wins the race runs cleanup. Before this,
 nothing in the task lifecycle ever terminated a session once it stopped
 being the task's current one — it just kept running, invisible from the
 task view once its pointer was overwritten or nulled, and cluttering both

@@ -723,6 +723,26 @@ describe("webhook routes", () => {
         .values({ name: "webhook-ingest-p4", cwd })
         .returning()
         .all();
+      // #775 — a reviewing task always has a live worker session and
+      // usually a review session too; assert both actually get killed by
+      // this path, the exact gap a fresh-review finding caught pre-#772.
+      // DB-level inserts, not POST /api/sessions — spawning a real PTY here
+      // (dtach/systemd-run) is unrelated to what this test verifies (the
+      // sessions.status flip) and is exactly the kind of flake CI doesn't
+      // need: killSession's own doc comment guarantees the row flips to
+      // "killed" even when the underlying terminate() is a no-op against a
+      // session PtyManager never actually spawned.
+      const { sessions } = await import("../../src/db/schema.js");
+      const [worker] = app.db
+        .insert(sessions)
+        .values({ projectId: project.id, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [reviewer] = app.db
+        .insert(sessions)
+        .values({ projectId: project.id, command: "bash", status: "active" })
+        .returning()
+        .all();
       app.db
         .insert(tasks)
         .values({
@@ -730,6 +750,8 @@ describe("webhook routes", () => {
           issueNumber: 45,
           title: "Reviewing task",
           status: "reviewing",
+          sessionId: worker.id,
+          reviewSessionId: reviewer.id,
         })
         .run();
 
@@ -766,6 +788,12 @@ describe("webhook routes", () => {
       // for it rather than asserting immediately.
       await waitUntil(() => getRow().status === "done");
       expect(getIssueStateSpy).toHaveBeenCalledWith("ghp_test_token", "acme", "widgets-close", 45);
+
+      await waitUntil(() => {
+        const [w] = app.db.select().from(sessions).where(eq(sessions.id, worker.id)).all();
+        const [r] = app.db.select().from(sessions).where(eq(sessions.id, reviewer.id)).all();
+        return w.status === "killed" && r.status === "killed";
+      });
 
       getIssueStateSpy.mockRestore();
       await app.close();

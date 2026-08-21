@@ -44,6 +44,7 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import { cleanupTaskSessions, cleanupTaskWorktree } from "./task-approve.js";
 
 export const LABEL_CLAIMED = "mullion-claimed";
 export const LABEL_REVIEWING = "mullion-reviewing";
@@ -384,6 +385,18 @@ export async function syncClosedIssueToLocal(
         via: "github-sync-closed",
         context: { issueNumber: task.issueNumber },
       });
+      // #775 — closing the linked issue directly on GitHub is a fourth way
+      // (alongside approve, give-up, and the auto-return force-reseed) for a
+      // task to leave "reviewing" for good, and it was the one path #772
+      // missed: this transition used to leave the worker/review sessions
+      // running forever (never flipped to "killed", invisible in the
+      // sidebar/ad-hoc lane once superseded but still consuming a real
+      // process) and the worktree in place. Gated on `updated.changes > 0`,
+      // not just reachability of this branch — both the webhook handler and
+      // the poll sweep can call this function for the same issue close, and
+      // only the pass that actually won the CAS may run cleanup once.
+      cleanupTaskWorktree(app, { worktreePath: task.worktreePath }, project);
+      cleanupTaskSessions(app, task);
     }
   } catch (err) {
     // Deliberately does NOT recordGithubSyncError here either (Hermes
