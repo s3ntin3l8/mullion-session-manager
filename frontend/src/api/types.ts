@@ -813,6 +813,25 @@ export interface TaskBlocker {
   htmlUrl: string | null;
 }
 
+// #746 — POST /api/tasks/clear-done's response shape. No route in this
+// codebase returned a per-row ok/failed shape before this one; modeled on
+// git-worktree.ts's own cleanupOrphanWorktrees (`{ removed, skipped }`).
+export interface ClearDoneBranchResult {
+  id: number;
+  branch: string;
+  deleted: boolean;
+  reason?: string;
+}
+
+export interface ClearDoneResult {
+  deleted: number[];
+  failed: { id: number; error: string }[];
+  branches: ClearDoneBranchResult[];
+  // Non-zero only when the batch cap (20 per call) truncated the sweep —
+  // the caller can call again to pick up the rest.
+  remaining: number;
+}
+
 // Mirrors src/routes/tasks.ts's TASK_ROW_COLUMNS (GET /api/tasks and GET
 // /api/tasks/:id) 1:1 — issue #214/#219, extended through Phase 6 (#233,
 // #215, #217, #220, #283).

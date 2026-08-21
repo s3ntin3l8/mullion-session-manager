@@ -531,6 +531,8 @@ export function UnifiedBoard({
             onCreated={() => setCreating(false)}
             hideDone={hideDone}
             onToggleHideDone={toggleHideDone}
+            activeProjectIds={activeProjectIds}
+            clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
           />
           {/* Issue: a blocked task's card badge is easy to scroll past on a
               large board. Only worth showing once something is actually

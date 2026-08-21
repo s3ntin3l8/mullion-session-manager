@@ -120,6 +120,45 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   no "nothing qualifies" state to gate on, so no render-time-reset dance is
   needed either.
 
+  **Bulk "Clear done" (`#746`)** — `POST /api/tasks/clear-done`, an optional
+  `{ projectIds?, deleteBranches? }` body — deletes every `done` task the
+  same deletability check above allows, in one request, via the board
+  toolbar's "Clear done" button. Shares `checkTaskDeletable` with the
+  single-row `DELETE` route so a row's fate is decided in exactly one
+  place; no existing route in this codebase returned a per-row ok/failed
+  shape before this one, so the response (`{ deleted, failed, branches,
+remaining }`) is modeled on `git-worktree.ts`'s own
+  `cleanupOrphanWorktrees` (`{ removed, skipped }`). Capped at 20 rows per
+  call — the same `MAX_READBACK_CHECKS_PER_SWEEP` precedent
+  `task-watcher.ts` already uses, since a GitHub-linked done task costs one
+  `isIssueStillTrackable` round-trip and 50+ of those in one request is
+  exactly the call-volume pattern `#759`/`#777` exist to prevent — with the
+  remainder reported (`remaining > 0`), not silently dropped; the toolbar
+  button calls again itself until the sweep finishes. The install-wide
+  GitHub rate-limit budget (`isGitHubRateLimited`, `github-fetch.ts`) is
+  checked once per request, not once per row: a GitHub-linked candidate
+  caught by it is reported failed with a rate-limit reason rather than
+  opening a call the transport layer already knows will fail; a local
+  (no linked issue) candidate is entirely unaffected.
+
+  Branch deletion (`deleteBranches: true`, off by default) is a **local**
+  concern only — the merge sweep already deletes the remote branch on a
+  successful merge (`deleteRemoteBranch`, called from `attemptMerge`). This
+  repo squash-merges, so a merged task branch's commits are not literally in
+  `main`'s history: a non-force `git branch -d` would return `"unmerged"`
+  for practically every done task, but blind `force: true` is not
+  acceptable either. Resolved explicitly, per row: only force-deletes once
+  a fresh `getPullRequestByNumber` read confirms the task's PR actually
+  merged; otherwise the branch is reported skipped with its reason
+  (`no-pr`/`not-merged`/`merge-check-failed`/`rate-limited`/the
+  `DeleteBranchReason` a local `git branch -D` itself can fail with) and
+  **left alone** — a branch failure never blocks the row deletion, which
+  already committed by the time the branch check runs. Branch deletes run
+  strictly serially (never `Promise.all`), the same posture every other
+  bulk git operation in this codebase takes — concurrent git operations
+  across this repo's own developer worktrees have twice corrupted shared
+  objects.
+
   A label-lost failure — never a close — also self-heals on its own,
   without needing the delete-and-recreate path above: if the same issue
   is re-sighted still open and labeled again, and the task never had a

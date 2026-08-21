@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
@@ -12,6 +12,10 @@ import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../servic
 import { resetMergeBackoff } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
+import { resolveGitHubToken } from "../services/github-integration.js";
+import { resolveRepoRef } from "../services/host-git.js";
+import { getPullRequestByNumber } from "../services/github-write.js";
+import { isGitHubRateLimited } from "../services/github-fetch.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 
@@ -53,6 +57,21 @@ interface RetryTaskBody {
   agent?: string | null;
   reviewAgent?: string | null;
 }
+
+// #746 — no existing route in this codebase returns a per-row ok/failed
+// shape (the nearest precedent, git-worktree.ts's cleanupOrphanWorktrees,
+// is service-level: `{ removed: string[]; skipped: Array<{ path, reason }> }`
+// — this establishes the convention at the route layer, modeled on it).
+const clearDoneTasksSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      projectIds: { type: "array", items: { type: "integer", minimum: 1 } },
+      deleteBranches: { type: "boolean" },
+    },
+  },
+};
 
 const createTaskSchema = {
   body: {
@@ -492,43 +511,65 @@ export async function tasksRoute(app: FastifyInstance) {
   const deletableTerminalGithubStatus = (status: string): status is "failed" | "done" =>
     status === "failed" || status === "done";
 
-  app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
-    const existing = getLocalTaskOr404(taskId);
-    if (!existing) return reply.notFound();
-
+  // #746 — extracted so the bulk clear-done route (below) shares this
+  // EXACT logic rather than a second copy that could quietly drift from
+  // it, including the tri-state isIssueStillTrackable handling: `undefined`
+  // means the check couldn't run (no repo/token, GitHub threw) and must
+  // never be treated as "confirmed untrackable," or a transient outage
+  // could delete a task the watcher would otherwise still re-ingest. Folds
+  // the (practically unreachable — a task's projectId is FK'd to a real
+  // row) "project not found" case into the same conflict-shaped result as
+  // everything else, since the bulk route has no per-row 404 concept to
+  // distinguish it into.
+  async function checkTaskDeletable(
+    existing: typeof tasks.$inferSelect,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (existing.issueNumber !== null) {
       if (!deletableTerminalGithubStatus(existing.status)) {
-        return reply.conflict("Cannot delete a task linked to a GitHub issue");
+        return { ok: false, reason: "Cannot delete a task linked to a GitHub issue" };
       }
       if (existing.status === "failed" && existing.branchName !== null) {
-        return reply.conflict(
-          "Cannot delete: this task has a preserved branch — use Retry to resume it",
-        );
+        return {
+          ok: false,
+          reason: "Cannot delete: this task has a preserved branch — use Retry to resume it",
+        };
       }
       const project = getProjectOr404(existing.projectId);
-      if (!project) return reply.notFound();
+      if (!project) return { ok: false, reason: "Project not found" };
       const trackable = await isIssueStillTrackable(app, existing, {
         cwd: project.cwd,
         hostId: project.hostId,
       });
       if (trackable !== false) {
         const label = app.config.MULLION_TASK_LABEL;
-        return reply.conflict(
-          trackable === undefined
-            ? "Could not confirm the linked GitHub issue is no longer tracked — try again"
-            : `Cannot delete: the linked GitHub issue is still open and labeled "${label}" — remove the label or close the issue first`,
-        );
+        return {
+          ok: false,
+          reason:
+            trackable === undefined
+              ? "Could not confirm the linked GitHub issue is no longer tracked — try again"
+              : `Cannot delete: the linked GitHub issue is still open and labeled "${label}" — remove the label or close the issue first`,
+        };
       }
     } else if (
       !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) &&
       existing.status !== "done"
     ) {
-      return reply.conflict(
-        `Cannot delete a task past the backlog/ready stage (status: ${existing.status})`,
-      );
+      return {
+        ok: false,
+        reason: `Cannot delete a task past the backlog/ready stage (status: ${existing.status})`,
+      };
     }
+    return { ok: true };
+  }
+
+  app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+
+    const check = await checkTaskDeletable(existing);
+    if (!check.ok) return reply.conflict(check.reason);
 
     const deleted = app.db
       .delete(tasks)
@@ -539,6 +580,163 @@ export async function tasksRoute(app: FastifyInstance) {
     }
     reply.code(204);
   });
+
+  // #746 — best-effort branch cleanup for the bulk clear-done flow below,
+  // opt-in and off by default (records preserved unless the caller asks for
+  // branch deletion too). This repo squash-merges, so a merged task
+  // branch's commits are NOT literally in main's history — a non-force
+  // `git branch -d` would return "unmerged" for practically every done
+  // task — but blind `force: true` is not acceptable either. Resolves it
+  // explicitly: only force-deletes once a fresh GitHub read confirms the
+  // task's PR actually merged; otherwise reports the branch as skipped
+  // with its reason and never touches it. A branch failure — including
+  // "couldn't confirm merge state" — never blocks the row deletion the
+  // caller already committed to; this is called strictly AFTER that DB
+  // delete succeeds, so a branch-check failure only means the branch
+  // survives, not that the task reappears.
+  async function attemptBranchDeleteForClearDone(
+    task: typeof tasks.$inferSelect,
+    project: typeof projects.$inferSelect,
+    rateLimited: boolean,
+  ): Promise<{ id: number; branch: string; deleted: boolean; reason?: string }> {
+    const branch = task.branchName!;
+    if (task.prNumber === null) {
+      return { id: task.id, branch, deleted: false, reason: "no-pr" };
+    }
+    if (rateLimited) {
+      return { id: task.id, branch, deleted: false, reason: "rate-limited" };
+    }
+    const repoRef = await resolveRepoRef(app, project);
+    if (!repoRef) {
+      return { id: task.id, branch, deleted: false, reason: "no-repo" };
+    }
+    // "read", not "write" — this only ever reads the PR's merge state.
+    const token = await resolveGitHubToken(app, repoRef, "read");
+    if (!token) {
+      return { id: task.id, branch, deleted: false, reason: "no-token" };
+    }
+    let merged: boolean;
+    try {
+      const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+      merged = pr.merged;
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id, prNumber: task.prNumber },
+        "clear-done: failed to confirm PR merge state — leaving the branch alone",
+      );
+      return { id: task.id, branch, deleted: false, reason: "merge-check-failed" };
+    }
+    if (!merged) {
+      return { id: task.id, branch, deleted: false, reason: "not-merged" };
+    }
+    try {
+      // resolveBackend, not the local deleteBranch function directly — a
+      // remote-hosted project's branch lives on that host's own
+      // filesystem (/internal/git-branch-delete).
+      const result = await resolveBackend(app, project.hostId).deleteBranch(project.cwd, branch, {
+        force: true,
+      });
+      return {
+        id: task.id,
+        branch,
+        deleted: result.deleted,
+        reason: result.deleted ? undefined : (result.reason ?? "delete-failed"),
+      };
+    } catch (err) {
+      app.log.warn({ err, taskId: task.id, branch }, "clear-done: deleteBranch threw");
+      return { id: task.id, branch, deleted: false, reason: "delete-failed" };
+    }
+  }
+
+  // #746 — bulk companion to DELETE /api/tasks/:id above, scoped to `done`
+  // tasks only (the single-row route's other terminal exception, `failed`,
+  // stays out of scope here too — see that route's own comment). Shares
+  // `checkTaskDeletable` so a row's deletability is decided in exactly one
+  // place regardless of which route reaches it.
+  //
+  // Capped at MAX_CLEAR_DONE_BATCH per call, mirroring task-watcher.ts's own
+  // MAX_READBACK_CHECKS_PER_SWEEP precedent — a GitHub-linked done task
+  // costs one isIssueStillTrackable round-trip, and 50+ of those in one
+  // request is exactly the call-volume pattern #759/#777 exist to prevent.
+  // The remainder is reported, not silently dropped; the frontend calls
+  // again for the next batch. The install-wide rate-limit budget
+  // (isGitHubRateLimited, github-fetch.ts) is checked ONCE per request, not
+  // once per task — a GitHub-linked candidate caught by it is reported
+  // failed with a rate-limit reason rather than opening a call the
+  // transport layer already knows will fail; a local (no issueNumber)
+  // candidate is entirely unaffected, since it needs no GitHub call at all.
+  const MAX_CLEAR_DONE_BATCH = 20;
+
+  app.post<{ Body: { projectIds?: number[]; deleteBranches?: boolean } }>(
+    "/api/tasks/clear-done",
+    { schema: clearDoneTasksSchema },
+    async (request) => {
+      const { projectIds, deleteBranches } = request.body ?? {};
+
+      const candidates =
+        projectIds && projectIds.length > 0
+          ? app.db
+              .select()
+              .from(tasks)
+              .where(and(eq(tasks.status, "done"), inArray(tasks.projectId, projectIds)))
+              .all()
+          : app.db.select().from(tasks).where(eq(tasks.status, "done")).all();
+
+      const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
+      const remaining = candidates.length - attempted.length;
+      if (remaining > 0) {
+        app.log.debug(
+          { total: candidates.length, attempting: attempted.length },
+          "clear-done: batch cap reached — remainder left for a follow-up call",
+        );
+      }
+
+      const rateLimited = isGitHubRateLimited();
+      const deleted: number[] = [];
+      const failed: { id: number; error: string }[] = [];
+      const branches: { id: number; branch: string; deleted: boolean; reason?: string }[] = [];
+
+      for (const task of attempted) {
+        if (task.issueNumber !== null && rateLimited) {
+          failed.push({
+            id: task.id,
+            error: "GitHub rate limit is in effect — try again shortly",
+          });
+          continue;
+        }
+        const check = await checkTaskDeletable(task);
+        if (!check.ok) {
+          failed.push({ id: task.id, error: check.reason });
+          continue;
+        }
+
+        const result = app.db
+          .delete(tasks)
+          .where(and(eq(tasks.id, task.id), eq(tasks.status, "done")))
+          .run();
+        if (result.changes === 0) {
+          failed.push({
+            id: task.id,
+            error: "Task changed since this check — refresh and try again",
+          });
+          continue;
+        }
+        deleted.push(task.id);
+
+        if (deleteBranches && task.branchName !== null) {
+          const project = getProjectOr404(task.projectId);
+          if (project) {
+            // Serial, not Promise.all — concurrent git operations across
+            // this repo's own worktrees have twice corrupted shared
+            // objects; a bulk branch-delete is that exact class of risk.
+            branches.push(await attemptBranchDeleteForClearDone(task, project, rateLimited));
+          }
+        }
+      }
+
+      return { deleted, failed, branches, remaining };
+    },
+  );
 
   // Phase 6 (6.2/#215) — thin wrapper over task-claim.ts's shared
   // orchestration (also used by task-watcher.ts's auto-claim sweep), which

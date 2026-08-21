@@ -79,6 +79,13 @@ function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
 }
 
+// #746 — unlike git() above (void, used for state-changing commands),
+// this captures stdout for the clear-done branch-delete tests' own
+// post-condition checks (did the branch actually survive/disappear).
+function gitOutput(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, env: gitEnv(), encoding: "utf8" });
+}
+
 function createGitRepo(): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tasks-route-test-repo-"));
   git(cwd, ["init", "-b", "main"]);
@@ -2545,6 +2552,358 @@ describe("tasks route", () => {
 
         const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
         expect(res.statusCode).toBe(409);
+        await app.close();
+      });
+    });
+
+    // #746 — the bulk companion to DELETE /api/tasks/:id, sharing its
+    // deletability rules via checkTaskDeletable. Branch-delete cases use a
+    // real local git repo/branch (same convention
+    // test/routes/projects.test.ts's own git-branch-delete tests use) rather
+    // than mocking deleteBranch itself — only the GitHub merge-state read
+    // (getPullRequestByNumber) is mocked, since that's the one real network
+    // call in the path.
+    describe("POST /api/tasks/clear-done (#746)", () => {
+      it("deletes only done tasks scoped to the requested projectIds", async () => {
+        const app = await buildApp();
+        const projectA = await createProject(app, "/tmp/clear-done-scope-a");
+        const projectB = await createProject(app, "/tmp/clear-done-scope-b");
+        const [rowA] = app.db
+          .insert(tasks)
+          .values({ projectId: projectA, title: "done in A", status: "done" })
+          .returning()
+          .all();
+        const [rowB] = app.db
+          .insert(tasks)
+          .values({ projectId: projectB, title: "done in B", status: "done" })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectA] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ deleted: [rowA.id], failed: [], remaining: 0 });
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const ids = (listed.json() as { id: number }[]).map((t) => t.id);
+        expect(ids).not.toContain(rowA.id);
+        expect(ids).toContain(rowB.id);
+
+        await app.close();
+      });
+
+      it("deletes every done task across all projects when projectIds is omitted", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/clear-done-all");
+        const [row1] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "done 1", status: "done" })
+          .returning()
+          .all();
+        const [row2] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "done 2", status: "done" })
+          .returning()
+          .all();
+        const [stillOpen] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "still open", status: "ready" })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "POST", url: "/api/tasks/clear-done", payload: {} });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        // Membership, not exact equality — this file shares one DB across
+        // its whole run, and an earlier test in this same describe block
+        // deliberately leaves an out-of-scope project's own done task
+        // behind (the project-scoping test above), which "omitted
+        // projectIds" is specifically supposed to also sweep up.
+        expect(body.deleted).toEqual(expect.arrayContaining([row1.id, row2.id]));
+        expect(body.deleted).not.toContain(stillOpen.id);
+
+        await app.close();
+      });
+
+      it("reports non-deletable rows in `failed`, not silently skipped", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-clear-done-failed");
+        const app = await buildApp();
+        await connectPat(app, "ghp_clear_done_failed");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 801,
+            title: "still tracked",
+            htmlUrl: "https://github.com/acme/widgets-clear-done-failed/issues/801",
+            status: "done",
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.deleted).toEqual([]);
+        expect(body.failed).toEqual([
+          {
+            id: row.id,
+            error: expect.stringContaining("still open and labeled"),
+          },
+        ]);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(true);
+
+        getIssueStateSpy.mockRestore();
+        await app.close();
+      });
+
+      it("caps the batch and reports the remainder as un-attempted, not silently dropped", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/clear-done-batch-cap");
+        const rows = Array.from({ length: 22 }, (_, i) =>
+          app.db
+            .insert(tasks)
+            .values({ projectId, title: `done ${i}`, status: "done" })
+            .returning()
+            .all(),
+        ).map(([row]) => row);
+        expect(rows).toHaveLength(22);
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.deleted).toHaveLength(20);
+        expect(body.remaining).toBe(2);
+
+        await app.close();
+      });
+
+      it("fails GitHub-linked candidates with a rate-limit reason, and leaves local ones unaffected, when the install-wide budget is in effect", async () => {
+        const projectId1Cwd = createGitRepoWithRemote("acme", "widgets-clear-done-ratelimit");
+        const app = await buildApp();
+        const { resetGitHubRateLimitForTests, recordGitHubRateLimit } =
+          await import("../../src/services/github-fetch.js");
+        resetGitHubRateLimitForTests();
+
+        const projectId = await createProject(app, projectId1Cwd);
+        const [linkedRow] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 802,
+            title: "linked, rate limited",
+            htmlUrl: "https://github.com/acme/widgets-clear-done-ratelimit/issues/802",
+            status: "done",
+          })
+          .returning()
+          .all();
+        const [localRow] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "local, unaffected", status: "done" })
+          .returning()
+          .all();
+
+        // A 429 response header (Retry-After) is what actually arms the
+        // module-level budget in production; this test file has no live
+        // GitHub call to trigger that naturally, so it's armed directly via
+        // the same test helper github-write.test.ts uses.
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.deleted).toEqual([localRow.id]);
+        expect(body.failed).toEqual([
+          { id: linkedRow.id, error: expect.stringContaining("rate limit") },
+        ]);
+
+        resetGitHubRateLimitForTests();
+        await app.close();
+      });
+
+      it("leaves the branch untouched when deleteBranches is off", async () => {
+        const cwd = createGitRepo();
+        git(cwd, ["branch", "mullion/task-branch-off"]);
+        const app = await buildApp();
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "done, branch preserved by default",
+            status: "done",
+            branchName: "mullion/task-branch-off",
+            prNumber: 1,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().deleted).toEqual([row.id]);
+        expect(res.json().branches).toEqual([]);
+
+        const branches = gitOutput(cwd, ["branch", "--list", "mullion/task-branch-off"]);
+        expect(branches).toContain("mullion/task-branch-off");
+
+        await app.close();
+      });
+
+      it("force-deletes the branch when deleteBranches is on and the PR is confirmed merged", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-clear-done-merged");
+        git(cwd, ["branch", "mullion/task-branch-merged"]);
+        const app = await buildApp();
+        await connectPat(app, "ghp_clear_done_merged_branch");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockResolvedValue({ merged: true } as never);
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "done, PR merged",
+            status: "done",
+            branchName: "mullion/task-branch-merged",
+            prNumber: 5,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId], deleteBranches: true },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().deleted).toEqual([row.id]);
+        expect(res.json().branches).toEqual([
+          { id: row.id, branch: "mullion/task-branch-merged", deleted: true },
+        ]);
+
+        const branches = gitOutput(cwd, ["branch", "--list", "mullion/task-branch-merged"]);
+        expect(branches).not.toContain("mullion/task-branch-merged");
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
+
+      it("reports the branch skipped (not deleted, row still gone) when the PR is not merged", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-clear-done-unmerged");
+        git(cwd, ["branch", "mullion/task-branch-unmerged"]);
+        const app = await buildApp();
+        await connectPat(app, "ghp_clear_done_unmerged_branch");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockResolvedValue({ merged: false } as never);
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "done, PR still open",
+            status: "done",
+            branchName: "mullion/task-branch-unmerged",
+            prNumber: 6,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId], deleteBranches: true },
+        });
+        expect(res.statusCode).toBe(200);
+        // The row deletion is not blocked by the branch outcome.
+        expect(res.json().deleted).toEqual([row.id]);
+        expect(res.json().branches).toEqual([
+          {
+            id: row.id,
+            branch: "mullion/task-branch-unmerged",
+            deleted: false,
+            reason: "not-merged",
+          },
+        ]);
+
+        const branches = gitOutput(cwd, ["branch", "--list", "mullion/task-branch-unmerged"]);
+        expect(branches).toContain("mullion/task-branch-unmerged");
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
+
+      it("a branch-delete failure (merge-check throws) still leaves the row deleted", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-clear-done-checkfail");
+        git(cwd, ["branch", "mullion/task-branch-checkfail"]);
+        const app = await buildApp();
+        await connectPat(app, "ghp_clear_done_checkfail");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockRejectedValue(new Error("HTTP 500"));
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "done, merge-check fails",
+            status: "done",
+            branchName: "mullion/task-branch-checkfail",
+            prNumber: 7,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/clear-done",
+          payload: { projectIds: [projectId], deleteBranches: true },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().deleted).toEqual([row.id]);
+        expect(res.json().branches).toEqual([
+          {
+            id: row.id,
+            branch: "mullion/task-branch-checkfail",
+            deleted: false,
+            reason: "merge-check-failed",
+          },
+        ]);
+
+        getPrSpy.mockRestore();
         await app.close();
       });
     });
