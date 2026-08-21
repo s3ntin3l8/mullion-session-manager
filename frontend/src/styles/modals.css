@@ -11,12 +11,14 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 120px;
+  padding: clamp(24px, 8vh, 120px) 20px 24px;
+  box-sizing: border-box;
   z-index: 70;
 }
 .create-modal {
   width: 520px;
   max-width: calc(100% - 40px);
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--chrome);
@@ -32,6 +34,7 @@
   gap: 11px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
 }
 .create-modal-icon {
   width: 30px;
@@ -80,6 +83,9 @@
   flex-direction: column;
   gap: 16px;
   padding: 18px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .create-modal-field {
   display: flex;
@@ -235,6 +241,7 @@
   padding: 14px 18px;
   border-top: 1px solid var(--border-soft);
   background: var(--sidebar-2);
+  flex-shrink: 0;
 }
 .create-modal-footer-hint {
   flex: 1;
