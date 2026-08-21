@@ -1,4 +1,3 @@
-import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -124,7 +123,21 @@ async function spawnReviewAgentNow(
     // Unlinking here, before the agent gets a chance to write anything, is
     // the fix: whatever this fresh spawn's own agent writes is now
     // guaranteed to be the only thing this path can ever contain.
-    unlinkFindingsFileIfPresent(app, task.id, findingsPath);
+    //
+    // #760 note: `findingsPath` above is still computed from THIS
+    // process's own local sessionsDir unconditionally — including for a
+    // remote-hosted project's review agent, which runs on a different
+    // host with its own (possibly different) sessionsDir. That's a
+    // pre-existing gap this PR doesn't fix (it's in the SEED side — what
+    // path the agent is TOLD to write to via buildReviewPrompt below —
+    // not the ingest-side read/delete this PR adds; fixing it needs a way
+    // to ask a remote host for its own sessionsDir before the prompt is
+    // built, distinct work — tracked as issue #778). `unlinkFindingsFileIfPresent` below is
+    // updated to go through `backend` purely so this call site still
+    // compiles against the new signature and stays correct for the common
+    // (local) case — it does not fix the remote seed-path mismatch.
+    const backend = resolveBackend(app, project.hostId);
+    await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
     const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath, ci });
     const result = await createSessionRecord(app, {
       projectId: project.id,
@@ -1507,16 +1520,27 @@ export async function autoReturnTask(
   return { ok: reseeded };
 }
 
-function unlinkFindingsFileIfPresent(
+// #760 — takes a resolved backend + round rather than a raw path, so this
+// works identically for a local or a remote-hosted task's review session
+// (SessionBackend.deleteTaskReviewFindings derives the actual path on
+// whichever host holds it). Best-effort by design, same as before this
+// PR: a delete failure (including a remote host going unreachable between
+// the read above and this call) is logged and otherwise ignored — the
+// content is already durably ingested into the DB by the time this runs,
+// so a leftover file on disk costs nothing but a stray bytes; it would
+// only ever cause a same-round re-review (reject keeps the round
+// unchanged) to needlessly re-read it, not a correctness problem.
+async function unlinkFindingsFileIfPresent(
   app: FastifyInstance,
+  backend: SessionBackend,
   taskId: number,
-  findingsPath: string,
-): void {
+  round: number,
+): Promise<void> {
   try {
-    if (existsSync(findingsPath)) unlinkSync(findingsPath);
+    await backend.deleteTaskReviewFindings(taskId, round);
   } catch (err) {
     app.log.warn(
-      { err, taskId, findingsPath },
+      { err, taskId, round },
       "task reconcile: failed to remove an ingested review findings file",
     );
   }
@@ -1535,28 +1559,16 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
   const now = Date.now();
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
-  const sessionsDir = path.dirname(app.pty.hookSocketPath);
 
+  // #760 — every host, not just LOCAL_HOST_ID. readTaskReviewFindings
+  // below (SessionBackend) is what makes this safe now: it reads from
+  // whichever host actually ran the review agent, instead of this
+  // process's own local sessionsDir the way the pre-#760 version of this
+  // loop did (which is why remote-hosted tasks used to be skipped
+  // entirely here — see git history/#760 for the "why not just read
+  // local and risk a false inconclusive" reasoning this used to document).
   const byHost = new Map<string, typeof allRows>();
   for (const row of allRows) {
-    // Hermes review, PR #576 — the findings file the review prompt tells the
-    // agent to write is read from THIS process's own local sessionsDir
-    // below; a remote-hosted review agent's file lands on the REMOTE host's
-    // filesystem instead, which SessionBackend has no generic file-read for.
-    // Reading local-only wouldn't error — it would just find nothing and
-    // falsely conclude the review was inconclusive, ingesting and commenting
-    // a lie about a review that may have found real, unreported issues. Skip
-    // entirely rather than mis-ingest. Unlike #484's other remote-hosted
-    // gaps (promotion/ingest/orphan-sweep/retry, all now proxied), this one
-    // stays local-only — it needs a generic remote file-read on
-    // SessionBackend, a distinct piece of work, not part of #484's scope.
-    if (row.project.hostId !== LOCAL_HOST_ID) {
-      app.log.info(
-        { taskId: row.task.id, hostId: row.project.hostId },
-        "task reconcile: skipping review-findings ingestion for a remote-hosted task (not supported yet)",
-      );
-      continue;
-    }
     const group = byHost.get(row.project.hostId) ?? [];
     group.push(row);
     byHost.set(row.project.hostId, group);
@@ -1592,18 +1604,29 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           info: defaultDeriveStatusInfo(info),
         });
 
-        const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.autoReturnRounds);
-        let findings: string | null = null;
+        // #760 — genuinely absent/empty (readTaskReviewFindings resolves
+        // `null`) is NOT the same outcome as a read failure (it throws):
+        // the former means "the review really did write nothing, treat as
+        // inconclusive"; the latter (host unreachable, a peer 5xx, a
+        // filesystem permission error, or a 404 from a peer too old to
+        // have this route — version skew) means "we don't actually know
+        // yet" and must `continue` to the next row rather than fall
+        // through and ingest a guess. The pre-#760 local-only version of
+        // this block did NOT make that distinction — a read failure fell
+        // through to `findings = null` exactly like a missing file,
+        // silently risking a false "inconclusive" comment on a real read
+        // error. Fixed here as part of introducing the same read for
+        // remote hosts, where a transient network blip is far more likely
+        // than a local disk read ever failing.
+        let findings: string | null;
         try {
-          if (existsSync(findingsPath)) {
-            const content = readFileSync(findingsPath, "utf8").trim();
-            if (content.length > 0) findings = content;
-          }
+          findings = await backend.readTaskReviewFindings(task.id, task.autoReturnRounds);
         } catch (err) {
           app.log.warn(
-            { err, taskId: task.id, findingsPath },
-            "task reconcile: failed to read review findings file",
+            { err, taskId: task.id, round: task.autoReturnRounds },
+            "task reconcile: failed to read review findings file — retrying next tick",
           );
+          continue;
         }
         // `parseReviewFindings`'s own doc comment: file-existence stopped
         // being a safe signal the moment `buildReviewPrompt` started asking
@@ -1773,7 +1796,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // round-suffixed path), so unlink it here too, before giving up on
         // this row.
         if (updated.changes === 0) {
-          unlinkFindingsFileIfPresent(app, task.id, findingsPath);
+          await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
           continue;
         }
 
@@ -1782,7 +1805,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // what would cause a same-round re-review (reject keeps
         // autoReturnRounds unchanged) to re-ingest THIS round's content as
         // if it were fresh.
-        unlinkFindingsFileIfPresent(app, task.id, findingsPath);
+        await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
         // #756 — a task that wanted another round but had none left gets one
         // extra sentence folded into the SAME comment, rather than a second
         // post: today's single-comment-per-round shape stays exactly that,

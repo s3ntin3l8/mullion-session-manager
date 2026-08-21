@@ -477,6 +477,51 @@ describe("RemoteHostClient", () => {
       ).resolves.toBeNull();
     });
 
+    // #760
+    it("resolveReadTaskReviewFindings GETs /internal/task-review-findings and unwraps { content }", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: "## Round 0\n\nLooks good." }));
+      await expect(client().resolveReadTaskReviewFindings(7, 0)).resolves.toBe(
+        "## Round 0\n\nLooks good.",
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/task-review-findings?taskId=7&round=0",
+        expect.anything(),
+      );
+    });
+
+    it("resolveReadTaskReviewFindings resolves null (not an error) for a genuinely absent file — a real 200 response", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: null }));
+      await expect(client().resolveReadTaskReviewFindings(7, 0)).resolves.toBeNull();
+    });
+
+    // #760's own stated safety requirement — the #590 lesson (HostRequestError
+    // covers ANY 4xx, not just 404) applies directly here: a peer build too
+    // old to have this route returns a genuine 404, which must throw, never
+    // resolve to `null` the way a real "file absent" response does above. A
+    // caller that collapsed these two would misread "this peer doesn't even
+    // have the route" as "the review wrote nothing" and post a false
+    // inconclusive comment.
+    it("resolveReadTaskReviewFindings throws HostRequestError (not null) on a 404 — a peer build too old to have this route (version skew)", async () => {
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+      await expect(client().resolveReadTaskReviewFindings(7, 0)).rejects.toThrow(HostRequestError);
+    });
+
+    it("resolveReadTaskReviewFindings throws HostUnreachableError on a network failure, same as every other call", async () => {
+      fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+      await expect(client().resolveReadTaskReviewFindings(7, 0)).rejects.toThrow(
+        HostUnreachableError,
+      );
+    });
+
+    it("resolveDeleteTaskReviewFindings DELETEs /internal/task-review-findings with taskId/round", async () => {
+      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+      await client().resolveDeleteTaskReviewFindings(7, 0);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/task-review-findings?taskId=7&round=0",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
     // These four calls each wrap an agent-side git shell-out well above
     // REQUEST_TIMEOUT_MS's 5s default (git-push.ts 30s, git-refs.ts up to
     // ~50s across its chained calls, git-worktree.ts 15s) — without an
