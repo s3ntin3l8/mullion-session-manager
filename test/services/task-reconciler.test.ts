@@ -214,6 +214,8 @@ const { reconcileTasks } = await import("../../src/services/task-reconciler.js")
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
+const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
+  await import("../../src/services/github-fetch.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
 
@@ -1184,6 +1186,21 @@ describe("reconcileTasks", () => {
         await app.close();
       }
     });
+
+    it("#759 — does not attempt a draft PR while the install-wide GitHub rate-limit budget is in effect", async () => {
+      const app = await buildApp();
+      try {
+        await createReviewingTaskWithNoPR(app);
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        await reconcileTasks(app);
+
+        expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
+    });
   });
 
   describe("merge-on-approve sweep (processMergeRequests)", () => {
@@ -1504,6 +1521,21 @@ describe("reconcileTasks", () => {
 
       expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
       await app.close();
+    });
+
+    it("#759 — does not attempt a merge while the install-wide GitHub rate-limit budget is in effect", async () => {
+      const app = await buildApp();
+      try {
+        await createDoneTaskWithPendingMerge(app);
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
     });
   });
 
@@ -1862,6 +1894,21 @@ describe("reconcileTasks", () => {
       );
 
       await app.close();
+    });
+
+    it("#759 — does not attempt an auto-approve while the install-wide GitHub rate-limit budget is in effect", async () => {
+      const app = await buildApp();
+      try {
+        await createAutoApproveCandidate(app);
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        await reconcileTasks(app);
+
+        expect(mockFetchRunsForHead).not.toHaveBeenCalled();
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
     });
   });
 

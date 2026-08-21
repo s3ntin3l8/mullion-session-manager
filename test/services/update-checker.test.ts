@@ -6,6 +6,7 @@ import {
   clearUpdateCheckCacheForTests,
   CACHE_TTL_MS,
 } from "../../src/services/update-checker.js";
+import { resetGitHubRateLimitForTests } from "../../src/services/github-fetch.js";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -32,11 +33,17 @@ describe("checkForUpdate", () => {
     // simpler than github.test.ts's "unique key per test" convention since
     // this service exposes a reset hook specifically for it.
     clearUpdateCheckCacheForTests();
+    // #759 — this file mocks a real 429 response (below), which
+    // githubApiFetch now records into github-fetch.ts's process-wide
+    // rate-limit budget. Without this reset, that budget leaks into
+    // whichever test runs next in this file.
+    resetGitHubRateLimitForTests();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    resetGitHubRateLimitForTests();
   });
 
   it("reports no update available when the latest tag equals the current version", async () => {
@@ -359,10 +366,13 @@ describe("resolveReleaseByTag", () => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     clearUpdateCheckCacheForTests();
+    // #759 — see checkForUpdate's own beforeEach/afterEach above for why.
+    resetGitHubRateLimitForTests();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetGitHubRateLimitForTests();
   });
 
   it("resolves the release's asset/checksum/release URLs for a matching tag", async () => {
