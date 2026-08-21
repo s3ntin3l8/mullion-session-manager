@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.40](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.39...v0.2.40) (2026-08-21)
+
+
+### Features
+
+* **tasks:** add Task Master-specific global default agent and review agent settings ([#766](https://github.com/s3ntin3l8/mullion-session-manager/issues/766)) ([c85d8df](https://github.com/s3ntin3l8/mullion-session-manager/commit/c85d8df85f807ede114328b4911f24a6c00ff927))
+* **tasks:** auto-approve a task with a clean review and green CI ([#768](https://github.com/s3ntin3l8/mullion-session-manager/issues/768)) ([485d3f3](https://github.com/s3ntin3l8/mullion-session-manager/commit/485d3f37175904283f2f953e178cdc0ed0f689b9))
+* **tasks:** merge an approved task's PR automatically ([#763](https://github.com/s3ntin3l8/mullion-session-manager/issues/763)) ([1edd684](https://github.com/s3ntin3l8/mullion-session-manager/commit/1edd6843a32790376216065c81970a66b61b2a99))
+* **tasks:** queue manual claims instead of rejecting them at capacity ([#770](https://github.com/s3ntin3l8/mullion-session-manager/issues/770)) ([81b6247](https://github.com/s3ntin3l8/mullion-session-manager/commit/81b62477ff80bbb852863f296e265bb5c5ea948c))
+* **tasks:** surface merge and auto-approve controls in the UI ([#769](https://github.com/s3ntin3l8/mullion-session-manager/issues/769)) ([a869922](https://github.com/s3ntin3l8/mullion-session-manager/commit/a8699223448376a38dea3952f0fdf0fc715f813e))
+
+
+### Bug Fixes
+
+* stop the workspace-autosave rate-limit-storm from terminal title churn ([#771](https://github.com/s3ntin3l8/mullion-session-manager/issues/771)) ([e84de95](https://github.com/s3ntin3l8/mullion-session-manager/commit/e84de95812a17a215fd8d84eb8da14e848a9b80c))
+* **tasks:** make the concurrency-cap 429 self-describing ([#765](https://github.com/s3ntin3l8/mullion-session-manager/issues/765)) ([2676338](https://github.com/s3ntin3l8/mullion-session-manager/commit/267633871feb61fdf35e3ecdabe6eea2f4acee66))
+
 ## [0.2.39](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.38...v0.2.39) (2026-08-20)
 
 
