@@ -6,7 +6,9 @@ import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
   taskReviewFindingsPath,
+  taskCommitTitlePath,
   parseReviewFindings,
+  parseCommitTitle,
   renderReviewFindingsMarkdown,
   severityPrefix,
   renderCiSummary,
@@ -100,6 +102,24 @@ describe("buildTaskMasterPreamble", () => {
     expect(out).not.toContain("Nobody is watching this session");
     // ...but every other rule still applies to a manual claim.
     expect(out).toContain("End your turn and stay running");
+  });
+
+  // #761 — gated entirely on the caller supplying `commitTitlePath` (which
+  // every caller only does when the project has `conventionalCommitTitles`
+  // on); omitted by default so an off-by-default feature stays silent for
+  // every project that hasn't opted in.
+  it("omits the PR title instruction when commitTitlePath is not supplied", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    expect(out).not.toContain("Conventional Commits title");
+  });
+
+  it("tells the worker where to write a Conventional Commits title when commitTitlePath is supplied", () => {
+    const out = buildTaskMasterPreamble({
+      ...BASE,
+      commitTitlePath: "/srv/mullion-sessions/task-42.title",
+    });
+    expect(out).toContain("/srv/mullion-sessions/task-42.title");
+    expect(out).toContain("Conventional Commits title");
   });
 });
 
@@ -477,6 +497,52 @@ describe("taskReviewFindingsPath", () => {
     const round0 = taskReviewFindingsPath("/srv/mullion-sessions", 42, 0);
     const round1 = taskReviewFindingsPath("/srv/mullion-sessions", 42, 1);
     expect(round0).not.toBe(round1);
+  });
+});
+
+describe("taskCommitTitlePath", () => {
+  it("builds a fixed (not round-suffixed) path under the given sessions dir", () => {
+    expect(taskCommitTitlePath("/srv/mullion-sessions", 42)).toBe(
+      "/srv/mullion-sessions/task-42.title",
+    );
+  });
+});
+
+describe("parseCommitTitle", () => {
+  it.each([
+    "feat: add credential storage",
+    "fix(sidebar): stop the drag handle from jittering",
+    "chore!: drop the deprecated v1 endpoints",
+    "refactor(auth)!: replace the token cache with a single source of truth",
+  ])("accepts a well-formed Conventional Commits title: %s", (title) => {
+    expect(parseCommitTitle(title)).toBe(title);
+  });
+
+  it("trims surrounding whitespace and a trailing newline", () => {
+    expect(parseCommitTitle("  feat: add credential storage  \n")).toBe(
+      "feat: add credential storage",
+    );
+  });
+
+  it.each([
+    "just some prose with no type prefix",
+    "feat : a space before the colon isn't the spec",
+    "FEAT: uppercase type isn't a recognized type",
+    "unknowntype: not one of the recognized types",
+    "feat:missing the space after the colon",
+    "",
+    "   ",
+  ])("rejects a malformed title: %s", (title) => {
+    expect(parseCommitTitle(title)).toBeNull();
+  });
+
+  it("rejects an embedded newline even if the first line alone would parse", () => {
+    expect(parseCommitTitle("feat: add credential storage\nrm -rf /")).toBeNull();
+  });
+
+  it("rejects a title beyond the length bound", () => {
+    const tooLong = `feat: ${"x".repeat(200)}`;
+    expect(parseCommitTitle(tooLong)).toBeNull();
   });
 });
 

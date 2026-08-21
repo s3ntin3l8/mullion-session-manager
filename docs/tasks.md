@@ -1202,15 +1202,53 @@ GitHub at least sees the red X first; "Merge now" is the equivalent override
 here. The flip side: a non-required check that never reports at all leaves a
 PR `unstable` — and therefore never auto-merging — forever.
 
-**Commit title caveat.** This repo's squash-merge uses the PR title as the
-`main` commit message, and an unprefixed title (no `feat:`/`fix:`/...)
-silently drops out of release-please's changelog. A task's PR title is the
-raw task title, with no Conventional Commits enforcement. The merge sweep
-passes the commit title explicitly so the result is deterministic regardless
-of the repo's own squash-title setting, but it does **not** gate the merge on
-a prefix check — that's this repo's policy, not a Mullion-wide one. This
-matters more with `mergeOnApprove`/`autoApprove` on, since nobody is reading
-the title before it becomes a permanent commit message.
+**Commit title caveat, and the opt-in fix (`#761`).** This repo's squash-merge
+uses the PR title as the `main` commit message, and an unprefixed title (no
+`feat:`/`fix:`/...) silently drops out of release-please's changelog. By
+default a task's PR title is still the raw task title, with no Conventional
+Commits enforcement — matters more with `mergeOnApprove`/`autoApprove` on,
+since nobody is reading the title before it becomes a permanent commit
+message.
+
+With `projects.conventionalCommitTitles` on, the worker is asked (via
+`buildTaskMasterPreamble`) to write a `type(scope)?: description` title to a
+`sessionsDir`-relative file (`taskCommitTitlePath`, task-prompt.ts — same
+outside-the-worktree convention `taskReviewFindingsPath` already uses, and
+for the same reason: a file written inside the worktree would dirty the tree
+and block approval). `task-reconciler.ts` reads and validates it
+(`parseCommitTitle`) at the exact "-> reviewing" transition, right before
+`openDraftPRForTask`'s first PR-create call, and stores it on `tasks.prTitle`
+— **not round-suffixed**, unlike the review-findings file: a worker
+re-seeded for a later round only needs to rewrite it if the type should
+change, and a round that doesn't touches nothing (`?? task.prTitle` on the
+write). `task-promote.ts`'s `createOrRecoverPR` then uses
+`task.prTitle ?? task.title`.
+
+Absent (feature off) or malformed (didn't match the pattern, or exceeded the
+length bound) both fall back identically to the raw task title, one
+`app.log.warn` — this never blocks promotion. The read is **local-only**
+today (plain `existsSync`/`readFileSync`, not routed through
+`SessionBackend`) — same known limitation `#778` already tracks for the
+review-findings _seed_ path: a remote-hosted task's worker writes this file
+on its own host, which the primary can't read directly, so the feature
+silently no-ops for a remote-hosted project until that's fixed. The merge
+sweep passes the commit title explicitly so the result is deterministic
+regardless of the repo's own squash-title setting, but neither this nor the
+sweep gates the merge on a prefix check — that's this repo's own policy, not
+a Mullion-wide one.
+
+**The title is never re-synced to GitHub after the PR is created (`#782`).**
+`tasks.prTitle` updates correctly on every round, but nothing calls GitHub's
+update-PR-title endpoint once a draft PR already exists — `openDraftPRForTask`
+just pushes new commits on that path. So the round-persistence design above
+only actually helps "PR creation was deferred to a later round" (e.g. a
+`no-token` failure resolved by round 2); it does not help a worker that
+legitimately changes the Conventional Commits type between rounds (round 1
+seeds a `docs:` fix, review feedback turns it into `feat:` work) — the live
+GitHub title, and the eventual squash-merge commit message, stays frozen at
+whichever round first opened the PR. Not urgent (off by default, and the
+title rarely changes between rounds in practice), but worth knowing before
+relying on this for a task that goes through more than one round.
 
 ### Auto-approve
 

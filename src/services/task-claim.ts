@@ -1,3 +1,4 @@
+import path from "node:path";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
@@ -21,7 +22,7 @@ import {
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
-import { buildWorkerPrompt } from "./task-prompt.js";
+import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 
 // Shared by claimTask's and retryTask's identical "cap" branches (Hermes
 // review, PR #765) — the limit shown here is always the RESOLVED value
@@ -345,6 +346,18 @@ export async function dispatchClaimedTask(
       // difference, not a correctness gate the way no-seed-channel is.
       auto: false,
       mode: "claim",
+      // #761 — same known limitation #778 already tracks for the
+      // review-findings seed path: this is always the PRIMARY's own
+      // sessionsDir, not necessarily where a remote-hosted task's worker
+      // actually runs. Not fixed here (would need the same "ask the
+      // remote host for its own sessionsDir first" work #778 already
+      // scopes) — worst case for a mismatched host, the title file lands
+      // somewhere the reconciler never reads, and task-reconciler.ts's
+      // ingest step falls back to the raw task title, same as any other
+      // malformed/absent title.
+      commitTitlePath: project.conventionalCommitTitles
+        ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+        : undefined,
     });
     const result = await createSessionRecord(app, {
       projectId: project.id,
@@ -695,6 +708,18 @@ export async function retryTask(
       // therefore watching, so the "don't stop to ask" bullet stays off.
       auto: false,
       mode: "retry",
+      // #761 — same known limitation #778 already tracks for the
+      // review-findings seed path: this is always the PRIMARY's own
+      // sessionsDir, not necessarily where a remote-hosted task's worker
+      // actually runs. Not fixed here (would need the same "ask the
+      // remote host for its own sessionsDir first" work #778 already
+      // scopes) — worst case for a mismatched host, the title file lands
+      // somewhere the reconciler never reads, and task-reconciler.ts's
+      // ingest step falls back to the raw task title, same as any other
+      // malformed/absent title.
+      commitTitlePath: project.conventionalCommitTitles
+        ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+        : undefined,
     });
     const result = await createSessionRecord(app, {
       projectId: project.id,

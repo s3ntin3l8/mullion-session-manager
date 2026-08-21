@@ -116,6 +116,11 @@ interface UpdateProjectBody {
   // an install-wide default that works for every project, so a global
   // fallback tier is useful here where it wasn't for those two.
   maxAutoReturnRounds?: number | null;
+  // #761 — per-project only, no install-wide tier — same posture as
+  // mergeOnApprove/autoApprove above: whether this repo's commit history
+  // follows Conventional Commits is a property of that repo, not a
+  // Mullion-wide default.
+  conventionalCommitTitles?: boolean | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -155,6 +160,7 @@ const updateProjectSchema = {
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
       maxAutoReturnRounds: { type: ["integer", "null"], minimum: 1 },
+      conventionalCommitTitles: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -2039,6 +2045,7 @@ export async function projectsRoute(app: FastifyInstance) {
         mergeOnApprove,
         autoApprove,
         maxAutoReturnRounds,
+        conventionalCommitTitles,
         createDir,
         gitInit,
       } = request.body;
@@ -2092,10 +2099,11 @@ export async function projectsRoute(app: FastifyInstance) {
         defaultReviewAgent === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
-        maxAutoReturnRounds === undefined
+        maxAutoReturnRounds === undefined &&
+        conventionalCommitTitles === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, or maxAutoReturnRounds must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, or conventionalCommitTitles must be provided.",
         );
       }
 
@@ -2152,6 +2160,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
+          ...(conventionalCommitTitles !== undefined ? { conventionalCommitTitles } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

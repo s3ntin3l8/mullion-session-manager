@@ -51,6 +51,9 @@ interface CreateProjectModalProps {
     // means "use the install default" — the modal sends `null` when the
     // field is left blank, never `0` (the API rejects a cap below 1).
     maxAutoReturnRounds?: number | null;
+    // #761 — per-project only, no install-wide tier, same edit-mode-only
+    // framing as mergeOnApprove/autoApprove above.
+    conventionalCommitTitles?: boolean | null;
     // Confirm-first directory creation — only ever sent once the user has
     // clicked "Create folder" below, in response to a PROJECT_DIR_MISSING
     // rejection. `gitInit` only has an effect when `createDir` is also set.
@@ -86,6 +89,7 @@ interface CreateProjectModalProps {
   initialMergeOnApprove?: boolean | null;
   initialAutoApprove?: boolean | null;
   initialMaxAutoReturnRounds?: number | null;
+  initialConventionalCommitTitles?: boolean | null;
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -114,6 +118,7 @@ export function CreateProjectModal({
   initialMergeOnApprove = null,
   initialAutoApprove = null,
   initialMaxAutoReturnRounds = null,
+  initialConventionalCommitTitles = null,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
@@ -132,6 +137,9 @@ export function CreateProjectModal({
   // one can.
   const [maxAutoReturnRounds, setMaxAutoReturnRounds] = useState(
     initialMaxAutoReturnRounds !== null ? String(initialMaxAutoReturnRounds) : "",
+  );
+  const [conventionalCommitTitles, setConventionalCommitTitles] = useState(
+    initialConventionalCommitTitles ?? false,
   );
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -254,6 +262,7 @@ export function CreateProjectModal({
             ? null
             : Number(maxAutoReturnRounds)
           : undefined,
+        conventionalCommitTitles: isEdit ? conventionalCommitTitles : undefined,
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -541,6 +550,25 @@ export function CreateProjectModal({
                 How many times a task may be sent back to its worker automatically — a
                 changes-requested review, a red required CI check, or an unresolved PR comment.
                 Blank uses the install default (currently 2).
+              </span>
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Conventional Commits titles</span>
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={conventionalCommitTitles}
+                  onChange={(e) => setConventionalCommitTitles(e.target.checked)}
+                />
+                Use the worker's own Conventional Commits title for the PR
+              </label>
+              <span className="create-modal-field-hint">
+                Off by default: the PR title is the raw task title. On, the worker is asked to write
+                a "type(scope): description" title alongside its usual completion signal — a
+                malformed or missing one silently falls back to the raw task title.
               </span>
             </label>
           )}

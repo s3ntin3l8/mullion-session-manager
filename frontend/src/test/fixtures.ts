@@ -90,6 +90,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     mergeOnApprove: null,
     autoApprove: null,
     maxAutoReturnRounds: null,
+    conventionalCommitTitles: null,
     ...overrides,
   };
 }

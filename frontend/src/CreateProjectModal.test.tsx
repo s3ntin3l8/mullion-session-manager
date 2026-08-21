@@ -278,6 +278,44 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       mergeOnApprove: false,
       autoApprove: false,
       maxAutoReturnRounds: null,
+      conventionalCommitTitles: false,
+    });
+  });
+
+  it("passes conventionalCommitTitles through to onCreate on save, toggled on", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Use the worker's own Conventional Commits title for the PR/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "mullion",
+      cwd: "/home/x/mullion",
+      hostId: undefined,
+      devServerUrl: null,
+      defaultAgent: null,
+      defaultReviewAgent: null,
+      mergeOnApprove: false,
+      autoApprove: false,
+      maxAutoReturnRounds: null,
+      conventionalCommitTitles: true,
     });
   });
 
@@ -315,6 +353,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       mergeOnApprove: true,
       autoApprove: true,
       maxAutoReturnRounds: null,
+      conventionalCommitTitles: false,
     });
   });
 
@@ -581,6 +620,7 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       mergeOnApprove: false,
       autoApprove: false,
       maxAutoReturnRounds: null,
+      conventionalCommitTitles: false,
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });

@@ -91,6 +91,10 @@ export interface Project {
   // "use the install default" (currently 2). Mirrors
   // projects.maxAutoReturnRounds.
   maxAutoReturnRounds: number | null;
+  // #761 — off by default: the PR title is the raw task title. On, the
+  // worker is asked to write a Conventional Commits title alongside its
+  // usual completion signal. Mirrors projects.conventionalCommitTitles.
+  conventionalCommitTitles: boolean | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live

@@ -480,6 +480,59 @@ describe("promoteTaskToPR", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // #761 — the agent-supplied Conventional Commits title, when present,
+  // wins over the raw task title.
+  it("uses task.prTitle for the PR title when it's set", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+
+    const task = baseTask({
+      title: "Fix the thing",
+      prTitle: "fix(widget): stop it exploding on Tuesdays",
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+    });
+    await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      expect.objectContaining({ title: "fix(widget): stop it exploding on Tuesdays" }),
+    );
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // Absent (feature off, or a malformed/unreadable write that
+  // task-reconciler.ts's ingest step already rejected) falls back to the
+  // raw task title — never blocks promotion on this.
+  it("falls back to the raw task title when task.prTitle is null", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+
+    const task = baseTask({
+      title: "Fix the thing",
+      prTitle: null,
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+    });
+    await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      expect.objectContaining({ title: "Fix the thing" }),
+    );
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("includes 'Closes #N' in the PR body for an issue-linked task, and omits it for a local task", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);

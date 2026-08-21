@@ -835,6 +835,7 @@ function ProjectHeader({
               initialMergeOnApprove={project.mergeOnApprove}
               initialAutoApprove={project.autoApprove}
               initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
+              initialConventionalCommitTitles={project.conventionalCommitTitles}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -845,6 +846,7 @@ function ProjectHeader({
                 mergeOnApprove,
                 autoApprove,
                 maxAutoReturnRounds,
+                conventionalCommitTitles,
                 createDir,
                 gitInit,
               }) =>
@@ -857,6 +859,7 @@ function ProjectHeader({
                   mergeOnApprove,
                   autoApprove,
                   maxAutoReturnRounds,
+                  conventionalCommitTitles,
                   createDir,
                   gitInit,
                 })
