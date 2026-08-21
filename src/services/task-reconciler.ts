@@ -44,6 +44,7 @@ import {
   deleteRemoteBranch,
 } from "./github-write.js";
 import { computeCiStatus, fetchRunsForHead } from "./github.js";
+import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -799,11 +800,29 @@ function draftPrRetryBackoffMs(attempts: number): number {
   return Math.min(DRAFT_PR_RETRY_TTL_MS * 2 ** (attempts - 1), DRAFT_PR_RETRY_MAX_TTL_MS);
 }
 
+// #759 — one entry-point check per sweep, not per task: skip opening the
+// pass at all once the install-wide rate-limit budget (github-fetch.ts) is
+// known to be in effect, rather than discovering it task-by-task via
+// exceptions. githubApiFetch/githubRequest already short-circuit at the
+// transport layer regardless (the PRIMARY defense — see that file's own
+// doc comment), so this is a belt-and-suspenders "don't even open a pass
+// we know will fail immediately" — logged once per sweep, not once per
+// task, so a long rate-limit window doesn't spam the log every 30s tick.
+function skipSweepIfGitHubRateLimited(app: FastifyInstance, sweepName: string): boolean {
+  if (!isGitHubRateLimited()) return false;
+  app.log.debug(
+    { sweep: sweepName, resumeInMs: githubRateLimitRemainingMs() },
+    "task reconcile: skipping sweep — GitHub rate limit is in effect",
+  );
+  return true;
+}
+
 async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   // Same gate as the transition itself (Hermes review, PR #480) — a retry
   // is still "real GitHub state," not a passive read.
   if (!resolvedTaskMaster.enabled) return;
+  if (skipSweepIfGitHubRateLimited(app, "retryStrandedDraftPRs")) return;
 
   const rows = app.db
     .select({ task: tasks, project: projects })
@@ -842,6 +861,10 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
     [...byHost.values()].map(async (hostRows) => {
       for (const { task, project } of hostRows) {
         if (attempted >= MAX_DRAFT_PR_RETRIES_PER_SWEEP) return;
+        // #759 — re-check mid-pass: a rate limit can land on task N of a
+        // multi-host, multi-task pass, and the sweep-entry check above only
+        // catches a limit already in effect when the tick started.
+        if (isGitHubRateLimited()) return;
 
         const state = draftPrRetryState.get(task.id);
         if (
@@ -1055,6 +1078,7 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
   // Same gate as the transition itself — a merge is real GitHub state, not
   // a passive read.
   if (!resolvedTaskMaster.enabled) return;
+  if (skipSweepIfGitHubRateLimited(app, "processMergeRequests")) return;
 
   const rows = app.db
     .select({ task: tasks, project: projects })
@@ -1077,6 +1101,7 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
   // loop from.
   for (const { task, project } of rows) {
     if (attempted >= MAX_MERGE_RETRIES_PER_SWEEP) return;
+    if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
     const state = mergeRetryState.get(task.id);
     if (state !== undefined && now - state.lastAttemptedAt < mergeRetryBackoffMs(state.attempts))
@@ -1236,6 +1261,7 @@ async function attemptAutoApprove(
 async function processAutoApprovals(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return;
+  if (skipSweepIfGitHubRateLimited(app, "processAutoApprovals")) return;
 
   const rows = app.db
     .select({ task: tasks, project: projects })
@@ -1252,6 +1278,7 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
 
   for (const { task, project } of rows) {
     if (attempted >= MAX_AUTO_APPROVALS_PER_SWEEP) return;
+    if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
     const state = autoApproveRetryState.get(task.id);
     if (
