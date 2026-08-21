@@ -1455,7 +1455,15 @@ export async function autoReturnTask(
   if (!reseeded) {
     const rolledBack = app.db
       .update(tasks)
-      .set({ autoReturnRounds: task.autoReturnRounds })
+      .set({
+        autoReturnRounds: task.autoReturnRounds,
+        // Fresh subagent review, PR #774 — a rolled-back attempt means no
+        // auto-return round actually completed, so leaving this set to
+        // whatever reason the earlier CAS just wrote would contradict this
+        // column's own doc comment (schema.ts): "which trigger most
+        // recently drove an auto-return round" — this one didn't.
+        lastAutoReturnReason: task.lastAutoReturnReason,
+      })
       .where(and(eq(tasks.id, task.id), eq(tasks.autoReturnRounds, task.autoReturnRounds + 1)))
       .run();
     app.log.warn(

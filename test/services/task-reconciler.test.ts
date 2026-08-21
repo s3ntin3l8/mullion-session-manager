@@ -2937,6 +2937,11 @@ describe("reconcileTasks", () => {
       expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("should not cost the task its one round");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      // Fresh subagent review, PR #774 — a rolled-back attempt means no
+      // auto-return round actually completed, so lastAutoReturnReason must
+      // roll back to whatever it was before too (null, here), not linger
+      // at "review" for a round that never happened.
+      expect(row.lastAutoReturnReason).toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId, rolledBack: true }),
         expect.stringContaining("rolled back the spent auto-return round"),
