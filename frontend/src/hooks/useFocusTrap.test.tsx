@@ -89,6 +89,60 @@ describe("useFocusTrap", () => {
     expect(screen.getByText("plain-close")).toHaveFocus();
   });
 
+  // Independent code review — CommandPalette.tsx's own coarse-pointer path
+  // anchors initial focus on the trap's container itself (`tabIndex={-1}`),
+  // not any focusable descendant. getFocusable's selector excludes
+  // `[tabindex="-1"]`, so the container is never `first`/`last` — without
+  // the container.current-anchor branch in the hook, Shift+Tab from there
+  // escaped the trap entirely via the browser's own native default instead
+  // of wrapping to `last`.
+  function HarnessWithContainerAnchor() {
+    const [active, setActive] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const { onKeyDown } = useFocusTrap({ active, containerRef, initialFocusRef: containerRef });
+    return (
+      <div>
+        <button onClick={() => setActive(true)}>open</button>
+        {active && (
+          <div ref={containerRef} onKeyDown={onKeyDown} tabIndex={-1} data-testid="trap">
+            <button>first</button>
+            <button>last</button>
+          </div>
+        )}
+        <button>outside</button>
+      </div>
+    );
+  }
+
+  it("focuses the container itself when initialFocusRef points at it", async () => {
+    const user = userEvent.setup();
+    render(<HarnessWithContainerAnchor />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByTestId("trap")).toHaveFocus();
+  });
+
+  it("wraps Tab from the container anchor to the first focusable descendant", async () => {
+    const user = userEvent.setup();
+    render(<HarnessWithContainerAnchor />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByTestId("trap")).toHaveFocus();
+
+    await user.tab();
+
+    expect(screen.getByText("first")).toHaveFocus();
+  });
+
+  it("wraps Shift+Tab from the container anchor to the last focusable descendant, not out of the dialog", async () => {
+    const user = userEvent.setup();
+    render(<HarnessWithContainerAnchor />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByTestId("trap")).toHaveFocus();
+
+    await user.tab({ shift: true });
+
+    expect(screen.getByText("last")).toHaveFocus();
+  });
+
   it("restores focus to the trigger element on a plain close", async () => {
     const user = userEvent.setup();
     render(<Harness />);

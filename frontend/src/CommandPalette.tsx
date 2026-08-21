@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
@@ -22,6 +23,7 @@ import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -184,15 +186,63 @@ export function CommandPalette({
   // below is the one path that does; the Escape key and the backdrop click
   // are the only two that close WITHOUT opening anything, so they call
   // `onClose` directly and get the normal restore-to-trigger behavior.
+  //
+  // Mobile/tablet touch fix — `initialFocusRef: inputRef` (unconditionally,
+  // before this change) auto-raised the on-screen keyboard the instant this
+  // opened on a coarse pointer, covering the very list the launcher exists
+  // to show. `isCoarsePointer` swaps the trap's initial focus target to
+  // `modalRef` itself (given `tabIndex={-1}` below so it's actually
+  // focusable) instead of suppressing initial focus outright — the trap
+  // still needs a focus anchor inside the dialog for its own Tab cycle and
+  // for a11y, same reasoning as `BrowserPanel.tsx`'s own
+  // `autoFocus={... && !isCoarsePointer}` for the same class of problem.
+  // Tapping the search input directly still raises the keyboard, same as
+  // any other input — this only changes what grabs focus on OPEN.
+  const isCoarsePointer = useCoarsePointer();
   const modalRef = useRef<HTMLDivElement>(null);
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: true,
     containerRef: modalRef,
-    initialFocusRef: inputRef,
+    initialFocusRef: isCoarsePointer ? modalRef : inputRef,
   });
   const closeAfterAction = () => {
     suppressRestore();
     onClose();
+  };
+
+  // Independent code review — `(pointer: coarse)` is deliberately not
+  // width- or touch-event-gated (layoutTier.ts's own comment: a touchscreen
+  // laptop, or a 2-in-1's keyboard-attach transition, both count), so the
+  // coarse-pointer anchor above also fires for hardware-keyboard-equipped
+  // touch devices — an iPad/Android tablet with an attached keyboard, a
+  // touchscreen laptop. On those, typing/arrow-nav/Enter are normally
+  // reachable only through the search input's own onKeyDown below; with
+  // focus anchored on the dialog instead, they'd otherwise go nowhere until
+  // the user manually taps the input first. Redirecting focus to the input
+  // on the first non-Tab, non-Escape keystroke — WITHOUT calling
+  // preventDefault — lets the browser deliver that same keystroke to the
+  // newly-focused input (verified: a focus change made synchronously inside
+  // a keydown handler is honored by the browser's own default action for
+  // that same event, the same "type to search" trick VS Code's and Slack's
+  // command palettes use), so a keyboard-equipped device keeps working
+  // exactly as before this fix. Escape is excluded because it's the close
+  // key (handled on the input's own onKeyDown once focus lands there, and
+  // by App.tsx's handleGlobalEscape regardless) — redirecting focus for it
+  // would just add an extra step before closing, not open. Tab is excluded
+  // because onTrapKeyDown below already gives it a specific meaning (wrap to
+  // the first/last focusable descendant) that this must not preempt.
+  const onDialogKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (
+      document.activeElement === modalRef.current &&
+      e.key !== "Tab" &&
+      e.key !== "Escape" &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey
+    ) {
+      inputRef.current?.focus();
+    }
+    onTrapKeyDown(e);
   };
 
   // Issue #271, option 1 — the launcher's opt-in "isolate this session"
@@ -354,10 +404,17 @@ export function CommandPalette({
         ref={modalRef}
         className="cmd-palette"
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={onTrapKeyDown}
+        onKeyDown={onDialogKeyDown}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        // Only meaningful as a focus target when isCoarsePointer's own
+        // initialFocusRef switch (above) points the trap at this div
+        // instead of the search input — a non-interactive container needs
+        // tabIndex={-1} to be programmatically focusable at all, without
+        // adding it to the regular Tab order (the pointer-fine path never
+        // uses this; it still lands on the input directly).
+        tabIndex={-1}
       >
         <div className="cmd-palette-search">
           <SearchIcon size={17} strokeWidth={1.9} />

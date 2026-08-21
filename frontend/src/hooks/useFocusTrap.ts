@@ -125,6 +125,23 @@ export function useFocusTrap({
     if (focusable.length === 0) return;
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
+    // Independent code review — a caller can point `initialFocusRef` at a
+    // non-tabbable container (CommandPalette.tsx's own coarse-pointer path
+    // does this, `tabIndex={-1}` on its dialog root, to anchor initial focus
+    // somewhere that doesn't raise the on-screen keyboard). `getFocusable`'s
+    // own selector excludes `[tabindex="-1"]`, so the container itself is
+    // never `first` or `last` and neither wrap-around branch below can ever
+    // match it — Shift+Tab from there fell through to the browser's own
+    // native default, which escapes the trap entirely (moves to whatever
+    // precedes the container in the WHOLE document, not just this dialog).
+    // Handled explicitly here, for both directions, rather than leaning on
+    // native forward-Tab's happening to land on `first` by DOM-order
+    // coincidence — that's not a contract, just an incidental default.
+    if (document.activeElement === containerRef.current) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+      return;
+    }
     if (e.shiftKey && document.activeElement === first) {
       e.preventDefault();
       last.focus();
