@@ -12,8 +12,21 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: color-mix(in srgb, #000 48%, transparent);
+  /* Fallback declaration first, unconditionally: a browser with no
+     backdrop-filter support drops that whole declaration and keeps this
+     flat tint instead — same "plain value first, enhanced value second"
+     pattern as .toolbar's own env()-fallback height (toolbar.css). The
+     tint is lighter than the old flat 48% black specifically because the
+     blur below is doing most of the separation work now; keeping the old
+     48% on top of a blur would read as near-opaque. */
+  background: color-mix(in srgb, #000 30%, transparent);
   z-index: 40;
+}
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .cmux-scrim {
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
 }
 
 .sidebar-wrapper {
@@ -28,10 +41,62 @@
   transition: width 0.16s ease;
 }
 
-/* Desktop-only collapse (the mobile <700px block below fully owns
-   .sidebar-wrapper's positioning at that breakpoint, so this is scoped to
-   widths above it to avoid fighting the overlay transform there). */
-@media (min-width: 700px) {
+/* Floating-sidebar redesign — below desktop width (phone AND tablet now,
+   not just phone), the sidebar is a translucent overlay card floating ON
+   TOP of the tiled grid, not an in-flow column that pushes/resizes it.
+   Modeled on UISplitViewController's own overlay display mode (Files/
+   Notes/Mail on iPad): reveal/dismiss via App.tsx's `sidebarOpen` state
+   (`toggleSidebar`'s own comment), content's width never changes while it
+   shows. Was phone-only (`max-width: 699px`, in mobile.css) under the
+   tablet tier plan, which deliberately kept tablet on desktop's docked
+   collapse behavior below — reversed because tablet's sidebar was pushing
+   and resizing the live dockview grid on open, which is both the wrong
+   feel and (independently) a second trigger for the dockview pane-skew
+   bug fixed separately: any grid-width change while a group is maximized
+   replays that clamp. `699.98px`/`1279.98px`, not bare integers — matches
+   lib/layoutTier.ts's own PHONE_BREAKPOINT_QUERY/TABLET_BREAKPOINT_QUERY
+   exactly (that file's own comment explains why: avoids a live gap at
+   fractional/boundary widths a foldable's mid-transition can report). */
+@media (max-width: 1279.98px) {
+  .sidebar-wrapper {
+    position: fixed !important;
+    /* Matches .toolbar's own inset-aware height (its base rule, near the
+       top of toolbar.css) — a bare 44px here would let the drawer start
+       under the (now taller, on a notched device) toolbar. */
+    top: calc(44px + env(safe-area-inset-top));
+    left: 0;
+    bottom: 0;
+    width: min(310px, 84vw) !important;
+    padding-left: env(safe-area-inset-left);
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 45;
+    transform: translateX(-101%);
+    transition: transform 0.24s ease;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
+  }
+  .app.sb-open .sidebar-wrapper {
+    transform: none;
+  }
+  .app.sb-open .cmux-scrim {
+    display: block !important;
+  }
+
+  /* No reserved-sidebar-width column to line the toolbar's lead section up
+     with once the sidebar floats instead of docking — same treatment the
+     phone-only block already gave this before tablet shared the overlay. */
+  .toolbar-lead {
+    width: auto !important;
+  }
+}
+
+/* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
+   the overlay above: a persisted `sidebarCollapsed` preference from a
+   previous desktop session has no CSS effect below this width at all
+   (`toggleSidebar` itself stops writing to it below desktop width too —
+   see that function's own comment), so this block scoping to desktop only
+   is consistent with what actually drives the class, not just a leftover
+   width query. */
+@media (min-width: 1280px) {
   .app.sidebar-collapsed .sidebar-wrapper {
     width: 0;
     border-right: none;

@@ -50,6 +50,7 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
+import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
@@ -1049,19 +1050,74 @@ export function App() {
     [dockviewApi, splitRequest, onOpenSession, projects],
   );
 
-  // One toggle, two meanings depending on breakpoint: phone's `sidebarOpen`
-  // is a closed-by-default overlay flag (App.tsx-local, not persisted —
-  // resets to closed every navigation, which is the right default for an
-  // overlay); desktop's `sidebarCollapsed` is a persisted, open-by-default
-  // panel-visibility preference (store-owned, survives reload). Same button,
-  // same handler, branch on the existing `isMobile` state — tablet tier
-  // plan, PR 4: deliberately still phone-only, not tier-generalized. Tablet
-  // keeps desktop's collapse behavior (it has room for the docked sidebar,
-  // unlike phone's overlay drawer).
+  // One toggle, two meanings depending on breakpoint: phone/tablet's
+  // `sidebarOpen` is a closed-by-default overlay flag (App.tsx-local, not
+  // persisted — resets to closed every navigation, which is the right
+  // default for an overlay); desktop's `sidebarCollapsed` is a persisted,
+  // open-by-default panel-visibility preference (store-owned, survives
+  // reload). Same button, same handler.
+  //
+  // Floating-sidebar redesign — was phone-only (`isMobile`) under the
+  // tablet tier plan, with tablet deliberately kept on desktop's docked
+  // collapse behavior ("it has room for the docked sidebar"). Reversed:
+  // tablet's sidebar was pushing and resizing the live dockview grid on
+  // open (`sidebar.css`'s `.sidebar-wrapper` was an in-flow `flex-shrink: 0`
+  // item there), which is both the wrong feel (Apple's own
+  // `UISplitViewController` floats the sidebar as an overlay below the
+  // regular/compact width threshold, never resizing content) and a second,
+  // independent trigger for the dockview pane-skew bug fixed separately —
+  // any grid-width change while a group is maximized replays that same
+  // clamp. `layoutTier !== "desktop"` (not `isMobile`) now drives
+  // `sidebarOpen`, so tablet gets the same floating overlay as phone.
   const toggleSidebar = useCallback(() => {
-    if (isMobile) setSidebarOpen((v) => !v);
+    if (layoutTier !== "desktop") setSidebarOpen((v) => !v);
     else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [isMobile, sidebarCollapsed]);
+  }, [layoutTier, sidebarCollapsed]);
+
+  // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
+  // own header comment covers the design: discrete threshold+commit, not a
+  // live drag-follow, and no separate overlay hit-target so touches starting
+  // in the edge slice still reach a terminal rendered flush against it
+  // first). Two independent attachments, only one live at a time per state:
+  // `.app-body` with an edge-zone filter drives open (only relevant while
+  // closed), the sidebar panel itself (draggable from anywhere on it,
+  // matching Files/Notes on iPad) drives dismiss (only relevant while open).
+  // Desktop is excluded entirely — the docked sidebar has no swipe gesture.
+  const appBodyRef = useRef<HTMLDivElement>(null);
+  const sidebarWrapperRef = useRef<HTMLDivElement>(null);
+  // Review finding — without this, resizing from tablet (drawer open) to
+  // desktop and back re-opened the drawer unbidden: `sidebarOpen` has no
+  // other tier-transition reset, so it just carried the stale `true` back
+  // across the boundary. Desktop's own overlay CSS never reads `sb-open`
+  // (scoped to `max-width: 1279.98px`), so this was a surprising re-open on
+  // tier reversion, not a desktop-side visual bug. Direct setState is
+  // genuinely needed here (canceling in response to an externally-driven
+  // `layoutTier` change, not a pure render-time derivation) — same shape as
+  // the mobile-rename-cancel effect above.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (layoutTier === "desktop") setSidebarOpen(false);
+  }, [layoutTier]);
+  useEffect(() => {
+    if (layoutTier === "desktop") return;
+    if (sidebarOpen) {
+      const el = sidebarWrapperRef.current;
+      if (!el) return;
+      return attachSidebarSwipeGesture({
+        element: el,
+        commitDirection: -1,
+        onCommit: () => setSidebarOpen(false),
+      });
+    }
+    const el = appBodyRef.current;
+    if (!el) return;
+    return attachSidebarSwipeGesture({
+      element: el,
+      commitDirection: 1,
+      edgeZonePx: 24,
+      onCommit: () => setSidebarOpen(true),
+    });
+  }, [layoutTier, sidebarOpen]);
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct
@@ -1189,10 +1245,18 @@ export function App() {
         paneCount={paneCount}
         currentVersion={currentVersion}
       />
-      <div className="app-body">
+      <div className="app-body" ref={appBodyRef}>
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
-        <div className="sidebar-wrapper cmux-scroll">
-          {!sidebarCollapsed && (
+        <div className="sidebar-wrapper cmux-scroll" ref={sidebarWrapperRef}>
+          {/* Desktop-only (review finding, floating-sidebar redesign): the
+              overlay's own `width: min(310px, 84vw) !important`
+              (sidebar.css's `max-width: 1279.98px` block) outranks
+              `--sidebar-width`, the custom property this drag actually
+              writes to, so below desktop width the handle used to render,
+              respond to mousedown, and update state/localStorage while
+              visibly doing nothing — a resize-by-mouse gesture doesn't fit
+              a touch-first floating overlay anyway. */}
+          {layoutTier === "desktop" && !sidebarCollapsed && (
             <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
           )}
           <WorkspaceSwitcher />
