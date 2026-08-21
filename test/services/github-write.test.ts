@@ -13,6 +13,7 @@ import {
   updatePullRequestBranch,
   deleteRemoteBranch,
   closePullRequest,
+  updatePullRequestTitle,
   markPullRequestReadyForReview,
   createPullRequestReview,
   fetchPullRequestReviewThreads,
@@ -461,6 +462,20 @@ describe("github-write service", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.github.com/repos/owner/repo/pulls/9",
       expect.objectContaining({ method: "PATCH", body: JSON.stringify({ state: "closed" }) }),
+    );
+  });
+
+  // #782 — mirrors closePullRequest's own test shape exactly, the same
+  // shared PATCH .../pulls/:number endpoint with a different field.
+  it("updatePullRequestTitle PATCHes title on the pull endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { number: 9, title: "feat: new title" }));
+    await updatePullRequestTitle("tok", "owner", "repo", 9, "feat: new title");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ title: "feat: new title" }),
+      }),
     );
   });
 

@@ -49,6 +49,7 @@ import {
   getPullRequestByNumber,
   markPullRequestReadyForReview,
   closePullRequest,
+  updatePullRequestTitle,
   GitHubWriteScopeError,
 } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
@@ -339,6 +340,31 @@ async function createOrRecoverPR(
             return { ok: false, reason: "pr-create-failed", detail };
           }
         }
+        // #782 — same compare-then-PATCH as promoteTaskToPR's already-open
+        // branch: this 422-adopt path picks up whatever title the PR was
+        // opened with (a human's out-of-band PR, or openDraftPRForTask's own
+        // earlier create for the same head branch), which can differ from
+        // task.prTitle. Without this, approve's own createOrRecoverPR call
+        // (the only caller that can reach this branch with prNumber still
+        // null going in) would adopt a stale title with nothing left to
+        // correct it before attemptMerge reads pr.title for the squash-merge
+        // commit message.
+        if (task.prTitle !== null && task.prTitle !== existing.title) {
+          try {
+            await updatePullRequestTitle(
+              token,
+              repoRef.owner,
+              repoRef.repo,
+              existing.number,
+              task.prTitle,
+            );
+          } catch (err) {
+            app.log.warn(
+              { err, taskId: task.id, prNumber: existing.number },
+              "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
+            );
+          }
+        }
         clearGithubSyncError(app, task.id);
         return { ok: true, prUrl: existing.htmlUrl, prNumber: existing.number };
       }
@@ -355,12 +381,13 @@ async function createOrRecoverPR(
 }
 
 /**
- * Opens (or, on re-entry, just pushes new commits to) a draft PR for a task
- * entering "reviewing" — called best-effort from task-reconciler.ts, never
- * blocking the transition that already committed. `task.prNumber !== null`
- * means a draft already exists (this is a second "-> reviewing" after an
- * auto-returned review round): nothing left to create, just push whatever
- * new commits exist.
+ * Opens (or, on re-entry, just pushes new commits to and re-syncs the
+ * title of) a draft PR for a task entering "reviewing" — called
+ * best-effort from task-reconciler.ts, never blocking the transition that
+ * already committed. `task.prNumber !== null` means a draft already exists
+ * (this is a second "-> reviewing" after an auto-returned review round):
+ * nothing left to create, just push whatever new commits exist (`#782`
+ * also re-syncs the title, since a later round can rewrite it).
  */
 export async function openDraftPRForTask(
   app: FastifyInstance,
@@ -374,6 +401,31 @@ export async function openDraftPRForTask(
   if (task.prNumber !== null) {
     const pushFailure = await pushForPromotion(app, task, project, token);
     if (pushFailure) return pushFailure;
+    // #782 — this branch makes NO other GitHub call today (it returns
+    // task.prUrl/prNumber straight from the DB row), so a bare PATCH here
+    // is the cheapest way to keep the title re-synced on this path too: a
+    // GET-then-compare would double the call count for a branch whose
+    // whole point is "nothing left to create, just push." The PATCH is
+    // idempotent (same value in, same value out) when the title hasn't
+    // changed, so there's no correctness cost to skipping the comparison
+    // `promoteTaskToPR`'s branch above does (it has `pr.title` in hand
+    // already; this branch would need a whole extra fetch to get one).
+    if (task.prTitle !== null) {
+      try {
+        await updatePullRequestTitle(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          task.prNumber,
+          task.prTitle,
+        );
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, prNumber: task.prNumber },
+          "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
+        );
+      }
+    }
     clearGithubSyncError(app, task.id);
     return { ok: true, prUrl: task.prUrl!, prNumber: task.prNumber };
   }
@@ -436,6 +488,32 @@ export async function promoteTaskToPR(
       // approve on every retry — skip it once already true.
       if (pr.draft) {
         await markPullRequestReadyForReview(token, pr.nodeId);
+      }
+      // #782 — a later auto-return round can rewrite tasks.prTitle with a
+      // changed Conventional Commits type (e.g. round 1 seeds `docs:`,
+      // review feedback in round 2 turns it into real functional work
+      // warranting `feat:`), but nothing previously re-synced that to the
+      // live GitHub PR — the squash-merge commit message (attemptMerge
+      // reads pr.title, not task.prTitle) stayed frozen at whichever round
+      // first opened the PR. Already have `pr` in hand here, so compare
+      // before writing: zero extra API calls in the common (unchanged)
+      // case. Never lets a title-sync failure fail the promotion — same
+      // "never gate promotion on the title" posture #761 established.
+      if (task.prTitle !== null && task.prTitle !== pr.title) {
+        try {
+          await updatePullRequestTitle(
+            token,
+            repoRef.owner,
+            repoRef.repo,
+            task.prNumber,
+            task.prTitle,
+          );
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, prNumber: task.prNumber },
+            "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
+          );
+        }
       }
       clearGithubSyncError(app, task.id);
       return { ok: true, prUrl: pr.htmlUrl, prNumber: pr.number };
