@@ -1030,14 +1030,19 @@
   display: flex;
   flex-direction: column;
 }
+/* Header padding, height, and border aligned to .tasks-panel-toolbar
+   (padding: 10px 14px, var(--border)) so the top chrome bar and its
+   dividing border line stay continuous across the board columns and
+   the drawer without a vertical step or color mismatch. */
 .kanban-detail-drawer-header {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 6px 6px 12px;
-  border-bottom: 1px solid var(--border-soft);
+  min-height: 45px;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--border);
 }
 .kanban-detail-drawer-header-label {
   font-size: 10.5px;
