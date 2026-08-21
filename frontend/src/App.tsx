@@ -128,11 +128,12 @@ export function App() {
   // Mobile UI/UX overhaul, item B.2 — writes the keyboard's on-screen height
   // (0 when closed) directly onto `document.documentElement`'s own
   // `--kb-inset` custom property (no React state — see the hook's own
-  // comment on why), which the mobile-only `.app { bottom: var(--kb-inset) }`
-  // rule (styles.css) inherits to shrink the fixed-position shell above the
-  // keyboard instead of letting it overlay the terminal's active line. A
-  // no-op on desktop: the CSS that reads this variable is scoped to the
-  // mobile breakpoint, same as every other mobile-only rule in that file.
+  // comment on why), which the `.app { bottom: var(--kb-inset) }` rule
+  // (tablet.css, gated on `(pointer: coarse)` — any touch device, not just
+  // the phone breakpoint) inherits to shrink the fixed-position shell above
+  // the keyboard instead of letting it overlay the terminal's active line.
+  // Called unconditionally: a no-op wherever the consuming rule doesn't
+  // apply (mouse-driven desktop), not scoped to a single breakpoint itself.
   useVisualViewportInset();
   // Mobile UI/UX overhaul, item A.5 — the mobile pane bar's own inline
   // rename, mirroring PaneTab.tsx's renaming/draftName pair (the actual
