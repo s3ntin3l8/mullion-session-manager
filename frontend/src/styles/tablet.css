@@ -77,15 +77,42 @@
     padding-bottom: 0;
   }
 
+  /* Reported bug — under Android Chrome text scaling (or any fallback font
+     wider than the default), the seven buttons' combined intrinsic width
+     can exceed a narrow viewport. `flex: 1`'s implied `min-width: auto`
+     stops them shrinking below that intrinsic size, and the row had no
+     `overflow` of its own to absorb the rest — the tail ran off the right
+     edge, clipped by nothing and unreachable. `overflow-x: auto` plus
+     `touch-action: pan-x` makes the row itself swipeable, the same
+     scrollbar-hiding idiom already used for the dockview tab strip under
+     coarse pointers (xterm.css's own `(pointer: coarse)` block). `pan-x`
+     specifically (not a bare touch-action removal) reserves only the
+     horizontal axis, so the bar stays immune to its ancestors' vertical
+     `touch-action: none` — a horizontal swipe here was never competing with
+     `terminalTouchScroll.ts`'s vertical scrollback drag to begin with. */
   .mobile-key-bar {
     display: flex;
     flex-shrink: 0;
     border-top: 1px solid var(--border);
     background: var(--chrome);
     padding-bottom: env(safe-area-inset-bottom);
+    overflow-x: auto;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
   }
+  .mobile-key-bar::-webkit-scrollbar {
+    display: none;
+  }
+  /* `flex: 1 0 auto` (not the previous bare `flex: 1`, i.e. `1 1 0`) is the
+     other half of the fix — deliberate trade-off: on a screen too narrow to
+     show all seven keys at their `min-width: 44px` touch-target floor, they
+     now overflow (swipeable via the container above) rather than squashing
+     to fit. Guaranteed 44px targets and no silently-clipped keys, at the
+     cost of not all seven being visible at once on the narrowest covers. */
   .mobile-key-bar-btn {
-    flex: 1;
+    flex: 1 0 auto;
+    min-width: 44px;
     height: 44px;
     display: flex;
     align-items: center;
@@ -98,6 +125,7 @@
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
+    white-space: nowrap;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }

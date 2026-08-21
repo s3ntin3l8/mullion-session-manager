@@ -435,6 +435,95 @@ describe("CommandPalette -> focus management (P11)", () => {
     expect(screen.getByPlaceholderText("Launch a session or run a command…")).toHaveFocus();
   });
 
+  // Mobile/tablet touch fix — autofocusing the search input on open used to
+  // raise the on-screen keyboard immediately, covering the launcher list a
+  // touch user opened this to read. Same matchMedia-stub pattern as
+  // Dock.test.tsx's own coarse-pointer test.
+  function stubCoarsePointer() {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+
+  it("focuses the dialog itself, not the search input, on open under a coarse pointer", async () => {
+    stubCoarsePointer();
+    renderPalette();
+    const dialog = await screen.findByRole("dialog", { name: "Command palette" });
+
+    expect(dialog).toHaveFocus();
+    expect(screen.getByPlaceholderText("Launch a session or run a command…")).not.toHaveFocus();
+  });
+
+  it("tapping the search box directly still raises the keyboard under a coarse pointer", async () => {
+    const user = userEvent.setup();
+    stubCoarsePointer();
+    renderPalette();
+    await screen.findByRole("dialog", { name: "Command palette" });
+    const input = screen.getByPlaceholderText("Launch a session or run a command…");
+
+    // This fix only changes what grabs focus on open — tapping the input is
+    // still a normal click, exercised through userEvent (not a bare
+    // `.focus()` call, which would only prove jsdom's own focus mechanics
+    // work) so this also proves the redirect below didn't somehow eat clicks
+    // on the input itself.
+    await user.click(input);
+
+    expect(input).toHaveFocus();
+  });
+
+  // Independent code review — `(pointer: coarse)` also covers hardware-
+  // keyboard-equipped touch devices (a touchscreen laptop, a tablet with an
+  // attached keyboard — layoutTier.ts's own comment). Without a redirect,
+  // typing on those would go nowhere until the user manually tapped the
+  // input first, since typing/arrow-nav/Enter only ever reached the palette
+  // through the input's own onKeyDown.
+  it("redirects focus to the search input on the first keystroke under a coarse pointer", async () => {
+    const user = userEvent.setup();
+    stubCoarsePointer();
+    renderPalette();
+    const dialog = await screen.findByRole("dialog", { name: "Command palette" });
+    expect(dialog).toHaveFocus();
+
+    await user.keyboard("b");
+
+    expect(screen.getByPlaceholderText("Launch a session or run a command…")).toHaveFocus();
+  });
+
+  it("does not redirect focus to the search input on Escape (the dialog's own close key)", async () => {
+    const user = userEvent.setup();
+    stubCoarsePointer();
+    renderPalette();
+    const dialog = await screen.findByRole("dialog", { name: "Command palette" });
+    expect(dialog).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByPlaceholderText("Launch a session or run a command…")).not.toHaveFocus();
+  });
+
+  // Independent code review — without the container-anchor branch
+  // useFocusTrap.ts now has, Shift+Tab from a `tabIndex={-1}` container
+  // (neither `first` nor `last` per getFocusable's own selector) fell
+  // through to the browser's native default and escaped the dialog
+  // entirely, landing on whatever precedes it in the WHOLE document.
+  it("wraps Shift+Tab from the dialog anchor within the dialog, not out to the page", async () => {
+    const user = userEvent.setup();
+    stubCoarsePointer();
+    renderPalette();
+    const dialog = await screen.findByRole("dialog", { name: "Command palette" });
+    expect(dialog).toHaveFocus();
+
+    await user.tab({ shift: true });
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
   it("restores focus to the trigger element on a plain close (Escape)", async () => {
     render(<button>open palette</button>);
     const trigger = screen.getByText("open palette");
