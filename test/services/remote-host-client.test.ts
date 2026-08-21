@@ -522,6 +522,33 @@ describe("RemoteHostClient", () => {
       );
     });
 
+    // #778 — mirrors resolveReadTaskReviewFindings's own shape/tests exactly.
+    it("resolveReadTaskCommitTitle GETs /internal/task-commit-title and unwraps { content }", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: "fix: handle the edge case" }));
+      await expect(client().resolveReadTaskCommitTitle(7)).resolves.toBe(
+        "fix: handle the edge case",
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/task-commit-title?taskId=7",
+        expect.anything(),
+      );
+    });
+
+    it("resolveReadTaskCommitTitle resolves null (not an error) for a genuinely absent file — a real 200 response", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: null }));
+      await expect(client().resolveReadTaskCommitTitle(7)).resolves.toBeNull();
+    });
+
+    it("resolveReadTaskCommitTitle throws HostRequestError (not null) on a 404 — a peer build too old to have this route (version skew)", async () => {
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+      await expect(client().resolveReadTaskCommitTitle(7)).rejects.toThrow(HostRequestError);
+    });
+
+    it("resolveReadTaskCommitTitle throws HostUnreachableError on a network failure, same as every other call", async () => {
+      fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+      await expect(client().resolveReadTaskCommitTitle(7)).rejects.toThrow(HostUnreachableError);
+    });
+
     // These four calls each wrap an agent-side git shell-out well above
     // REQUEST_TIMEOUT_MS's 5s default (git-push.ts 30s, git-refs.ts up to
     // ~50s across its chained calls, git-worktree.ts 15s) — without an

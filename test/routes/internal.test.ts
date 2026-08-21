@@ -19,7 +19,7 @@ import {
   hashBody,
   sign,
 } from "../../src/services/request-signature.js";
-import { taskReviewFindingsPath } from "../../src/services/task-prompt.js";
+import { taskReviewFindingsPath, taskCommitTitlePath } from "../../src/services/task-prompt.js";
 
 // The agent's /internal/* API (issue #26) reaches the exact same PtyManager
 // spawn/liveness path as the primary's own routes (sessions.ts, terminal.ts)
@@ -2005,6 +2005,78 @@ describe("internal routes (agent role, issue #26)", () => {
       const res = await app.inject({
         method: "GET",
         url: `/internal/task-review-findings?taskId=${encodeURIComponent("../../etc/passwd")}&round=0`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
+  // #778 — mirrors GET /internal/task-review-findings's own shape/tests
+  // exactly (no DELETE counterpart: the commit-title file isn't
+  // round-suffixed and is meant to persist across rounds).
+  describe("GET /internal/task-commit-title (#778)", () => {
+    it("returns { content: null } (200, not 404) for a genuinely absent file", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-commit-title?taskId=999",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ content: null });
+      await app.close();
+    });
+
+    it("returns the trimmed file content when present", async () => {
+      const app = await buildApp();
+      const titlePath = taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), 7);
+      fs.writeFileSync(titlePath, "  fix: handle the edge case  \n");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-commit-title?taskId=7",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ content: "fix: handle the edge case" });
+
+      fs.rmSync(titlePath, { force: true });
+      await app.close();
+    });
+
+    it("returns { content: null } for a present-but-empty file, same as absent", async () => {
+      const app = await buildApp();
+      const titlePath = taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), 8);
+      fs.writeFileSync(titlePath, "   \n");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-commit-title?taskId=8",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.json()).toEqual({ content: null });
+
+      fs.rmSync(titlePath, { force: true });
+      await app.close();
+    });
+
+    it("rejects a non-integer taskId with 400, not a crash", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-commit-title?taskId=abc",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("never accepts a path fragment — taskId is the only input, numeric", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/task-commit-title?taskId=${encodeURIComponent("../../etc/passwd")}`,
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(res.statusCode).toBe(400);

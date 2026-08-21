@@ -1188,6 +1188,193 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // #778 — the review agent's seed prompt must be told to write to the
+    // OWNING host's own sessionsDir, not the primary's. Extends the
+    // version-skew test's fakeBackend/remote-host setup above with a
+    // distinct `resolveSessionsDir` return value and asserts the spawned
+    // findings path is built from THAT value.
+    it("embeds the remote host's own sessionsDir in the review agent's findings path (#778)", async () => {
+      const app = await buildApp();
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-review-remote-dir", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { defaultReviewAgent: "codex" },
+      });
+      const { sessions } = await import("../../src/db/schema.js");
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "reviewed task",
+          body: "some spec",
+          status: "in_progress",
+          sessionId: workerSession.id,
+          claimedAt: new Date(),
+          startedAt: new Date(),
+          worktreePath: "/remote/project",
+        })
+        .returning()
+        .all();
+
+      let capturedInitialPrompt: string | undefined;
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = {
+        spawn: vi.fn().mockImplementation((opts: { initialPrompt?: string }) => {
+          capturedInitialPrompt = opts.initialPrompt;
+          return Promise.resolve({});
+        }),
+        liveStatus: vi.fn().mockResolvedValue({
+          [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
+        }),
+        isMasterAlive: vi.fn().mockResolvedValue({}),
+        terminate: vi.fn().mockResolvedValue(undefined),
+        getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+        uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+        resolveReviewGate: vi.fn().mockResolvedValue(false),
+        createWorktree: vi.fn().mockResolvedValue(null),
+        checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+        resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+        stashSeed: vi.fn().mockResolvedValue(undefined),
+        resolvePendingPromote: vi.fn().mockResolvedValue(false),
+        removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+        pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+        clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+        readTaskReviewFindings: vi.fn().mockResolvedValue(null),
+        deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
+        resolveSessionsDir: vi.fn().mockResolvedValue("/remote/own/sessions-dir"),
+        readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+      };
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeBackend);
+
+      await reconcileTasks(app);
+
+      // The initial prompt is only real argv when the review command is
+      // seed-capable (codex is) — spawn() itself is what's mocked here, not
+      // createSessionRecord's own initialPrompt-vs-stashSeed branching, so
+      // this reaches the same prompt-building path buildReviewPrompt uses.
+      expect(capturedInitialPrompt).toBeDefined();
+      expect(capturedInitialPrompt).toContain(
+        `/remote/own/sessions-dir/task-${task.id}.review.0.md`,
+      );
+      // The wrong (primary-local) path must never appear.
+      expect(capturedInitialPrompt).not.toContain(path.dirname(app.pty.hookSocketPath));
+      expect(fakeBackend.resolveSessionsDir).toHaveBeenCalled();
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
+    // #778 — a resolveSessionsDir failure (host unreachable, version skew)
+    // must degrade to the primary's local path with a warn, not strand the
+    // review spawn.
+    it("falls back to the primary's local sessionsDir when resolving the remote host's own fails (#778)", async () => {
+      const app = await buildApp();
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-review-remote-fallback", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { defaultReviewAgent: "codex" },
+      });
+      const { sessions } = await import("../../src/db/schema.js");
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "reviewed task",
+          body: "some spec",
+          status: "in_progress",
+          sessionId: workerSession.id,
+          claimedAt: new Date(),
+          startedAt: new Date(),
+          worktreePath: "/remote/project",
+        })
+        .returning()
+        .all();
+
+      let capturedInitialPrompt: string | undefined;
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = {
+        spawn: vi.fn().mockImplementation((opts: { initialPrompt?: string }) => {
+          capturedInitialPrompt = opts.initialPrompt;
+          return Promise.resolve({});
+        }),
+        liveStatus: vi.fn().mockResolvedValue({
+          [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
+        }),
+        isMasterAlive: vi.fn().mockResolvedValue({}),
+        terminate: vi.fn().mockResolvedValue(undefined),
+        getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+        uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+        resolveReviewGate: vi.fn().mockResolvedValue(false),
+        createWorktree: vi.fn().mockResolvedValue(null),
+        checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+        resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+        stashSeed: vi.fn().mockResolvedValue(undefined),
+        resolvePendingPromote: vi.fn().mockResolvedValue(false),
+        removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+        pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+        clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+        readTaskReviewFindings: vi.fn().mockResolvedValue(null),
+        deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
+        resolveSessionsDir: vi.fn().mockRejectedValue(new Error("host unreachable")),
+        readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+      };
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeBackend);
+
+      await reconcileTasks(app);
+
+      const localSessionsDir = path.dirname(app.pty.hookSocketPath);
+      expect(capturedInitialPrompt).toBeDefined();
+      expect(capturedInitialPrompt).toContain(`${localSessionsDir}/task-${task.id}.review.0.md`);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, hostId }),
+        expect.stringContaining("failed to resolve the owning host's own sessionsDir"),
+      );
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
     it("does not spawn a review agent when none is configured", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTask(app, "in_progress");

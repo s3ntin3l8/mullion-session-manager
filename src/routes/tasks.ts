@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
@@ -12,6 +11,7 @@ import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import { resetMergeBackoff } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
+import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 
@@ -314,10 +314,16 @@ export async function tasksRoute(app: FastifyInstance) {
       // A reject is always a human's action, so someone is watching.
       auto: false,
       feedback,
-      // #761 — see task-claim.ts's own comment on this same expression for
-      // the remote-host caveat (#778).
+      // #778 — resolved against the OWNING host's own sessionsDir; see
+      // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
-        ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+        ? taskCommitTitlePath(
+            await resolveSessionsDirWithFallback(app, resolveBackend(app, project.hostId), {
+              taskId: task.id,
+              hostId: project.hostId,
+            }),
+            task.id,
+          )
         : undefined,
     });
     await reseedTaskIfSessionExited(app, task, project, prompt, "task reject");

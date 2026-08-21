@@ -1018,6 +1018,19 @@ export class RemoteHostClient {
   }
 
   /**
+   * #778 — reads a task's Conventional Commits title file off this agent's
+   * own filesystem, mirrors resolveReadTaskReviewFindings's own shape and
+   * version-skew posture exactly (a 404 — the route doesn't exist on an old
+   * peer build — throws HostRequestError, never collapses into `null`).
+   */
+  async resolveReadTaskCommitTitle(taskId: number): Promise<string | null> {
+    const result = await this.request<{ content: string | null }>(
+      `/internal/task-commit-title?taskId=${taskId}`,
+    );
+    return result.content;
+  }
+
+  /**
    * Opens (but does not wait for) a WS connection to this agent's
    * `/internal/ws/attach`, bearer-authed via a request header (the `ws`
    * package is required for this — the browser/global WebSocket API can't

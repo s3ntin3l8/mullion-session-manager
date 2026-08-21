@@ -6,7 +6,7 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, type SpawnResult } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
-import { taskReviewFindingsPath } from "./task-prompt.js";
+import { taskReviewFindingsPath, taskCommitTitlePath } from "./task-prompt.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -205,6 +205,31 @@ export interface SessionBackend {
   // logged and otherwise ignored there, not surfaced to this method's
   // caller as something to act on.
   deleteTaskReviewFindings(taskId: number, round: number): Promise<void>;
+  // #778 — the SEED-side counterpart of the read/delete pair above. Every
+  // caller that builds a prompt telling an agent WHERE to write a
+  // sessionsDir-relative file (`taskReviewFindingsPath`,
+  // `taskCommitTitlePath` — both task-prompt.ts) used to compute that
+  // directory unconditionally from THIS process's own `app.pty.hookSocketPath`,
+  // even when the agent about to receive that prompt runs on a different
+  // host with its own (possibly different) `SESSIONS_DIR`. That's a
+  // seed-a-path-the-agent-can't-write-to bug, not a read/ingest bug — this
+  // resolves the OWNING host's sessionsDir so a caller can build the right
+  // path before the prompt goes out. Returns a bare directory string, no
+  // identifiers involved — safe by construction, same posture as the
+  // read/delete pair's "caller passes identifiers, never a path" rule, just
+  // inverted (this returns a path fragment, not content).
+  resolveSessionsDir(): Promise<string>;
+  // #778 — the READ-side counterpart of the SEED-side fix above, for the
+  // Conventional Commits title file (`taskCommitTitlePath`, task-prompt.ts):
+  // `task-reconciler.ts`'s `-> reviewing` ingest used to read this straight
+  // off the local filesystem (`existsSync`/`readFileSync`) and silently
+  // no-op for a remote-hosted task, same class of gap #760 fixed for
+  // review-findings. Same contract as `readTaskReviewFindings`: `null`
+  // ONLY for a genuinely absent/empty file, throws for everything else
+  // (host unreachable, a peer 5xx, version skew). Not round-suffixed
+  // (unlike review findings) — see `taskCommitTitlePath`'s own doc comment
+  // — so there is no matching delete method; the file is meant to persist.
+  readTaskCommitTitle(taskId: number): Promise<string | null>;
 }
 
 class LocalBackend implements SessionBackend {
@@ -379,6 +404,20 @@ class LocalBackend implements SessionBackend {
     const findingsPath = this.findingsPath(taskId, round);
     if (existsSync(findingsPath)) unlinkSync(findingsPath);
   }
+
+  // #778 — same expression every seed call site used to inline directly;
+  // kept identical on purpose (zero divergence risk), just given a name
+  // other callers can use without reaching into `app.pty` themselves.
+  async resolveSessionsDir(): Promise<string> {
+    return path.dirname(this.app.pty.hookSocketPath);
+  }
+
+  async readTaskCommitTitle(taskId: number): Promise<string | null> {
+    const titlePath = taskCommitTitlePath(path.dirname(this.app.pty.hookSocketPath), taskId);
+    if (!existsSync(titlePath)) return null;
+    const content = readFileSync(titlePath, "utf8").trim();
+    return content.length > 0 ? content : null;
+  }
 }
 
 class RemoteBackend implements SessionBackend {
@@ -535,6 +574,26 @@ class RemoteBackend implements SessionBackend {
   deleteTaskReviewFindings(taskId: number, round: number): Promise<void> {
     return this.client.resolveDeleteTaskReviewFindings(taskId, round);
   }
+
+  // #778 — reuses the existing `/internal/config` route (issue #247/roadmap
+  // 7.4), which already returns `sessionsDir` for exactly this purpose —
+  // no new route needed. Deliberately uncached: a review-agent spawn or a
+  // worker seed happens once per round/claim, not once per reconcile tick,
+  // so the request volume this adds is proportional to real work, not sweep
+  // frequency. A cached value would also risk staleness across a remote
+  // host redeploy that changes its own SESSIONS_DIR — the primary process
+  // doesn't restart when a peer does, so a stale cache entry would silently
+  // outlive the value it cached. Throws on any resolveConfig failure
+  // (unreachable host, version-skewed peer, ...) — callers decide the
+  // fallback, this method doesn't guess one.
+  async resolveSessionsDir(): Promise<string> {
+    const config = await this.client.resolveConfig();
+    return config.sessionsDir;
+  }
+
+  readTaskCommitTitle(taskId: number): Promise<string | null> {
+    return this.client.resolveReadTaskCommitTitle(taskId);
+  }
 }
 
 /** Resolve the backend that owns sessions for `hostId` — `"local"` (and,
@@ -547,4 +606,29 @@ class RemoteBackend implements SessionBackend {
 export function resolveBackend(app: FastifyInstance, hostId: string): SessionBackend {
   if (!hostId || hostId === LOCAL_HOST_ID) return new LocalBackend(app);
   return new RemoteBackend(app, hostId);
+}
+
+// #778 — the shared fallback every `resolveSessionsDir()` caller uses. On
+// any failure to resolve the OWNING host's own sessionsDir (unreachable
+// host, a version-skewed peer with no `/internal/config`, ...), falls back
+// to the primary's own local path rather than throwing — that degrades to
+// today's (wrong-for-remote, but at least non-crashing) behavior instead of
+// stranding whatever spawn/re-seed was about to happen. Never seeds an
+// obviously-unwritable path by silently swallowing the error either: always
+// logs. `logContext` lets each call site attach its own identifiers
+// (taskId, hostId, ...) without this helper needing to know their shape.
+export async function resolveSessionsDirWithFallback(
+  app: FastifyInstance,
+  backend: SessionBackend,
+  logContext: Record<string, unknown>,
+): Promise<string> {
+  try {
+    return await backend.resolveSessionsDir();
+  } catch (err) {
+    app.log.warn(
+      { err, ...logContext },
+      "session-backend: failed to resolve the owning host's own sessionsDir — falling back to the primary's local path (wrong for a remote host whose SESSIONS_DIR differs)",
+    );
+    return path.dirname(app.pty.hookSocketPath);
+  }
 }

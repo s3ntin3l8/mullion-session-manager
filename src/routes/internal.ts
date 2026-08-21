@@ -4,7 +4,7 @@ import { realpathSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
-import { taskReviewFindingsPath } from "../services/task-prompt.js";
+import { taskReviewFindingsPath, taskCommitTitlePath } from "../services/task-prompt.js";
 import {
   listAgentRules,
   getAgentRule,
@@ -1256,6 +1256,31 @@ export async function internalRoutes(app: FastifyInstance) {
       );
       if (existsSync(findingsPath)) unlinkSync(findingsPath);
       reply.code(204);
+    },
+  );
+
+  // #778 — the agent-side counterpart of SessionBackend's
+  // readTaskCommitTitle, for a remote-hosted task's Conventional Commits
+  // title ingestion (task-reconciler.ts's `-> reviewing` transition). Same
+  // no-cwd/path, identifier-only shape as `/internal/task-review-findings`
+  // above, for the same reason: nothing here for a traversal attempt to
+  // reach. No DELETE counterpart — unlike review findings (round-suffixed,
+  // unlinked once ingested so a same-round re-review can't re-ingest stale
+  // content), the commit-title file is deliberately NOT round-suffixed and
+  // is meant to persist across rounds (see `taskCommitTitlePath`'s own doc
+  // comment) — there is nothing to clean up here.
+  app.get<{ Querystring: { taskId?: string } }>(
+    "/internal/task-commit-title",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const taskId = Number(request.query.taskId);
+      if (!Number.isInteger(taskId)) {
+        return reply.badRequest("taskId query param must be an integer");
+      }
+      const titlePath = taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), taskId);
+      if (!existsSync(titlePath)) return { content: null };
+      const content = readFileSync(titlePath, "utf8").trim();
+      return { content: content.length > 0 ? content : null };
     },
   );
 
