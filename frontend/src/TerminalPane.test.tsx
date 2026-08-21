@@ -481,6 +481,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         namePattern: "",
         confirmBeforeKill: false,
         hideEndedSessions: false,
+        showTaskSessions: false,
         reconcileIntervalSeconds: 30,
         staleErrorSeconds: 600,
         staleBusySeconds: 2400,

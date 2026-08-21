@@ -297,6 +297,28 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  // #9 — named and locked at spawn time so the worker session reads as
+  // "task #N's worker" anywhere it's shown (sidebar, task-linked-session
+  // toggle), instead of the bare launch command, and so a live OSC title
+  // update from the agent's own process can't overwrite it.
+  it("names and locks the worker session at dispatch time (#9)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 71);
+
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    const row = getTask(app, task.id);
+    const { sessions } = await import("../../src/db/schema.js");
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, row.sessionId)).all();
+    expect(session).toMatchObject({ name: `Task #${task.id} · worker`, nameLocked: true });
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("releases the reservation back to claimed (not ready) when worktree creation fails, recording a failureReason", async () => {
     const app = await buildApp();
     // Not a git repo at all — resolveDefaultBaseRef/createWorktree fail
@@ -1055,6 +1077,28 @@ describe("retryTask (#483)", () => {
     // #491 — retry resumes the preserved branch from its original base, so
     // baseSha must survive unchanged, not be re-resolved or cleared.
     expect(row.baseSha).toBe("cafef00d");
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  // #9 — same naming/locking as a fresh dispatch (dispatchClaimedTask's own
+  // test above) — a retry spawns a genuinely new session, so it needs the
+  // same treatment, not just the original claim.
+  it("names and locks the resumed session (#9)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 72);
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected ok");
+    expect(outcome.session).toMatchObject({
+      name: `Task #${task.id} · worker`,
+      nameLocked: true,
+    });
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

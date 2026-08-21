@@ -5,7 +5,14 @@ import { NumberField, Row, Toggle } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit } from "../clamp.js";
 
 export function SessionsSection() {
-  const { settings, updateSettings, hideEndedSessions, setHideEndedSessions } = useDashboardStore();
+  const {
+    settings,
+    updateSettings,
+    hideEndedSessions,
+    setHideEndedSessions,
+    showTaskSessions,
+    setShowTaskSessions,
+  } = useDashboardStore();
   const theme = useDashboardStore((s) => s.theme);
   const s = settings.sessions;
   const agentLogoUrl = resolveAgentLogo("claude", theme);
@@ -80,6 +87,12 @@ export function SessionsSection() {
         desc="Keep dead sessions visible in the inventory."
       >
         <Toggle on={!hideEndedSessions} onChange={(v) => setHideEndedSessions(!v)} />
+      </Row>
+      <Row
+        label="Show task sessions"
+        desc="Keep Task Master's worker/review sessions visible in the sidebar, alongside your own. A killed one is hidden either way."
+      >
+        <Toggle on={showTaskSessions} onChange={setShowTaskSessions} />
       </Row>
       <Row label="Auto-reconcile interval" desc="How often exited sessions are swept.">
         <NumberField

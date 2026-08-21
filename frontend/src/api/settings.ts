@@ -159,6 +159,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     namePattern: "{agent} · {project}",
     confirmBeforeKill: true,
     hideEndedSessions: false,
+    showTaskSessions: false,
     reconcileIntervalSeconds: 30,
     // Mirrors settings.ts's DEFAULT_SETTINGS — raised from 600 (fix:
     // status-clearing-semantics), see that file's comment for why.

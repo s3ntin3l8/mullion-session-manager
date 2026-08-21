@@ -67,6 +67,7 @@ const createSessionSchema = {
       projectId: { type: "integer" },
       command: { type: "string", minLength: 1 },
       name: { type: "string", minLength: 1 },
+      nameLocked: { type: "boolean" },
       cwd: { type: "string", minLength: 1 },
       kind: { type: "string", enum: ["terminal", "dock"] },
       worktree: worktreeIntentSchema,

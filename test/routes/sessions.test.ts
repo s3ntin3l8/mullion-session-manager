@@ -399,6 +399,25 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // #9 — settable at creation time, not just via a later PATCH: a caller
+  // that wants a name to survive a live OSC title update (issue #69) needs
+  // it pinned from the very first spawn, before the agent's own process
+  // (and therefore its first title-changing escape sequence) can even
+  // start. Task Master's own worker/review spawns are the first real
+  // caller of this (task-claim.ts/task-reconciler.ts).
+  it("persists nameLocked: true when explicitly passed at creation", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", name: "Task #7 · worker", nameLocked: true },
+    });
+    expect(created.json()).toMatchObject({ name: "Task #7 · worker", nameLocked: true });
+
+    await app.close();
+  });
+
   it("404s renaming an unknown session", async () => {
     const app = await buildApp();
     const res = await app.inject({

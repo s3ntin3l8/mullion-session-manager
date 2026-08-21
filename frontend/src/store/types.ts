@@ -432,6 +432,10 @@ export interface UiSlice {
   theme: Theme;
   terminalPrefs: TerminalPrefs;
   hideEndedSessions: boolean;
+  // #9 — off by default: a task-linked session (a "killed" one is already
+  // filtered out unconditionally, before this check even runs — see
+  // Sidebar.tsx's own filter) stays hidden from the sidebar unless toggled.
+  showTaskSessions: boolean;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment.
@@ -531,6 +535,7 @@ export interface UiSlice {
   toggleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
+  setShowTaskSessions: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;

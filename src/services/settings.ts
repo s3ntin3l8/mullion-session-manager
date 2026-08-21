@@ -166,6 +166,14 @@ export interface AppSettings {
     namePattern: string;
     confirmBeforeKill: boolean;
     hideEndedSessions: boolean;
+    // #9 — a task-owned session (worker/review/rebase) is hidden from the
+    // sidebar by default, same as any other decluttering toggle here; a
+    // "killed" one is already filtered out unconditionally regardless of
+    // this setting (see Sidebar.tsx's own filter — that's a status check
+    // that runs first, not this preference). Off by default so the sidebar
+    // stays focused on sessions a human is more likely to want to glance at
+    // or attach to directly.
+    showTaskSessions: boolean;
     reconcileIntervalSeconds: number;
     // Rich statuses — a session's `errorState` (api_error/tool_failure) is
     // otherwise cleared only by the next progress/turn_start hook, a genuine
@@ -423,6 +431,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     namePattern: "{agent} · {project}",
     confirmBeforeKill: true,
     hideEndedSessions: false,
+    showTaskSessions: false,
     reconcileIntervalSeconds: 30,
     // Raised from 600 (fix: status-clearing-semantics) — now that a mere
     // glance/tab-switch no longer clears a stale error (that was this TTL's
