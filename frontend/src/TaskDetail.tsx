@@ -502,13 +502,17 @@ function DeleteTaskAction({
   }
 
   // #746 — a done task's local row is the only thing this removes: the
-  // closed issue and merged PR stay on GitHub, and cleanupTaskWorktree
-  // already removed the worktree directory at approve time — the branch
-  // itself is untouched (see the DELETE route's own doc comment on why
-  // that's true for the GitHub-linked case).
+  // closed issue and its PR stay on GitHub (whatever state that PR is in —
+  // approveTask sets prNumber/prUrl unconditionally, but only requests a
+  // merge when the project has mergeOnApprove on, default off, and even
+  // then the merge sweep is async/best-effort, so "done" does not imply
+  // "merged"), and cleanupTaskWorktree already removed the worktree
+  // directory at approve time — the branch itself is untouched (see the
+  // DELETE route's own doc comment on why that's true for the
+  // GitHub-linked case).
   const hint =
     isDone && isGithubLinked
-      ? "Delete this task? The closed issue and merged PR stay on GitHub, and the branch is untouched. This can't be undone."
+      ? "Delete this task? The closed issue and its PR stay on GitHub, and the branch is untouched. This can't be undone."
       : isDone
         ? "Delete this task? The branch is untouched. This can't be undone."
         : "Delete this task? This can't be undone.";
