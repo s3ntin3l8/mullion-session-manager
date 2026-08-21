@@ -1601,7 +1601,11 @@ const prCommentCapCommentedRounds = new Map<number, number>();
  *
  * Resolves its own `repoRef` rather than reusing `attemptAutoApprove`'s own
  * CI lookup — deliberately decoupled, so a CI-fetch failure (or a project
- * with no CI runs at all) doesn't also block PR-comment ingestion.
+ * with no CI runs at all) doesn't also block PR-comment ingestion. Fresh
+ * review, PR #784: the caller must actually let this run when the CI
+ * lookup throws, not `return` before reaching it — REST and GraphQL are
+ * metered against separate rate-limit buckets, so a REST-side failure is
+ * exactly the case where this call would otherwise still succeed.
  */
 async function attemptReturnPrCommentsToWorker(
   app: FastifyInstance,
@@ -1614,7 +1618,20 @@ async function attemptReturnPrCommentsToWorker(
 
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) return false;
-  const token = await resolveGitHubToken(app, repoRef, "read");
+  // "write", not "read" — deliberately matching postReviewFindingsComment's
+  // own scope (task-github-sync.ts), even though this call itself only
+  // reads. Fresh review, PR #784: an App installed before the "read" scope
+  // (actions/metadata) existed on it 422s a "read" mint specifically and
+  // falls back to the PAT (see getInstallationToken's own doc comment,
+  // github-app.ts) while a "write" mint for the SAME installation still
+  // succeeds — so a "read" token here could authenticate as a genuinely
+  // different identity (the PAT owner) than postReviewFindingsComment's
+  // "write" token (the App). viewerLogin is compared against
+  // postReviewFindingsComment's own posted comments below; if the two
+  // calls can diverge in which identity they resolve to, that comparison
+  // silently breaks and Mullion's own findings get ingested as if a human
+  // wrote them. Matching scopes is what keeps them the same identity.
+  const token = await resolveGitHubToken(app, repoRef, "write");
   if (!token) return false;
 
   let result: Awaited<ReturnType<typeof fetchPullRequestReviewThreads>>;
@@ -1714,7 +1731,19 @@ async function attemptAutoApprove(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
 ): Promise<void> {
-  let current: Awaited<ReturnType<typeof fetchCurrentCiStatus>>;
+  // Fresh review, PR #784: `current` is left `null` (not returned-out-of)
+  // on a thrown CI lookup — attemptReturnPrCommentsToWorker's own doc
+  // comment already claims it's decoupled from a CI-fetch failure (it
+  // resolves its own repoRef/token independently), but that was only true
+  // in isolation; an early `return` right here, before it was ever called,
+  // silently defeated that decoupling for every REST-side failure (a
+  // 404'd PR, a REST-bucket rate limit distinct from GraphQL's own) even
+  // though the GraphQL call underneath would very likely still have
+  // succeeded. `current && ...` below already guards
+  // attemptReturnRedCiToWorker against a null current, so this costs
+  // nothing on the CI-return path — it just stops blocking the unrelated
+  // PR-comment path on a CI-only failure.
+  let current: Awaited<ReturnType<typeof fetchCurrentCiStatus>> | null = null;
   try {
     current = await fetchCurrentCiStatus(app, task, project);
   } catch (err) {
@@ -1722,11 +1751,11 @@ async function attemptAutoApprove(
       { err, taskId: task.id },
       "task reconcile: auto-approve CI lookup failed — waiting to retry",
     );
-    return;
   }
 
   if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
+  if (!current) return;
 
   if (
     task.reviewFindingsIngestedSessionId === null ||

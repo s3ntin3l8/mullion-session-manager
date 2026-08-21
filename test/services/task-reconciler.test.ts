@@ -2972,6 +2972,118 @@ describe("reconcileTasks", () => {
 
         await app.close();
       });
+
+      // Fresh review, PR #784 — attemptReturnPrCommentsToWorker resolves
+      // its own repoRef/token independently of attemptAutoApprove's own CI
+      // lookup specifically so a REST-side failure (this repo's own
+      // getPullRequestByNumber, a different rate-limit bucket than
+      // GraphQL) doesn't also block PR-comment ingestion. Only a test that
+      // combines BOTH a thrown CI lookup AND a pending new comment can
+      // catch a regression back to the early `return` this fix removed.
+      it("still returns the task for a new PR comment even when the CI lookup itself throws", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockRejectedValue(new Error("network blip"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+
+        await app.close();
+      });
+
+      // Fresh review, PR #784 — resolveGitHubToken must be called with the
+      // SAME scope postReviewFindingsComment itself uses ("write", not
+      // "read"): an installation predating the "read" scope's permissions
+      // 422s a read-scoped mint specifically and falls back to the shared
+      // PAT, while a write-scoped mint for that SAME installation still
+      // succeeds against the App — so a read-scoped call here could
+      // resolve `viewerLogin` to a genuinely different identity than the
+      // one that actually posts Mullion's own review comments, silently
+      // breaking the self-comment filter below. Pinned directly rather
+      // than only via the filtering tests above, which can't distinguish
+      // "the right scope was requested" from "the mock happened to return
+      // a consistent viewerLogin regardless of scope."
+      it("resolves the GitHub token with 'write' scope, matching postReviewFindingsComment's own", async () => {
+        const app = await buildApp();
+        await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [thread(false, "octocat", "Fix this.", "2026-08-20T10:00:00Z")],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockResolveGitHubToken).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          "write",
+        );
+
+        await app.close();
+      });
+
+      it("filters a self-authored comment out of a result that also has a genuine human one, and still returns the task for the human comment", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(false, "mullion-bot[bot]", "My own findings.", "2026-08-20T09:00:00Z"),
+            thread(false, "octocat", "A genuine human comment.", "2026-08-20T10:00:00Z"),
+          ],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+        // The cursor reflects only the genuine (non-self) comment's
+        // timestamp, not the self-authored one's — proves the self
+        // comment was excluded before the newest-timestamp computation,
+        // not just before the round-trigger decision.
+        expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T10:00:00.000Z");
+
+        await app.close();
+      });
+
+      it("advances the cursor to the NEWEST comment across multiple unresolved threads, not the first", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(false, "octocat", "Older comment.", "2026-08-20T08:00:00Z"),
+            thread(false, "octocat", "Newest comment.", "2026-08-20T12:00:00Z"),
+            thread(false, "octocat", "Middle comment.", "2026-08-20T10:00:00Z"),
+          ],
+          truncated: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T12:00:00.000Z");
+
+        await app.close();
+      });
     });
 
     it("waits forever (no deadline) when no CI is found at all — unlike the review-spawn gate", async () => {
