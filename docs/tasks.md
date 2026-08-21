@@ -1191,6 +1191,19 @@ construction — see Lifecycle above), not `done`/`failed` ones. The only
 two paths that revisit a refused-but-now-clean worktree are a boot-time
 sweep (below) and a re-claim of the same task.
 
+**Sessions get the same treatment (`#772`).** A task's worker and (optional)
+review sessions are killed — `killSession`, so the row actually flips to
+`"killed"`, not left for the 30s exited-session reconciler to eventually
+mark `"exited"` — at every point that supersedes or ends the link: approve
+(human or auto-approve), give-up, Retry (the old worker session, before a
+fresh one is spawned), and every fresh `→ reviewing` entry (the prior
+round's review session, on a reject-and-re-review cycle). Before this,
+nothing in the task lifecycle ever terminated a session once it stopped
+being the task's current one — it just kept running, invisible from the
+task view once its pointer was overwritten or nulled, and cluttering both
+the sidebar and the Unified Board's ad-hoc lane indefinitely (both filter
+out `"killed"` sessions, never `"active"`/`"exited"` ones).
+
 **`→ failed` removes only the worktree, never the branch (`#483`).** That
 asymmetry is deliberate, not an oversight: the branch is what Retry (see
 Lifecycle above) resumes on. `resumeTaskWorktree`

@@ -6,6 +6,7 @@ import fs from "node:fs";
 const mockCreateSessionRecord = vi.fn();
 const mockTerminate = vi.fn();
 const mockResolveBackend = vi.fn(() => ({ terminate: mockTerminate }));
+const mockCloseSessionBrowserBindings = vi.fn();
 
 vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -13,6 +14,9 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
 });
 vi.mock("../../src/services/session-backend.js", () => ({
   resolveBackend: mockResolveBackend,
+}));
+vi.mock("../../src/services/session-browsers.js", () => ({
+  closeSessionBrowserBindings: mockCloseSessionBrowserBindings,
 }));
 
 const { buildApp } = await import("../../src/app.js");
@@ -166,11 +170,22 @@ describe("reseedTaskIfSessionExited", () => {
     expect(mockCreateSessionRecord).toHaveBeenCalledTimes(1);
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(newSessionId);
+    // #772 — the OLD session's row must flip to "killed" once terminate is
+    // CONFIRMED to have succeeded, not left "active" for the 30s
+    // exited-session reconciler to eventually mark "exited".
+    const [oldSessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    expect(oldSessionRow.status).toBe("killed");
+    // Fresh subagent review, PR #773 follow-up — killSession() isn't used
+    // here (see the comment at the call site), so this side effect has to
+    // be triggered explicitly on the same confirmed-success path, or a
+    // stale session-browser binding lingers forever.
+    expect(mockCloseSessionBrowserBindings).toHaveBeenCalledTimes(1);
+    expect(mockCloseSessionBrowserBindings.mock.calls[0][1]).toBe(sessionId);
   });
 
   it("with force: true — does NOT spawn a second agent when terminate itself fails", async () => {
     mockTerminate.mockRejectedValue(new Error("host unreachable"));
-    const { task } = insertTaskWithSession("active");
+    const { task, sessionId } = insertTaskWithSession("active");
     const warnSpy = vi.spyOn(app.log, "warn");
 
     const result = await reseedTaskIfSessionExited(
@@ -190,6 +205,13 @@ describe("reseedTaskIfSessionExited", () => {
     );
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
+    // #772 — a FAILED terminate must NOT flip the row to "killed" — that
+    // would misrepresent a session we couldn't actually confirm is dead
+    // (and this function's own contract is to leave it as-is for a later
+    // pass to retry, not silently declare it gone).
+    const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    expect(sessionRow.status).toBe("active");
+    expect(mockCloseSessionBrowserBindings).not.toHaveBeenCalled();
   });
 
   it("logs and does not update the task row when the spawn itself fails", async () => {

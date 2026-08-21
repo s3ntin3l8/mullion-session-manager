@@ -1060,6 +1060,68 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
+  // #772 — nothing terminated the PRIOR attempt's worker session before this
+  // fix; `insertFailedTaskWithPreservedBranch` sets `sessionId: null`
+  // precisely because the real failure paths (budget/no-commits) already
+  // null it via a bare terminate today, so this test attaches a real,
+  // still-"active" session to the failed row to exercise retry's own new
+  // kill call specifically.
+  it("kills the previous session before resuming", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 72);
+    const oldSession = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const oldSessionId = oldSession.json().id as number;
+    app.db.update(tasks).set({ sessionId: oldSessionId }).where(eq(tasks.id, task.id)).run();
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    const { sessions } = await import("../../src/db/schema.js");
+    const [oldRow] = app.db.select().from(sessions).where(eq(sessions.id, oldSessionId)).all();
+    expect(oldRow.status).toBe("killed");
+    const row = getTask(app, task.id);
+    expect(row.sessionId).not.toBe(oldSessionId);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("does not let a session-kill failure block the retry itself", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 73);
+    const oldSession = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    app.db
+      .update(tasks)
+      .set({ sessionId: oldSession.json().id })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const sessionLifecycleModule = await import("../../src/services/session-lifecycle.js");
+    const killSpy = vi
+      .spyOn(sessionLifecycleModule, "killSession")
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    expect(killSpy).toHaveBeenCalled();
+
+    killSpy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("releases back to failed (not ready) when the branch can no longer be resumed", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
