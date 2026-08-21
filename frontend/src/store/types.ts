@@ -7,6 +7,7 @@ import type {
   GitDiffStats,
   GitHubPRsStatus,
   GitStatus,
+  GitPullResult,
   Group,
   Host,
   NotificationEvent,
@@ -216,6 +217,7 @@ export interface GitSlice {
   // action's own implementation in slices/git.ts for why.
   refreshGitRefs: (projectIds?: number[]) => Promise<void>;
   fetchProjectGit: (projectId: number) => Promise<void>;
+  pullProjectGit: (projectId: number) => Promise<GitPullResult>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
 }
 

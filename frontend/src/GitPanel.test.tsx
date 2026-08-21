@@ -27,9 +27,17 @@ const CLEAN_STATUS: GitStatus = {
 function mockFetch(opts: {
   status?: () => Response | Promise<Response>;
   branches?: () => Response | Promise<Response>;
+  pull?: () => Response | Promise<Response>;
+  fetch?: () => Response | Promise<Response>;
 }) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/git-pull")) {
+      return Promise.resolve(opts.pull ? opts.pull() : jsonResponse(200, { pulled: true }));
+    }
+    if (url.includes("/git-fetch")) {
+      return Promise.resolve(opts.fetch ? opts.fetch() : jsonResponse(200, { success: true }));
+    }
     if (url.includes("/git-status")) {
       return Promise.resolve(opts.status ? opts.status() : new Response(null, { status: 204 }));
     }
@@ -736,6 +744,65 @@ describe("GitPanel", () => {
       } finally {
         useDashboardStore.setState({ refreshGitRefs: originalRefreshGitRefs });
       }
+    });
+  });
+
+  describe("Pull action (issue #745)", () => {
+    it("disables the Pull button when behind is 0", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ status: () => jsonResponse(200, { ...CLEAN_STATUS, behind: 0 }) }),
+      );
+      render(<GitPanel params={{ projectId: 20 }} />);
+
+      const pullButton = await screen.findByRole("button", { name: /Pull/ });
+      expect(pullButton).toBeDisabled();
+    });
+
+    it("enables the Pull button when behind > 0 and calls pull endpoint on click", async () => {
+      let pullCalled = false;
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () => jsonResponse(200, { ...CLEAN_STATUS, behind: 2 }),
+          pull: () => {
+            pullCalled = true;
+            return jsonResponse(200, { pulled: true });
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 21 }} />);
+
+      const pullButton = await screen.findByRole("button", { name: /Pull/ });
+      expect(pullButton).not.toBeDisabled();
+
+      await user.click(pullButton);
+      expect(pullCalled).toBe(true);
+    });
+
+    it("renders error banner when pull returns a refusal reason", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () => jsonResponse(200, { ...CLEAN_STATUS, behind: 1 }),
+          pull: () =>
+            jsonResponse(200, {
+              pulled: false,
+              reason: "dirty-tree",
+              detail: "Worktree has uncommitted changes",
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 22 }} />);
+
+      const pullButton = await screen.findByRole("button", { name: /Pull/ });
+      await user.click(pullButton);
+
+      expect(
+        await screen.findByText("Working tree has uncommitted changes or conflicts."),
+      ).toBeInTheDocument();
     });
   });
 });

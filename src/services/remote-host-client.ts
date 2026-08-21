@@ -40,6 +40,7 @@ import type {
   WorktreeResult,
 } from "./git-worktree.js";
 import type { DeleteBranchResult } from "./git-branch-delete.js";
+import type { GitPullResult } from "./git-pull.js";
 import type { PushResult } from "./git-push.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
@@ -780,6 +781,16 @@ export class RemoteHostClient {
    * from a host-reachability 5xx. */
   resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
     return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Runs a fast-forward `git pull` on this agent's filesystem (issue #745).
+   * Returns `{ pulled: boolean, reason?, detail? }` matching runGitPull's
+   * GitPullResult shape. */
+  resolveGitPull(cwd: string): Promise<GitPullResult> {
+    return this.request("/internal/git-pull", {
+      method: "POST",
+      body: JSON.stringify({ cwd }),
+    });
   }
 
   /** Resolves this agent's default base ref (and its pinned commit SHA) on

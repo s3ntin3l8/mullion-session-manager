@@ -24,12 +24,17 @@ support uses.
 - **Prune stale worktrees** — clears `git worktree`'s administrative
   metadata for entries whose directory is already gone, without touching
   anything that still exists on disk.
+- **Fast-forward Pull** — advances the local working tree to match upstream
+  (`git merge --ff-only @{u}`) after fetching, safely refusing if history
+  has diverged or the tree is dirty.
 
 ## Endpoints
 
 | Endpoint                                | Method | Notes                                                                                                                 |
 | --------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
 | `/api/projects/:id/git-branches`        | GET    | Branches + worktrees + remote branches. `?detail=1` additionally computes `isMerged` per branch. Rate-limited 30/min. |
+| `/api/projects/:id/git-fetch`           | POST   | Manual `git fetch origin` trigger. Rate-limited 10/min.                                                               |
+| `/api/projects/:id/git-pull`            | POST   | Fast-forward `git pull --ff-only` (`git merge --ff-only @{u}`). Rate-limited 10/min.                                  |
 | `/api/projects/:id/git-branch-delete`   | POST   | `{ name, force? }`. POST, not DELETE — a branch name can contain `/`. Rate-limited 10/min.                            |
 | `/api/projects/:id/git-worktree-remove` | POST   | `{ worktreePath, force? }`. Rate-limited 10/min.                                                                      |
 | `/api/projects/:id/git-worktree-prune`  | POST   | No body. Rate-limited 10/min.                                                                                         |
@@ -43,6 +48,15 @@ with no confirmation at all. `force: true` on the very first request isn't
 bypassing anything the underlying host doesn't already permit; what it
 does is skip the _warning_, not the _action_.
 
+- **Fast-forward pull refusals.** Pulling via the UI enforces `--ff-only`
+  semantics. It never creates a merge commit or rebases automatically. A pull
+  refuses cleanly if:
+  - The working tree has uncommitted changes or merge conflicts (`dirty-tree`).
+  - HEAD is detached (`detached-head`) or unborn (`unborn-head`).
+  - No upstream tracking branch is configured (`no-upstream`).
+  - Local commits have diverged from upstream (`not-fast-forward`).
+    Sessions running in the main worktree do not block a pull as long as their
+    working tree is clean (any uncommitted edits are caught by `dirty-tree`).
 - **Task-branch refusal.** Deleting a `mullion/task-<N>` branch belonging
   to a task whose status is `claimed`/`in_progress`/`reviewing`/`failed`
   refuses (`reason: "task-branch"`, `detail: "#<taskId>"`) — the same

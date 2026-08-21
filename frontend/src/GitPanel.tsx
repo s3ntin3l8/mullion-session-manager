@@ -63,6 +63,20 @@ function reasonMessage(reason: string | undefined, detail: string | undefined): 
       // and deliberately not forceable: Prune stale is the correct action
       // here, not a stronger form of Remove.
       return "This worktree's directory no longer exists — use Prune stale instead.";
+    case "dirty-tree":
+      return "Working tree has uncommitted changes or conflicts.";
+    case "detached-head":
+      return "Cannot pull in a detached HEAD state.";
+    case "unborn-head":
+      return "The current branch has no commits.";
+    case "no-upstream":
+      return "No upstream tracking branch configured.";
+    case "not-fast-forward":
+      return "Branch has diverged from upstream (cannot fast-forward).";
+    case "already-up-to-date":
+      return "Already up to date.";
+    case "pull-failed":
+      return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
     default:
       return "Action failed.";
   }
@@ -139,6 +153,8 @@ export function GitPanel({
     undefined,
   );
   const [isFetching, setIsFetching] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
   // Issue #442 — per-row refusal state for branch delete / worktree remove,
   // keyed by `branch:<name>` / `worktree:<path>`. Cleared on a successful
   // mutation for that row; left in place across an unrelated refresh.
@@ -166,6 +182,7 @@ export function GitPanel({
     (s) => s.settings.sessions.gitAutoFetchIntervalSeconds > 0,
   );
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
+  const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
   const effectiveAutoFetch = autoFetch ?? globalEnabled;
   const isInherited = autoFetch === null;
 
@@ -405,6 +422,7 @@ export function GitPanel({
 
   const handleFetch = useCallback(async () => {
     setIsFetching(true);
+    setPullError(null);
     try {
       await fetchProjectGit(params.projectId);
       await fetchStatus();
@@ -414,6 +432,24 @@ export function GitPanel({
       setIsFetching(false);
     }
   }, [params.projectId, fetchProjectGit, fetchStatus]);
+
+  const handlePull = useCallback(async () => {
+    setIsPulling(true);
+    setPullError(null);
+    try {
+      const result = await pullProjectGit(params.projectId);
+      if (result.pulled) {
+        await refreshAll();
+      } else {
+        setPullError(reasonMessage(result.reason, result.detail));
+      }
+    } catch (err) {
+      console.debug("[GitPanel] pullProjectGit failed", err);
+      setPullError(err instanceof Error ? err.message : "Pull request failed — try again.");
+    } finally {
+      setIsPulling(false);
+    }
+  }, [params.projectId, pullProjectGit, refreshAll]);
 
   const handleToggleAutoFetch = useCallback(async () => {
     const store = useDashboardStore.getState();
@@ -459,8 +495,24 @@ export function GitPanel({
           )}
         </span>
         <span className="git-panel-sync-controls">
-          <button className="git-panel-fetch-btn" onClick={handleFetch} disabled={isFetching}>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleFetch}
+            disabled={isFetching || isPulling}
+          >
             {isFetching ? "⟳" : "↻"} Fetch
+          </button>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handlePull}
+            disabled={isPulling || isFetching || status.behind === 0}
+            title={
+              status.behind === 0
+                ? "Already up to date with tracking branch"
+                : "Fast-forward pull from tracking branch"
+            }
+          >
+            {isPulling ? "⟳" : "↓"} Pull
           </button>
           <span className="git-panel-toggle-wrapper">
             <Toggle
@@ -488,6 +540,10 @@ export function GitPanel({
           </span>
         </span>
       </div>
+
+      {pullError && (
+        <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+      )}
 
       <div className="github-panel-section">
         <div className="github-panel-section-title">

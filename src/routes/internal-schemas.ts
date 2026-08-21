@@ -322,6 +322,16 @@ export const gitWorktreePruneMetadataSchema = schemaFor({
   required: ["cwd"],
 });
 
+export interface GitPullBody {
+  cwd: string;
+}
+
+// Issue #745 — the agent-side counterpart of runGitPull for a remote-hosted
+// project's fast-forward git pull.
+export const gitPullSchema = schemaFor({
+  required: ["cwd"],
+});
+
 export interface GitPushBody {
   cwd: string;
   branch: string;

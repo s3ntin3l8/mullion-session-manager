@@ -8,6 +8,7 @@ import type {
   RemoveWorktreeResult,
   GitStatusesBatchResult,
   GitFileDiffResponse,
+  GitPullResult,
 } from "./types.js";
 import type { GitStatus, GitDiffStats } from "../../../src/shared/types.js";
 
@@ -58,6 +59,12 @@ export const gitApi = {
   // Manual git fetch trigger — runs `git fetch origin` for this project now.
   postProjectGitFetch: (projectId: number) =>
     request<{ success: boolean; error?: string }>(`/api/projects/${projectId}/git-fetch`, {
+      method: "POST",
+    }),
+
+  // Issue #745 — Manual fast-forward git pull trigger (`git merge --ff-only @{u}`).
+  postProjectGitPull: (projectId: number) =>
+    request<GitPullResult>(`/api/projects/${projectId}/git-pull`, {
       method: "POST",
     }),
 

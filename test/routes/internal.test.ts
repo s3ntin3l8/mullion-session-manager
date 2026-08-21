@@ -2423,6 +2423,73 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  describe("POST /internal/git-pull (issue #745)", () => {
+    async function makeRepo() {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-pull-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[], runCwd = cwd) =>
+        execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      return { repoRoot, cwd, run };
+    }
+
+    it("runs git pull on this host's own filesystem and returns GitPullResult", async () => {
+      const { repoRoot, cwd } = await makeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-pull",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(
+        expect.objectContaining({ pulled: expect.any(Boolean) as boolean }),
+      );
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd body and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const { repoRoot } = await makeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-pull",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-pull",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: "/etc" },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   it("returns this host's detected agents", async () => {
     const app = await buildApp();
     const res = await app.inject({

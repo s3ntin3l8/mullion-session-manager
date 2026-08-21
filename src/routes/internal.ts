@@ -68,6 +68,7 @@ import {
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
@@ -131,6 +132,7 @@ import {
   gitBranchDeleteSchema,
   gitWorktreeRemoveListedSchema,
   gitWorktreePruneMetadataSchema,
+  gitPullSchema,
   gitPushSchema,
   gitWorktreeResumeSchema,
   promoteDecisionSchema,
@@ -153,6 +155,7 @@ import type {
   GitBranchDeleteBody,
   GitWorktreeRemoveListedBody,
   GitWorktreePruneMetadataBody,
+  GitPullBody,
   GitPushBody,
   GitWorktreeResumeBody,
   PromoteDecisionBody,
@@ -1122,6 +1125,21 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await runGitFetch(resolvedCwd);
+    },
+  );
+
+  // Issue #745 — runs a fast-forward `git pull` on the given cwd for a
+  // remote-hosted project's Pull button (POST /api/projects/:id/git-pull).
+  // Goes through resolveWithinRoots. Returns GitPullResult ({ pulled, reason?, detail? })
+  // matching runGitPull's shape.
+  app.post<{ Body: GitPullBody }>(
+    "/internal/git-pull",
+    { ...INTERNAL_RATE_LIMIT, schema: gitPullSchema },
+    async (request, reply) => {
+      const { cwd } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await runGitPull(resolvedCwd);
     },
   );
 
