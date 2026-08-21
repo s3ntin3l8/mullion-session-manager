@@ -42,8 +42,12 @@ const MAX_READBACK_CHECKS_PER_SWEEP = 20;
 // roadmap labeled ready up front has ~31 candidates with dependencies, so
 // "only check tasks with dependencies" filters nothing — a per-sweep cap
 // alone would still mean 20 calls/project/60s = 1200/hr against a 5000/hr
-// core limit, with no 429/Retry-After handling anywhere in this repo to
-// catch the overrun. So the check moved into autoClaimReadyTasks itself,
+// core limit. (#759 added install-wide 429/Retry-After handling —
+// githubApiFetch/githubRequest, github-fetch.ts — as the actual backstop
+// against that overrun; these per-sweep caps below still matter on their
+// own terms, to keep one project/pass from starving the others, not just
+// to avoid tripping GitHub's limit.)
+// So the check moved into autoClaimReadyTasks itself,
 // where it only ever resolves blockers for a candidate the loop is actually
 // about to try, bounded three ways (cheapest first): a capacity pre-count
 // (§ autoClaimReadyTasks, zero calls once at cap), this TTL (skip a
@@ -1030,6 +1034,18 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         app.log.debug("[task-watcher] Task Master is disabled, skipping sweep");
         return;
       }
+      // #759 — deliberately NOT an entry-level "skip this whole tick"
+      // check here, unlike task-reconciler.ts's three GitHub-only sweeps.
+      // This tick's own GitHub calls (syncProjectTasks/
+      // resolveStaleTaskBlockers/fillParentIssueTitles) already fail fast
+      // at the transport layer regardless (githubApiFetch/githubRequest,
+      // github-fetch.ts — the primary defense), but autoClaimReadyTasks and
+      // dispatchQueuedTasks below are independent of GitHub connectivity
+      // entirely (see autoClaimReadyTasks's own doc comment) — gating the
+      // whole tick on the GitHub budget would silently stop local-only
+      // auto-claim from working while GitHub is rate-limited, which is
+      // exactly the kind of GitHub-availability coupling this codebase's
+      // roadmap decision (local-board-works-regardless-of-GitHub) rejects.
       const label = app.config.MULLION_TASK_LABEL;
       const rows = pollableProjectRows();
       // #667 — one Map per tick, populated by each project's own

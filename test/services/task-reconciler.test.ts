@@ -214,6 +214,8 @@ const { reconcileTasks } = await import("../../src/services/task-reconciler.js")
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
+const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
+  await import("../../src/services/github-fetch.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
 
@@ -1274,6 +1276,49 @@ describe("reconcileTasks", () => {
         await app.close();
       }
     });
+
+    it("#759 — does not attempt a draft PR while the install-wide GitHub rate-limit budget is in effect", async () => {
+      const app = await buildApp();
+      try {
+        await createReviewingTaskWithNoPR(app);
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        await reconcileTasks(app);
+
+        expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
+    });
+
+    // #759 — the entry-point check above only catches a limit already in
+    // effect when the sweep opens; this proves the SEPARATE per-task
+    // re-check (right beside the sweep's own MAX_DRAFT_PR_RETRIES_PER_SWEEP
+    // cap) actually stops the loop when the limit lands mid-pass instead.
+    it("#759 — stops attempting further draft PRs mid-pass once the rate limit lands, rather than continuing to the next task", async () => {
+      const app = await buildApp();
+      try {
+        await createReviewingTaskWithNoPR(app);
+        await createReviewingTaskWithNoPR(app);
+        mockOpenDraftPRForTask.mockImplementation(async () => {
+          // Simulates the limit being discovered via this exact attempt's
+          // own response — recorded here, not before the sweep started.
+          recordGitHubRateLimit(Date.now() + 60_000);
+          return { ok: false, reason: "dirty-tree" };
+        });
+
+        await reconcileTasks(app);
+
+        // Two "reviewing, no PR" rows exist; only the FIRST attempt should
+        // ever fire — the per-task re-check must stop the loop before the
+        // second row is ever reached, whichever row that attempt landed on.
+        expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
+    });
   });
 
   describe("merge-on-approve sweep (processMergeRequests)", () => {
@@ -1594,6 +1639,21 @@ describe("reconcileTasks", () => {
 
       expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
       await app.close();
+    });
+
+    it("#759 — does not attempt a merge while the install-wide GitHub rate-limit budget is in effect", async () => {
+      const app = await buildApp();
+      try {
+        await createDoneTaskWithPendingMerge(app);
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
     });
   });
 
@@ -1952,6 +2012,21 @@ describe("reconcileTasks", () => {
       );
 
       await app.close();
+    });
+
+    it("#759 — does not attempt an auto-approve while the install-wide GitHub rate-limit budget is in effect", async () => {
+      const app = await buildApp();
+      try {
+        await createAutoApproveCandidate(app);
+        recordGitHubRateLimit(Date.now() + 60_000);
+
+        await reconcileTasks(app);
+
+        expect(mockFetchRunsForHead).not.toHaveBeenCalled();
+      } finally {
+        resetGitHubRateLimitForTests();
+        await app.close();
+      }
     });
   });
 

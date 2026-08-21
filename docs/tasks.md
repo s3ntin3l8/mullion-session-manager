@@ -301,7 +301,11 @@ ingest — doesn't survive this feature's own motivating scenario: a
 32-issue roadmap labeled `ready` up front has ~31 candidates with
 dependencies, so "only check tasks with dependencies" filters nothing, and
 a per-sweep cap alone would still mean dozens of calls/project/poll against
-GitHub's rate limit (this repo has no 429/`Retry-After` handling anywhere).
+GitHub's rate limit. (`#759` added install-wide 429/`Retry-After` handling —
+see "GitHub rate limiting" below — as the actual backstop against that
+overrun; the per-sweep caps here still matter on their own terms, to keep
+one project/pass from starving the others out of a poll tick, not just to
+avoid tripping GitHub's limit.)
 Instead, `autoClaimReadyTasks` only resolves blockers for a candidate it is
 actually about to try, bounded three ways, cheapest first:
 
@@ -975,6 +979,60 @@ for a few seconds even on an immediate re-fetch (verified live during
 review), and passing it straight through would otherwise manufacture a
 false "blocker(s) not visible to this token" entry on the common
 single-blocker case.
+
+### GitHub rate limiting (`#759`)
+
+Every GitHub call in the process — REST or GraphQL, read or write, task
+sync or task-reconciler.ts's own sweeps — shares one install-wide budget:
+a module-scope "rate-limited until T" (`github-fetch.ts`), set whenever
+any response classifies as a rate limit (`429` unconditionally, or `403`
+carrying `Retry-After` or `X-RateLimit-Remaining: 0` alongside a
+not-yet-passed `X-RateLimit-Reset`), and observed by both transports —
+`githubApiFetch` (the shared chokepoint most reads and `githubGraphQL` go
+through) and `github-write.ts`'s own `githubRequest` (which deliberately
+bypasses `githubApiFetch` — see that file's header comment — so it checks
+and records independently). A call made while the budget is in effect
+fails fast and locally with `GitHubRateLimitError`, without spending a
+request (or its 5s timeout) proving what the budget already knows.
+
+**This is enforced at the transport, not threaded into
+task-reconciler.ts's three per-task backoff maps**
+(`draftPrRetryState`/`mergeRetryState`/`autoApproveRetryState`). Those maps
+record an attempt optimistically, before the network call even happens —
+there's no single catch site to hook a server-provided resume time into
+without a deeper refactor of the discriminated-result types the sweeps
+already use to swallow errors (`ApproveOutcome`/`PromoteOutcome`-style
+shapes). The transport-level budget gets the same practical protection —
+nothing anywhere in the process makes a GitHub call while rate-limited —
+without that refactor, and it covers call sites this feature doesn't
+enumerate too (`task-watcher.ts`'s dependency/readback/parent-title
+passes). The three sweeps above also each check the budget at their own
+entry point (skip opening a pass known to fail) and once per task inside
+their loop (a limit can land mid-pass) — belt-and-suspenders on top of the
+transport check, logged once per skipped sweep rather than once per call.
+
+**Deliberately not gated at `task-watcher.ts`'s poll-tick level.**
+`autoClaimReadyTasks` and `dispatchQueuedTasks` work with no GitHub
+connection at all (a locally-created task can reach `ready` and claim with
+zero GitHub calls) — skipping the whole tick whenever GitHub is
+rate-limited would silently stop local-only auto-claim from working too,
+which is exactly the GitHub-availability coupling this codebase's
+local-board-works-regardless-of-GitHub decision rejects. Its GitHub-only
+sub-passes (`syncProjectTasks`, `resolveStaleTaskBlockers`,
+`fillParentIssueTitles`) still fail fast per-call via the transport check
+above.
+
+The **misdiagnosis** this also fixes: `githubRequest` used to classify
+_any_ 403 as `GitHubWriteScopeError` ("the token likely lacks write
+access"). GitHub returns 403 for a secondary rate limit and for an
+exhausted primary limit too — before this, a rate-limited write was
+reported to the user as a broken token. The rate-limit classification now
+runs **before** that scope-error branch in both `githubRequest` and
+`githubGraphQL`.
+
+The budget is process-local, not persisted — same posture as the three
+backoff maps above — so a restart just means one more live check against
+GitHub, not a correctness problem.
 
 | Transition      | GitHub side effect                                                                                                                                                                                                                                                                                                     |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -18,6 +18,11 @@ import {
   GitHubWriteScopeError,
 } from "../../src/services/github-write.js";
 import { GitHubApiError } from "../../src/services/github.js";
+import {
+  GitHubRateLimitError,
+  isGitHubRateLimited,
+  resetGitHubRateLimitForTests,
+} from "../../src/services/github-fetch.js";
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -26,8 +31,8 @@ function jsonResponse(status: number, body: unknown) {
   });
 }
 
-function textResponse(status: number, body: string) {
-  return new Response(body, { status });
+function textResponse(status: number, body: string, headers?: Record<string, string>) {
+  return new Response(body, { status, headers });
 }
 
 describe("github-write service", () => {
@@ -36,10 +41,14 @@ describe("github-write service", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    // #759's rate-limit budget is process-wide module state — reset it so a
+    // rate limit recorded by one test never leaks into the next.
+    resetGitHubRateLimitForTests();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetGitHubRateLimitForTests();
   });
 
   it("addLabels POSTs the labels array to the issue's labels endpoint", async () => {
@@ -564,5 +573,99 @@ describe("github-write service", () => {
   it("rejects an invalid owner/repo before ever calling fetch", async () => {
     await expect(addLabels("tok", "bad owner", "repo", 5, ["x"])).rejects.toThrow(GitHubApiError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("#759 — rate limiting", () => {
+    it("a 429 throws GitHubRateLimitError with retryAfterMs from Retry-After (seconds)", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(429, "rate limited", { "retry-after": "30" }));
+      try {
+        await addLabels("tok", "owner", "repo", 5, ["x"]);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(GitHubRateLimitError);
+        expect((err as GitHubRateLimitError).statusCode).toBe(429);
+        expect((err as GitHubRateLimitError).retryAfterMs).toBe(30_000);
+      }
+    });
+
+    it("a 403 with X-RateLimit-Remaining: 0 and a future X-RateLimit-Reset classifies as a rate limit, not GitHubWriteScopeError", async () => {
+      const resetAt = Math.floor(Date.now() / 1000) + 120;
+      fetchMock.mockResolvedValueOnce(
+        textResponse(403, "nope", {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(resetAt),
+        }),
+      );
+      await expect(addLabels("tok", "owner", "repo", 5, ["x"])).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+    });
+
+    it("a 403 with X-RateLimit-Remaining: 0 but no X-RateLimit-Reset still throws GitHubWriteScopeError — reset-in-the-future is required, not remaining alone", async () => {
+      fetchMock.mockResolvedValueOnce(
+        textResponse(403, "no access", { "x-ratelimit-remaining": "0" }),
+      );
+      await expect(addLabels("tok", "owner", "repo", 5, ["x"])).rejects.toBeInstanceOf(
+        GitHubWriteScopeError,
+      );
+    });
+
+    it("a 403 with Retry-After classifies as a rate limit even without X-RateLimit-Remaining", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(403, "nope", { "retry-after": "5" }));
+      await expect(addLabels("tok", "owner", "repo", 5, ["x"])).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+    });
+
+    it("GitHubRateLimitError is also a GitHubApiError (same catch-by-base-class shape as GitHubWriteScopeError)", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(429, "rate limited"));
+      await expect(addLabels("tok", "owner", "repo", 5, ["x"])).rejects.toBeInstanceOf(
+        GitHubApiError,
+      );
+    });
+
+    it("records the rate limit into the shared budget, short-circuiting a later call without hitting fetch again", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(429, "rate limited", { "retry-after": "60" }));
+      await expect(addLabels("tok", "owner", "repo", 5, ["x"])).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+      expect(isGitHubRateLimited()).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await expect(removeLabel("tok", "owner", "repo", 5, "x")).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+      // The second call never reached fetch — short-circuited at the top of
+      // githubRequest before doing any network work.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a default backoff applies when a 429 carries no Retry-After header at all", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(429, "rate limited"));
+      try {
+        await addLabels("tok", "owner", "repo", 5, ["x"]);
+        expect.unreachable();
+      } catch (err) {
+        expect((err as GitHubRateLimitError).retryAfterMs).toBe(60_000);
+      }
+    });
+
+    it("the GraphQL path (markPullRequestReadyForReview) also classifies a 429 as GitHubRateLimitError, not falling through to GitHubApiError", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(429, "rate limited", { "retry-after": "10" }));
+      await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+    });
+
+    it("the GraphQL path's own transport (githubApiFetch) also short-circuits once the budget is set by a REST call", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(429, "rate limited", { "retry-after": "60" }));
+      await expect(addLabels("tok", "owner", "repo", 5, ["x"])).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+      await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 });
