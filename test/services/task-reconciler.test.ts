@@ -1881,6 +1881,34 @@ describe("reconcileTasks", () => {
       // can actually happen in (stale window + at cap + session still
       // active) — the previous "gives up..." test above never sets
       // rebaseStartedAt, so it can't exercise this ordering.
+      // Third review, PR #783 — the in-flight/window check runs BEFORE the
+      // cap check specifically so a last-attempt-at-cap still within its
+      // window waits for it rather than being reported as "gave up" while
+      // it may yet succeed. Every other test here covers rebaseAttempts at
+      // 1 (under cap) or a STALE window at the cap — nothing pins the
+      // "at cap, but still fresh" combination, which is exactly the case
+      // that ordering exists to get right and a future refactor could
+      // silently regress.
+      it("keeps waiting on an in-flight attempt even when it's the last one allowed (at cap, still within its window)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, {
+          rebaseAttempts: 2,
+          rebaseStartedAt: new Date(),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        expect(mockRemoveWorktree).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(2);
+        expect(row.mergeError).toContain("in progress");
+        expect(row.mergeError).not.toContain("gave up");
+
+        await app.close();
+      });
+
       it("gives up without terminating a stale attempt's still-active session, once attempts are exhausted", async () => {
         const app = await buildApp();
         const project = await app.inject({

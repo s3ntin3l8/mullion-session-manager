@@ -112,11 +112,25 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
                     // own clean-check gate underneath doesn't reliably save
                     // it, since the tree IS clean for stretches of a normal
                     // in-progress rebase (right after a commit, during the
-                    // verification-gate run). Once the window elapses,
-                    // attemptAutoRebase's own stale-attempt handling takes
-                    // over (terminates a still-alive session before ever
-                    // touching its worktree), so this sweep no longer needs
-                    // to protect it.
+                    // verification-gate run).
+                    //
+                    // Once the window elapses, this predicate stops
+                    // protecting the worktree regardless of what
+                    // attemptAutoRebase does next — and that's NOT always a
+                    // terminate-then-retry: if the attempts cap is already
+                    // spent, attemptAutoRebase deliberately gives up WITHOUT
+                    // terminating a still-active session (killing it would
+                    // be pointless if nothing is going to retry into a
+                    // fresh one — see that function's own cap-check-before-
+                    // terminate ordering). A task that hits the cap while
+                    // genuinely still working is a real, if narrow, gap
+                    // this predicate does not close: its worktree becomes
+                    // prunable on the very next boot even though a worker
+                    // may still be using it. Left as a known edge case
+                    // rather than widened further, since closing it
+                    // requires the cap-exhausted case to have its own
+                    // distinct "still genuinely active" signal, not just
+                    // "rebaseStartedAt is old."
                     and(
                       eq(tasks.status, "done"),
                       isNotNull(tasks.rebaseStartedAt),
