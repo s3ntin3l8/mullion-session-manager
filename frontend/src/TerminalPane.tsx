@@ -29,6 +29,7 @@ import {
 } from "./lib/terminalKeys.js";
 import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
@@ -111,6 +112,32 @@ export function TerminalPane(props: {
   active?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // PR 6 — @xterm/addon-webgl v0.19.0's own glyph-rendering canvas is sized
+  // wrong from its very first construction whenever devicePixelRatio isn't a
+  // "clean" integer the addon's internal computation expects (confirmed via
+  // live measurement: a 394px-wide, dpr-2.625 phone panel produced a glyph
+  // canvas sized for dpr 2.0 — 788px intrinsic width where dpr-correct would
+  // be 1034px — while xterm CORE's own separate `xterm-link-layer` canvas
+  // correctly used the live 2.625. Reproduced identically across DevTools
+  // zoom levels and across closing/reopening the pane, so this isn't a
+  // staleness/timing race — the addon computes it wrong on every single
+  // construction in that environment. No fixed upstream release exists yet
+  // (0.19.0 is current stable; only unreleased 0.20.0 betas exist). Coarse
+  // pointer, not layout tier — a touchscreen laptop at desktop width has the
+  // same class of display and should get the same, already-battle-tested
+  // fallback: `catch` below already falls back to xterm's default DOM
+  // renderer whenever WebGL construction throws, so skipping the `try` here
+  // entirely reuses that exact path rather than adding a new one. Read once
+  // at mount, not reactively — deliberately frozen even though the hook
+  // itself does react to a live pointer-type change (layoutTier.ts's own
+  // comment on `useCoarsePointer`, a couple lines above its definition,
+  // covers *why* it subscribes at all: a 2-in-1's keyboard-attach, or a
+  // devtools pointer-emulation toggle mid-session): rebuilding the whole
+  // renderer out from under a live Terminal instance is far more disruptive
+  // than living with a stale renderer choice for the rest of that session
+  // (same call already made for `theme`, excluded from this effect's own
+  // deps below) — the mount effect only reruns on `props.params.sessionId`.
+  const isCoarsePointer = useCoarsePointer();
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -424,26 +451,34 @@ export function TerminalPane(props: {
     // to fire in practice; #107's actual symptoms traced to two other,
     // already-fixed causes (#124, #129).
     let webglContextLossSub: IDisposable | null = null;
-    try {
-      const webglAddon = new WebglAddon();
-      term.loadAddon(webglAddon);
-      webglAddonRef.current = webglAddon;
-      // Fall back to the DOM renderer on context loss — see comment above.
-      webglContextLossSub = webglAddon.onContextLoss(() => {
-        // Guards against a double-firing context-loss event (rare, but some
-        // GPU drivers can raise it more than once) re-disposing an
-        // already-disposed addon and double-repainting.
-        if (!webglAddonRef.current) return;
-        console.warn("[terminal] WebGL context lost — falling back to DOM renderer");
-        webglAddon.dispose();
-        webglAddonRef.current = null;
-        term.refresh(0, term.rows - 1);
-      });
-    } catch (err) {
-      // Not every environment has a usable WebGL context (e.g. some headless
-      // or GPU-restricted setups) — xterm falls back to its default DOM
-      // renderer automatically, so this is a soft failure, not a blocker.
-      console.warn("[terminal] WebGL renderer unavailable, using default renderer", err);
+    // PR 6 — see `isCoarsePointer`'s own comment above (top of this
+    // component) for why coarse-pointer devices skip WebGL entirely rather
+    // than attempting construction: xterm's default DOM renderer is the
+    // exact same fallback the `catch` below already exercises for a
+    // genuinely unavailable WebGL context, so a coarse pointer simply takes
+    // that established path unconditionally instead of a new one.
+    if (!isCoarsePointer) {
+      try {
+        const webglAddon = new WebglAddon();
+        term.loadAddon(webglAddon);
+        webglAddonRef.current = webglAddon;
+        // Fall back to the DOM renderer on context loss — see comment above.
+        webglContextLossSub = webglAddon.onContextLoss(() => {
+          // Guards against a double-firing context-loss event (rare, but some
+          // GPU drivers can raise it more than once) re-disposing an
+          // already-disposed addon and double-repainting.
+          if (!webglAddonRef.current) return;
+          console.warn("[terminal] WebGL context lost — falling back to DOM renderer");
+          webglAddon.dispose();
+          webglAddonRef.current = null;
+          term.refresh(0, term.rows - 1);
+        });
+      } catch (err) {
+        // Not every environment has a usable WebGL context (e.g. some headless
+        // or GPU-restricted setups) — xterm falls back to its default DOM
+        // renderer automatically, so this is a soft failure, not a blocker.
+        console.warn("[terminal] WebGL renderer unavailable, using default renderer", err);
+      }
     }
 
     term.open(container);

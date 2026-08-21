@@ -978,6 +978,49 @@ describe("TerminalPane WebGL context-loss fallback (issue #107)", () => {
   });
 });
 
+describe("TerminalPane WebGL skipped on coarse pointer (PR 6)", () => {
+  // @xterm/addon-webgl v0.19.0's own glyph canvas is sized wrong from its
+  // very first construction on a coarse-pointer/high-dpr display (see
+  // `isCoarsePointer`'s own comment at the top of TerminalPane.tsx for the
+  // measured evidence) — same fallback the context-loss handler above
+  // already exercises, just skipped preemptively instead of reactively.
+  it("never constructs the WebGL addon under a coarse pointer", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    stubFakeWebSocket(true);
+    vi.mocked(WebglAddon).mockClear();
+
+    renderPane();
+
+    expect(WebglAddon).not.toHaveBeenCalled();
+  });
+
+  it("still constructs the WebGL addon on a fine (mouse-driven) pointer", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    stubFakeWebSocket(true);
+    vi.mocked(WebglAddon).mockClear();
+
+    renderPane();
+
+    expect(WebglAddon).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("TerminalPane pane padding (issue #91)", () => {
   it("applies the configured padding and border-box sizing to the terminal container", () => {
     stubFakeWebSocket(true);
