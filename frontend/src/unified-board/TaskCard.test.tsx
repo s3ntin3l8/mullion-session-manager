@@ -581,13 +581,13 @@ describe("UnifiedBoard task columns", () => {
   });
 
   it("shows a review-round indicator once a reviewing task has been auto-returned to the worker", () => {
-    tasks = [makeTask({ id: 1, status: "reviewing", reviewRounds: 1 })];
+    tasks = [makeTask({ id: 1, status: "reviewing", autoReturnRounds: 1 })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText(/Round 1/)).toBeInTheDocument();
   });
 
   it("shows no review-round indicator before any auto-return has happened", () => {
-    tasks = [makeTask({ id: 1, status: "reviewing", reviewRounds: 0 })];
+    tasks = [makeTask({ id: 1, status: "reviewing", autoReturnRounds: 0 })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.queryByText(/Round/)).toBeNull();
   });

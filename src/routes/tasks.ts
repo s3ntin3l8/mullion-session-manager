@@ -137,7 +137,13 @@ const TASK_ROW_COLUMNS = {
   // to any API response.
   reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
   reviewFindings: tasks.reviewFindings,
-  reviewRounds: tasks.reviewRounds,
+  // #756 — renamed from reviewRounds: this counter is no longer
+  // review-verdict-only (a red required CI check and an unresolved PR
+  // review comment are later auto-return triggers on the same model — see
+  // task-reconciler.ts's AutoReturnReason). lastAutoReturnReason names
+  // which trigger most recently spent a round.
+  autoReturnRounds: tasks.autoReturnRounds,
+  lastAutoReturnReason: tasks.lastAutoReturnReason,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,

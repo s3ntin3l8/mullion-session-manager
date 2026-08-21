@@ -277,6 +277,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       defaultReviewAgent: null,
       mergeOnApprove: false,
       autoApprove: false,
+      maxAutoReturnRounds: null,
     });
   });
 
@@ -313,7 +314,30 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       defaultReviewAgent: null,
       mergeOnApprove: true,
       autoApprove: true,
+      maxAutoReturnRounds: null,
     });
+  });
+
+  it("passes a typed maxAutoReturnRounds through to onCreate as a number", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("2 (install default)"), "5");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ maxAutoReturnRounds: 5 }));
   });
 
   it("pre-fills mergeOnApprove/autoApprove from the project's current values", () => {
@@ -556,6 +580,7 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       defaultReviewAgent: null,
       mergeOnApprove: false,
       autoApprove: false,
+      maxAutoReturnRounds: null,
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });

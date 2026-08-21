@@ -81,7 +81,8 @@ function makeTask(overrides: Partial<Task>): Task {
     reviewSeedDelivered: null,
     reviewFindingsIngestedSessionId: null,
     reviewFindings: null,
-    reviewRounds: 0,
+    autoReturnRounds: 0,
+    lastAutoReturnReason: null,
     worktreePath: null,
     branchName: null,
     agent: null,
@@ -579,14 +580,14 @@ describe("TaskDetail", () => {
   });
 
   it("shows a round indicator once the review has auto-returned to the worker", () => {
-    tasks = [makeTask({ id: 1, status: "in_progress", reviewSessionId: 5, reviewRounds: 1 })];
+    tasks = [makeTask({ id: 1, status: "in_progress", reviewSessionId: 5, autoReturnRounds: 1 })];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.getByText(/Round 1 sent back to the worker automatically/)).toBeInTheDocument();
   });
 
   it("shows no round indicator before any auto-return has happened", () => {
-    tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewRounds: 0 })];
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, autoReturnRounds: 0 })];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/Round \d+ sent back to the worker automatically/)).toBeNull();

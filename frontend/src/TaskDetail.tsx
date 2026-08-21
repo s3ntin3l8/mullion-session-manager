@@ -425,13 +425,13 @@ export function TaskDetail({
         <div className="task-detail-section task-detail-review-section">
           <div className="task-detail-section-title">Review</div>
           <div className="task-detail-review-hint">
-            {task.reviewRounds > 0
-              ? "Its findings were sent back to the worker once, automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
-              : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically, once, before this task is ready for another look."}
+            {task.autoReturnRounds > 0
+              ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
+              : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
           </div>
-          {task.reviewRounds > 0 && (
+          {task.autoReturnRounds > 0 && (
             <div className="task-detail-review-round">
-              Round {task.reviewRounds} sent back to the worker automatically
+              Round {task.autoReturnRounds} sent back to the worker automatically
             </div>
           )}
           {task.reviewSeedDelivered === false && (
