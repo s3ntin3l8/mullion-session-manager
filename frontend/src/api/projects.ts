@@ -42,6 +42,7 @@ export const projectsApi = {
         | "mergeOnApprove"
         | "autoApprove"
         | "maxAutoReturnRounds"
+        | "conventionalCommitTitles"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>

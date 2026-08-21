@@ -614,6 +614,31 @@ describe("reconcileTasks", () => {
       expect(row.prTitle).toBeNull();
       await app.close();
     });
+
+    // Fresh-review follow-up: the case `?? task.prTitle` on the write exists
+    // for — a later round (e.g. after an auto-return) that doesn't rewrite
+    // the title file must keep the EARLIER round's good title, not erase it
+    // just because this round's file is absent.
+    it("keeps a prior round's title when this round's file is absent", async () => {
+      const app = await buildApp();
+      const { taskId } = await createConventionalTitleTask(app);
+      app.db
+        .update(tasks)
+        .set({ prTitle: "feat: add credential storage" })
+        .where(eq(tasks.id, taskId))
+        .run();
+      // Deliberately no writeCommitTitle call for this round.
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.prTitle).toBe("feat: add credential storage");
+      await app.close();
+    });
   });
 
   // #772 — a reject-and-re-review cycle leaves the PRIOR round's review

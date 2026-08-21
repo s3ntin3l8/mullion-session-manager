@@ -1237,6 +1237,19 @@ regardless of the repo's own squash-title setting, but neither this nor the
 sweep gates the merge on a prefix check — that's this repo's own policy, not
 a Mullion-wide one.
 
+**The title is never re-synced to GitHub after the PR is created (`#782`).**
+`tasks.prTitle` updates correctly on every round, but nothing calls GitHub's
+update-PR-title endpoint once a draft PR already exists — `openDraftPRForTask`
+just pushes new commits on that path. So the round-persistence design above
+only actually helps "PR creation was deferred to a later round" (e.g. a
+`no-token` failure resolved by round 2); it does not help a worker that
+legitimately changes the Conventional Commits type between rounds (round 1
+seeds a `docs:` fix, review feedback turns it into `feat:` work) — the live
+GitHub title, and the eventual squash-merge commit message, stays frozen at
+whichever round first opened the PR. Not urgent (off by default, and the
+title rarely changes between rounds in practice), but worth knowing before
+relying on this for a task that goes through more than one round.
+
 ### Auto-approve
 
 With `autoApprove` on, a `reviewing` task approves itself — no human click —
