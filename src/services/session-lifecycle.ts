@@ -47,6 +47,13 @@ export interface CreateSessionBody {
   projectId: number;
   command: string;
   name?: string;
+  // #9 — settable at creation, not just via a later PATCH. Without this, a
+  // caller that wants a name to survive a live OSC title update (issue #69)
+  // has to create, THEN immediately PATCH — a window in which the agent's
+  // own title could already have overwritten it. See `sessions.nameLocked`
+  // (schema.ts) for the column's own default-false rationale; this lets a
+  // caller opt into the opposite up front.
+  nameLocked?: boolean;
   // Overrides the parent project's cwd for this session only — e.g. a
   // launcher/action (src/services/project-config.ts) targeting a monorepo
   // subdirectory. Falls back to the project's own cwd when omitted. Ignored
@@ -258,6 +265,7 @@ export async function createSessionRecord(
     projectId,
     command,
     name,
+    nameLocked,
     kind,
     worktree,
     worktreeRefresh,
@@ -388,6 +396,7 @@ export async function createSessionRecord(
         name: name ?? null,
         cwd: cwd ?? null,
         ...(kind !== undefined ? { kind } : {}),
+        ...(nameLocked !== undefined ? { nameLocked } : {}),
         ...(skipPermissions !== undefined ? { skipPermissions } : {}),
         ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
       })

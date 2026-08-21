@@ -38,6 +38,7 @@ import {
   SearchIcon,
 } from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
+import { taskLinkedSessionIds } from "./unifiedBoard.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
@@ -118,6 +119,7 @@ export function Sidebar({
     hosts,
     tasks,
     hideEndedSessions,
+    showTaskSessions,
     settings,
     settingsLoaded,
     hierarchicalView,
@@ -129,6 +131,7 @@ export function Sidebar({
       hosts: s.hosts,
       tasks: s.tasks,
       hideEndedSessions: s.hideEndedSessions,
+      showTaskSessions: s.showTaskSessions,
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
       hierarchicalView: s.hierarchicalView,
@@ -178,15 +181,26 @@ export function Sidebar({
     (t) => t.status === "ready" || t.status === "reviewing",
   ).length;
 
+  // #9 — a "killed" task session is already excluded by the `s.status !==
+  // "killed"` check above/below regardless of this toggle (see PR 8's own
+  // cleanup, which flips a superseded task session to "killed" rather than
+  // leaving it "active"/"exited") — this predicate only ever hides a
+  // currently LIVE task-linked session, which is the actual point: a human
+  // may still want to glance at or attach to it directly without
+  // navigating into the task view first, so it's a toggle, not a hard
+  // exclusion.
+  const taskSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
+
   // U3 — per-project base session list: the exact filter Sidebar has always
-  // applied (kind === "terminal", not killed, hideEndedSessions), with ONE
-  // addition — an explicitly-selected "Exited" chip bypasses
-  // hideEndedSessions for its own selection. Without that carve-out,
-  // hideEndedSessions=on would make the Exited chip permanently return zero
-  // rows, which is the "conflict" the task explicitly asks this PR to avoid;
-  // this makes the two *compose* instead — the Settings toggle still governs
-  // the default view, but an explicit chip click always wins for its own
-  // session set.
+  // applied (kind === "terminal", not killed, hideEndedSessions), with TWO
+  // additions — an explicitly-selected "Exited" chip bypasses
+  // hideEndedSessions for its own selection, and showTaskSessions governs
+  // whether a task-linked session is visible at all. Without the exited
+  // carve-out, hideEndedSessions=on would make the Exited chip permanently
+  // return zero rows, which is the "conflict" the task explicitly asks this
+  // PR to avoid; this makes the two *compose* instead — the Settings toggle
+  // still governs the default view, but an explicit chip click always wins
+  // for its own session set.
   const baseSessionsByProject = useMemo(() => {
     const map = new Map<number, Session[]>();
     for (const project of projects) {
@@ -197,12 +211,13 @@ export function Sidebar({
             s.projectId === project.id &&
             s.kind === "terminal" &&
             s.status !== "killed" &&
-            (!hideEndedSessions || s.status === "active" || selectedChips.has("exited")),
+            (!hideEndedSessions || s.status === "active" || selectedChips.has("exited")) &&
+            (showTaskSessions || !taskSessionIds.has(s.id)),
         ),
       );
     }
     return map;
-  }, [projects, sessions, hideEndedSessions, selectedChips]);
+  }, [projects, sessions, hideEndedSessions, showTaskSessions, taskSessionIds, selectedChips]);
 
   // Counted on the unfiltered base set (not whatever the search box
   // currently narrows to) — see VIRTUALIZE_SESSION_THRESHOLD's own comment

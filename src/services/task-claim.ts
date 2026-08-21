@@ -365,6 +365,17 @@ export async function dispatchClaimedTask(
       worktree: { baseRef: baseSha ?? baseRef, branchName },
       initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions: taskMasterConfig.skipPermissions,
+      // #9 — named and locked so this session reads as "task #N's worker"
+      // anywhere it's shown, instead of the bare launch command (currently
+      // indistinguishable from a manually-launched session of the same
+      // agent). `nameLocked: true` is a deliberate deviation from this
+      // column's own documented default intent (schema.ts) — a launch-time
+      // name pattern deliberately leaves it false so a live OSC title
+      // update can still override it, but a task session's whole point is
+      // a name that reliably identifies which task it belongs to, which an
+      // OSC update would defeat.
+      name: `Task #${task.id} · worker`,
+      nameLocked: true,
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -727,6 +738,9 @@ export async function retryTask(
       cwd: worktree.path,
       initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions: taskMasterConfig.skipPermissions,
+      // #9 — see the claim spawn's own comment (above, in this same file).
+      name: `Task #${task.id} · worker`,
+      nameLocked: true,
     });
     if (!result.ok) {
       await release("session spawn failed", worktree);

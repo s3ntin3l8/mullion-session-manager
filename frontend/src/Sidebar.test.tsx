@@ -6,8 +6,8 @@ import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
-import type { Host, Project, Session } from "./api/index.js";
-import { makeSession, makeProject, makeHost } from "./test/fixtures.js";
+import type { Host, Project, Session, Task } from "./api/index.js";
+import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
 // covers the sidebar's new search/chip filter, persisted project collapse
@@ -22,7 +22,10 @@ let projects: Project[];
 let sessions: Session[];
 let hosts: Host[];
 let hideEndedSessions: boolean;
+let showTaskSessions: boolean;
+let tasks: Task[];
 let viewMode: string;
+const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
 const refreshHosts = vi.fn().mockResolvedValue(undefined);
@@ -42,8 +45,10 @@ function storeState() {
     projects,
     sessions,
     hosts,
-    tasks: [],
+    tasks,
     hideEndedSessions,
+    showTaskSessions,
+    setShowTaskSessions,
     settings: { sessions: { confirmBeforeKill: false }, projectRoots: [] },
     settingsLoaded: true,
     hierarchicalView: false,
@@ -175,7 +180,9 @@ beforeEach(() => {
   projects = [PROJECT];
   sessions = [];
   hosts = [];
+  tasks = [];
   hideEndedSessions = false;
+  showTaskSessions = false;
   viewMode = "list";
   setViewMode.mockClear();
   localStorage.clear();
@@ -411,6 +418,53 @@ describe("Sidebar status filter chips (U3)", () => {
     await user.click(screen.getByRole("button", { name: "Exited" }));
 
     expect(screen.getByText("exited session")).toBeTruthy();
+  });
+});
+
+describe("Sidebar task session visibility (#9)", () => {
+  it("hides a currently task-linked session when showTaskSessions is off", () => {
+    sessions = [makeSession({ id: 1, command: "task worker session" })];
+    tasks = [makeTask({ id: 7, sessionId: 1 })];
+    showTaskSessions = false;
+    renderSidebar();
+
+    expect(screen.queryByText("task worker session")).toBeNull();
+  });
+
+  it("shows a currently task-linked session when showTaskSessions is on", () => {
+    sessions = [makeSession({ id: 1, command: "task worker session" })];
+    tasks = [makeTask({ id: 7, sessionId: 1 })];
+    showTaskSessions = true;
+    renderSidebar();
+
+    expect(screen.getByText("task worker session")).toBeTruthy();
+  });
+
+  it("a session not linked to any task is unaffected by the toggle either way", () => {
+    sessions = [makeSession({ id: 1, command: "ordinary session" })];
+    tasks = [makeTask({ id: 7, sessionId: 2 })];
+    showTaskSessions = false;
+    renderSidebar();
+
+    expect(screen.getByText("ordinary session")).toBeTruthy();
+  });
+
+  it("keeps a killed task-linked session hidden regardless of the toggle — the pre-existing status filter runs first", () => {
+    sessions = [makeSession({ id: 1, command: "killed task session", status: "killed" })];
+    tasks = [makeTask({ id: 7, sessionId: 1 })];
+    showTaskSessions = true;
+    renderSidebar();
+
+    expect(screen.queryByText("killed task session")).toBeNull();
+  });
+
+  it("a task's reviewSessionId is linked too, not just sessionId", () => {
+    sessions = [makeSession({ id: 2, command: "task review session" })];
+    tasks = [makeTask({ id: 7, reviewSessionId: 2 })];
+    showTaskSessions = false;
+    renderSidebar();
+
+    expect(screen.queryByText("task review session")).toBeNull();
   });
 });
 

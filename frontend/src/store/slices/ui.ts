@@ -63,6 +63,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       theme: resolveTheme(next.theme),
       terminalPrefs: deriveTerminalPrefs(next),
       hideEndedSessions: next.sessions.hideEndedSessions,
+      showTaskSessions: next.sessions.showTaskSessions,
       // Task Master Settings UI follow-up — recomputed on every settings
       // change (hydrate AND every updateSettings patch), not just once on
       // env load, so toggling Settings -> Task Master's Enable switch takes
@@ -89,6 +90,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     theme: readThemeHint(),
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
+    showTaskSessions: DEFAULT_SETTINGS.sessions.showTaskSessions,
     // Desktop-only persistent collapse (distinct from the mobile-only
     // `sidebarOpen` overlay flag App.tsx owns locally — different semantics
     // per breakpoint: mobile is a closed-by-default overlay, desktop is an
@@ -182,6 +184,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setHideEndedSessions: (value) => {
       get().updateSettings({ sessions: { hideEndedSessions: value } });
+    },
+
+    setShowTaskSessions: (value) => {
+      get().updateSettings({ sessions: { showTaskSessions: value } });
     },
 
     setSidebarCollapsed: (value) => {

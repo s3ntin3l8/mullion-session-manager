@@ -1094,6 +1094,7 @@ export interface AppSettings {
     namePattern: string;
     confirmBeforeKill: boolean;
     hideEndedSessions: boolean;
+    showTaskSessions: boolean;
     reconcileIntervalSeconds: number;
     // Rich statuses (fix: transient status clearing) — TTL backstop for a
     // session's errorState; mirrors src/services/settings.ts 1:1. Surfaced

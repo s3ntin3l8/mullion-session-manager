@@ -989,6 +989,29 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // #9 — named and locked at spawn time, same reasoning/pattern as the
+    // worker spawns (task-claim.ts's own tests).
+    it("names and locks the review session (#9)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [session] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, row.reviewSessionId))
+        .all();
+      expect(session).toMatchObject({ name: `Task #${taskId} · review`, nameLocked: true });
+
+      await app.close();
+    });
+
     it("spawns the review agent even when its adapter can't receive a seed (#487), recording reviewSeedDelivered: false and logging a warning", async () => {
       const app = await buildApp();
       // gemini, not opencode — opencode gained `initialPromptArgs`
@@ -1736,6 +1759,17 @@ describe("reconcileTasks", () => {
         expect(row.sessionId).not.toBeNull();
         expect(row.worktreePath).toBe("/tmp/.mullion-worktrees/mullion-task-x");
         expect(row.mergeError).toContain("in progress");
+        // #9 — the rebase worker is still task #N's worker, named/locked
+        // the same as the claim/retry spawns.
+        const rebaseSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, row.sessionId))
+          .all()[0];
+        expect(rebaseSession).toMatchObject({
+          name: `Task #${taskId} · worker`,
+          nameLocked: true,
+        });
 
         await app.close();
       });

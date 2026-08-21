@@ -1475,6 +1475,28 @@ task view once its pointer was overwritten or nulled, and cluttering both
 the sidebar and the Unified Board's ad-hoc lane indefinitely (both filter
 out `"killed"` sessions, never `"active"`/`"exited"` ones).
 
+**Task sessions are named and hidden from the sidebar by default (`#9`).**
+Every task-owned spawn (claim/retry's worker, `spawnReviewAgentNow`'s
+reviewer, `attemptAutoRebase`'s rebase worker — `#758`) is created with
+`name: "Task #<id> · worker"` / `"Task #<id> · review"` and
+`nameLocked: true`, instead of the bare launch command a manually-started
+`claude`/`opencode` session would show as. `nameLocked: true` here is a
+deliberate deviation from that column's own default intent: a launch-time
+name pattern (`CommandPalette`'s `expandSessionNamePattern`) leaves it
+`false` on purpose, so a live OSC title update can still override it, but a
+task session's whole point is a name that reliably identifies which task
+it belongs to — which an OSC update would defeat. Once named, a task
+session is still hidden from the sidebar by default (a new
+`settings.sessions.showTaskSessions` setting, off by default, same
+persistence mechanism as `hideEndedSessions`) — reusing
+`taskLinkedSessionIds` (`frontend/src/unifiedBoard.ts`) as the membership
+check. This is a toggle, not a hard exclusion: a `"killed"` task session is
+already filtered out of the sidebar unconditionally (the status check
+above runs first, before this setting is even consulted), so the toggle
+only ever governs whether a currently-live task session is visible — a
+human may still want to glance at or attach to one directly without
+navigating into the task view first.
+
 **`→ failed` removes only the worktree, never the branch (`#483`).** That
 asymmetry is deliberate, not an oversight: the branch is what Retry (see
 Lifecycle above) resumes on. `resumeTaskWorktree`

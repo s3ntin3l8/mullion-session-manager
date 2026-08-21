@@ -164,6 +164,12 @@ async function spawnReviewAgentNow(
       cwd: task.worktreePath,
       initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions,
+      // #9 — named and locked so this session reads as "task #N's review"
+      // anywhere it's shown. `nameLocked: true` deliberately overrides this
+      // column's own documented default intent (schema.ts) — see
+      // task-claim.ts's own worker-spawn comment for the full reasoning.
+      name: `Task #${task.id} · review`,
+      nameLocked: true,
     });
     if (!result.ok) {
       app.log.warn(
@@ -1195,6 +1201,12 @@ async function attemptAutoRebase(
     cwd: worktree.path,
     initialPrompt: seedCapable ? prompt : undefined,
     skipPermissions: taskMasterConfig.skipPermissions,
+    // #9 — a rebase worker is still task #N's worker, just spawned via a
+    // different path (attemptAutoRebase, #758) than the claim/retry spawns
+    // — same naming/locking, same reasoning (see task-claim.ts's own
+    // worker-spawn comment).
+    name: `Task #${task.id} · worker`,
+    nameLocked: true,
   });
   if (!result.ok) {
     recordMergeError(
