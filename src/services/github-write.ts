@@ -906,9 +906,15 @@ export async function findPullRequestByHead(
   owner: string,
   repo: string,
   head: string,
-): Promise<{ number: number; htmlUrl: string; nodeId: string; draft: boolean } | null> {
+): Promise<{
+  number: number;
+  htmlUrl: string;
+  nodeId: string;
+  draft: boolean;
+  title: string;
+} | null> {
   const results = await githubRequest<
-    Array<{ number: number; html_url: string; node_id: string; draft: boolean }>
+    Array<{ number: number; html_url: string; node_id: string; draft: boolean; title: string }>
   >(
     token,
     owner,
@@ -918,6 +924,12 @@ export async function findPullRequestByHead(
   );
   const [first] = results;
   return first
-    ? { number: first.number, htmlUrl: first.html_url, nodeId: first.node_id, draft: first.draft }
+    ? {
+        number: first.number,
+        htmlUrl: first.html_url,
+        nodeId: first.node_id,
+        draft: first.draft,
+        title: first.title,
+      }
     : null;
 }

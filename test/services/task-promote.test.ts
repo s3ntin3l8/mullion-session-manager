@@ -164,6 +164,7 @@ describe("promoteTaskToPR", () => {
       number: 9,
       htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
     });
+    mockUpdatePullRequestTitle.mockResolvedValue(undefined);
   });
 
   it("refuses when the task has no recorded worktree/branch", async () => {
@@ -705,6 +706,84 @@ describe("promoteTaskToPR", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // #782 — the 422-adopt path is the one caller of createOrRecoverPR that
+  // can land an already-existing PR number without ever having gone
+  // through openDraftPRForTask's own re-entry PATCH first (a human's
+  // out-of-band PR for the same branch, or a duplicate-create race), so it
+  // needs its own compare-then-PATCH — a fresh-review finding on this PR.
+  it("PATCHes the title when 422-adopting an existing PR whose title differs from tasks.prTitle (#782)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockCreatePullRequest.mockRejectedValue(
+      new GitHubApiError(
+        "A pull request already exists for test-owner:mullion/task-1 (HTTP 422)",
+        422,
+      ),
+    );
+    mockFindPullRequestByHead.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+      nodeId: "PR_node9",
+      draft: false,
+      title: "docs: old title",
+    });
+
+    const task = baseTask({
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+      prTitle: "feat: new title",
+    });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
+    expect(mockUpdatePullRequestTitle).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      9,
+      "feat: new title",
+    );
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("does NOT PATCH the title when 422-adopting an existing PR whose title already matches (#782)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockCreatePullRequest.mockRejectedValue(
+      new GitHubApiError(
+        "A pull request already exists for test-owner:mullion/task-1 (HTTP 422)",
+        422,
+      ),
+    );
+    mockFindPullRequestByHead.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+      nodeId: "PR_node9",
+      draft: false,
+      title: "feat: same title",
+    });
+
+    const task = baseTask({
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+      prTitle: "feat: same title",
+    });
+    await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(mockUpdatePullRequestTitle).not.toHaveBeenCalled();
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("#486 — a 422 that findPullRequestByHead can't resolve to an existing PR still falls back to pr-create-failed", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);
@@ -922,6 +1001,7 @@ describe("promoteTaskToPR", () => {
         title: "docs: old title",
       });
       mockUpdatePullRequestTitle.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+      const warnSpy = vi.fn();
 
       const task = baseTask({
         worktreePath: cwd,
@@ -930,9 +1010,13 @@ describe("promoteTaskToPR", () => {
         prTitle: "feat: new title",
       });
       const result = await promoteTaskToPR(
-        { config: {}, log: { warn: vi.fn() } } as never,
+        { config: {}, log: { warn: warnSpy } } as never,
         task,
         baseProject({ cwd }),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, prNumber: 9 }),
+        expect.stringContaining("failed to re-sync the PR title"),
       );
 
       expect(result).toEqual({
@@ -1067,6 +1151,7 @@ describe("openDraftPRForTask", () => {
     const cwd = createGitRepoWithRemote(remote);
     git(cwd, ["checkout", "-b", "mullion/task-1"]);
     mockUpdatePullRequestTitle.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+    const warnSpy = vi.fn();
 
     const task = baseTask({
       worktreePath: cwd,
@@ -1076,7 +1161,7 @@ describe("openDraftPRForTask", () => {
       prTitle: "feat: new title",
     });
     const result = await openDraftPRForTask(
-      { config: {}, log: { warn: vi.fn() } } as never,
+      { config: {}, log: { warn: warnSpy } } as never,
       task,
       baseProject({ cwd }),
     );
@@ -1086,6 +1171,10 @@ describe("openDraftPRForTask", () => {
       prUrl: "https://github.com/test-owner/test-repo/pull/9",
       prNumber: 9,
     });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, prNumber: 9 }),
+      expect.stringContaining("failed to re-sync the PR title"),
+    );
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

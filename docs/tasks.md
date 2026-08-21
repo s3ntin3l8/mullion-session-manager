@@ -1278,19 +1278,23 @@ a Mullion-wide one.
 
 **The title is re-synced to GitHub on every push, not just at creation
 (`#782`).** `tasks.prTitle` updates correctly on every round (the
-round-persistence design above), and both promotion paths now sync it to
-the live PR: `promoteTaskToPR`'s already-open branch (approve) already
-fetches the PR via `getPullRequestByNumber`, so it compares against
-`pr.title` and PATCHes only when they differ — zero extra API calls in the
-common (unchanged) case. `openDraftPRForTask`'s already-open branch (every
-`-> reviewing` after the first) makes no other GitHub call, so it takes a
-bare, idempotent PATCH instead of fetching just to compare. Either way, a
-worker that legitimately changes the Conventional Commits type between
-rounds (round 1 seeds a `docs:` fix, review feedback turns it into `feat:`
-work) now reaches the live GitHub title — and therefore the eventual
-squash-merge commit message (`attemptMerge` reads `pr.title` from GitHub,
-which this always writes before that read happens) — instead of staying
-frozen at whichever round first opened the PR. A title-sync failure never
+round-persistence design above), and all three places that can land an
+already-existing PR number now sync it to the live PR: `promoteTaskToPR`'s
+already-open branch (approve) already fetches the PR via
+`getPullRequestByNumber`, so it compares against `pr.title` and PATCHes
+only when they differ — zero extra API calls in the common (unchanged)
+case. `openDraftPRForTask`'s already-open branch (every `-> reviewing`
+after the first) makes no other GitHub call, so it takes a bare, idempotent
+PATCH instead of fetching just to compare. `createOrRecoverPR`'s 422-adopt
+branch (a `createPullRequest` collision — a human's out-of-band PR for the
+same branch, or a duplicate-create race) picks up whatever title the
+adopted PR already has, so it gets the same compare-then-PATCH as the
+approve branch. A worker that legitimately changes the Conventional
+Commits type between rounds (round 1 seeds a `docs:` fix, review feedback
+turns it into `feat:` work) now reaches the live GitHub title — and
+therefore the eventual squash-merge commit message (`attemptMerge` reads
+`pr.title` from GitHub) — instead of staying frozen at whichever round
+first opened the PR. A title-sync failure never
 blocks promotion, same "never gate promotion on the title" posture `#761`
 established for the read side.
 
