@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
-import { realpathSync } from "node:fs";
+import { realpathSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
+import { taskReviewFindingsPath } from "../services/task-prompt.js";
 import {
   listAgentRules,
   getAgentRule,
@@ -1198,6 +1199,63 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await resumeTaskWorktree(resolvedCwd, branchName);
+    },
+  );
+
+  // #760 — the agent-side counterpart of SessionBackend's
+  // readTaskReviewFindings/deleteTaskReviewFindings (session-backend.ts),
+  // for a remote-hosted task's review-findings ingestion
+  // (task-reconciler.ts's processReviewingTasks). Unlike every other
+  // filesystem route in this file, this pair takes NO cwd/path at all —
+  // there's nothing here for a traversal attempt to reach: the path is
+  // derived entirely on this side from THIS agent's own
+  // `app.pty.hookSocketPath` plus the two numeric identifiers, the same
+  // "target never a caller-supplied path" safety /internal/agent-rules'
+  // own comment above describes for its global-scope targets.
+  //
+  // GET returns `{ content: null }` (200) for a genuinely absent/empty
+  // file — never a 404. A 404 here can only mean this route itself
+  // doesn't exist (an old peer build, i.e. version skew), which
+  // RemoteHostClient's request() already turns into a thrown
+  // HostRequestError for every 4xx — the caller-visible signal that must
+  // stay distinguishable from "the file is absent" (see
+  // SessionBackend.readTaskReviewFindings's own doc comment).
+  app.get<{ Querystring: { taskId?: string; round?: string } }>(
+    "/internal/task-review-findings",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const taskId = Number(request.query.taskId);
+      const round = Number(request.query.round);
+      if (!Number.isInteger(taskId) || !Number.isInteger(round)) {
+        return reply.badRequest("taskId and round query params must be integers");
+      }
+      const findingsPath = taskReviewFindingsPath(
+        path.dirname(app.pty.hookSocketPath),
+        taskId,
+        round,
+      );
+      if (!existsSync(findingsPath)) return { content: null };
+      const content = readFileSync(findingsPath, "utf8").trim();
+      return { content: content.length > 0 ? content : null };
+    },
+  );
+
+  app.delete<{ Querystring: { taskId?: string; round?: string } }>(
+    "/internal/task-review-findings",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const taskId = Number(request.query.taskId);
+      const round = Number(request.query.round);
+      if (!Number.isInteger(taskId) || !Number.isInteger(round)) {
+        return reply.badRequest("taskId and round query params must be integers");
+      }
+      const findingsPath = taskReviewFindingsPath(
+        path.dirname(app.pty.hookSocketPath),
+        taskId,
+        round,
+      );
+      if (existsSync(findingsPath)) unlinkSync(findingsPath);
+      reply.code(204);
     },
   );
 

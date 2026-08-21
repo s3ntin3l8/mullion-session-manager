@@ -985,6 +985,39 @@ export class RemoteHostClient {
   }
 
   /**
+   * Reads a task's round-suffixed review-findings file (#760) off this
+   * agent's own filesystem — mirrors /internal/task-review-findings's
+   * `{ content: string | null }` shape exactly. `content: null` is a real
+   * 200 response meaning "genuinely absent/empty", not a connectivity or
+   * scope failure — those still surface as thrown HostUnreachableError/
+   * HostRequestError from `request()` below, unchanged. A 404
+   * specifically (an old peer build with no such route — version skew)
+   * throws HostRequestError like any other 4xx (see that class's own doc
+   * comment) rather than being swallowed here into a `null`, which is
+   * exactly what would misread "the route doesn't exist" as "the file
+   * doesn't exist" — session-backend.ts's RemoteBackend passes this
+   * straight through so its own caller (task-reconciler.ts) sees the
+   * distinction too.
+   */
+  async resolveReadTaskReviewFindings(taskId: number, round: number): Promise<string | null> {
+    const result = await this.request<{ content: string | null }>(
+      `/internal/task-review-findings?taskId=${taskId}&round=${round}`,
+    );
+    return result.content;
+  }
+
+  /**
+   * Deletes a task's round-suffixed review-findings file (#760) off this
+   * agent's own filesystem, once its content has been durably ingested.
+   * Mirrors resolveReadTaskReviewFindings's own route.
+   */
+  async resolveDeleteTaskReviewFindings(taskId: number, round: number): Promise<void> {
+    await this.request(`/internal/task-review-findings?taskId=${taskId}&round=${round}`, {
+      method: "DELETE",
+    });
+  }
+
+  /**
    * Opens (but does not wait for) a WS connection to this agent's
    * `/internal/ws/attach`, bearer-authed via a request header (the `ws`
    * package is required for this — the browser/global WebSocket API can't

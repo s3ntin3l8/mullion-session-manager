@@ -1169,10 +1169,30 @@ review can gate merge) _less_ pressing but doesn't close it: the gate above
 is Mullion's own, enforced before a merge is ever requested — not a GitHub
 required-review.
 
-A remote-hosted task can never auto-approve today: review-findings
-ingestion (step 2 above) is local-only (see `processReviewingTasks`'s own
-doc comment), so `lastReviewVerdict` never gets written for one regardless
-of what its review agent actually found.
+**A remote-hosted task can now auto-approve (`#760`).** Review-findings
+ingestion (step 2 above) used to be local-only — this process could only
+read the findings file off its own filesystem, so a remote-hosted review
+agent's file (written on the REMOTE host) was invisible, and
+`lastReviewVerdict` never got written for one regardless of what its
+review agent actually found. `SessionBackend` gained a narrow,
+identifier-only pair —
+`readTaskReviewFindings(taskId, round)`/`deleteTaskReviewFindings(taskId,
+round)` — that reads/deletes from whichever host actually ran the review,
+mirroring the git-worktree proxy methods already on that interface
+(`resumeTaskWorktree`, `listTaskWorktreeDirs`, ...). The remote agent-side
+route (`/internal/task-review-findings`) derives the path entirely from
+its own `hookSocketPath` plus the two numeric identifiers — no
+caller-supplied path fragment at all, the same "target never a
+caller-supplied path" safety `/internal/agent-rules` already relies on for
+its own global-scope targets.
+
+The one thing this deliberately did **not** do: a remote-hosted review
+agent's _seed prompt_ (`buildReviewPrompt`, telling it where to write) is
+still computed from THIS process's own local `sessionsDir` — a
+pre-existing, separate gap in the write/seed side, not the read/ingest
+side `#760` addresses. Fixing it needs a way to ask a remote host for its
+own `sessionsDir` before the prompt is built; tracked as its own follow-up,
+not blocking this one.
 
 ## Worktree lifecycle
 
@@ -1237,13 +1257,18 @@ extensive design comments.
 
 ## Known limitations
 
-- **Promotion, issue ingest, the boot-time orphan sweep, and Retry all now
-  work for remote-hosted projects (`#484`).** The one remaining gap is
-  version skew: a remote host running an agent build older than `#484`
-  degrades per-path rather than breaking — promotion 501s with
+- **Promotion, issue ingest, the boot-time orphan sweep, Retry, and
+  review-findings ingestion all now work for remote-hosted projects
+  (`#484`, `#760`).** The one remaining gap is version skew: a remote host
+  running an agent build older than the feature in question degrades
+  per-path rather than breaking — promotion 501s with
   `remote-not-supported` (see Task → PR promotion above), Retry 501s the
-  same way, and the ingest/orphan sweeps just log and skip that host.
-  Update the agent build on that host to close the gap.
+  same way, the ingest/orphan sweeps just log and skip that host, and a
+  remote host too old to have `/internal/task-review-findings` (`#760`)
+  makes `readTaskReviewFindings` throw a `HostRequestError` — logged and
+  retried next tick, same as a genuinely unreachable host, never
+  misread as "the review wrote nothing." Update the agent build on that
+  host to close the gap.
 - **`git-push.ts`'s push credential is https-transport only.** A task's
   branch is pushed via `git -c http.extraHeader=...`, which only applies to
   an `origin` configured over https — a remote-hosted project whose

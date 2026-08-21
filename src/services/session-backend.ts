@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import path from "node:path";
 import type { SessionInfo } from "./pty-manager.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, type SpawnResult } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
+import { taskReviewFindingsPath } from "./task-prompt.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -175,6 +178,33 @@ export interface SessionBackend {
   // that still exists on disk — see git-worktree.ts's pruneWorktreeMetadata
   // doc comment.
   pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }>;
+  // #760 — reads a task's round-suffixed review-findings file
+  // (`taskReviewFindingsPath`, task-prompt.ts) from whichever host actually
+  // ran the review agent that wrote it. `processReviewingTasks`
+  // (task-reconciler.ts) used to read this straight off the local
+  // filesystem and skip remote-hosted tasks entirely — see that function's
+  // own doc comment for why a remote task could never auto-approve as a
+  // result.
+  //
+  // Returns `null` ONLY for a genuinely absent/empty file (the review
+  // hasn't finished, or the agent never wrote one — an expected, common
+  // state). Throws for every other failure: a host unreachable, a peer
+  // 5xx, a filesystem permission error, or — critically — a 404 from a
+  // peer whose build predates this route entirely (version skew). A
+  // caller must never collapse any of those into "the file is absent" —
+  // that would ingest a transient failure as a genuine "review wrote
+  // nothing" verdict and post a false inconclusive comment. See
+  // RemoteBackend's own doc comment on this method for how the wire
+  // format keeps "absent" and "404, route doesn't exist" distinguishable.
+  readTaskReviewFindings(taskId: number, round: number): Promise<string | null>;
+  // #760 — deletes a task's round-suffixed review-findings file once its
+  // content has been durably ingested (task-reconciler.ts's
+  // `unlinkFindingsFileIfPresent`), on whichever host actually holds it.
+  // Best-effort by contract at the call site, same posture as today's
+  // local-only unlink — never throws for "already gone," and a failure is
+  // logged and otherwise ignored there, not surfaced to this method's
+  // caller as something to act on.
+  deleteTaskReviewFindings(taskId: number, round: number): Promise<void>;
 }
 
 class LocalBackend implements SessionBackend {
@@ -328,6 +358,27 @@ class LocalBackend implements SessionBackend {
   pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
     return pruneWorktreeMetadata(cwd);
   }
+
+  // #760 — same path derivation task-reconciler.ts's own local-only
+  // ingestion already used (`path.dirname(hookSocketPath)`, not
+  // `app.config.SESSIONS_DIR` directly) — kept identical on purpose, zero
+  // divergence risk from the exact expression already proven correct in
+  // production.
+  private findingsPath(taskId: number, round: number): string {
+    return taskReviewFindingsPath(path.dirname(this.app.pty.hookSocketPath), taskId, round);
+  }
+
+  async readTaskReviewFindings(taskId: number, round: number): Promise<string | null> {
+    const findingsPath = this.findingsPath(taskId, round);
+    if (!existsSync(findingsPath)) return null;
+    const content = readFileSync(findingsPath, "utf8").trim();
+    return content.length > 0 ? content : null;
+  }
+
+  async deleteTaskReviewFindings(taskId: number, round: number): Promise<void> {
+    const findingsPath = this.findingsPath(taskId, round);
+    if (existsSync(findingsPath)) unlinkSync(findingsPath);
+  }
 }
 
 class RemoteBackend implements SessionBackend {
@@ -467,6 +518,22 @@ class RemoteBackend implements SessionBackend {
 
   pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
     return this.client.resolvePruneWorktreeMetadata(cwd);
+  }
+
+  // #760 — mirrors LocalBackend's own pair exactly, over the wire. `null`
+  // is a genuine 200 response (`{ content: null }`) from the peer's own
+  // /internal/task-review-findings — never confused with a thrown
+  // HostRequestError, which `resolveReadTaskReviewFindings` (and this
+  // method) let propagate unchanged. That distinction is what keeps a
+  // version-skew 404 (the route doesn't exist on an old peer build) from
+  // ever being misread as "the findings file is absent" — see the
+  // interface doc comment above.
+  readTaskReviewFindings(taskId: number, round: number): Promise<string | null> {
+    return this.client.resolveReadTaskReviewFindings(taskId, round);
+  }
+
+  deleteTaskReviewFindings(taskId: number, round: number): Promise<void> {
+    return this.client.resolveDeleteTaskReviewFindings(taskId, round);
   }
 }
 

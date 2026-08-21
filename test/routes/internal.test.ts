@@ -19,6 +19,7 @@ import {
   hashBody,
   sign,
 } from "../../src/services/request-signature.js";
+import { taskReviewFindingsPath } from "../../src/services/task-prompt.js";
 
 // The agent's /internal/* API (issue #26) reaches the exact same PtyManager
 // spawn/liveness path as the primary's own routes (sessions.ts, terminal.ts)
@@ -1909,6 +1910,104 @@ describe("internal routes (agent role, issue #26)", () => {
       expect(outside.statusCode).toBe(400);
 
       fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  describe("GET/DELETE /internal/task-review-findings (#760)", () => {
+    it("GET returns { content: null } (200, not 404) for a genuinely absent file", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-review-findings?taskId=999&round=0",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ content: null });
+      await app.close();
+    });
+
+    it("GET returns the trimmed file content when present", async () => {
+      const app = await buildApp();
+      const findingsPath = taskReviewFindingsPath(path.dirname(app.pty.hookSocketPath), 7, 0);
+      fs.writeFileSync(findingsPath, "  ## Round 0\n\nLooks good.  \n");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-review-findings?taskId=7&round=0",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ content: "## Round 0\n\nLooks good." });
+
+      fs.rmSync(findingsPath, { force: true });
+      await app.close();
+    });
+
+    it("GET returns { content: null } for a present-but-empty file, same as absent", async () => {
+      const app = await buildApp();
+      const findingsPath = taskReviewFindingsPath(path.dirname(app.pty.hookSocketPath), 8, 0);
+      fs.writeFileSync(findingsPath, "   \n");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-review-findings?taskId=8&round=0",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.json()).toEqual({ content: null });
+
+      fs.rmSync(findingsPath, { force: true });
+      await app.close();
+    });
+
+    it("GET rejects non-integer taskId/round with 400, not a crash", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-review-findings?taskId=abc&round=0",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("DELETE removes the file when present, and is a no-op (still 204) when absent", async () => {
+      const app = await buildApp();
+      const findingsPath = taskReviewFindingsPath(path.dirname(app.pty.hookSocketPath), 9, 0);
+      fs.writeFileSync(findingsPath, "content");
+
+      const res = await app.inject({
+        method: "DELETE",
+        url: "/internal/task-review-findings?taskId=9&round=0",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(204);
+      expect(fs.existsSync(findingsPath)).toBe(false);
+
+      // Already gone — deleting again must still succeed, not throw.
+      const again = await app.inject({
+        method: "DELETE",
+        url: "/internal/task-review-findings?taskId=9&round=0",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(again.statusCode).toBe(204);
+
+      await app.close();
+    });
+
+    // Safety property this route exists to preserve (session-backend.ts's
+    // SessionBackend.readTaskReviewFindings doc comment): the path is
+    // derived ENTIRELY from this agent's own hookSocketPath plus two
+    // numeric identifiers — no cwd, no caller-supplied path fragment at
+    // all — so there's nothing here for a traversal attempt to reach.
+    it("never accepts a path fragment — taskId/round are the only inputs, both numeric", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/task-review-findings?taskId=${encodeURIComponent("../../etc/passwd")}&round=0`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
       await app.close();
     });
   });

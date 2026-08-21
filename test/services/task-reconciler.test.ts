@@ -2668,10 +2668,20 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    // Hermes review, PR #576, finding #1 — the findings file lives in THIS
-    // process's own local sessionsDir; a remote-hosted review agent writes
-    // to the remote host's filesystem instead, which this loop cannot read.
-    it("never ingests a remote-hosted task's review findings, rather than falsely concluding 'no findings' from a locally-missing file", async () => {
+    // #760 — this loop used to skip every remote-hosted task outright
+    // (Hermes review, PR #576, finding #1: the findings file lives in
+    // THIS process's own local sessionsDir, and reading local-only for a
+    // remote-hosted review would falsely conclude "no findings"). #760
+    // replaced that with SessionBackend.readTaskReviewFindings, which
+    // reads from whichever host actually ran the review — so a remote
+    // host is no longer skipped outright; it's only skipped when
+    // genuinely unreachable, same as every other host-aware sweep in this
+    // file (e.g. the merge sweep's own liveStatus failure handling). This
+    // test's host (`http://127.0.0.1:1`) is unreachable by construction,
+    // so it's caught by liveStatus's own pre-existing catch below, before
+    // readTaskReviewFindings is ever called — never ingested as
+    // inconclusive, never silently dropped either.
+    it("skips (does not ingest as inconclusive) a remote-hosted task whose host is unreachable", async () => {
       const app = await buildApp();
       const host = await app.inject({
         method: "POST",
@@ -2709,7 +2719,7 @@ describe("reconcileTasks", () => {
         })
         .returning()
         .all();
-      const infoSpy = vi.spyOn(app.log, "info");
+      const warnSpy = vi.spyOn(app.log, "warn");
 
       await reconcileTasks(app);
 
@@ -2717,11 +2727,183 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
       expect(row.reviewFindings).toBeNull();
       expect(row.reviewFindingsIngestedSessionId).toBeNull();
-      expect(infoSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId: task.id, hostId }),
-        expect.stringContaining("remote-hosted task"),
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId }),
+        expect.stringContaining("host unreachable, skipping its review sessions"),
       );
 
+      await app.close();
+    });
+
+    // #760 — the actual point of this feature: a REACHABLE remote host's
+    // review findings are now read (via SessionBackend.readTaskReviewFindings)
+    // and ingested exactly like a local task's, instead of being skipped
+    // outright.
+    it("ingests a reachable remote-hosted task's review findings via the resolved backend", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-remote-review-ok", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [reviewSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "codex", status: "active" })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "remote review, reachable",
+          status: "reviewing",
+          sessionId: workerSession.id,
+          reviewSessionId: reviewSession.id,
+          worktreePath: "/remote/project",
+          agentCommand: "codex",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const deleteMock = vi.fn().mockResolvedValue(undefined);
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hId) => {
+          const real = realResolveBackend(appArg, hId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "liveStatus") {
+                return async () => ({
+                  [String(reviewSession.id)]: fakeInfo({
+                    lastTurnEndedAt: Date.now(),
+                  }),
+                });
+              }
+              if (prop === "readTaskReviewFindings") {
+                return async () =>
+                  JSON.stringify({
+                    verdict: "clean",
+                    summary: "Looks good from the remote agent.",
+                  });
+              }
+              if (prop === "deleteTaskReviewFindings") return deleteMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSession.id);
+      expect(row.reviewFindings).toContain("Looks good from the remote agent.");
+      expect(row.lastReviewVerdict).toBe("clean");
+      expect(deleteMock).toHaveBeenCalledWith(task.id, 0);
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
+    // #760 — the safety requirement, stated precisely in the issue: a read
+    // FAILURE (host unreachable mid-read, a peer 5xx, a version-skew 404 —
+    // anything readTaskReviewFindings throws) must never collapse into "the
+    // file is absent." This exercises that distinction directly against a
+    // backend whose liveStatus succeeds (so the row isn't skipped at the
+    // host level) but whose read throws.
+    it("does not ingest as inconclusive when readTaskReviewFindings itself throws (host unreachable mid-read, a peer 5xx, or version skew)", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-remote-review-readfail", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [reviewSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "codex", status: "active" })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "remote review, read fails",
+          status: "reviewing",
+          sessionId: workerSession.id,
+          reviewSessionId: reviewSession.id,
+          worktreePath: "/remote/project",
+          agentCommand: "codex",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hId) => {
+          const real = realResolveBackend(appArg, hId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "liveStatus") {
+                return async () => ({
+                  [String(reviewSession.id)]: fakeInfo({
+                    lastTurnEndedAt: Date.now(),
+                  }),
+                });
+              }
+              if (prop === "readTaskReviewFindings") {
+                return async () => {
+                  throw new Error("HTTP 404 — this peer build has no such route");
+                };
+              }
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, round: 0 }),
+        expect.stringContaining("failed to read review findings file"),
+      );
+
+      resolveBackendSpy.mockRestore();
       await app.close();
     });
 
