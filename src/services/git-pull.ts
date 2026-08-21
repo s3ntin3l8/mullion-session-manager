@@ -1,7 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { gitEnv } from "./git-env.js";
+import { isGitRepo } from "./git-status.js";
 import type { GitPullReason, GitPullResult } from "../shared/types.js";
 
 export type { GitPullReason, GitPullResult };
@@ -18,10 +17,6 @@ const FETCH_TIMEOUT_MS = 30_000;
 const MERGE_TIMEOUT_MS = 10_000;
 const STATUS_TIMEOUT_MS = 5_000;
 const KILL_ESCALATION_MS = 2_000;
-
-function isSafeAbsolutePath(cwd: string): boolean {
-  return path.isAbsolute(cwd) && !path.normalize(cwd).split(path.sep).includes("..");
-}
 
 interface GitResult {
   code: number | null;
@@ -101,7 +96,7 @@ function runGit(cwd: string, args: string[], timeoutMs = 10_000): Promise<GitRes
  * - `pull-failed`: unexpected fetch or merge error
  */
 export async function runGitPull(cwd: string): Promise<GitPullResult> {
-  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) {
+  if (!isGitRepo(cwd)) {
     return { pulled: false, reason: "not-a-repo" };
   }
 
