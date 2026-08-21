@@ -21,6 +21,8 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
   openBrowserPanePanel: vi.fn(),
+  resetTiledGroupWidths: vi.fn(),
+  canResetTiledGroupWidths: vi.fn(() => true),
   panelSessionId: (panel: { params?: { sessionId?: unknown } }) => {
     const id = panel.params?.sessionId;
     return typeof id === "number" ? id : undefined;

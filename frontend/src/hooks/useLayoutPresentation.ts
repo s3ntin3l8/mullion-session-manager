@@ -1,8 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { DockviewGroupPanel } from "dockview";
-import { applyLayoutPresentation, isTiledGroup } from "../panelUtils.js";
+import {
+  applyLayoutPresentation,
+  isTiledGroup,
+  snapshotTiledGroupWidths,
+  restoreTiledGroupWidths,
+} from "../panelUtils.js";
 import {
   PHONE_BREAKPOINT_QUERY,
   DESKTOP_BREAKPOINT_QUERY,
@@ -64,13 +69,60 @@ export function useLayoutPresentation({
   // onChange() already runs immediately on mount, and this effect re-runs
   // when dockviewApi transitions from null to non-null, so "first mount
   // while already phone/tablet" is covered without a separate call.
+  // Pane-skew fix (see snapshotTiledGroupWidths/restoreTiledGroupWidths's own
+  // header comment in panelUtils.ts for the dockview-internal mechanism this
+  // works around) — a ref, not state: it needs to survive across renders
+  // without itself triggering one, and its identity is never read by JSX.
+  // `prevTierRef` starts `null` (rather than "desktop", the tier's own
+  // default) specifically so the very first `onChange()` call on mount —
+  // which can land on "phone" if the app is opened at phone width — is never
+  // treated as an entering-phone TRANSITION and doesn't snapshot a layout
+  // that was never actually tablet/desktop to begin with.
+  const prevTierRef = useRef<LayoutTier | null>(null);
+  const widthSnapshotRef = useRef<Map<string, number> | null>(null);
+  // Holds the pending restore rAF's id so effect cleanup (below) can cancel
+  // it — without this, an unmount (or a dockviewApi/layoutMode change that
+  // re-runs this effect) between scheduling and firing left the callback to
+  // run anyway against a `dockviewApi` that could by then be disposed. The
+  // callback's own try/catch already stops that from crashing the app, but
+  // there's no reason to let it fire pointlessly instead of just cancelling
+  // it — restoreTiledGroupWidths would no-op against a torn-down api regardless.
+  const restoreRafRef = useRef<number | null>(null);
+
   useEffect(() => {
     const onChange = () => {
       const tier = resolveLayoutTier(layoutMode);
+      const prevTier = prevTierRef.current;
+      prevTierRef.current = tier;
       setLayoutTier(tier);
       if (!dockviewApi) return;
       try {
+        if (prevTier !== null && prevTier !== "phone" && tier === "phone") {
+          widthSnapshotRef.current = snapshotTiledGroupWidths(dockviewApi);
+        }
         applyLayoutPresentation(dockviewApi, tier);
+        if (prevTier === "phone" && tier !== "phone" && widthSnapshotRef.current) {
+          const snapshot = widthSnapshotRef.current;
+          widthSnapshotRef.current = null;
+          // Deferred a frame — dockview's own ResizeObserver-driven relayout
+          // to the post-fold width hasn't run yet at this point (that's the
+          // same ordering gap that causes the skew in the first place), so
+          // restoring immediately would apply these proportions against the
+          // still-stale width. One rAF is enough: watchElementResize's own
+          // relayout is also rAF-scheduled, so by the next frame the grid is
+          // already at its real width and this only needs to redistribute,
+          // not wait for a second resize.
+          const api = dockviewApi;
+          if (restoreRafRef.current !== null) cancelAnimationFrame(restoreRafRef.current);
+          restoreRafRef.current = requestAnimationFrame(() => {
+            restoreRafRef.current = null;
+            try {
+              restoreTiledGroupWidths(api, snapshot);
+            } catch (err) {
+              console.error("[useLayoutPresentation] restoreTiledGroupWidths failed", err);
+            }
+          });
+        }
       } catch (err) {
         // Independent code review — applyLayoutPresentation's own comment
         // documents the specific dockview crash this used to be exposed to
@@ -83,12 +135,21 @@ export function useLayoutPresentation({
       }
     };
     onChange();
-    if (layoutMode !== "auto") return;
+    // The pending-rAF cancellation below must run regardless of layoutMode
+    // — onChange() just above can schedule one even in an explicit-override
+    // mode, so this can't be folded into the `layoutMode !== "auto"` early
+    // return the width-boundary-listener setup below still needs.
+    if (layoutMode !== "auto") {
+      return () => {
+        if (restoreRafRef.current !== null) cancelAnimationFrame(restoreRafRef.current);
+      };
+    }
     const phone = window.matchMedia(PHONE_BREAKPOINT_QUERY);
     const desktop = window.matchMedia(DESKTOP_BREAKPOINT_QUERY);
     phone.addEventListener("change", onChange);
     desktop.addEventListener("change", onChange);
     return () => {
+      if (restoreRafRef.current !== null) cancelAnimationFrame(restoreRafRef.current);
       phone.removeEventListener("change", onChange);
       desktop.removeEventListener("change", onChange);
     };

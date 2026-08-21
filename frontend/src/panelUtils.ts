@@ -895,3 +895,135 @@ export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): voi
   if (!panel) return;
   api.maximizeGroup(panel);
 }
+
+// Mobile/tablet pane-skew fix — a hidden splitview view's size in the
+// installed dockview-core (`ViewItem.setVisible`) is cached as an absolute
+// PIXEL value at the moment it's hidden, and nothing ever rescales that cache
+// against a later width change. `applyLayoutPresentation`'s maximize (on
+// entering phone) and exitMaximizedGroup (on leaving it) are only lossless
+// when the grid is the same width at both calls — but useLayoutPresentation's
+// breakpoint-change handler runs synchronously, one frame before dockview's
+// own ResizeObserver-driven relayout picks up the new width, so a real fold/
+// unfold always crosses them at different widths. The previously-visible
+// group absorbs the deficit first (dockview's own `distributeEmptySpace`
+// shrink order) and clamps at dockview's 100px group-minimum, and that ratio
+// gets frozen into `saveProportions()` — converging, on repeated maximize/
+// exit cycles (every `serializeForPersist`, every mobile tab tap), to a fixed
+// point of `100 / (foldedWidth - 100)`, independent of the original tablet
+// geometry. This pair of functions snapshots each tiled group's width
+// proportion right before that maximize, and restores it via `setSize` (a
+// live per-group resize equivalent to a sash drag, NOT a `fromJSON()`-style
+// rebuild — verified against the installed dockview-core that this specific
+// event chain is real: `GridviewPanelApi.setSize` fires
+// `GridviewPanel._onDidChange`, which `Splitview`'s own per-item subscription
+// (installed in `addView`) turns into `Splitview.onDidChange` ->
+// `relayout()` -> `saveProportions()`, the same code path a manual sash drag
+// takes, with no panel remount/reconnect anywhere in it) right after the
+// matching exit, rather than trusting dockview's own cache. That
+// verification covers the event chain, not the redistribution arithmetic
+// itself below — this repo's test suite mocks `setSize` as a plain
+// per-group write with no cross-item absorption, so it doesn't exercise
+// dockview's own multi-item `relayout()`/`distributeEmptySpace()` behavior;
+// treat this as reasoned from the source, not integration-verified.
+//
+// Scoped to a single row of tiled groups on purpose — restoring an arbitrary
+// nested grid (rows AND columns both skewed) would need to walk dockview's
+// internal branch-node tree, which isn't exposed through the public
+// `DockviewApi`. `restoreTiledGroupWidths` below detects the multi-row case
+// via a height-equality heuristic (tiled groups whose heights don't already
+// match) and no-ops rather than redistributing width across groups that
+// were never siblings in the same splitview. That heuristic is imprecise —
+// a 2x2 grid (two side-by-side columns, each itself split into two stacked
+// rows) can produce four same-height groups that aren't actually siblings —
+// but a `setSize({width})` call against a group whose parent splitview
+// stacks vertically maps onto the wrong axis in dockview-core's own
+// `LeafNode`, which `Splitview.onDidChange` falls back to no-op'ing rather
+// than corrupting, so this degrades safely today. That's an accident of
+// dockview's internal event plumbing, not something this code establishes
+// on its own — worth a real per-branch check if dockview's internals here
+// ever change out from under it.
+//
+// The "last group absorbs the leftover" assumption below (dockview's own
+// `distributeEmptySpace`, confirmed to shrink from the highest index
+// backward when nothing has an explicit priority) also has an unhandled
+// edge: if several groups are simultaneously near dockview's own group-
+// minimum, one `setSize` call's own overflow can cascade backward into a
+// group this loop already explicitly set earlier in the same pass. Bounded
+// to "many tiled groups on an already-narrow width," not the common case —
+// left as a known gap rather than chased here.
+const ROW_HEIGHT_TOLERANCE_PX = 2;
+
+// Shared by restoreTiledGroupWidths/resetTiledGroupWidths and the "Reset
+// pane sizes" menu item's own enablement check (canResetTiledGroupWidths) —
+// a single definition of "is there a single row of tiled groups worth
+// redistributing right now," so the menu item can't disagree with what the
+// action it triggers is actually willing to do.
+function eligibleTiledRowGroups(api: DockviewApi): DockviewGroupPanel[] | null {
+  const groups = api.groups.filter(isTiledGroup);
+  if (groups.length < 2) return null;
+  const firstHeight = groups[0]!.api.height;
+  const sameRow = groups.every(
+    (group) => Math.abs(group.api.height - firstHeight) <= ROW_HEIGHT_TOLERANCE_PX,
+  );
+  return sameRow ? groups : null;
+}
+
+export function snapshotTiledGroupWidths(api: DockviewApi): Map<string, number> {
+  const groups = api.groups.filter(isTiledGroup);
+  const total = groups.reduce((sum, group) => sum + group.api.width, 0);
+  const proportions = new Map<string, number>();
+  if (total <= 0) return proportions;
+  for (const group of groups) proportions.set(group.id, group.api.width / total);
+  return proportions;
+}
+
+export function restoreTiledGroupWidths(api: DockviewApi, proportions: Map<string, number>): void {
+  if (proportions.size === 0) return;
+  const groups = eligibleTiledRowGroups(api);
+  if (!groups) return;
+  // A changed group count (a pane closed/opened during the phone excursion)
+  // means the snapshot no longer describes the current layout — checked
+  // against every CURRENT tiled group, not just the ones the snapshot
+  // happens to recognize, so a newly-added group doesn't just get silently
+  // excluded from an otherwise-applied redistribution.
+  if (groups.length !== proportions.size) return;
+  if (!groups.every((group) => proportions.has(group.id))) return;
+  const total = groups.reduce((sum, group) => sum + group.api.width, 0);
+  if (total <= 0) return;
+  // Skip the last group — dockview's own relayout gives it whatever's left
+  // over, so rounding from the explicit `setSize` calls below lands in one
+  // place instead of compounding into a visible gap or overlap. Known gap
+  // (not chased here, see this section's own header comment): if several
+  // groups are simultaneously near dockview's own group-minimum, one
+  // `setSize` call's overflow can cascade backward into a group this loop
+  // already explicitly set earlier in the same pass.
+  for (const group of groups.slice(0, -1)) {
+    const proportion = proportions.get(group.id);
+    if (proportion === undefined) continue;
+    group.api.setSize({ width: Math.round(proportion * total) });
+  }
+}
+
+// The "Reset pane sizes" action (PaneActionsMenu.tsx) — distributes every
+// tiled group in the same row evenly, for a workspace whose proportions were
+// already skewed (by the fold/unfold bug above, or any other cause) before
+// this fix landed. Deliberately manual, not auto-applied on restore: a user
+// may have sized panes on purpose, and silently overriding that on every
+// workspace load would be worse than leaving an already-broken layout for one
+// explicit action to fix.
+export function resetTiledGroupWidths(api: DockviewApi): void {
+  const groups = eligibleTiledRowGroups(api);
+  if (!groups) return;
+  const even = new Map<string, number>();
+  for (const group of groups) even.set(group.id, 1 / groups.length);
+  restoreTiledGroupWidths(api, even);
+}
+
+// PaneActionsMenu.tsx's own enablement check for "Reset pane sizes" —
+// without this, the menu item was present and clickable even when
+// resetTiledGroupWidths's own guards (fewer than two tiled groups, or a
+// multi-row grid the height heuristic above rejects) meant it would
+// silently do nothing, with no way for the user to tell whether it worked.
+export function canResetTiledGroupWidths(api: DockviewApi): boolean {
+  return eligibleTiledRowGroups(api) !== null;
+}
