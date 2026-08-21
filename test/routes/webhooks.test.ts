@@ -726,16 +726,23 @@ describe("webhook routes", () => {
       // #775 — a reviewing task always has a live worker session and
       // usually a review session too; assert both actually get killed by
       // this path, the exact gap a fresh-review finding caught pre-#772.
-      const worker = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId: project.id, command: "bash" },
-      });
-      const reviewer = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId: project.id, command: "bash" },
-      });
+      // DB-level inserts, not POST /api/sessions — spawning a real PTY here
+      // (dtach/systemd-run) is unrelated to what this test verifies (the
+      // sessions.status flip) and is exactly the kind of flake CI doesn't
+      // need: killSession's own doc comment guarantees the row flips to
+      // "killed" even when the underlying terminate() is a no-op against a
+      // session PtyManager never actually spawned.
+      const { sessions } = await import("../../src/db/schema.js");
+      const [worker] = app.db
+        .insert(sessions)
+        .values({ projectId: project.id, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [reviewer] = app.db
+        .insert(sessions)
+        .values({ projectId: project.id, command: "bash", status: "active" })
+        .returning()
+        .all();
       app.db
         .insert(tasks)
         .values({
@@ -743,8 +750,8 @@ describe("webhook routes", () => {
           issueNumber: 45,
           title: "Reviewing task",
           status: "reviewing",
-          sessionId: worker.json().id,
-          reviewSessionId: reviewer.json().id,
+          sessionId: worker.id,
+          reviewSessionId: reviewer.id,
         })
         .run();
 
@@ -782,10 +789,9 @@ describe("webhook routes", () => {
       await waitUntil(() => getRow().status === "done");
       expect(getIssueStateSpy).toHaveBeenCalledWith("ghp_test_token", "acme", "widgets-close", 45);
 
-      const { sessions } = await import("../../src/db/schema.js");
       await waitUntil(() => {
-        const [w] = app.db.select().from(sessions).where(eq(sessions.id, worker.json().id)).all();
-        const [r] = app.db.select().from(sessions).where(eq(sessions.id, reviewer.json().id)).all();
+        const [w] = app.db.select().from(sessions).where(eq(sessions.id, worker.id)).all();
+        const [r] = app.db.select().from(sessions).where(eq(sessions.id, reviewer.id)).all();
         return w.status === "killed" && r.status === "killed";
       });
 
