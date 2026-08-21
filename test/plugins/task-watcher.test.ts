@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import { eq } from "drizzle-orm";
 import { gitEnv } from "../../src/services/git-env.js";
 import { buildTestApp } from "../helpers/app.js";
 
@@ -97,6 +98,67 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     expect(fs.existsSync(orphan!.path)).toBe(false);
     expect(fs.existsSync(active!.path)).toBe(true);
     fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // #758 fresh review fix — a `done` task's auto-rebase attempt gives it a
+  // real worktree again, still within its in-flight window. Without this,
+  // a restart mid-attempt could destroy it out from under a live worker.
+  it("keeps a done task's worktree while its auto-rebase attempt is within its window, but reaps it once that window goes stale", async () => {
+    const cwd = createGitRepo();
+    const { createWorktree } = await import("../../src/services/git-worktree.js");
+    const orphan = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-orphan" });
+    const freshRebase = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-fresh" });
+    const staleRebase = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-stale" });
+    expect(orphan).not.toBeNull();
+    expect(freshRebase).not.toBeNull();
+    expect(staleRebase).not.toBeNull();
+
+    const app = await buildTestApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "boot-sweep-rebase-p", cwd })
+      .returning()
+      .all();
+    app.db
+      .insert(tasks)
+      .values([
+        {
+          projectId: project.id,
+          title: "fresh rebase attempt",
+          status: "done",
+          worktreePath: freshRebase!.path,
+          mergeRequestedAt: new Date(),
+          rebaseStartedAt: new Date(),
+        },
+        {
+          projectId: project.id,
+          title: "stale rebase attempt",
+          status: "done",
+          worktreePath: staleRebase!.path,
+          mergeRequestedAt: new Date(),
+          rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+        },
+      ])
+      .run();
+
+    await app.ready();
+    // Waits for BOTH removals, not just the orphan's — pruneWorktrees may
+    // process its orphan list in an order/timing where the stale rebase
+    // attempt hasn't been removed yet the instant the sentinel orphan has.
+    await waitUntil(() => !fs.existsSync(orphan!.path) && !fs.existsSync(staleRebase!.path));
+
+    expect(fs.existsSync(orphan!.path)).toBe(false);
+    expect(fs.existsSync(freshRebase!.path)).toBe(true);
+    expect(fs.existsSync(staleRebase!.path)).toBe(false);
+    fs.rmSync(cwd, { recursive: true, force: true });
+    // Unlike this file's other tests, this project's row is deleted here —
+    // its default ("local") hostId otherwise lingers in the shared tmpDb
+    // and gets swept into a LATER test's own resolveBackend mock (the
+    // "non-transport error" test below mocks resolveBackend to return one
+    // fixed backend for every project, so a leftover local-hosted project
+    // from an earlier test races that test's own `waitUntil` condition).
+    app.db.delete(tasks).where(eq(tasks.projectId, project.id)).run();
+    app.db.delete(projects).where(eq(projects.id, project.id)).run();
   });
 
   it("never touches a dock-preview worktree — only the mullion-task- naming prefix is in scope", async () => {

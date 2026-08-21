@@ -601,8 +601,8 @@ export function buildReviewFeedbackPrompt(
  * The auto-rebase worker's prompt (`task-reconciler.ts`'s `attemptAutoRebase`,
  * #758) — sent when a `done` task's PR has a real conflict with its base
  * branch. Unlike every other prompt this module builds, this one must
- * countermand two lines of `buildTaskMasterPreamble` explicitly rather than
- * just add to it:
+ * countermand THREE lines of `buildTaskMasterPreamble` explicitly rather
+ * than just add to it:
  *
  * - "Do not switch, rebase onto, or create another branch" is about branch
  *   IDENTITY (so Mullion can find `branchName` to push it) — replaying
@@ -615,6 +615,10 @@ export function buildReviewFeedbackPrompt(
  *   (`done` has no outgoing edges — see `task-state.ts`). The merge sweep
  *   only re-reads GitHub's own `mergeableState` on its next tick; a resolved
  *   conflict that stays unpushed is invisible to it forever.
+ * - "Ending your turn... moves this task to review" is simply false here —
+ *   this task already left "reviewing" once, back when it was first
+ *   approved. Ending the turn only signals THIS rebase attempt is over, not
+ *   a lifecycle transition.
  */
 export function buildRebasePrompt(opts: WorkerPreambleOptions & { baseRef: string }): string {
   const preamble = buildTaskMasterPreamble(opts);
@@ -632,6 +636,9 @@ export function buildRebasePrompt(opts: WorkerPreambleOptions & { baseRef: strin
     "the gate passes, push with `git push --force-with-lease origin " +
     `${opts.branchName}\` (not a plain push — ${opts.branchName} already has commits on the ` +
     "remote). Mullion picks up the result automatically on its next check; do not open or " +
-    "comment on any pull request yourself.";
+    "comment on any pull request yourself.\n\n" +
+    "One more correction to the instructions above: ending your turn here does NOT move this " +
+    "task to review — that already happened earlier in its lifecycle. It only signals that this " +
+    "rebase attempt is finished; Mullion notices the push (or the lack of one) on its own.";
   return `${preamble}${SECTION_BREAK}${instructions}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }

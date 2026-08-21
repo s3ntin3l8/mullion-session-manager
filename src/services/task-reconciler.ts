@@ -7,6 +7,11 @@ import type { SessionInfo } from "./pty-manager.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
+// closeSessionBrowserBindings — the same "confirmed-terminate" side effect
+// reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
+// attemptAutoRebase's stale-attempt-termination branch below for why this
+// needs it too.
+import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
@@ -36,7 +41,7 @@ import {
   type ReviewCiInfo,
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
-import { approveTask } from "./task-approve.js";
+import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges, deriveWorktreePath } from "./git-worktree.js";
@@ -969,11 +974,15 @@ export function resetMergeBackoff(taskId: number): void {
   mergeRetryState.delete(taskId);
 }
 
-function clearMergeState(app: FastifyInstance, taskId: number): void {
+function clearMergeState(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): void {
   app.db
     .update(tasks)
     .set({ mergeRequestedAt: null, mergeError: null, rebaseStartedAt: null })
-    .where(eq(tasks.id, taskId))
+    .where(eq(tasks.id, task.id))
     .run();
   // Hermes review, PR #763 — without this, a resolved task's backoff entry
   // lingers in mergeRetryState until MAX_MERGE_RETRY_ENTRIES forces an
@@ -982,7 +991,19 @@ function clearMergeState(app: FastifyInstance, taskId: number): void {
   // count. Deleting here (unlike draftPrRetryState's own "never gets read
   // again" reasoning, which relies on the row dropping out of that sweep's
   // WHERE clause) closes that gap directly.
-  mergeRetryState.delete(taskId);
+  mergeRetryState.delete(task.id);
+  // #758, fresh-review fix — a task that went through attemptAutoRebase has
+  // a REAL worktree/session again (worktreePath/sessionId overwritten from
+  // their post-approve null), which nothing else ever cleans up once the
+  // conflict resolves and this merges: the task never leaves `done`, so
+  // approveTask's own cleanupTaskWorktree/cleanupTaskSessions calls (which
+  // only ever fire on a "-> done" transition) never fire again for it. Both
+  // are no-ops on the (far more common) task that never auto-rebased —
+  // worktreePath/sessionId are already null from approve time — so this is
+  // safe to call unconditionally rather than branching on whether a rebase
+  // ever happened.
+  cleanupTaskWorktree(app, task, project);
+  cleanupTaskSessions(app, task);
 }
 
 function recordMergeError(app: FastifyInstance, taskId: number, message: string): void {
@@ -1004,8 +1025,10 @@ const MAX_REBASE_ATTEMPTS = 2;
 // schema.ts's rebaseStartedAt doc comment for why session status can't
 // answer "is an attempt still in flight" here. Same 30-minute scale as
 // REVIEW_FINDINGS_GRACE_MS below: a rebase-and-reverify round is comparable
-// in scope to a review-fix round.
-const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
+// in scope to a review-fix round. Exported so task-watcher.ts's boot-time
+// orphan sweep can use the SAME window to decide a `done` task's rebase
+// worktree is still active — see that file's own use of this constant.
+export const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
 
 /**
  * Spawns a worker to resolve a real merge conflict (`dirty` mergeableState)
@@ -1032,15 +1055,52 @@ async function attemptAutoRebase(
   }
 
   const now = Date.now();
+  const backend = resolveBackend(app, project.hostId);
 
-  // An attempt is still within its window — wait for it rather than
-  // spawning a second worker into the same worktree concurrently.
-  if (
-    task.rebaseStartedAt !== null &&
-    now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS
-  ) {
-    recordMergeError(app, task.id, "Conflicts with main — an auto-rebase attempt is in progress");
-    return;
+  if (task.rebaseStartedAt !== null) {
+    const withinWindow = now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS;
+    if (withinWindow) {
+      // Still within its window — wait for it rather than spawning a second
+      // worker into the same worktree concurrently.
+      recordMergeError(app, task.id, "Conflicts with main — an auto-rebase attempt is in progress");
+      return;
+    }
+    // Past the window, so treated as abandoned — but "past the window" is a
+    // TIME check, not a liveness check (see REBASE_ATTEMPT_STALE_MS's own
+    // doc comment on why session-exit can't answer "still working" here). A
+    // rebase-and-reverify round genuinely can run long on a large repo
+    // without being stuck. Fresh review, PR #783 — force-removing the
+    // worktree below while that session is still actually alive would yank
+    // the directory out from under a running process, not just leak one.
+    // Terminate it first if it's still active, same posture as
+    // reseedTaskIfSessionExited's own `force: true` path: confirm the kill
+    // succeeded before doing anything destructive to its worktree, and
+    // don't proceed at all if the terminate itself fails.
+    if (task.sessionId !== null) {
+      const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+      if (session?.status === "active") {
+        try {
+          await backend.terminate(String(task.sessionId));
+          app.db
+            .update(sessions)
+            .set({ status: "killed" })
+            .where(eq(sessions.id, task.sessionId))
+            .run();
+          closeSessionBrowserBindings(app, task.sessionId);
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, sessionId: task.sessionId },
+            "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
+          );
+          recordMergeError(
+            app,
+            task.id,
+            "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
+          );
+          return;
+        }
+      }
+    }
   }
 
   if (task.rebaseAttempts >= MAX_REBASE_ATTEMPTS) {
@@ -1065,8 +1125,6 @@ async function attemptAutoRebase(
     );
     return;
   }
-
-  const backend = resolveBackend(app, project.hostId);
 
   // Clear any leftover worktree from a prior attempt first. resumeTaskWorktree
   // targets a deterministic path (deriveWorktreePath), so a second attempt at
@@ -1188,7 +1246,7 @@ async function attemptMerge(
     if (pr.merged || pr.state === "closed") {
       // Merged or closed out of band (a human merged it directly on GitHub,
       // or closed it) — idempotent no-op, not an error.
-      clearMergeState(app, task.id);
+      clearMergeState(app, task, project);
       return;
     }
 
@@ -1210,7 +1268,7 @@ async function attemptMerge(
             "task reconcile: merged the PR but failed to delete its remote branch",
           );
         }
-        clearMergeState(app, task.id);
+        clearMergeState(app, task, project);
         return;
       }
       case "behind": {

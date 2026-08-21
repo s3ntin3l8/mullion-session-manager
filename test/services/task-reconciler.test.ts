@@ -1668,6 +1668,7 @@ describe("reconcileTasks", () => {
           agentCommand: string | null;
           rebaseAttempts: number;
           rebaseStartedAt: Date | null;
+          sessionId: number | null;
         }> = {},
       ) {
         const { autoApprove = true, ...taskOverrides } = overrides;
@@ -1786,6 +1787,75 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // Fresh review, PR #783 — a stale rebaseStartedAt is a TIME check, not
+      // proof the previous attempt's session actually died: Task Master
+      // workers are told to keep running, so "still active" is normal even
+      // for a genuinely long-running (not abandoned) rebase-and-reverify
+      // round. This proves the still-active session is terminated (and its
+      // row flips to "killed", not left "active") BEFORE the stale-worktree
+      // force-remove/retry proceeds — never force-removing a worktree a live
+      // process might still be writing to.
+      it("terminates a stale attempt's still-active session before clearing its worktree and retrying", async () => {
+        const app = await buildApp();
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = project.json().id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove: true },
+        });
+        const session = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const staleSessionId = session.json().id as number;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            sessionId: staleSessionId,
+            rebaseAttempts: 1,
+            rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+          })
+          .returning()
+          .all();
+        const taskId = row.id;
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        const staleSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, staleSessionId))
+          .all()[0];
+        expect(staleSession.status).toBe("killed");
+        expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+        const updatedRow = await getTask(app, taskId);
+        expect(updatedRow.rebaseAttempts).toBe(2);
+        expect(updatedRow.sessionId).not.toBe(staleSessionId);
+
+        await app.close();
+      });
+
       it("gives up and falls back to plain conflict backoff once attempts are exhausted", async () => {
         const app = await buildApp();
         const { taskId } = await createDoneTaskWithConflict(app, { rebaseAttempts: 2 });
@@ -1818,6 +1888,71 @@ describe("reconcileTasks", () => {
         expect(row.rebaseAttempts).toBe(0);
         expect(row.rebaseStartedAt).toBeNull();
         expect(row.mergeError).toContain("could not recreate the worktree");
+
+        await app.close();
+      });
+
+      // Fresh review, PR #783 — a rebased-then-merged task's worktree/session
+      // are real again (attemptAutoRebase overwrote them from their
+      // post-approve null), and nothing else ever cleans them up once the
+      // conflict resolves: the task never leaves "done", so approveTask's
+      // own cleanup (which only fires on a "-> done" transition) never fires
+      // a second time for it. clearMergeState must do that cleanup itself —
+      // and must NOT reset rebaseAttempts, a lifetime counter design point 8
+      // otherwise has zero coverage for.
+      it("cleans up the worktree/session and clears rebaseStartedAt on a successful merge, but preserves rebaseAttempts", async () => {
+        const app = await buildApp();
+        const session = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-merge-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = session.json().id;
+        const workerSession = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const sessionId = workerSession.json().id as number;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "was-conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            sessionId,
+            worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+            rebaseAttempts: 1,
+            rebaseStartedAt: new Date(),
+          })
+          .returning()
+          .all();
+        const taskId = row.id;
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+        mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+        mockDeleteRemoteBranch.mockResolvedValue(undefined);
+
+        await reconcileTasks(app);
+
+        const updatedRow = await getTask(app, taskId);
+        expect(updatedRow.mergeRequestedAt).toBeNull();
+        expect(updatedRow.rebaseStartedAt).toBeNull();
+        // The lifetime counter — never reset, unlike everything else
+        // clearMergeState clears.
+        expect(updatedRow.rebaseAttempts).toBe(1);
+        const finalSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .all()[0];
+        expect(finalSession.status).toBe("killed");
 
         await app.close();
       });
