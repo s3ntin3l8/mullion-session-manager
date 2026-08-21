@@ -44,7 +44,12 @@ import {
   updatePullRequestBranch,
   deleteRemoteBranch,
 } from "./github-write.js";
-import { computeCiStatus, fetchRunsForHead, fetchRequiredStatusContexts } from "./github.js";
+import {
+  computeCiStatus,
+  fetchRunsForHead,
+  fetchRequiredStatusContexts,
+  fetchCheckRunsForHead,
+} from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 
 /**
@@ -1190,25 +1195,39 @@ function autoApproveRetryBackoffMs(attempts: number): number {
  * so red-required-CI-plus-either-of-those would otherwise stall in
  * "reviewing" forever, exactly the failure class #755 exists to close.
  *
- * Only compares against `required_status_checks.contexts`
- * (`fetchRequiredStatusContexts`, github.ts) — a red NON-required check
- * (this repo's own `test-e2e`) is not a reason to return the worker, since
- * the merge sweep itself doesn't gate on it either. `null` from that lookup
- * (a 403/404 — no `administration` scope, or no protection configured) is
- * a fail-closed "don't know", not "nothing is required": returns `false`
- * without returning the worker, same as `current.status !== "failure"`.
+ * Matches against `required_status_checks.contexts`
+ * (`fetchRequiredStatusContexts`, github.ts) by CHECK RUN name
+ * (`fetchCheckRunsForHead`) — NOT `current.runs`, which is Workflow Run
+ * data from a different GitHub API namespace that never overlaps with the
+ * required set (fresh-review finding; see `fetchCheckRunsForHead`'s own
+ * doc comment for the full story). A red NON-required check (this repo's
+ * own `test-e2e`) is not a reason to return the worker, since the merge
+ * sweep itself doesn't gate on it either. `null` from the required-contexts
+ * lookup (a 403/404 — no `administration` scope, or no protection
+ * configured) is a fail-closed "don't know", not "nothing is required":
+ * returns `false` without returning the worker, same as `current.status
+ * !== "failure"`.
  *
  * Shares `autoReturnTask`'s round counter/cap with every other trigger
  * (#756's model). When the cap is already spent, posts one PR comment
  * naming it (same `postReviewFindingsComment` mechanism the review-feedback
  * loop's own cap-reached path uses) and leaves the task in "reviewing" —
  * silence here would be the same "capped looks identical to never going to
- * auto-return" gap #756 already fixed for the review path.
+ * auto-return" gap #756 already fixed for the review path. Deduped via
+ * `ciCapCommentedRounds` (below) so a task stuck red+capped gets exactly
+ * one comment per round, not a fresh one every sweep tick indefinitely —
+ * unlike the review-feedback loop's own cap comment, which is naturally
+ * single-shot (tied to a findings-ingestion CAS write), this function runs
+ * unconditionally every tick a candidate row matches, with no equivalent
+ * state transition to hang a "have I already said this" check on.
  *
  * Returns whether it actually returned the task (or posted the cap-reached
  * comment) — either way, `attemptAutoApprove` must not fall through to its
  * own approve gates for this tick.
  */
+const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
+const ciCapCommentedRounds = new Map<number, number>();
+
 async function attemptReturnRedCiToWorker(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -1228,10 +1247,16 @@ async function attemptReturnRedCiToWorker(
     current.baseRef,
   );
   // Fail closed — see this function's own doc comment.
-  if (requiredContexts === null) return false;
+  if (requiredContexts === null || requiredContexts.length === 0) return false;
 
-  const redRequired = current.runs.some(
-    (r) => requiredContexts.includes(r.name) && r.conclusion === "failure",
+  const checkRuns = await fetchCheckRunsForHead(
+    token,
+    current.repoRef.owner,
+    current.repoRef.repo,
+    current.headSha,
+  );
+  const redRequired = checkRuns.some(
+    (c) => requiredContexts.includes(c.name) && c.conclusion === "failure",
   );
   if (!redRequired) return false;
 
@@ -1240,6 +1265,15 @@ async function attemptReturnRedCiToWorker(
 
   const maxRounds = resolveMaxAutoReturnRounds(project);
   if (task.autoReturnRounds >= maxRounds) {
+    if (ciCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
+    if (
+      !ciCapCommentedRounds.has(task.id) &&
+      ciCapCommentedRounds.size >= MAX_CI_CAP_COMMENTED_ENTRIES
+    ) {
+      const oldest = ciCapCommentedRounds.keys().next().value;
+      if (oldest !== undefined) ciCapCommentedRounds.delete(oldest);
+    }
+    ciCapCommentedRounds.set(task.id, task.autoReturnRounds);
     await postReviewFindingsComment(app, task, project, {
       body: `A required CI check is failing on this task's PR, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });

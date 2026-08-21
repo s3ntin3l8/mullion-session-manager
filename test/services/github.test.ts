@@ -5,6 +5,7 @@ import {
   getCacheSizeForTests,
   MAX_CACHE_ENTRIES,
   fetchRequiredStatusContexts,
+  fetchCheckRunsForHead,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -336,5 +337,60 @@ describe("fetchRequiredStatusContexts", () => {
     const second = await fetchRequiredStatusContexts("tok", "o", "retry-after-403-repo", "main");
     expect(second).toEqual(["CI"]);
     expect(fetchMock.mock.calls.length).toBe(2);
+  });
+});
+
+// #755 fresh-review finding: Check Run names (this API) and Workflow Run
+// names (`fetchRunsForHead`) are two different GitHub namespaces — verified
+// live against this repo's own protected branch (a single workflow run like
+// "CI/CD" fans out into per-job check runs like "test-node /
+// lint-and-test"), and it's the check-run name that actually matches
+// `required_status_checks.contexts`.
+describe("fetchCheckRunsForHead", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns check-run name/conclusion pairs for the head commit", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        check_runs: [
+          { name: "test-node / lint-and-test", conclusion: "success" },
+          { name: "test-e2e", conclusion: "failure" },
+        ],
+      }),
+    );
+    const result = await fetchCheckRunsForHead("tok", "o", "check-runs-repo", "sha-head");
+    expect(result).toEqual([
+      { name: "test-node / lint-and-test", conclusion: "success" },
+      { name: "test-e2e", conclusion: "failure" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repos/o/check-runs-repo/commits/sha-head/check-runs"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("degrades to [] on a non-ok response, never throws", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    await expect(
+      fetchCheckRunsForHead("tok", "o", "check-runs-404-repo", "sha-head"),
+    ).resolves.toEqual([]);
+  });
+
+  it("degrades to [] on a network failure, never throws", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(
+      fetchCheckRunsForHead("tok", "o", "check-runs-down-repo", "sha-head"),
+    ).resolves.toEqual([]);
   });
 });

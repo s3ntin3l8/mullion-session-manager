@@ -558,6 +558,67 @@ export async function fetchRunsForHead(
   }
 }
 
+export interface CheckRunResult {
+  name: string;
+  conclusion: string | null;
+}
+
+/**
+ * #755 fresh-review finding: `required_status_checks.contexts` (branch
+ * protection) names match CHECK RUN names, not Workflow Run names — two
+ * different GitHub API namespaces that happen to look superficially
+ * similar. Verified live against this repo's own protected branch: a
+ * single workflow run (`fetchRunsForHead`'s `"CI/CD"`, `"CodeQL"`, ...)
+ * fans out into many individual check runs (`"test-node / lint-and-test"`,
+ * `"analyze / Analyze (javascript-typescript)"`, ...), and it's the
+ * check-run name GitHub itself compares against `required_status_checks
+ * .contexts` when deciding merge eligibility — `fetchRunsForHead`'s names
+ * never appear in that set at all. The original #755 implementation
+ * compared `fetchRunsForHead`'s workflow-run names against
+ * `fetchRequiredStatusContexts`'s check-run-shaped required set, which can
+ * never match for a repo using GitHub's standard "require these specific
+ * job checks" branch protection — the common case, not an edge case. This
+ * is the fix: read `GET /commits/{sha}/check-runs` directly, in the same
+ * namespace as the required set.
+ *
+ * `fetchRunsForHead` stays on the Workflow Runs API deliberately — its
+ * other callers (the review-agent's CI summary, auto-approve's coarse
+ * red/green pre-filter) only need "is anything red at all," not per-check
+ * names, and Workflow Runs is one call per commit regardless of how many
+ * jobs it fans out into.
+ *
+ * Never throws — degrades to `[]` on any failure, same posture as
+ * `fetchRunsForHead`. A job configured with `continue-on-error: true` can
+ * report a check-run `conclusion` other than the plain pass/fail GitHub
+ * shows in its own merge-gate UI; not accounted for here, same scope
+ * boundary `computeCiStatus` already draws for skipped/cancelled runs.
+ */
+export async function fetchCheckRunsForHead(
+  token: string,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<CheckRunResult[]> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  try {
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`,
+      { headers },
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      check_runs?: { name: string; conclusion: string | null }[];
+    };
+    return (data.check_runs ?? []).map((c) => ({ name: c.name, conclusion: c.conclusion }));
+  } catch {
+    return [];
+  }
+}
+
 interface RequiredStatusContextsCacheEntry {
   contexts: string[];
   expiresAt: number;

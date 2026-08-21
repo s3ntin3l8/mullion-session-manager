@@ -119,6 +119,7 @@ const {
   mockDeleteRemoteBranch,
   mockFetchRunsForHead,
   mockFetchRequiredStatusContexts,
+  mockFetchCheckRunsForHead,
   mockCreatePullRequestReview,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
@@ -131,6 +132,7 @@ const {
   mockDeleteRemoteBranch: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
   mockFetchRequiredStatusContexts: vi.fn(),
+  mockFetchCheckRunsForHead: vi.fn(),
   mockCreatePullRequestReview: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
@@ -188,6 +190,7 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
     ...actual,
     fetchRunsForHead: mockFetchRunsForHead,
     fetchRequiredStatusContexts: mockFetchRequiredStatusContexts,
+    fetchCheckRunsForHead: mockFetchCheckRunsForHead,
   };
 });
 
@@ -217,6 +220,10 @@ mockFetchRunsForHead.mockImplementation(actualGithubModule.fetchRunsForHead);
 // same "don't return the worker" behavior they always have. Only the
 // dedicated #755 tests below override this.
 mockFetchRequiredStatusContexts.mockResolvedValue(null);
+// Never a real pass-through either — only reached once requiredContexts is
+// non-null/non-empty, which no pre-existing test triggers. Defaults to []
+// so an accidental reach still can't match anything.
+mockFetchCheckRunsForHead.mockResolvedValue([]);
 // Only #755's cap-reached test below actually exercises a comment post with
 // a real prNumber set — every other existing test in this file avoids that
 // path entirely by leaving prNumber null. Defaulted here (not a real
@@ -360,6 +367,13 @@ describe("reconcileTasks", () => {
     mockUpdatePullRequestBranch.mockReset();
     mockDeleteRemoteBranch.mockReset();
     mockFetchRunsForHead.mockClear();
+    // #755 — same reasoning as mockFetchRunsForHead above: no pre-existing
+    // test's project has autoApprove on with a red CI status, so these are
+    // never reached outside the dedicated describe block below, but a
+    // leaked call count from one #755 test must not bleed into the next.
+    mockFetchRequiredStatusContexts.mockClear();
+    mockFetchCheckRunsForHead.mockClear();
+    mockCreatePullRequestReview.mockClear();
   });
 
   afterEach(() => {
@@ -1782,6 +1796,7 @@ describe("reconcileTasks", () => {
       mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
       mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
       mockFetchRequiredStatusContexts.mockResolvedValue(null);
+      mockFetchCheckRunsForHead.mockResolvedValue([]);
     });
 
     it("auto-approves once the latest verdict is clean and CI reads success", async () => {
@@ -1975,6 +1990,15 @@ describe("reconcileTasks", () => {
 
     // #755 — a red REQUIRED check returns the task to its worker for one
     // automatic round, the same mechanism a "changes-requested" review uses.
+    // Fresh-review finding on an earlier version of this PR: the required
+    // set (`required_status_checks.contexts`) and `fetchRunsForHead` live in
+    // two DIFFERENT GitHub API namespaces — Workflow Run names (`"CI/CD"`,
+    // `"CodeQL"`) vs. per-job Check Run names (`"test-node /
+    // lint-and-test"`) — verified live against this repo's own protected
+    // branch. Every test below deliberately uses DISTINCT, non-matching
+    // names for the two, exactly like this repo's real CI, so a regression
+    // back to comparing the wrong namespace fails loudly instead of passing
+    // by coincidence the way the original (buggy) version of these tests did.
     describe("red required CI returns the task to the worker (#755)", () => {
       async function createRedCiCandidate(
         app: Awaited<ReturnType<typeof buildApp>>,
@@ -1998,12 +2022,36 @@ describe("reconcileTasks", () => {
         return candidate;
       }
 
+      // The Workflow Run layer — only used for the coarse "is anything red
+      // at all" pre-filter (`current.status !== "failure"`), never compared
+      // against `requiredContexts` directly (that would be this bug again).
+      function workflowRun(name: string, conclusion: "success" | "failure") {
+        return [
+          {
+            name,
+            status: "completed" as const,
+            conclusion,
+            htmlUrl: "https://x/1",
+            headSha: "sha-head",
+          },
+        ];
+      }
+
+      // The Check Run layer — THIS is what's actually compared against
+      // `requiredContexts`.
+      function checkRun(name: string, conclusion: "success" | "failure") {
+        return [{ name, conclusion }];
+      }
+
       it("returns the task when a REQUIRED check fails", async () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app);
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
-        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
 
         await reconcileTasks(app);
 
@@ -2020,16 +2068,14 @@ describe("reconcileTasks", () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app);
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue([
-          {
-            name: "test-e2e",
-            status: "completed" as const,
-            conclusion: "failure" as const,
-            htmlUrl: "https://x/1",
-            headSha: "sha-head",
-          },
-        ]);
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
         mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        // "test-e2e" is red, but it's not in the required set above —
+        // exactly this repo's own real branch protection.
+        mockFetchCheckRunsForHead.mockResolvedValue([
+          { name: "test-node / lint-and-test", conclusion: "success" },
+          { name: "test-e2e", conclusion: "failure" },
+        ]);
 
         await reconcileTasks(app);
 
@@ -2041,6 +2087,19 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      it("does not fetch check runs at all when the coarse Workflow Run status isn't red (avoids an extra GitHub call on the common green path)", async () => {
+        const app = await buildApp();
+        await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "success"));
+
+        await reconcileTasks(app);
+
+        expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+
+        await app.close();
+      });
+
       it("returns the task even with no review agent configured (gate 2 would otherwise never pass)", async () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app, {
@@ -2048,8 +2107,11 @@ describe("reconcileTasks", () => {
           lastReviewVerdict: null,
         });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
-        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
 
         await reconcileTasks(app);
 
@@ -2064,8 +2126,11 @@ describe("reconcileTasks", () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app, { lastReviewVerdict: "inconclusive" });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
-        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
 
         await reconcileTasks(app);
 
@@ -2080,8 +2145,11 @@ describe("reconcileTasks", () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app, { autoReturnRounds: 2 });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
-        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
 
         await reconcileTasks(app);
 
@@ -2099,12 +2167,27 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // Note: `ciCapCommentedRounds`'s dedup specifically covers a LATER
+      // tick, once `autoApproveRetryState`'s own ~30s-to-30min backoff has
+      // elapsed and this task becomes eligible for another attempt — not
+      // meaningfully exercisable here without fake timers, which this file
+      // deliberately never uses (see the plan's own note on why: time here
+      // is faked via backdated DB timestamps, not `vi.useFakeTimers`, and
+      // there's no DB-backed clock for an in-memory `Map`). The dedup check
+      // itself is a single `Map` lookup keyed on the exact
+      // `task.autoReturnRounds` value being observed, checked before either
+      // side effect (the comment post or the round spend) — reviewed by
+      // inspection rather than a synthetic multi-tick test.
+
       it("does not return the task when the project's autoApprove is off", async () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app, { autoApprove: false });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
-        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
 
         await reconcileTasks(app);
 
