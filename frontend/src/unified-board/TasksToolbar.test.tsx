@@ -266,6 +266,26 @@ describe("UnifiedBoard clear-done", () => {
     expect(screen.getByText("Cleared 3 done task(s).")).toBeInTheDocument();
   });
 
+  it("stops looping after a batch that deletes nothing, even if remaining stays positive", async () => {
+    // Regression for a dead-code guard: every candidate in a batch failing
+    // (e.g. rate-limited, or a relabeled GitHub issue that conflicts every
+    // pass) must not spin the client in an infinite re-POST loop.
+    clearDoneTasks.mockResolvedValue({
+      deleted: [],
+      failed: [{ id: 2, error: "GitHub rate limit in effect" }],
+      branches: [],
+      remaining: 5,
+    });
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(await screen.findByText("Cleared 0 done task(s).")).toBeInTheDocument();
+    expect(clearDoneTasks).toHaveBeenCalledTimes(1);
+  });
+
   it("renders the per-row failure list on partial failure, without discarding successes", async () => {
     clearDoneTasks.mockResolvedValue({
       deleted: [1],

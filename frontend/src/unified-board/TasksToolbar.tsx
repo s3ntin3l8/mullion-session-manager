@@ -95,10 +95,12 @@ export function TasksToolbar({
         failed.push(...result.failed);
         branches.push(...result.branches);
         remaining = result.remaining;
-        // A pass that made zero progress (every candidate failed, none
-        // deleted) but still reports a remainder would otherwise spin
-        // forever re-attempting the same un-deletable rows.
-        if (result.deleted.length === 0 && result.failed.length === 0) break;
+        // A pass that made zero progress (every candidate in this batch
+        // failed, none deleted) but still reports a remainder would
+        // otherwise spin forever re-attempting the same un-deletable rows —
+        // e.g. every row rate-limited, or a relabeled GitHub issue that
+        // conflicts on every pass.
+        if (result.deleted.length === 0) break;
       }
       // No explicit refresh call here — the store's clearDoneTasks action
       // (useDashboardStore's tasks slice) already calls refreshTasks()
