@@ -14,6 +14,8 @@ import type {
   GitBranchInfo,
   GitWorktreeInfo,
   GitStatus,
+  GitPullReason,
+  GitPullResult,
   DockControl,
   Theme,
   CursorStyle,
@@ -23,6 +25,8 @@ import type {
   TabletPaneCap,
 } from "../../../src/shared/types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
+
+export type { GitPullReason, GitPullResult };
 
 export interface AuthStatus {
   methods: { token: boolean; oidc: boolean };

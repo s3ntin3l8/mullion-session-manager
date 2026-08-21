@@ -19,6 +19,7 @@ vi.mock("./api/index.js", async (importOriginal) => {
     api: {
       ...actual.api,
       postProjectGitFetch: vi.fn().mockResolvedValue({ success: true }),
+      postProjectGitPull: vi.fn().mockResolvedValue({ pulled: true }),
       getProjectGitStatus: vi.fn(),
       getProjectGitFileDiff: vi.fn(),
     },
@@ -322,5 +323,69 @@ describe("SourceControlSection (issue #433 scope B)", () => {
 
     expect(screen.getByText("branch-a")).toBeTruthy();
     expect(screen.queryByText("branch-b")).toBeNull();
+  });
+
+  it("disables the Pull button when behind is 0", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({ behind: 0 }) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    const pullButton = screen.getByRole("button", { name: /Pull/ });
+    expect(pullButton).toBeDisabled();
+  });
+
+  it("enables the Pull button when behind > 0 and calls postProjectGitPull on click", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.postProjectGitPull).mockResolvedValue({ pulled: true });
+    vi.mocked(api.getProjectGitStatus).mockResolvedValue(statusWith({ behind: 0 }));
+
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({ behind: 3 }) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    const pullButton = screen.getByRole("button", { name: /Pull/ });
+    expect(pullButton).not.toBeDisabled();
+
+    await user.click(pullButton);
+    await waitFor(() => expect(api.postProjectGitPull).toHaveBeenCalledWith(PROJECT_A.id));
+    await waitFor(() =>
+      expect(api.getProjectGitStatus).toHaveBeenCalledWith(PROJECT_A.id, { fresh: true }),
+    );
+  });
+
+  it("renders pull error when pull returns a refusal reason", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.postProjectGitPull).mockResolvedValue({
+      pulled: false,
+      reason: "not-fast-forward",
+      detail: "Branch has diverged from upstream",
+    });
+
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({ behind: 1 }) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    const pullButton = screen.getByRole("button", { name: /Pull/ });
+    await user.click(pullButton);
+
+    expect(
+      await screen.findByText("Branch has diverged from upstream (cannot fast-forward)."),
+    ).toBeTruthy();
   });
 });

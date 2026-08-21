@@ -3004,6 +3004,66 @@ describe("projects route", () => {
     });
   });
 
+  describe("POST /api/projects/:id/git-pull (issue #745)", () => {
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "POST", url: "/api/projects/999999/git-pull" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("runs git pull for a real local repo and returns a GitPullResult", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-pull-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "pull-repo", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${created.json().id}/git-pull`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(
+        expect.objectContaining({ pulled: expect.any(Boolean) as boolean }),
+      );
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "git-pull-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-git-pull", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-pull`,
+      });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
   describe("POST /api/projects/:id/git-branch-delete (issue #442)", () => {
     async function makeProjectWithBranch(app: Awaited<ReturnType<typeof buildApp>>) {
       const { execFileSync } = await import("node:child_process");

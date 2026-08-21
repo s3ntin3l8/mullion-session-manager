@@ -196,6 +196,26 @@ export interface GitStatus {
 }
 
 // ---------------------------------------------------------------------------
+// git-pull.ts — GitPullReason / GitPullResult
+// ---------------------------------------------------------------------------
+
+export type GitPullReason =
+  | "not-a-repo"
+  | "unborn-head"
+  | "detached-head"
+  | "no-upstream"
+  | "dirty-tree"
+  | "not-fast-forward"
+  | "already-up-to-date"
+  | "pull-failed";
+
+export interface GitPullResult {
+  pulled: boolean;
+  reason?: GitPullReason;
+  detail?: string;
+}
+
+// ---------------------------------------------------------------------------
 // git-diff.ts — GitDiffStats
 // ---------------------------------------------------------------------------
 

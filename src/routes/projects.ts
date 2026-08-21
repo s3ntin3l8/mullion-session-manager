@@ -30,6 +30,7 @@ import {
   type GitDiffStats,
 } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { runGitPull } from "../services/git-pull.js";
 import { runGitInit } from "../services/git-init.js";
 import {
   assertProjectDir,
@@ -1753,6 +1754,38 @@ export async function projectsRoute(app: FastifyInstance) {
 
       try {
         return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
+      } catch {
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
+  // Manual fast-forward pull trigger (issue #745) — POST /api/projects/:id/git-pull
+  // runs `git merge --ff-only @{u}` after fetching for this project.
+  // Returns GitPullResult ({ pulled: boolean, reason?, detail? }).
+  const gitPullParamsSchema = {
+    params: {
+      type: "object",
+      required: ["id"],
+      properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
+    },
+  };
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/git-pull",
+    { schema: gitPullParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      if (project.hostId === LOCAL_HOST_ID) {
+        return await runGitPull(project.cwd);
+      }
+
+      try {
+        return await getRemoteHostClient(app, project.hostId).resolveGitPull(project.cwd);
       } catch {
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }

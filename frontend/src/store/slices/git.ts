@@ -228,6 +228,11 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
     await api.postProjectGitFetch(projectId);
   },
 
+  // Issue #745 — Manual fast-forward git pull for a project.
+  pullProjectGit: async (projectId: number) => {
+    return await api.postProjectGitPull(projectId);
+  },
+
   // Toggle auto-fetch for a project (null = inherit from global setting).
   toggleAutoFetch: async (projectId: number, value: boolean | null) => {
     await api.updateProject(projectId, { autoFetch: value });

@@ -111,6 +111,7 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
   const activePanelId = useDashboardStore((s) => s.activePanelId);
   const gitStatuses = useDashboardStore((s) => s.gitStatuses);
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
+  const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
 
   const [collapsed, setCollapsed] = useState(() =>
     readBool(STORAGE_KEYS.sourceControlCollapsed, true),
@@ -183,9 +184,13 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
   }
 
   const [isFetching, setIsFetching] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
+
   const handleFetch = useCallback(async () => {
     if (effectiveProjectId == null) return;
     setIsFetching(true);
+    setPullError(null);
     try {
       await fetchProjectGit(effectiveProjectId);
       // Two separate staleness traps, both avoided here:
@@ -211,6 +216,45 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
       setIsFetching(false);
     }
   }, [effectiveProjectId, fetchProjectGit]);
+
+  const handlePull = useCallback(async () => {
+    if (effectiveProjectId == null) return;
+    setIsPulling(true);
+    setPullError(null);
+    try {
+      const result = await pullProjectGit(effectiveProjectId);
+      if (result.pulled) {
+        const status = await api.getProjectGitStatus(effectiveProjectId, { fresh: true });
+        useDashboardStore.setState((s) => ({
+          gitStatuses: { ...s.gitStatuses, [effectiveProjectId]: status ?? null },
+        }));
+        void useDashboardStore.getState().refreshGitRefs([effectiveProjectId]);
+      } else {
+        const msg =
+          result.reason === "dirty-tree"
+            ? "Working tree has uncommitted changes or conflicts."
+            : result.reason === "detached-head"
+              ? "Cannot pull in a detached HEAD state."
+              : result.reason === "unborn-head"
+                ? "The current branch has no commits."
+                : result.reason === "no-upstream"
+                  ? "No upstream tracking branch configured."
+                  : result.reason === "not-fast-forward"
+                    ? "Branch has diverged from upstream (cannot fast-forward)."
+                    : result.reason === "already-up-to-date"
+                      ? "Already up to date."
+                      : result.detail
+                        ? `Pull failed: ${result.detail}`
+                        : "The pull operation failed.";
+        setPullError(msg);
+      }
+    } catch (err) {
+      console.debug("[SourceControlSection] pull failed", err);
+      setPullError(err instanceof Error ? err.message : "Pull request failed — try again.");
+    } finally {
+      setIsPulling(false);
+    }
+  }, [effectiveProjectId, pullProjectGit]);
 
   const dropdownOptions = [
     { value: FOLLOW_SENTINEL, label: "Follow active panel" },
@@ -293,8 +337,24 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
               </div>
 
               <div className="source-control-actions">
-                <button className="git-panel-fetch-btn" onClick={handleFetch} disabled={isFetching}>
+                <button
+                  className="git-panel-fetch-btn"
+                  onClick={handleFetch}
+                  disabled={isFetching || isPulling}
+                >
                   {isFetching ? "⟳" : "↻"} Fetch
+                </button>
+                <button
+                  className="git-panel-fetch-btn"
+                  onClick={handlePull}
+                  disabled={isPulling || isFetching || gitStatus.behind === 0}
+                  title={
+                    gitStatus.behind === 0
+                      ? "Already up to date with tracking branch"
+                      : "Fast-forward pull from tracking branch"
+                  }
+                >
+                  {isPulling ? "⟳" : "↓"} Pull
                 </button>
                 <button
                   className="git-panel-fetch-btn"
@@ -303,6 +363,10 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
                   Open Git Panel
                 </button>
               </div>
+
+              {pullError && (
+                <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+              )}
 
               {gitStatus.isClean ? (
                 <div className="github-panel-empty-row">Working tree clean</div>
