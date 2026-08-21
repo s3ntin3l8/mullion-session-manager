@@ -1276,18 +1276,23 @@ but neither this nor the sweep gates the merge on a prefix check — that's
 this repo's own policy, not
 a Mullion-wide one.
 
-**The title is never re-synced to GitHub after the PR is created (`#782`).**
-`tasks.prTitle` updates correctly on every round, but nothing calls GitHub's
-update-PR-title endpoint once a draft PR already exists — `openDraftPRForTask`
-just pushes new commits on that path. So the round-persistence design above
-only actually helps "PR creation was deferred to a later round" (e.g. a
-`no-token` failure resolved by round 2); it does not help a worker that
-legitimately changes the Conventional Commits type between rounds (round 1
-seeds a `docs:` fix, review feedback turns it into `feat:` work) — the live
-GitHub title, and the eventual squash-merge commit message, stays frozen at
-whichever round first opened the PR. Not urgent (off by default, and the
-title rarely changes between rounds in practice), but worth knowing before
-relying on this for a task that goes through more than one round.
+**The title is re-synced to GitHub on every push, not just at creation
+(`#782`).** `tasks.prTitle` updates correctly on every round (the
+round-persistence design above), and both promotion paths now sync it to
+the live PR: `promoteTaskToPR`'s already-open branch (approve) already
+fetches the PR via `getPullRequestByNumber`, so it compares against
+`pr.title` and PATCHes only when they differ — zero extra API calls in the
+common (unchanged) case. `openDraftPRForTask`'s already-open branch (every
+`-> reviewing` after the first) makes no other GitHub call, so it takes a
+bare, idempotent PATCH instead of fetching just to compare. Either way, a
+worker that legitimately changes the Conventional Commits type between
+rounds (round 1 seeds a `docs:` fix, review feedback turns it into `feat:`
+work) now reaches the live GitHub title — and therefore the eventual
+squash-merge commit message (`attemptMerge` reads `pr.title` from GitHub,
+which this always writes before that read happens) — instead of staying
+frozen at whichever round first opened the PR. A title-sync failure never
+blocks promotion, same "never gate promotion on the title" posture `#761`
+established for the read side.
 
 ### Auto-approve
 

@@ -645,6 +645,28 @@ export async function closePullRequest(
 }
 
 /**
+ * #782 — re-syncs an already-open PR's title to `tasks.prTitle` (`#761`'s
+ * Conventional Commits title). The same shared `PATCH .../pulls/:number`
+ * endpoint `closePullRequest` above already uses, just with `title` in
+ * place of `state` — REST's PATCH has no `draft` field (see
+ * `markPullRequestReadyForReview`'s own doc comment below for why THAT
+ * needs GraphQL instead), but `title` is plainly in scope for it. Callers
+ * are expected to compare against the PR's current title first and skip
+ * the call when unchanged — this function itself doesn't check, since one
+ * caller (`openDraftPRForTask`'s already-open re-entry) has no live title
+ * in hand to compare against without an extra fetch.
+ */
+export async function updatePullRequestTitle(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  title: string,
+): Promise<void> {
+  await githubRequest(token, owner, repo, "PATCH", `/pulls/${number}`, { title });
+}
+
+/**
  * Minimal GraphQL POST — this repo's first GraphQL call (every other write
  * in this file is REST). Needed because REST's `PATCH /pulls/:number` has
  * no `draft` field: converting a draft PR to ready-for-review is

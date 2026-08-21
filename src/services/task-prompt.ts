@@ -135,10 +135,6 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   ];
 
   if (commitTitlePath) {
-    // #782 — if the worker DOES rewrite this with a changed type on a later
-    // round, that only reaches `tasks.prTitle`; nothing currently re-syncs
-    // an already-open PR's title on GitHub, so a type change past the round
-    // that first opened the PR has no visible effect until that's fixed.
     lines.push(
       `- Write a Conventional Commits title for this pull request to ${commitTitlePath} —`,
       "  a single line, no trailing newline, shaped like",
