@@ -860,6 +860,17 @@
   max-width: 380px;
   gap: 8px;
 }
+/* #746 — the hide-done board toggle collapses a Done/Failed column to
+   header-only, but without this it still claimed the same flex-basis as
+   every card-bearing column, defeating the whole point ("doesn't crowd out
+   the columns still being worked" — UnifiedBoard.tsx's own comment on
+   `hideDone`). `flex: 0 0 auto` + no min-width lets it shrink to the
+   header's own content width instead. */
+.kanban-column-collapsed {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+}
 .kanban-column-header {
   display: flex;
   align-items: center;
@@ -962,6 +973,16 @@
   flex: 1 1 200px;
   min-width: 200px;
   max-width: 320px;
+}
+/* #746 — this selector's own higher specificity would otherwise override
+   the plain .kanban-column-collapsed rule above (both classes are on the
+   same element here, but ".kanban-unified-columns .kanban-column" beats a
+   single class), silently keeping a collapsed column at the same 200px
+   floor every other column claims. */
+.kanban-unified-columns .kanban-column-collapsed {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
 }
 /* Pins each column's title/count in view while its own body scrolls past —
    without this, a long Backlog scrolls its header out of frame and nothing

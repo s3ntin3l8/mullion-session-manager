@@ -98,11 +98,12 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   `approveTask` sets `prNumber`/`prUrl` unconditionally but only requests a
   merge when the project has `mergeOnApprove` on (default off), and even
   then the merge sweep is async/best-effort, so a done task's PR is often
-  still open — and the local branch is
-  worktree directory, never the branch — see the Worktree lifecycle section
-  below). `failed` task cleanup beyond the `#729` case above is deliberately
-  out of scope here — a separate effort, since Retry must still be able to
-  resume an ordinary claimed-then-failed task.
+  still open — and the local branch is untouched too (worktree cleanup at
+  approve time already removed the worktree directory, never the branch —
+  see the Worktree lifecycle section below). `failed` task cleanup beyond
+  the `#729` case above is deliberately out of scope here — a separate
+  effort, since Retry must still be able to resume an ordinary
+  claimed-then-failed task.
 
   **A "Hide done" board toggle (`#746`)** complements deletion for anyone
   who wants finished tasks kept as reference rather than deleted: it
