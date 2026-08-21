@@ -22,7 +22,14 @@
 // this reason, and this file now matches that precedent.
 
 import { GitHubApiError, validateGitHubRepoRef } from "./github.js";
-import { githubApiFetch } from "./github-fetch.js";
+import {
+  githubApiFetch,
+  classifyRateLimit,
+  recordGitHubRateLimit,
+  isGitHubRateLimited,
+  githubRateLimitRemainingMs,
+  GitHubRateLimitError,
+} from "./github-fetch.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -57,6 +64,17 @@ async function githubRequest<T>(
   validateGitHubRepoRef(owner, repo);
   const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${pathSuffix}`;
 
+  // #759 — same short-circuit as githubApiFetch's own (github-fetch.ts);
+  // duplicated here, not reused, because this function deliberately bypasses
+  // githubApiFetch entirely (see the file-header comment on why).
+  if (isGitHubRateLimited()) {
+    throw new GitHubRateLimitError(
+      "GitHub rate limit is in effect — not making this request",
+      429,
+      githubRateLimitRemainingMs(),
+    );
+  }
+
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -81,6 +99,14 @@ async function githubRequest<T>(
 
   if (!res.ok) {
     const responseBody = await res.text().catch(() => "");
+    // #759 — classify BEFORE the write-scope branch below: a rate-limited
+    // 403 must never be reported as "the token lacks write access" (the
+    // exact misdiagnosis this feature exists to fix).
+    const rateLimit = classifyRateLimit(res);
+    if (rateLimit) {
+      recordGitHubRateLimit(Date.now() + rateLimit.retryAfterMs);
+      throw rateLimit;
+    }
     // A 404 on a write (label/comment/assignee/close/PR-create endpoints
     // all live under an issue/repo path a write implies exists) almost
     // always means "no write access" rather than "not found" — GitHub
@@ -636,6 +662,12 @@ async function githubGraphQL<T>(
 
   if (!res.ok) {
     const responseBody = await res.text().catch(() => "");
+    // #759 — same classify-before-scope-error ordering as githubRequest
+    // above. githubApiFetch already recorded this into the shared budget;
+    // this call site still needs to throw its own typed error rather than
+    // falling into the write-scope branch below.
+    const rateLimit = classifyRateLimit(res);
+    if (rateLimit) throw rateLimit;
     if (res.status === 403 || res.status === 404) {
       throw new GitHubWriteScopeError(
         `GitHub rejected this write (HTTP ${res.status}) — the connected token likely lacks write access. ${responseBody}`.trim(),
