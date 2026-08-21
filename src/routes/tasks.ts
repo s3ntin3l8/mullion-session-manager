@@ -1,9 +1,10 @@
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
-import { buildRejectPrompt } from "../services/task-prompt.js";
+import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
@@ -313,6 +314,11 @@ export async function tasksRoute(app: FastifyInstance) {
       // A reject is always a human's action, so someone is watching.
       auto: false,
       feedback,
+      // #761 — see task-claim.ts's own comment on this same expression for
+      // the remote-host caveat (#778).
+      commitTitlePath: project.conventionalCommitTitles
+        ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+        : undefined,
     });
     await reseedTaskIfSessionExited(app, task, project, prompt, "task reject");
   }

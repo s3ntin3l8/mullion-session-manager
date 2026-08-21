@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -27,7 +28,9 @@ import {
   buildReviewFeedbackPrompt,
   buildCiFailurePrompt,
   taskReviewFindingsPath,
+  taskCommitTitlePath,
   parseReviewFindings,
+  parseCommitTitle,
   renderReviewFindingsMarkdown,
   type ReviewCiInfo,
 } from "./task-prompt.js";
@@ -1303,6 +1306,11 @@ async function attemptReturnRedCiToWorker(
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     auto: true,
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
+    // #761 — see task-claim.ts's own comment on this same expression for
+    // the remote-host caveat (#778).
+    commitTitlePath: project.conventionalCommitTitles
+      ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+      : undefined,
   });
   await autoReturnTask(app, task, project, { reason: "ci", seedPrompt: prompt });
   return true;
@@ -1988,6 +1996,11 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           // guarantees `parsed !== null` here, but `parsed` may be JSON; the
           // worker should read prose, not the wire format Mullion parses.
           findings: renderReviewFindingsMarkdown(parsed!),
+          // #761 — see task-claim.ts's own comment on this same expression
+          // for the remote-host caveat (#778).
+          commitTitlePath: project.conventionalCommitTitles
+            ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+            : undefined,
         });
         await autoReturnTask(app, task, project, { reason: "review", seedPrompt: prompt });
       }
@@ -2228,6 +2241,38 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               );
               continue;
             }
+            // #761 — read BEFORE the transition write below so the same
+            // write that flips this task to "reviewing" also carries its
+            // title, and task-promote.ts's createOrRecoverPR (called via
+            // maybeOpenDraftPR just below) sees it on its very first PR
+            // create. Local-only for now (`existsSync`/`readFileSync`
+            // directly, not routed through `SessionBackend`) — same
+            // known limitation `#778` tracks for the review-findings
+            // SEED path: a remote-hosted task's worker writes this file
+            // on its own host, which this process can't read directly.
+            // Absent, unreadable, or malformed all fall back identically:
+            // `prTitle` stays `null`, and task-promote.ts falls back to
+            // the raw task title.
+            const commitTitlePath = project.conventionalCommitTitles
+              ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+              : null;
+            let prTitle: string | null = null;
+            if (commitTitlePath && existsSync(commitTitlePath)) {
+              try {
+                prTitle = parseCommitTitle(readFileSync(commitTitlePath, "utf8"));
+                if (prTitle === null) {
+                  app.log.warn(
+                    { taskId: task.id, commitTitlePath },
+                    "task reconcile: worker's PR title file didn't parse as a Conventional Commits title — falling back to the raw task title",
+                  );
+                }
+              } catch (err) {
+                app.log.warn(
+                  { err, taskId: task.id, commitTitlePath },
+                  "task reconcile: failed to read the worker's PR title file — falling back to the raw task title",
+                );
+              }
+            }
             const updated = app.db
               .update(tasks)
               .set({
@@ -2238,6 +2283,12 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 reviewSessionId: null,
                 reviewSeedDelivered: null,
                 reviewSpawnClaimedAt: null,
+                // #761 — `?? task.prTitle`, not a bare overwrite: a later
+                // round that doesn't rewrite the title file (see
+                // `taskCommitTitlePath`'s own doc comment on why that's
+                // the expected common case, not an error) must not erase
+                // an earlier round's good title.
+                prTitle: prTitle ?? task.prTitle,
               })
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
               .run();
@@ -2276,14 +2327,21 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 to: "reviewing",
                 via: "reconcile",
               });
-              await syncTaskTransition(
-                app,
-                { ...task, status: "reviewing", reviewingAt: now },
-                project,
-                "reviewing",
-                { diffStat: await computeTaskDiffStat(app, task, project) },
-              );
-              await maybeOpenDraftPR(app, task, project);
+              // #761 — carries the freshly-ingested `prTitle` (the DB write
+              // above may have set it; `task` itself is still the
+              // pre-transition in-memory snapshot) so `maybeOpenDraftPR`'s
+              // very first PR-create call already has it, not just a later
+              // reconcile tick's re-read.
+              const transitionedTask = {
+                ...task,
+                status: "reviewing" as const,
+                reviewingAt: now,
+                prTitle: prTitle ?? task.prTitle,
+              };
+              await syncTaskTransition(app, transitionedTask, project, "reviewing", {
+                diffStat: await computeTaskDiffStat(app, task, project),
+              });
+              await maybeOpenDraftPR(app, transitionedTask, project);
             }
           }
         }

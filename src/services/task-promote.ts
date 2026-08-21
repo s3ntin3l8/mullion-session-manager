@@ -297,7 +297,11 @@ async function createOrRecoverPR(
 
   try {
     const pr = await createPullRequest(token, repoRef.owner, repoRef.repo, {
-      title: task.title,
+      // #761 — the agent-supplied Conventional Commits title, ingested and
+      // validated by task-reconciler.ts at the "-> reviewing" transition.
+      // Falls back to the raw task title when absent (feature off, or a
+      // malformed/unreadable write) — never blocks promotion on this.
+      title: task.prTitle ?? task.title,
       head: task.branchName!,
       base,
       body,

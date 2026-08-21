@@ -137,6 +137,12 @@ export const projects = sqliteTable("projects", {
   // sensible default that works for every project, so a global fallback is
   // useful here where it wasn't for those two.
   maxAutoReturnRounds: integer("max_auto_return_rounds"),
+  // #761 — opt-in per project, same no-install-wide-tier posture as
+  // mergeOnApprove/autoApprove above: whether this repo's own commit
+  // history follows Conventional Commits is a property of that repo's own
+  // convention, not a Mullion-wide default. Null/false = off — the raw
+  // task title is used as the PR title, today's unchanged behavior.
+  conventionalCommitTitles: integer("conventional_commit_titles", { mode: "boolean" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -523,6 +529,16 @@ export const tasks = sqliteTable(
     // already set and pushes new commits to the existing PR instead of
     // creating another one.
     prNumber: integer("pr_number"),
+    // #761 — the agent-supplied Conventional Commits title (worker writes it
+    // to a sessionsDir-relative file as part of its finish contract; see
+    // taskCommitTitlePath's own doc comment, task-prompt.ts), validated and
+    // ingested at the same "-> reviewing" transition openDraftPRForTask runs
+    // from, so the draft PR's very first create call already has it.
+    // Nullable: absent (project doesn't opt in via
+    // projects.conventionalCommitTitles), or malformed (didn't match the
+    // Conventional Commits pattern) — either way task-promote.ts falls back
+    // to the raw task title, never blocking promotion on this.
+    prTitle: text("pr_title"),
     // Merge-on-approve — the durable *intent* to merge this task's PR, set
     // when approve runs on a project with mergeOnApprove on (or by a manual
     // "Merge now"/"Retry merge" click). Bounds task-reconciler.ts's

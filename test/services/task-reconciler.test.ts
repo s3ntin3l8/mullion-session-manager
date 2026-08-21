@@ -243,7 +243,8 @@ const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
-const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
+const { taskReviewFindingsPath, taskCommitTitlePath } =
+  await import("../../src/services/task-prompt.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
   await import("../../src/services/github-fetch.js");
 
@@ -515,6 +516,104 @@ describe("reconcileTasks", () => {
     const row = await getTask(app, taskId);
     expect(row.status).toBe("reviewing");
     await app.close();
+  });
+
+  // #761 — the worker's Conventional Commits title, ingested at the exact
+  // same "-> reviewing" transition this describe block already covers.
+  describe("Conventional Commits title ingestion at -> reviewing (#761)", () => {
+    async function createConventionalTitleTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+    ): Promise<{ taskId: number; projectId: number }> {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-cc-title-${Math.random()}`, cwd: "/tmp" },
+      });
+      const projectId = project.json().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { conventionalCommitTitles: true },
+      });
+      const session = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "t",
+          status: "in_progress",
+          sessionId: session.json().id,
+          claimedAt: new Date(),
+          startedAt: new Date(),
+        })
+        .returning()
+        .all();
+      return { taskId: row.id, projectId };
+    }
+
+    function writeCommitTitle(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      taskId: number,
+      raw: string,
+    ) {
+      fs.writeFileSync(taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), taskId), raw);
+    }
+
+    it("ingests a well-formed title into tasks.prTitle", async () => {
+      const app = await buildApp();
+      const { taskId } = await createConventionalTitleTask(app);
+      writeCommitTitle(app, taskId, "feat: add credential storage\n");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.prTitle).toBe("feat: add credential storage");
+      await app.close();
+    });
+
+    it("falls back to a null prTitle (never blocks the transition) when the file is malformed", async () => {
+      const app = await buildApp();
+      const { taskId } = await createConventionalTitleTask(app);
+      writeCommitTitle(app, taskId, "just some prose, not a Conventional Commits title");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.prTitle).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId }),
+        expect.stringContaining("didn't parse as a Conventional Commits title"),
+      );
+      await app.close();
+    });
+
+    it("leaves prTitle null (never blocks the transition) when the project hasn't opted in", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.prTitle).toBeNull();
+      await app.close();
+    });
   });
 
   // #772 — a reject-and-re-review cycle leaves the PRIOR round's review

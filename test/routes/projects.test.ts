@@ -833,6 +833,61 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("sets, then clears, conventionalCommitTitles", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "cc-titles-p", cwd: "/tmp/cc-titles-p" },
+      });
+      const { id } = created.json();
+      expect(created.json().conventionalCommitTitles).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { conventionalCommitTitles: true },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().conventionalCommitTitles).toBe(true);
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { conventionalCommitTitles: false },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().conventionalCommitTitles).toBe(false);
+
+      await app.close();
+    });
+
+    // Regression guard for the "nothing maps to a column" 400 check, same
+    // reasoning as the mergeOnApprove-only test above.
+    it("accepts a PATCH carrying only conventionalCommitTitles", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "cc-titles-only-field",
+          cwd: "/tmp/cc-titles-only-field",
+        },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { conventionalCommitTitles: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().conventionalCommitTitles).toBe(true);
+
+      await app.close();
+    });
+
     it("accepts a PATCH carrying only autoApprove", async () => {
       const app = await buildApp();
       const created = await app.inject({

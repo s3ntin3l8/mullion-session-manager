@@ -78,6 +78,15 @@ export interface WorkerPreambleOptions {
    * check-in a manual claim wants. Everything else in the preamble applies
    * identically either way. */
   auto: boolean;
+  /** #761 — set (via `taskCommitTitlePath`) only when the project has
+   * `conventionalCommitTitles` on; omitted entirely otherwise, which is
+   * what gates the title-file instruction below. Every caller of this
+   * preamble passes the same resolved path, so a worker re-seeded mid-task
+   * (retry, reject, a review-feedback or red-CI auto-return round) sees an
+   * identical instruction each time — the title can legitimately change
+   * between rounds (a fix-up round's type may differ from the initial
+   * round's), so this is intentionally NOT claim-only. */
+  commitTitlePath?: string;
 }
 
 /**
@@ -95,7 +104,7 @@ export interface WorkerPreambleOptions {
  * docs tells the agent it will never see CI's result.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
-  const { task, branchName, worktreePath, budgetMinutes, auto } = opts;
+  const { task, branchName, worktreePath, budgetMinutes, auto, commitTitlePath } = opts;
 
   const lines = [
     `You are working ${taskLabel(task)} as a Mullion Task Master worker.`,
@@ -124,6 +133,20 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  one suppresses the completion signal, and the task will sit until its budget",
     "  runs out.",
   ];
+
+  if (commitTitlePath) {
+    lines.push(
+      `- Write a Conventional Commits title for this pull request to ${commitTitlePath} —`,
+      "  a single line, no trailing newline, shaped like",
+      '  "type(scope)?: description" (types: feat, fix, chore, docs, refactor, perf,',
+      '  test, build, ci, style, revert; scope is optional; add "!" before the colon',
+      "  for a breaking change). This path is outside the worktree, so writing it does",
+      "  not block approval. It reflects what you actually did — pick fix: over feat:",
+      "  for a bug fix even if the underlying task description says otherwise. If you",
+      "  are re-seeded for another round, rewrite this file only if the type should",
+      "  change; otherwise leave the existing one in place.",
+    );
+  }
 
   if (auto) {
     lines.push(
@@ -200,6 +223,60 @@ export function buildWorkerPrompt(opts: WorkerPromptOptions): string {
  */
 export function taskReviewFindingsPath(sessionsDir: string, taskId: number, round: number): string {
   return path.join(sessionsDir, `task-${taskId}.review.${round}.md`);
+}
+
+/**
+ * Where a worker should write its Conventional Commits PR title (`#761`) —
+ * a `sessionsDir`-relative path, same convention `taskReviewFindingsPath`
+ * documents: a file written INSIDE the worktree dirties the tree and trips
+ * `promoteTaskToPR`'s `dirty-tree` refusal, and if the agent committed it
+ * instead it would pollute the PR diff. Shared between `buildTaskMasterPreamble`
+ * (which tells the worker where to write) and `task-reconciler.ts` (which
+ * reads it back at the "-> reviewing" transition) so the two can never
+ * compute different paths.
+ *
+ * Deliberately NOT round-suffixed, unlike `taskReviewFindingsPath`: this is
+ * read synchronously, once, in the same reconcile tick as the transition
+ * that observes the worker's turn as finished — there is no separate
+ * polling loop with a grace window that could re-ingest a stale file the
+ * way the review-findings loop's own round-suffixing guards against. A
+ * worker that finishes a later round without rewriting this file simply
+ * leaves the previous round's title in place, which is the right fallback
+ * (the title rarely changes between an initial round and a review-feedback
+ * fix-up) rather than a bug to guard against.
+ */
+export function taskCommitTitlePath(sessionsDir: string, taskId: number): string {
+  return path.join(sessionsDir, `task-${taskId}.title`);
+}
+
+// #761 — Conventional Commits' own spec: type(scope)!: description. `!`
+// marks a breaking change; `(scope)` is optional. Intentionally permissive
+// on `description` (`.+`) — this validates the STRUCTURE Mullion needs to
+// trust the title enough to use it verbatim, not the prose an agent chose.
+const CONVENTIONAL_COMMIT_TITLE_PATTERN =
+  /^(feat|fix|chore|docs|refactor|perf|test|build|ci|style|revert)(\([^)]+\))?!?: .+/;
+// GitHub itself allows PR titles far longer than this; bounded here to keep
+// a malformed/runaway agent write from becoming a wall of text in the PR
+// list and the squash-merge commit log, same spirit as a conventional git
+// subject line (traditionally ~50-72 chars) without being that strict.
+const MAX_COMMIT_TITLE_LENGTH = 100;
+
+/**
+ * Validates and trims a worker-supplied PR title read from
+ * `taskCommitTitlePath`. Returns `null` for anything that doesn't parse as
+ * a Conventional Commits title or exceeds the length bound — the caller
+ * (`task-reconciler.ts`) falls back to the raw task title on `null`, one
+ * `app.log.warn`, never blocking promotion (see that column's own doc
+ * comment, `schema.ts`).
+ */
+export function parseCommitTitle(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_COMMIT_TITLE_LENGTH) return null;
+  // Reject embedded newlines even though the regex's `.` would already stop
+  // at the first one — an explicit check reads clearer than relying on that
+  // as the reason a multi-line write gets rejected.
+  if (trimmed.includes("\n")) return null;
+  return CONVENTIONAL_COMMIT_TITLE_PATTERN.test(trimmed) ? trimmed : null;
 }
 
 /** A single anchored review comment — GitHub's own review-comment shape

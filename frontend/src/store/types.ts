@@ -90,6 +90,7 @@ export interface ProjectsSlice {
         | "mergeOnApprove"
         | "autoApprove"
         | "maxAutoReturnRounds"
+        | "conventionalCommitTitles"
       >
     > &
       CreateProjectDirOptions,
