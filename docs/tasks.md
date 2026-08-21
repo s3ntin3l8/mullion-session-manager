@@ -1235,15 +1235,43 @@ once **all** of the following hold:
 
 Anything else — no review agent configured on the project (so no verdict is
 ever ingested), `changes-requested`, `inconclusive`, CI red or still
-running — leaves the task in `reviewing` for a human, exactly today's
-behavior. Auto-approving records the transition with `via: "auto-approve"`,
-distinct from a human's `via: "approve"` in the task timeline and on
-`/ws/tasks`.
+running — leaves the task in `reviewing` for a human... with one exception
+below (`#755`). Auto-approving records the transition with `via:
+"auto-approve"`, distinct from a human's `via: "approve"` in the task
+timeline and on `/ws/tasks`.
 
 This makes issue #737 (a second GitHub identity so the review agent's own PR
 review can gate merge) _less_ pressing but doesn't close it: the gate above
 is Mullion's own, enforced before a merge is ever requested — not a GitHub
 required-review.
+
+**Red required CI returns the task to the worker (`#755`).** The CI lookup
+(step 4 above) is fetched _before_ steps 2/3, not after: a project with no
+review agent configured never writes a verdict at all (step 2 never
+passes), and an `inconclusive` verdict never satisfies step 3 either — so a
+red **required** check on either of those would otherwise stall in
+`reviewing` forever, exactly the gap this closes. "Required" means a name
+present in `required_status_checks.contexts` from
+`GET /repos/{owner}/{repo}/branches/{branch}/protection`
+(`fetchRequiredStatusContexts`, `github.ts`, cached per repo/branch for an
+hour — branch protection changes about never) — a red run whose name isn't
+in that set (this repo's own `test-e2e`, deliberately not required) is left
+alone, since the merge sweep itself doesn't gate on it either. The
+protection lookup needs `administration: read` on the GitHub App token,
+which `READ_PERMISSIONS` deliberately does **not** grant (scope creep for
+one feature); a 403/404 there fails **closed** — "don't know" is never read
+as "nothing is required," and the task is simply left in `reviewing`
+exactly as it would be without `#755` at all.
+
+Shares `tasks.autoReturnRounds`/`maxAutoReturnRounds` — the same counter and
+cap every other auto-return trigger uses (`reason: "ci"`). Once the cap is
+spent, one PR comment names it (the same `postReviewFindingsComment`
+mechanism the review-feedback loop's own cap-reached note uses) and the
+task stays in `reviewing`. The worker is re-seeded with a rendering of the
+same `ReviewCiInfo` the review agent itself would see
+(`renderCiSummary`/`buildCiFailurePrompt`, `task-prompt.ts`) — Mullion does
+not fetch or summarize Actions logs itself; the worker has a shell and the
+real worktree, and can run `gh run view --log-failed` far more precisely.
 
 **A remote-hosted task can now auto-approve (`#760`).** Review-findings
 ingestion (step 2 above) used to be local-only — this process could only

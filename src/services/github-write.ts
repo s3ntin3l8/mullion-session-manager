@@ -400,6 +400,11 @@ export async function createPullRequest(
  * `mergeStateStatus` purely to avoid adding a second query shape to this
  * file for one more field — REST already returns it on the same response
  * every other field here comes from.
+ *
+ * `baseRef` — added for #755's red-CI-return gate, which needs the PR's
+ * actual base branch to look up branch protection against (never assume
+ * `main`/`default_branch`: a task's PR can target any branch a human chose
+ * when opening it, e.g. when stacking on another feature branch).
  */
 export async function getPullRequestByNumber(
   token: string,
@@ -413,6 +418,7 @@ export async function getPullRequestByNumber(
   draft: boolean;
   headSha: string;
   headRef: string;
+  baseRef: string;
   title: string;
   state: "open" | "closed";
   merged: boolean;
@@ -425,6 +431,7 @@ export async function getPullRequestByNumber(
     node_id: string;
     draft: boolean;
     head: { sha: string; ref: string };
+    base: { ref: string };
     title: string;
     state: "open" | "closed";
     merged: boolean;
@@ -438,6 +445,7 @@ export async function getPullRequestByNumber(
     draft: result.draft,
     headSha: result.head.sha,
     headRef: result.head.ref,
+    baseRef: result.base.ref,
     title: result.title,
     state: result.state,
     merged: result.merged,

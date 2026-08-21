@@ -558,6 +558,70 @@ export async function fetchRunsForHead(
   }
 }
 
+interface RequiredStatusContextsCacheEntry {
+  contexts: string[];
+  expiresAt: number;
+}
+const requiredStatusContextsCache = new Map<string, RequiredStatusContextsCacheEntry>();
+// Branch protection changes about never — this is read on every
+// processAutoApprovals tick for every candidate task otherwise (#755).
+const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
+
+/**
+ * Reads `required_status_checks.contexts` from branch protection for a
+ * branch — the subset of check names that actually gate a merge, as
+ * opposed to every Actions run for a head commit (`computeCiStatus` makes
+ * no required/non-required distinction at all). #755's red-CI-return gate
+ * uses this to avoid returning a task to the worker over a red but
+ * non-required check (this repo's own `test-e2e`, deliberately not
+ * required — see CLAUDE.md's CI/CD section).
+ *
+ * Returns `null`, never throws, on ANY lookup failure. The GitHub App's
+ * "read" token scope (`READ_PERMISSIONS`, github-app.ts) does not include
+ * `administration`, which this endpoint requires — deliberately not
+ * expanded for this one lookup (see #755's own plan notes: that would be
+ * unrequested scope creep for a single feature). A 403 from that missing
+ * scope and a 404 (no protection configured, or the branch doesn't exist)
+ * both collapse to `null`. Callers must fail CLOSED on `null` — treating it
+ * as "nothing is required" would let a task stalled on a red
+ * non-required-only check look identical to one this gate has an actual
+ * opinion on.
+ *
+ * Cached per `owner/repo/branch` for `REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS`.
+ * Only successes are cached — a failure is retried on the next call rather
+ * than latched, since it may be transient.
+ */
+export async function fetchRequiredStatusContexts(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<string[] | null> {
+  validateGitHubRepoRef(owner, repo);
+  const key = `${owner}/${repo}/${branch}`;
+  const cached = requiredStatusContextsCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) return cached.contexts;
+
+  try {
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}/protection`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      required_status_checks?: { contexts?: string[] } | null;
+    };
+    const contexts = data.required_status_checks?.contexts ?? [];
+    requiredStatusContextsCache.set(key, {
+      contexts,
+      expiresAt: Date.now() + REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS,
+    });
+    return contexts;
+  } catch {
+    return null;
+  }
+}
+
 // Exported for the per-branch filter (issue #202, routes/projects.ts's
 // GET .../github/prs?branch=): the route re-derives the summary counts for
 // its filtered subset rather than slicing the cached whole-repo summary.

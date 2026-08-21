@@ -479,6 +479,26 @@ export function buildReviewPrompt(opts: {
 }
 
 /**
+ * The red-CI auto-return's prompt (`task-reconciler.ts`'s `attemptAutoApprove`,
+ * #755) — sent when a REQUIRED check fails on a task's PR after it reached
+ * "reviewing". Reuses `renderCiSummary` (the same rendering the review
+ * agent's own prompt gets) rather than fetching and summarizing Actions
+ * logs itself: the worker has a shell and the actual worktree, and can run
+ * `gh run view --log-failed` far more precisely than Mullion could
+ * pre-digest for it. Always carries the task spec, same reasoning as
+ * `buildRejectPrompt`/`buildReviewFeedbackPrompt`: this only runs once
+ * `reseedTaskIfSessionExited` decides the previous session is gone, so it
+ * may be a completely fresh one with no memory of the task.
+ */
+export function buildCiFailurePrompt(opts: WorkerPreambleOptions & { ci: ReviewCiInfo }): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const failure =
+    `A required CI check failed on this task's PR after it reached review.\n\n${renderCiSummary(opts.ci)}\n\n` +
+    "Pull the latest changes, read the failing check's log, and fix it — then push and finish again.";
+  return `${preamble}${SECTION_BREAK}${failure}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}
+
+/**
  * The review-feedback auto-return's prompt (`task-reconciler.ts`) — the
  * review agent's own findings, delivered the same way a human's reject
  * feedback is (`buildRejectPrompt`), since the worker doesn't need to know

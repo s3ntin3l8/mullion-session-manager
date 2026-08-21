@@ -118,6 +118,8 @@ const {
   mockUpdatePullRequestBranch,
   mockDeleteRemoteBranch,
   mockFetchRunsForHead,
+  mockFetchRequiredStatusContexts,
+  mockCreatePullRequestReview,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
@@ -128,6 +130,8 @@ const {
   mockUpdatePullRequestBranch: vi.fn(),
   mockDeleteRemoteBranch: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
+  mockFetchRequiredStatusContexts: vi.fn(),
+  mockCreatePullRequestReview: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -175,6 +179,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     mergePullRequest: mockMergePullRequest,
     updatePullRequestBranch: mockUpdatePullRequestBranch,
     deleteRemoteBranch: mockDeleteRemoteBranch,
+    createPullRequestReview: mockCreatePullRequestReview,
   };
 });
 vi.mock("../../src/services/github.js", async (importOriginal) => {
@@ -182,6 +187,7 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
   return {
     ...actual,
     fetchRunsForHead: mockFetchRunsForHead,
+    fetchRequiredStatusContexts: mockFetchRequiredStatusContexts,
   };
 });
 
@@ -203,6 +209,23 @@ const actualGithubModule = await vi.importActual<typeof GitHubModule>(
   "../../src/services/github.js",
 );
 mockFetchRunsForHead.mockImplementation(actualGithubModule.fetchRunsForHead);
+// #755 — deliberately NOT a pass-through to the real implementation (unlike
+// every other mock above): the real one hits GitHub's branch-protection
+// endpoint over the network, which this test file has no business doing.
+// Defaults to `null` (fail-closed, "lookup failed") so every pre-existing
+// test in this file — none of which know about #755 — sees exactly the
+// same "don't return the worker" behavior they always have. Only the
+// dedicated #755 tests below override this.
+mockFetchRequiredStatusContexts.mockResolvedValue(null);
+// Only #755's cap-reached test below actually exercises a comment post with
+// a real prNumber set — every other existing test in this file avoids that
+// path entirely by leaving prNumber null. Defaulted here (not a real
+// pass-through, same reasoning as fetchRequiredStatusContexts above) so
+// that test doesn't need its own real GitHub write mock.
+mockCreatePullRequestReview.mockResolvedValue({
+  id: 1,
+  htmlUrl: "https://github.com/o/r/pull/9#pullrequestreview-1",
+});
 const actualTaskPromoteModule = await vi.importActual<typeof TaskPromoteModule>(
   "../../src/services/task-promote.js",
 );
@@ -1365,6 +1388,7 @@ describe("reconcileTasks", () => {
         draft: false,
         headSha: "sha-head",
         headRef: "mullion/task-x",
+        baseRef: "main",
         title: "feat: do the thing",
         state: "open",
         merged: false,
@@ -1669,6 +1693,10 @@ describe("reconcileTasks", () => {
         reviewFindingsIngestedSessionId: number | null;
         prNumber: number | null;
         autoApprove: boolean;
+        worktreePath: string | null;
+        agentCommand: string | null;
+        autoReturnRounds: number;
+        sessionId: number | null;
       }> = {},
     ) {
       const { autoApprove = true, ...taskOverrides } = overrides;
@@ -1716,6 +1744,7 @@ describe("reconcileTasks", () => {
         draft: false,
         headSha: "sha-head",
         headRef: "mullion/task-x",
+        baseRef: "main",
         title: "feat: do the thing",
         state: "open",
         merged: false,
@@ -1752,6 +1781,7 @@ describe("reconcileTasks", () => {
       mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
       mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
       mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
+      mockFetchRequiredStatusContexts.mockResolvedValue(null);
     });
 
     it("auto-approves once the latest verdict is clean and CI reads success", async () => {
@@ -1830,15 +1860,25 @@ describe("reconcileTasks", () => {
       }
     });
 
+    // #755 — the CI fetch is now hoisted ABOVE these gates (so a red
+    // REQUIRED check can return the task even when one of them would
+    // otherwise block forever, see the dedicated describe block below), so
+    // `getPullRequestByNumber` genuinely IS called now, unlike before #755.
+    // CI is mocked to "success" here — `attemptReturnRedCiToWorker`'s own
+    // very first check is `current.status !== "failure"`, so a passing CI
+    // status makes it a no-op immediately and these tests still isolate
+    // exactly the gate they're named for.
     it("does not approve when no review round has been ingested yet", async () => {
       const app = await buildApp();
       const { taskId } = await createAutoApproveCandidate(app, {
         reviewFindingsIngestedSessionId: null,
       });
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
 
       await reconcileTasks(app);
 
-      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
 
@@ -1861,10 +1901,14 @@ describe("reconcileTasks", () => {
         .set({ reviewSessionId: freshSession.json().id })
         .where(eq(tasks.id, taskId))
         .run();
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
 
       await reconcileTasks(app);
 
-      expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
 
       await app.close();
     });
@@ -1873,11 +1917,15 @@ describe("reconcileTasks", () => {
       "does not approve on a '%s' verdict",
       async (verdict) => {
         const app = await buildApp();
-        await createAutoApproveCandidate(app, { lastReviewVerdict: verdict });
+        const { taskId } = await createAutoApproveCandidate(app, { lastReviewVerdict: verdict });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
 
         await reconcileTasks(app);
 
-        expect(mockGetPullRequestByNumber).not.toHaveBeenCalled();
+        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
 
         await app.close();
       },
@@ -1906,6 +1954,10 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Also #755's fail-closed default in action: mockFetchRequiredStatusContexts
+    // resolves to `null` (this describe block's own beforeEach) here, same as
+    // a real 403/404 — the red-CI-return gate must not fire on a "don't know"
+    // any more than the pre-existing approve gate below it does.
     it("waits (does not approve) while CI status is red", async () => {
       const app = await buildApp();
       const { taskId } = await createAutoApproveCandidate(app);
@@ -1919,6 +1971,149 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
 
       await app.close();
+    });
+
+    // #755 — a red REQUIRED check returns the task to its worker for one
+    // automatic round, the same mechanism a "changes-requested" review uses.
+    describe("red required CI returns the task to the worker (#755)", () => {
+      async function createRedCiCandidate(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        overrides: Parameters<typeof createAutoApproveCandidate>[1] = {},
+      ) {
+        const candidate = await createAutoApproveCandidate(app, {
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          ...overrides,
+        });
+        const workerSession = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId: candidate.projectId, command: "bash" },
+        });
+        app.db
+          .update(tasks)
+          .set({ sessionId: workerSession.json().id })
+          .where(eq(tasks.id, candidate.taskId))
+          .run();
+        return candidate;
+      }
+
+      it("returns the task when a REQUIRED check fails", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+
+        await reconcileTasks(app);
+
+        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("ci");
+
+        await app.close();
+      });
+
+      it("does NOT return the task when the red check is not in the required set (this repo's own test-e2e)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue([
+          {
+            name: "test-e2e",
+            status: "completed" as const,
+            conclusion: "failure" as const,
+            htmlUrl: "https://x/1",
+            headSha: "sha-head",
+          },
+        ]);
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+
+        await reconcileTasks(app);
+
+        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("returns the task even with no review agent configured (gate 2 would otherwise never pass)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, {
+          reviewFindingsIngestedSessionId: null,
+          lastReviewVerdict: null,
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("ci");
+
+        await app.close();
+      });
+
+      it("returns the task even when the verdict is inconclusive (gate 3 would otherwise never pass)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, { lastReviewVerdict: "inconclusive" });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("ci");
+
+        await app.close();
+      });
+
+      it("posts a cap-reached comment and stays in 'reviewing' once the round budget is spent", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, { autoReturnRounds: 2 });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "tok",
+          "o",
+          "r",
+          9,
+          expect.objectContaining({ body: expect.stringContaining("round cap (2)") }),
+        );
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(2);
+
+        await app.close();
+      });
+
+      it("does not return the task when the project's autoApprove is off", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, { autoApprove: false });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["CI"]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
     });
 
     it("waits forever (no deadline) when no CI is found at all — unlike the review-spawn gate", async () => {
