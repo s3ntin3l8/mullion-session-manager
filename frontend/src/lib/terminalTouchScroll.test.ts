@@ -101,8 +101,136 @@ describe("attachTerminalTouchScroll", () => {
     detach();
   });
 
-  it("bails without scrolling or calling preventDefault when mouse tracking is active", () => {
+  // Mouse-tracking and alt-screen TUIs (Claude Code among them — see this
+  // module's own header comment for the live-session evidence) get
+  // scrollLines()'d nothing: there's no scrollback to move (alt-screen) or
+  // the scrollback that matters lives inside the TUI, not xterm (mouse
+  // tracking). A synthetic wheel event on term.element is the same input a
+  // desktop mouse wheel already produces over the same session, and reaches
+  // xterm's own wheel handler.
+  it("dispatches a wheel event on term.element, not scrollLines, when mouse tracking is active", () => {
     const term = createFakeTerm({ modes: { mouseTrackingMode: "vt200" } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
+    // Finger drags down 40px — scrolls up, i.e. negative deltaY (same sign
+    // convention as the scrollLines path's own negation).
+    const move = touchEvent("touchmove", [{ clientY: 40 }]);
+    const prevented = !container.dispatchEvent(move);
+
+    expect(term.scrollLines).not.toHaveBeenCalled();
+    expect(wheelListener).toHaveBeenCalledTimes(1);
+    expect((wheelListener.mock.calls[0]![0] as WheelEvent).deltaY).toBe(-40);
+    // Committed once past the movement threshold, same as the scrollLines
+    // path — the page must not also handle this drag (pull-to-refresh, a
+    // background scroll) once xterm owns it.
+    expect(prevented).toBe(true);
+    detach();
+  });
+
+  // xterm's own consumeWheelEvent (CoreMouseService.ts) multiplies any
+  // dispatched |deltaY| under 50 by 0.3 — a correction for trackpad
+  // acceleration a synthetic touch delta has no equivalent of. Left
+  // uncompensated this makes the whole gesture ~3.3x slower than the
+  // scrollLines() path's own 1:1 rate (see this module's own
+  // TRACKPAD_DAMPING_* comment). A 10px move (raw deltaY -10, magnitude
+  // under 50*0.3=15) must be divided back out to -33.33 so that after
+  // xterm's own 0.3x cut it nets back out to roughly the original -10.
+  it("compensates the dispatched deltaY for xterm's own trackpad-damping heuristic on a small move", () => {
+    const term = createFakeTerm({ modes: { mouseTrackingMode: "vt200" } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 10 }]));
+
+    expect((wheelListener.mock.calls[0]![0] as WheelEvent).deltaY).toBeCloseTo(-10 / 0.3);
+    detach();
+  });
+
+  // The compensation only applies while the corrected value would still
+  // land under xterm's own 50px threshold (i.e. the original delta was
+  // under 15) — past that, a single touchmove already covers enough
+  // distance that xterm's heuristic doesn't dampen it either, so this
+  // module must not pre-multiply it. 20px is past 15 (no compensation,
+  // matches the existing 40px test above) but still under 50 (xterm itself
+  // would still dampen it, just not by this module's own doing).
+  it("does not compensate a move already past the compensation's own cutoff", () => {
+    const term = createFakeTerm({ modes: { mouseTrackingMode: "vt200" } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 20 }]));
+
+    expect((wheelListener.mock.calls[0]![0] as WheelEvent).deltaY).toBe(-20);
+    detach();
+  });
+
+  // The whole reason mode is checked per-move (this module's own header
+  // comment) rather than once at touchstart: a TUI can flip mouse tracking
+  // or the alt-screen mid-gesture, and the dispatch target must follow.
+  it("switches from wheel dispatch to scrollLines mid-drag when mouse tracking turns off", () => {
+    const term = createFakeTerm({ modes: { mouseTrackingMode: "vt200" } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 40 }]));
+    expect(wheelListener).toHaveBeenCalledTimes(1);
+    expect(term.scrollLines).not.toHaveBeenCalled();
+
+    (term.modes as unknown as { mouseTrackingMode: string }).mouseTrackingMode = "none";
+    // 14px fallback row height, threshold is 6px — another 20px down covers
+    // both and yields exactly one more line via the scrollLines path.
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 60 }]));
+
+    expect(wheelListener).toHaveBeenCalledTimes(1);
+    expect(term.scrollLines).toHaveBeenCalledWith(-1);
+    detach();
+  });
+
+  it("switches from scrollLines to wheel dispatch mid-drag when the alt-screen activates", () => {
+    const term = createFakeTerm();
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 20 }]));
+    expect(term.scrollLines).toHaveBeenCalledTimes(1);
+    expect(wheelListener).not.toHaveBeenCalled();
+
+    (term.buffer as unknown as { active: { type: string } }).active.type = "alternate";
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 40 }]));
+
+    expect(term.scrollLines).toHaveBeenCalledTimes(1);
+    expect(wheelListener).toHaveBeenCalledTimes(1);
+    detach();
+  });
+
+  it("dispatches a wheel event with the opposite sign when the finger drags up", () => {
+    const term = createFakeTerm({ modes: { mouseTrackingMode: "vt200" } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 40 }]));
+    container.dispatchEvent(touchEvent("touchmove", [{ clientY: 0 }]));
+
+    expect((wheelListener.mock.calls[0]![0] as WheelEvent).deltaY).toBe(40);
+    detach();
+  });
+
+  it("dispatches a wheel event, not scrollLines, on the alternate screen (no scrollback to scroll)", () => {
+    const term = createFakeTerm({ buffer: { active: { type: "alternate" } } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
     const detach = attachTerminalTouchScroll({ term, element: container });
 
     container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
@@ -110,20 +238,37 @@ describe("attachTerminalTouchScroll", () => {
     const prevented = !container.dispatchEvent(move);
 
     expect(term.scrollLines).not.toHaveBeenCalled();
+    expect(wheelListener).toHaveBeenCalledTimes(1);
+    expect(prevented).toBe(true);
+    detach();
+  });
+
+  it("does not dispatch a wheel event below the movement threshold on the alternate screen", () => {
+    const term = createFakeTerm({ buffer: { active: { type: "alternate" } } } as never);
+    const wheelListener = vi.fn();
+    term.element!.addEventListener("wheel", wheelListener);
+    const detach = attachTerminalTouchScroll({ term, element: container });
+
+    container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
+    const move = touchEvent("touchmove", [{ clientY: 3 }]);
+    const prevented = !container.dispatchEvent(move);
+
+    expect(wheelListener).not.toHaveBeenCalled();
     expect(prevented).toBe(false);
     detach();
   });
 
-  it("bails without scrolling on the alternate screen (no scrollback to scroll)", () => {
-    const term = createFakeTerm({ buffer: { active: { type: "alternate" } } } as never);
+  it("does not throw, and does not scroll, when term.element is undefined", () => {
+    const term = createFakeTerm({
+      buffer: { active: { type: "alternate" } },
+      element: undefined,
+    } as never);
     const detach = attachTerminalTouchScroll({ term, element: container });
 
     container.dispatchEvent(touchEvent("touchstart", [{ clientY: 0 }]));
-    const move = touchEvent("touchmove", [{ clientY: 40 }]);
-    const prevented = !container.dispatchEvent(move);
+    expect(() => container.dispatchEvent(touchEvent("touchmove", [{ clientY: 40 }]))).not.toThrow();
 
     expect(term.scrollLines).not.toHaveBeenCalled();
-    expect(prevented).toBe(false);
     detach();
   });
 
