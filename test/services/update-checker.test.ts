@@ -496,6 +496,27 @@ describe("resolveReleaseByTag", () => {
     });
 
     it("caches a non-404 GitHub error response briefly too", async () => {
+      // #759 — deliberately 500, not 429/a rate-limit-shaped 403: this test
+      // isolates the failure-CACHE (a fixed cooldown before the second
+      // fetchMock call even happens), which a 429 would no longer isolate
+      // now that github-fetch.ts's own transport-level rate-limit budget
+      // ALSO makes the second call short-circuit — for a different reason,
+      // before reaching this cache at all. See the dedicated 429 test below
+      // for that mechanism instead.
+      fetchMock.mockResolvedValueOnce(new Response("server error", { status: 500 }));
+
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+      await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // #759 — the OTHER mechanism that can make a second call not reach
+    // fetch: a 429 records into github-fetch.ts's install-wide rate-limit
+    // budget, and githubApiFetch's own pre-check short-circuits before ever
+    // making the second request — independent of (and faster than) the
+    // failure-cache the test above exercises.
+    it("a 429 short-circuits a second lookup via the shared rate-limit budget, not the failure cache", async () => {
       fetchMock.mockResolvedValueOnce(new Response("rate limited", { status: 429 }));
 
       await expect(resolveReleaseByTag("owner/repo", "0.1.5")).rejects.toThrow(UpdateCheckError);
