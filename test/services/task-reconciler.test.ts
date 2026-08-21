@@ -121,6 +121,8 @@ const {
   mockFetchRequiredStatusContexts,
   mockFetchCheckRunsForHead,
   mockCreatePullRequestReview,
+  mockResumeTaskWorktree,
+  mockRemoveWorktree,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
@@ -134,6 +136,13 @@ const {
   mockFetchRequiredStatusContexts: vi.fn(),
   mockFetchCheckRunsForHead: vi.fn(),
   mockCreatePullRequestReview: vi.fn(),
+  // #758 — no pass-through default (unlike commitWipChanges's `{ committed:
+  // false }` no-op default): resumeTaskWorktree/removeWorktree would shell
+  // out to real git against this file's fake "/tmp" project cwds, which
+  // isn't a real repo. Reset to a safe fail-closed default every beforeEach
+  // (see below) and only overridden inside the dedicated auto-rebase block.
+  mockResumeTaskWorktree: vi.fn(),
+  mockRemoveWorktree: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -155,6 +164,8 @@ vi.mock("../../src/services/git-worktree.js", async (importOriginal) => {
   return {
     ...actual,
     commitWipChanges: mockCommitWipChanges,
+    resumeTaskWorktree: mockResumeTaskWorktree,
+    removeWorktree: mockRemoveWorktree,
   };
 });
 
@@ -245,6 +256,7 @@ const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath } =
   await import("../../src/services/task-prompt.js");
+const { deriveWorktreePath } = await import("../../src/services/git-worktree.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
   await import("../../src/services/github-fetch.js");
 
@@ -375,6 +387,11 @@ describe("reconcileTasks", () => {
     mockFetchRequiredStatusContexts.mockClear();
     mockFetchCheckRunsForHead.mockClear();
     mockCreatePullRequestReview.mockClear();
+    // #758 — fail-closed defaults (no pre-existing test's task has
+    // mergeRequestedAt + a "dirty" mergeableState + autoApprove on, so
+    // these are never reached outside the dedicated describe block below).
+    mockResumeTaskWorktree.mockReset().mockResolvedValue(null);
+    mockRemoveWorktree.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -1634,6 +1651,406 @@ describe("reconcileTasks", () => {
       expect(row.mergeError).toContain("Conflicts with main");
 
       await app.close();
+    });
+
+    describe("auto-rebase on a real conflict (#758)", () => {
+      // Mirrors createDoneTaskWithPendingMerge above, plus the fields
+      // attemptAutoRebase needs: branchName/agentCommand (a claimed task
+      // always has both by the time it's "done" — see task-claim.ts's own
+      // reservation transaction), and project.autoApprove defaulted ON
+      // (unlike the bare merge-sweep tests above, which deliberately leave
+      // it off to prove the plain-backoff fallback).
+      async function createDoneTaskWithConflict(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        overrides: Partial<{
+          autoApprove: boolean;
+          branchName: string | null;
+          agentCommand: string | null;
+          rebaseAttempts: number;
+          rebaseStartedAt: Date | null;
+          sessionId: number | null;
+        }> = {},
+      ) {
+        const { autoApprove = true, ...taskOverrides } = overrides;
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = project.json().id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove },
+        });
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            ...taskOverrides,
+          })
+          .returning()
+          .all();
+        return { taskId: row.id, projectId };
+      }
+
+      it("spawns an auto-rebase worker when autoApprove is on", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(1);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(row.sessionId).not.toBeNull();
+        expect(row.worktreePath).toBe("/tmp/.mullion-worktrees/mullion-task-x");
+        expect(row.mergeError).toContain("in progress");
+
+        await app.close();
+      });
+
+      it("clears a stale worktree from a prior attempt before resuming", async () => {
+        const app = await buildApp();
+        await createDoneTaskWithConflict(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        const expectedStalePath = deriveWorktreePath("/tmp", "mullion/task-x");
+        expect(mockRemoveWorktree).toHaveBeenCalledWith(expectedStalePath, "/tmp");
+        // Cleared BEFORE resuming, not after — a second attempt at the same
+        // deterministic path fails outright otherwise (resumeTaskWorktree's
+        // own "target path already exists" refusal).
+        const removeOrder = mockRemoveWorktree.mock.invocationCallOrder[0];
+        const resumeOrder = mockResumeTaskWorktree.mock.invocationCallOrder[0];
+        expect(removeOrder).toBeLessThan(resumeOrder);
+
+        await app.close();
+      });
+
+      it("does not spawn a second worker while one is still in flight", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, {
+          rebaseAttempts: 1,
+          rebaseStartedAt: new Date(),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(1);
+        expect(row.mergeError).toContain("in progress");
+
+        await app.close();
+      });
+
+      it("retries once the previous attempt's window goes stale", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, {
+          rebaseAttempts: 1,
+          rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(2);
+
+        await app.close();
+      });
+
+      // Fresh review, PR #783 — a stale rebaseStartedAt is a TIME check, not
+      // proof the previous attempt's session actually died: Task Master
+      // workers are told to keep running, so "still active" is normal even
+      // for a genuinely long-running (not abandoned) rebase-and-reverify
+      // round. This proves the still-active session is terminated (and its
+      // row flips to "killed", not left "active") BEFORE the stale-worktree
+      // force-remove/retry proceeds — never force-removing a worktree a live
+      // process might still be writing to.
+      it("terminates a stale attempt's still-active session before clearing its worktree and retrying", async () => {
+        const app = await buildApp();
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = project.json().id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove: true },
+        });
+        const session = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const staleSessionId = session.json().id as number;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            sessionId: staleSessionId,
+            rebaseAttempts: 1,
+            rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+          })
+          .returning()
+          .all();
+        const taskId = row.id;
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+
+        await reconcileTasks(app);
+
+        const staleSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, staleSessionId))
+          .all()[0];
+        expect(staleSession.status).toBe("killed");
+        expect(mockResumeTaskWorktree).toHaveBeenCalledWith("/tmp", "mullion/task-x");
+        const updatedRow = await getTask(app, taskId);
+        expect(updatedRow.rebaseAttempts).toBe(2);
+        expect(updatedRow.sessionId).not.toBe(staleSessionId);
+
+        await app.close();
+      });
+
+      it("gives up and falls back to plain conflict backoff once attempts are exhausted", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, { rebaseAttempts: 2 });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        expect(mockRemoveWorktree).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(2);
+        expect(row.mergeRequestedAt).not.toBeNull();
+        expect(row.mergeError).toContain("gave up after 2 attempt(s)");
+
+        await app.close();
+      });
+
+      // Second review, PR #783 — the cap check must run BEFORE the
+      // stale-attempt termination, not after: a task that's already at the
+      // cap gets no more attempts either way, so terminating a possibly
+      // still-working session only to then immediately give up would be a
+      // pointless, irreversible kill. This is the one case that combination
+      // can actually happen in (stale window + at cap + session still
+      // active) — the previous "gives up..." test above never sets
+      // rebaseStartedAt, so it can't exercise this ordering.
+      // Third review, PR #783 — the in-flight/window check runs BEFORE the
+      // cap check specifically so a last-attempt-at-cap still within its
+      // window waits for it rather than being reported as "gave up" while
+      // it may yet succeed. Every other test here covers rebaseAttempts at
+      // 1 (under cap) or a STALE window at the cap — nothing pins the
+      // "at cap, but still fresh" combination, which is exactly the case
+      // that ordering exists to get right and a future refactor could
+      // silently regress.
+      it("keeps waiting on an in-flight attempt even when it's the last one allowed (at cap, still within its window)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app, {
+          rebaseAttempts: 2,
+          rebaseStartedAt: new Date(),
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        expect(mockRemoveWorktree).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseAttempts).toBe(2);
+        expect(row.mergeError).toContain("in progress");
+        expect(row.mergeError).not.toContain("gave up");
+
+        await app.close();
+      });
+
+      it("gives up without terminating a stale attempt's still-active session, once attempts are exhausted", async () => {
+        const app = await buildApp();
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = project.json().id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove: true },
+        });
+        const session = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const staleSessionId = session.json().id as number;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            sessionId: staleSessionId,
+            rebaseAttempts: 2,
+            rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
+          })
+          .returning()
+          .all();
+        const taskId = row.id;
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+
+        await reconcileTasks(app);
+
+        expect(mockResumeTaskWorktree).not.toHaveBeenCalled();
+        expect(mockRemoveWorktree).not.toHaveBeenCalled();
+        const staleSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, staleSessionId))
+          .all()[0];
+        expect(staleSession.status).toBe("active");
+        const updatedRow = await getTask(app, taskId);
+        expect(updatedRow.rebaseAttempts).toBe(2);
+        expect(updatedRow.sessionId).toBe(staleSessionId);
+        expect(updatedRow.mergeError).toContain("gave up after 2 attempt(s)");
+
+        await app.close();
+      });
+
+      it("surfaces rather than retries when the branch can't be recreated", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithConflict(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "dirty" }));
+        mockResumeTaskWorktree.mockResolvedValue(null);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        // Not retryable by spawning again — attempts/rebaseStartedAt are left
+        // untouched so a later merge-sweep tick doesn't mistake this for an
+        // in-flight or exhausted attempt; it's surfaced for a human instead.
+        expect(row.rebaseAttempts).toBe(0);
+        expect(row.rebaseStartedAt).toBeNull();
+        expect(row.mergeError).toContain("could not recreate the worktree");
+
+        await app.close();
+      });
+
+      // Fresh review, PR #783 — a rebased-then-merged task's worktree/session
+      // are real again (attemptAutoRebase overwrote them from their
+      // post-approve null), and nothing else ever cleans them up once the
+      // conflict resolves: the task never leaves "done", so approveTask's
+      // own cleanup (which only fires on a "-> done" transition) never fires
+      // a second time for it. clearMergeState must do that cleanup itself —
+      // and must NOT reset rebaseAttempts, a lifetime counter design point 8
+      // otherwise has zero coverage for.
+      it("cleans up the worktree/session and clears rebaseStartedAt on a successful merge, but preserves rebaseAttempts", async () => {
+        const app = await buildApp();
+        const session = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-rebase-merge-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = session.json().id;
+        const workerSession = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const sessionId = workerSession.json().id as number;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "was-conflicted",
+            status: "done",
+            claimedAt: new Date(),
+            completedAt: new Date(),
+            prNumber: 9,
+            prUrl: "https://github.com/o/r/pull/9",
+            mergeRequestedAt: new Date(),
+            branchName: "mullion/task-x",
+            agentCommand: "claude",
+            sessionId,
+            worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+            rebaseAttempts: 1,
+            rebaseStartedAt: new Date(),
+          })
+          .returning()
+          .all();
+        const taskId = row.id;
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+        mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+        mockDeleteRemoteBranch.mockResolvedValue(undefined);
+
+        await reconcileTasks(app);
+
+        const updatedRow = await getTask(app, taskId);
+        expect(updatedRow.mergeRequestedAt).toBeNull();
+        expect(updatedRow.rebaseStartedAt).toBeNull();
+        // The lifetime counter — never reset, unlike everything else
+        // clearMergeState clears.
+        expect(updatedRow.rebaseAttempts).toBe(1);
+        const finalSession = app.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .all()[0];
+        expect(finalSession.status).toBe("killed");
+
+        await app.close();
+      });
     });
 
     it("backs off and retries when a required check is blocked", async () => {

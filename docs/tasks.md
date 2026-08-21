@@ -1182,16 +1182,49 @@ task-reconciler.ts) lands the merge asynchronously, once GitHub allows it:
 | `behind`                         | Updates the branch, waits for the next tick (checks must re-run first)                                                            |
 | `unstable`                       | Backs off and retries — does **not** merge (a non-required check, e.g. this repo's own `test-e2e`, is failing/pending; see below) |
 | `blocked`                        | Backs off and retries — a required check is red or still pending                                                                  |
-| `dirty`                          | Backs off and retries — a real conflict with the base branch, needs a rebase or a human                                           |
+| `dirty`                          | Spawns a worker to auto-rebase (bounded, opt-in — see "Auto-rebase" below); backs off and retries otherwise                       |
 | `unknown` (`mergeable === null`) | Backs off and retries — GitHub is still computing mergeability                                                                    |
 | merged/closed (out of band)      | Clears the merge flag — idempotent no-op                                                                                          |
 
-The sweep never gives up on a retryable state — a conflict becomes
-resolvable the moment someone rebases, and a give-up cap would just strand
-the task the same way an unbounded-wait bug would. A **"Merge now"/"Retry
+The sweep never gives up on a retryable state — `behind`/`unstable`/`blocked`/
+`unknown` all become resolvable on their own (a check goes green, GitHub
+finishes computing mergeability), and a give-up cap would just strand the
+task the same way an unbounded-wait bug would. A **"Merge now"/"Retry
 merge"** button in the task drawer (`POST /api/tasks/:id/merge`) re-arms the
-sweep immediately for any `done` task with a linked PR, for the conflict/red-
-CI cases that need a human to actually go fix something first.
+sweep immediately, for cases that need a human to actually go fix something
+first.
+
+**Auto-rebase (`#758`).** `dirty` is different from the rest of that table: a
+real conflict with the base branch never resolves on its own. With
+`projects.autoApprove` on (the same "nobody is watching" opt-in `#755`'s
+red-CI-return and `#757`'s PR-comment-ingest use), `attemptAutoRebase`
+(task-reconciler.ts) spawns a worker into the task's branch to fix it
+instead of just backing off:
+
+- Recreates the worktree with `resumeTaskWorktree` (the same primitive Retry
+  uses) — the worktree itself is long gone by this point (`approveTask` cleans
+  it up at approve time), but the branch (`mullion/task-<id>`) isn't touched
+  until a successful merge deletes it. A stale worktree from a prior attempt
+  at the same deterministic path is force-removed first — `resumeTaskWorktree`
+  refuses outright if the target path already exists.
+- The seed prompt (`buildRebasePrompt`) asks the worker to rebase onto the
+  current base, resolve conflicts, re-run the repo's own verification gate,
+  and — unlike every other Task Master spawn — push the result itself with
+  `git push --force-with-lease`: Mullion's own push only ever happens once, at
+  the `-> reviewing` transition, and a `done` task never revisits it (`done`
+  has no outgoing edge — see "State machine" below).
+- The task's status never changes — it stays `done` throughout. This is a
+  sibling to the merge sweep's own retry loop, not an `autoReturnTask` round:
+  `tasks.rebaseAttempts` is a separate, dedicated counter (default cap: **2**,
+  no per-project override yet), and `tasks.rebaseStartedAt` tracks whether an
+  attempt is still in its window (30 minutes) so consecutive sweep ticks don't
+  spawn a second worker into the same worktree — deliberately NOT session-exit
+  detection, since a Task Master worker is told to keep the session running
+  after it finishes.
+- If `resumeTaskWorktree` can't recreate the worktree (branch deleted or
+  checked out elsewhere), or the attempt cap is spent, the sweep falls back to
+  today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,
+  same as `mergeOnApprove` without `autoApprove`.
 
 **Why `unstable` doesn't merge.** `unstable` means a _non-required_ check is
 failing or still running — and this repo deliberately does not require

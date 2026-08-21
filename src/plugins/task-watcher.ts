@@ -1,12 +1,13 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { startTaskWatcher } from "../services/task-watcher.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { HostRequestError, HostUnreachableError } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
+import { REBASE_ATTEMPT_STALE_MS } from "../services/task-reconciler.js";
 
 // Statuses a task-owned worktree is still "in use" for — the same
 // non-terminal set task-reconciler.ts polls, minus "backlog"/"ready" (never
@@ -14,6 +15,13 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 // claim) and "done"/"failed" (routes/tasks.ts and the reconcilers already
 // clean those up via removeWorktreeIfClean at the moment they transition;
 // see this file's own boot-sweep doc comment for why this exists anyway).
+//
+// "done" is deliberately NOT in this list, even though #758's auto-rebase
+// can give a `done` task a real worktree again — that case is handled
+// separately below (a `done` task with a fresh `rebaseStartedAt` also
+// counts as active), rather than by widening this set wholesale, which
+// would defeat the whole point of this sweep for the (far more common)
+// `done` task that finished normally and has no worktree at all.
 const ACTIVE_WORKTREE_STATUSES = ["claimed", "in_progress", "reviewing"] as const;
 
 /**
@@ -92,7 +100,43 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
               .where(
                 and(
                   eq(tasks.projectId, project.id),
-                  inArray(tasks.status, ACTIVE_WORKTREE_STATUSES),
+                  or(
+                    inArray(tasks.status, ACTIVE_WORKTREE_STATUSES),
+                    // #758 fresh review fix — a `done` task's auto-rebase
+                    // attempt gives it a real worktree again, still within
+                    // its in-flight window (the same REBASE_ATTEMPT_STALE_MS
+                    // window attemptAutoRebase itself uses to decide whether
+                    // to retry). Without this, this boot-time sweep can
+                    // destroy a still-in-use rebase worktree out from under
+                    // a live worker on a restart mid-attempt — the sweep's
+                    // own clean-check gate underneath doesn't reliably save
+                    // it, since the tree IS clean for stretches of a normal
+                    // in-progress rebase (right after a commit, during the
+                    // verification-gate run).
+                    //
+                    // Once the window elapses, this predicate stops
+                    // protecting the worktree regardless of what
+                    // attemptAutoRebase does next — and that's NOT always a
+                    // terminate-then-retry: if the attempts cap is already
+                    // spent, attemptAutoRebase deliberately gives up WITHOUT
+                    // terminating a still-active session (killing it would
+                    // be pointless if nothing is going to retry into a
+                    // fresh one — see that function's own cap-check-before-
+                    // terminate ordering). A task that hits the cap while
+                    // genuinely still working is a real, if narrow, gap
+                    // this predicate does not close: its worktree becomes
+                    // prunable on the very next boot even though a worker
+                    // may still be using it. Left as a known edge case
+                    // rather than widened further, since closing it
+                    // requires the cap-exhausted case to have its own
+                    // distinct "still genuinely active" signal, not just
+                    // "rebaseStartedAt is old."
+                    and(
+                      eq(tasks.status, "done"),
+                      isNotNull(tasks.rebaseStartedAt),
+                      gt(tasks.rebaseStartedAt, new Date(Date.now() - REBASE_ATTEMPT_STALE_MS)),
+                    ),
+                  ),
                 ),
               )
               .all()
