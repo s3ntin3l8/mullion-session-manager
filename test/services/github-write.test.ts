@@ -193,6 +193,7 @@ describe("github-write service", () => {
         html_url: "https://github.com/owner/repo/pull/9",
         node_id: "PR_node9",
         head: { sha: "abc123" },
+        base: { ref: "main" },
       }),
     );
     const result = await getPullRequestByNumber("tok", "owner", "repo", 9);
@@ -201,6 +202,7 @@ describe("github-write service", () => {
       htmlUrl: "https://github.com/owner/repo/pull/9",
       nodeId: "PR_node9",
       headSha: "abc123",
+      baseRef: "main",
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.github.com/repos/owner/repo/pulls/9",
@@ -216,6 +218,7 @@ describe("github-write service", () => {
         node_id: "PR_node9",
         draft: false,
         head: { sha: "abc123", ref: "mullion/task-9" },
+        base: { ref: "main" },
         title: "feat: do the thing",
         state: "open",
         merged: false,
@@ -231,6 +234,7 @@ describe("github-write service", () => {
       draft: false,
       headSha: "abc123",
       headRef: "mullion/task-9",
+      baseRef: "main",
       title: "feat: do the thing",
       state: "open",
       merged: false,
@@ -247,6 +251,7 @@ describe("github-write service", () => {
         node_id: "n",
         draft: false,
         head: { sha: "abc123", ref: "mullion/task-9" },
+        base: { ref: "main" },
         title: "t",
         state: "open",
         merged: false,

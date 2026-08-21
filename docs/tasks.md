@@ -1235,15 +1235,78 @@ once **all** of the following hold:
 
 Anything else — no review agent configured on the project (so no verdict is
 ever ingested), `changes-requested`, `inconclusive`, CI red or still
-running — leaves the task in `reviewing` for a human, exactly today's
-behavior. Auto-approving records the transition with `via: "auto-approve"`,
-distinct from a human's `via: "approve"` in the task timeline and on
-`/ws/tasks`.
+running — leaves the task in `reviewing` for a human... with one exception
+below (`#755`). Auto-approving records the transition with `via:
+"auto-approve"`, distinct from a human's `via: "approve"` in the task
+timeline and on `/ws/tasks`.
 
 This makes issue #737 (a second GitHub identity so the review agent's own PR
 review can gate merge) _less_ pressing but doesn't close it: the gate above
 is Mullion's own, enforced before a merge is ever requested — not a GitHub
 required-review.
+
+**Red required CI returns the task to the worker (`#755`).** The CI lookup
+(step 4 above) is fetched _before_ steps 2/3, not after: a project with no
+review agent configured never writes a verdict at all (step 2 never
+passes), and an `inconclusive` verdict never satisfies step 3 either — so a
+red **required** check on either of those would otherwise stall in
+`reviewing` forever, exactly the gap this closes. "Required" means a name
+present in `required_status_checks.contexts` from
+`GET /repos/{owner}/{repo}/branches/{branch}/protection`
+(`fetchRequiredStatusContexts`, `github.ts`, cached per repo/branch for an
+hour — branch protection changes about never). The protection lookup needs
+`administration: read` on the GitHub App token, which `READ_PERMISSIONS`
+deliberately does **not** grant (scope creep for one feature); a 403/404
+there fails **closed** — "don't know" is never read as "nothing is
+required," and the task is simply left in `reviewing` exactly as it would
+be without `#755` at all.
+
+**Matched against Check Runs, not Workflow Runs — a fresh-review catch on
+the first version of this feature.** `required_status_checks.contexts`
+names live in a different GitHub API namespace than
+`fetchRunsForHead`'s Workflow Run names: a single workflow run (`"CI/CD"`,
+`"CodeQL"`) fans out into many per-job Check Runs
+(`"test-node / lint-and-test"`, `"analyze / Analyze
+(javascript-typescript)"`, ...), and it's the check-run name GitHub itself
+compares against the required set — verified live against this repo's own
+protection. The two namespaces share no names at all for a repo using
+GitHub's standard "require these specific job checks" protection (the
+common case, not an edge case), so the original implementation, which
+compared `fetchRunsForHead`'s names against the required set, could never
+match anything. The fix: `fetchCheckRunsForHead` (`github.ts`) reads
+`GET /commits/{sha}/check-runs` directly, in the same namespace as the
+required set, and that's what's actually matched. `fetchRunsForHead`
+(unchanged) still supplies the coarse "is anything red at all" pre-filter —
+a red workflow run and a red one of its constituent check runs are
+correlated in practice (a job failure fails its parent workflow run too),
+so this avoids a second GitHub call on the ordinary green-CI tick, at the
+cost of not accounting for a `continue-on-error: true` job (out of scope).
+A red run whose name isn't in the required set (this repo's own
+`test-e2e`) is left alone either way, since the merge sweep itself doesn't
+gate on it.
+
+**`mergeableState === "blocked"` was considered and rejected** for the same
+reason the original #755 design doc already ruled it out: this repo (like
+most with `required_conversation_resolution` on) can read `"blocked"` with
+perfectly green CI whenever Mullion's own review agent has left an
+unresolved inline PR comment thread — a false positive unrelated to CI.
+
+Shares `tasks.autoReturnRounds`/`maxAutoReturnRounds` — the same counter and
+cap every other auto-return trigger uses (`reason: "ci"`). Once the cap is
+spent, one PR comment names it (the same `postReviewFindingsComment`
+mechanism the review-feedback loop's own cap-reached note uses) and the
+task stays in `reviewing` — deduped per round (`ciCapCommentedRounds`,
+`task-reconciler.ts`) so a task stuck red-and-capped gets exactly one
+comment, not a fresh one on every sweep tick indefinitely; unlike the
+review-feedback loop's own cap comment, which is naturally single-shot
+(tied to a findings-ingestion CAS write), this path runs unconditionally
+every tick a candidate row still matches, with no equivalent state
+transition to hang a "have I already said this" check on. The worker is
+re-seeded with a rendering of the same `ReviewCiInfo` the review agent
+itself would see (`renderCiSummary`/`buildCiFailurePrompt`,
+`task-prompt.ts`) — Mullion does not fetch or summarize Actions logs
+itself; the worker has a shell and the real worktree, and can run
+`gh run view --log-failed` far more precisely.
 
 **A remote-hosted task can now auto-approve (`#760`).** Review-findings
 ingestion (step 2 above) used to be local-only — this process could only

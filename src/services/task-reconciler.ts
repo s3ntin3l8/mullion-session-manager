@@ -25,6 +25,7 @@ import { recordTaskTransition } from "./task-state.js";
 import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
+  buildCiFailurePrompt,
   taskReviewFindingsPath,
   parseReviewFindings,
   renderReviewFindingsMarkdown,
@@ -35,6 +36,7 @@ import { approveTask } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges } from "./git-worktree.js";
+import type { GitHubRepoRef } from "./git-remote.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import {
   getPullRequestByNumber,
@@ -42,7 +44,12 @@ import {
   updatePullRequestBranch,
   deleteRemoteBranch,
 } from "./github-write.js";
-import { computeCiStatus, fetchRunsForHead } from "./github.js";
+import {
+  computeCiStatus,
+  fetchRunsForHead,
+  fetchRequiredStatusContexts,
+  fetchCheckRunsForHead,
+} from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 
 /**
@@ -252,6 +259,12 @@ async function fetchCurrentCiStatus(
   headSha: string;
   status: ReturnType<typeof computeCiStatus>;
   runs: ReviewCiInfo["runs"];
+  // #755 — the PR's own repo/base branch, for the red-CI-return gate's
+  // branch-protection lookup. Returned here (rather than re-resolved by
+  // that gate) since this function already has both in scope from the
+  // `getPullRequestByNumber` call below — one fewer redundant GitHub call.
+  repoRef: GitHubRepoRef;
+  baseRef: string;
 } | null> {
   if (task.prNumber === null) return null;
   const repoRef = await resolveRepoRef(app, project);
@@ -268,7 +281,7 @@ async function fetchCurrentCiStatus(
     conclusion: r.conclusion,
     htmlUrl: r.htmlUrl,
   }));
-  return { headSha: pr.headSha, status, runs: runSummaries };
+  return { headSha: pr.headSha, status, runs: runSummaries, repoRef, baseRef: pr.baseRef };
 }
 
 /**
@@ -1145,7 +1158,14 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
 //      sweep simply wins.
 // Anything else — no review agent configured (never ingests a verdict at
 // all), "changes-requested", "inconclusive", CI red/still running/absent —
-// leaves the task in "reviewing" for a human, exactly today's behavior.
+// leaves the task in "reviewing" for a human, exactly today's behavior...
+// EXCEPT one case #755 now closes: a red REQUIRED check (per
+// `fetchRequiredStatusContexts`, github.ts) returns the task to the worker
+// automatically, same as a "changes-requested" review round — even for a
+// project with no review agent configured at all (gate 2 would otherwise
+// never pass for those) and even when the verdict is "inconclusive" (gate 3
+// would otherwise never pass). See `attemptReturnRedCiToWorker`'s own doc
+// comment for why that check runs BEFORE gates 2/3, not folded into gate 4.
 //
 // Gate 4 deliberately has NO deadline, unlike resolveReviewCi's own
 // wait-then-proceed-anyway posture for spawning the reviewer in the first
@@ -1165,6 +1185,130 @@ function autoApproveRetryBackoffMs(attempts: number): number {
 }
 
 /**
+ * #755 — a red REQUIRED check on a task's PR sends it back to the worker
+ * for one automatic round, same mechanism as a "changes-requested" review
+ * (`autoReturnTask`, `reason: "ci"`). Deliberately hoisted ABOVE
+ * `attemptAutoApprove`'s gates 2/3 (the ingested-verdict and "clean"
+ * checks) rather than folded into gate 4's CI check below: gate 2 never
+ * passes for a project with no review agent configured at all (no verdict
+ * is ever written), and gate 3 never passes for an "inconclusive" verdict —
+ * so red-required-CI-plus-either-of-those would otherwise stall in
+ * "reviewing" forever, exactly the failure class #755 exists to close.
+ *
+ * Matches against `required_status_checks.contexts`
+ * (`fetchRequiredStatusContexts`, github.ts) by CHECK RUN name
+ * (`fetchCheckRunsForHead`) — NOT `current.runs`, which is Workflow Run
+ * data from a different GitHub API namespace that never overlaps with the
+ * required set (fresh-review finding; see `fetchCheckRunsForHead`'s own
+ * doc comment for the full story). A red NON-required check (this repo's
+ * own `test-e2e`) is not a reason to return the worker, since the merge
+ * sweep itself doesn't gate on it either. `null` from the required-contexts
+ * lookup (a 403/404 — no `administration` scope, or no protection
+ * configured) is a fail-closed "don't know", not "nothing is required":
+ * returns `false` without returning the worker, same as `current.status
+ * !== "failure"`.
+ *
+ * Shares `autoReturnTask`'s round counter/cap with every other trigger
+ * (#756's model). When the cap is already spent, posts one PR comment
+ * naming it (same `postReviewFindingsComment` mechanism the review-feedback
+ * loop's own cap-reached path uses) and leaves the task in "reviewing" —
+ * silence here would be the same "capped looks identical to never going to
+ * auto-return" gap #756 already fixed for the review path. Deduped via
+ * `ciCapCommentedRounds` (below) so a task stuck red+capped gets exactly
+ * one comment per round, not a fresh one every sweep tick indefinitely —
+ * unlike the review-feedback loop's own cap comment, which is naturally
+ * single-shot (tied to a findings-ingestion CAS write), this function runs
+ * unconditionally every tick a candidate row matches, with no equivalent
+ * state transition to hang a "have I already said this" check on.
+ *
+ * Returns whether it actually returned the task (or posted the cap-reached
+ * comment) — either way, `attemptAutoApprove` must not fall through to its
+ * own approve gates for this tick.
+ */
+const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
+const ciCapCommentedRounds = new Map<number, number>();
+
+async function attemptReturnRedCiToWorker(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  current: NonNullable<Awaited<ReturnType<typeof fetchCurrentCiStatus>>>,
+): Promise<boolean> {
+  if (current.status !== "failure") return false;
+  if (task.worktreePath === null || task.agentCommand === null) return false;
+  if (!commandSupportsSeed(task.agentCommand)) return false;
+
+  const token = await resolveGitHubToken(app, current.repoRef, "read");
+  if (!token) return false;
+  const requiredContexts = await fetchRequiredStatusContexts(
+    token,
+    current.repoRef.owner,
+    current.repoRef.repo,
+    current.baseRef,
+  );
+  // Fail closed — see this function's own doc comment.
+  if (requiredContexts === null || requiredContexts.length === 0) return false;
+
+  const checkRuns = await fetchCheckRunsForHead(
+    token,
+    current.repoRef.owner,
+    current.repoRef.repo,
+    current.headSha,
+  );
+  // Fresh-review finding: a bare `=== "failure"` missed `timed_out` and
+  // `action_required` — conclusions GitHub's own merge gate blocks on just
+  // like a plain failure, but which the coarse Workflow-Run pre-filter
+  // above (`computeCiStatus`) already treats as "not passing." Matching
+  // the same "not success, not skipped, not cancelled, not still-running"
+  // definition here keeps the two checks consistent — a required check
+  // that fails BOTH ways it can fail (a bare "failure", or one of these)
+  // now returns the worker either way, rather than reintroducing the
+  // exact "stalls in reviewing forever" gap #755 exists to close, just at
+  // a different conclusion value.
+  const redRequired = checkRuns.some(
+    (c) =>
+      requiredContexts.includes(c.name) &&
+      c.conclusion !== null &&
+      c.conclusion !== "success" &&
+      c.conclusion !== "skipped" &&
+      c.conclusion !== "cancelled" &&
+      c.conclusion !== "neutral",
+  );
+  if (!redRequired) return false;
+
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return false;
+
+  const maxRounds = resolveMaxAutoReturnRounds(project);
+  if (task.autoReturnRounds >= maxRounds) {
+    if (ciCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
+    if (
+      !ciCapCommentedRounds.has(task.id) &&
+      ciCapCommentedRounds.size >= MAX_CI_CAP_COMMENTED_ENTRIES
+    ) {
+      const oldest = ciCapCommentedRounds.keys().next().value;
+      if (oldest !== undefined) ciCapCommentedRounds.delete(oldest);
+    }
+    ciCapCommentedRounds.set(task.id, task.autoReturnRounds);
+    await postReviewFindingsComment(app, task, project, {
+      body: `A required CI check is failing on this task's PR, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
+    });
+    return true;
+  }
+
+  const prompt = buildCiFailurePrompt({
+    task,
+    branchName: task.branchName ?? `mullion/task-${task.id}`,
+    worktreePath: task.worktreePath,
+    budgetMinutes: resolvedTaskMaster.budgetMinutes,
+    auto: true,
+    ci: { headSha: current.headSha, status: current.status, runs: current.runs },
+  });
+  await autoReturnTask(app, task, project, { reason: "ci", seedPrompt: prompt });
+  return true;
+}
+
+/**
  * What happens once `approveTask` actually runs — the gate above says WHEN
  * to attempt; this says what to do with each `ApproveOutcome`. In a sweep
  * there's no human reading a 409, so every reason needs a named
@@ -1176,14 +1320,6 @@ async function attemptAutoApprove(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
 ): Promise<void> {
-  if (
-    task.reviewFindingsIngestedSessionId === null ||
-    task.reviewFindingsIngestedSessionId !== task.reviewSessionId
-  ) {
-    return;
-  }
-  if (task.lastReviewVerdict !== "clean") return;
-
   let current: Awaited<ReturnType<typeof fetchCurrentCiStatus>>;
   try {
     current = await fetchCurrentCiStatus(app, task, project);
@@ -1194,6 +1330,17 @@ async function attemptAutoApprove(
     );
     return;
   }
+
+  if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
+
+  if (
+    task.reviewFindingsIngestedSessionId === null ||
+    task.reviewFindingsIngestedSessionId !== task.reviewSessionId
+  ) {
+    return;
+  }
+  if (task.lastReviewVerdict !== "clean") return;
+
   if (!current || current.status !== "success") return;
 
   const outcome = await approveTask(app, task, project, "auto-approve");
@@ -1233,11 +1380,9 @@ async function attemptAutoApprove(
       return;
     case "remote-not-supported":
       // Permanent for this host — logged once per attempt (the backoff
-      // below still bounds how often that is). Mostly moot: a remote-hosted
-      // task can't reach a "clean" verdict at all today, since review-
-      // findings ingestion is local-only (processReviewingTasks's own doc
-      // comment) — this branch exists for completeness, not because it's
-      // expected to fire.
+      // below still bounds how often that is). #760 made review-findings
+      // ingestion remote-capable, so a remote-hosted task CAN now reach a
+      // "clean" verdict and land here for real, not just for completeness.
       app.log.warn(
         { taskId: task.id },
         "task reconcile: auto-approve not supported for this task's host",
