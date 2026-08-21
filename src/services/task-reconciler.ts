@@ -1,5 +1,3 @@
-import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
 import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -12,7 +10,11 @@ import { createSessionRecord, killSession } from "./session-lifecycle.js";
 // attemptAutoRebase's stale-attempt-termination branch below for why this
 // needs it too.
 import { closeSessionBrowserBindings } from "./session-browsers.js";
-import { resolveBackend, type SessionBackend } from "./session-backend.js";
+import {
+  resolveBackend,
+  resolveSessionsDirWithFallback,
+  type SessionBackend,
+} from "./session-backend.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
@@ -121,15 +123,21 @@ async function spawnReviewAgentNow(
     // an unattended review agent idling exactly like an unattended worker
     // did before this fix.
     const seedCapable = commandSupportsSeed(reviewCommand);
+    // #778 — resolved against the OWNING host's own sessionsDir (falls back
+    // to the primary's local path, with a warn, if that lookup fails) so
+    // the review agent is told to write somewhere it can actually reach on
+    // its own filesystem, not wherever the primary's own hookSocketPath
+    // happens to live.
+    const backend = resolveBackend(app, project.hostId);
+    const sessionsDir = await resolveSessionsDirWithFallback(app, backend, {
+      taskId: task.id,
+      hostId: project.hostId,
+    });
     // task.autoReturnRounds is the round THIS review belongs to: 0 for the
     // first review, 1 for the one spawned after an auto-returned round —
     // see taskReviewFindingsPath's own doc comment for why round-suffixing
     // matters here.
-    const findingsPath = taskReviewFindingsPath(
-      path.dirname(app.pty.hookSocketPath),
-      task.id,
-      task.autoReturnRounds,
-    );
+    const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.autoReturnRounds);
     // Task Master trial 220921 / PR #743's incident left exactly this file
     // on disk: `processReviewingTasks`'s own unlink-on-ingest ran before the
     // real (late-arriving) findings file existed, so it found nothing to
@@ -142,20 +150,6 @@ async function spawnReviewAgentNow(
     // Unlinking here, before the agent gets a chance to write anything, is
     // the fix: whatever this fresh spawn's own agent writes is now
     // guaranteed to be the only thing this path can ever contain.
-    //
-    // #760 note: `findingsPath` above is still computed from THIS
-    // process's own local sessionsDir unconditionally — including for a
-    // remote-hosted project's review agent, which runs on a different
-    // host with its own (possibly different) sessionsDir. That's a
-    // pre-existing gap this PR doesn't fix (it's in the SEED side — what
-    // path the agent is TOLD to write to via buildReviewPrompt below —
-    // not the ingest-side read/delete this PR adds; fixing it needs a way
-    // to ask a remote host for its own sessionsDir before the prompt is
-    // built, distinct work — tracked as issue #778). `unlinkFindingsFileIfPresent` below is
-    // updated to go through `backend` purely so this call site still
-    // compiles against the new signature and stays correct for the common
-    // (local) case — it does not fix the remote seed-path mismatch.
-    const backend = resolveBackend(app, project.hostId);
     await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
     const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath, findingsPath, ci });
     const result = await createSessionRecord(app, {
@@ -1182,8 +1176,16 @@ async function attemptAutoRebase(
   }
 
   const taskMasterConfig = resolveTaskMasterConfig(app);
+  // #778 — resolved against the OWNING host's own sessionsDir; see
+  // spawnReviewAgentNow's own comment above for the full rationale.
   const commitTitlePath = project.conventionalCommitTitles
-    ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+    ? taskCommitTitlePath(
+        await resolveSessionsDirWithFallback(app, backend, {
+          taskId: task.id,
+          hostId: project.hostId,
+        }),
+        task.id,
+      )
     : undefined;
   const seedCapable = commandSupportsSeed(task.agentCommand);
   const prompt = buildRebasePrompt({
@@ -1567,6 +1569,17 @@ async function attemptReturnRedCiToWorker(
     return true;
   }
 
+  // #778 — resolved against the OWNING host's own sessionsDir; see
+  // spawnReviewAgentNow's own comment for the full rationale.
+  const commitTitlePath = project.conventionalCommitTitles
+    ? taskCommitTitlePath(
+        await resolveSessionsDirWithFallback(app, resolveBackend(app, project.hostId), {
+          taskId: task.id,
+          hostId: project.hostId,
+        }),
+        task.id,
+      )
+    : undefined;
   const prompt = buildCiFailurePrompt({
     task,
     branchName: task.branchName ?? `mullion/task-${task.id}`,
@@ -1574,11 +1587,7 @@ async function attemptReturnRedCiToWorker(
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     auto: true,
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
-    // #761 — see task-claim.ts's own comment on this same expression for
-    // the remote-host caveat (#778).
-    commitTitlePath: project.conventionalCommitTitles
-      ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
-      : undefined,
+    commitTitlePath,
   });
   await autoReturnTask(app, task, project, { reason: "ci", seedPrompt: prompt });
   return true;
@@ -1699,17 +1708,24 @@ async function attemptReturnPrCommentsToWorker(
     return true;
   }
 
+  // #778 — resolved against the OWNING host's own sessionsDir; see
+  // spawnReviewAgentNow's own comment for the full rationale.
+  const commitTitlePath = project.conventionalCommitTitles
+    ? taskCommitTitlePath(
+        await resolveSessionsDirWithFallback(app, resolveBackend(app, project.hostId), {
+          taskId: task.id,
+          hostId: project.hostId,
+        }),
+        task.id,
+      )
+    : undefined;
   const prompt = buildPrReviewCommentsPrompt({
     task,
     branchName: task.branchName ?? `mullion/task-${task.id}`,
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     auto: true,
-    // #761 — see task-claim.ts's own comment on this same expression for
-    // the remote-host caveat (#778).
-    commitTitlePath: project.conventionalCommitTitles
-      ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
-      : undefined,
+    commitTitlePath,
     comments: newComments.map((c): PrReviewCommentInfo => ({
       author: c.author,
       path: c.path,
@@ -2424,10 +2440,16 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           // guarantees `parsed !== null` here, but `parsed` may be JSON; the
           // worker should read prose, not the wire format Mullion parses.
           findings: renderReviewFindingsMarkdown(parsed!),
-          // #761 — see task-claim.ts's own comment on this same expression
-          // for the remote-host caveat (#778).
+          // #778 — resolved against the OWNING host's own sessionsDir; see
+          // spawnReviewAgentNow's own comment for the full rationale.
           commitTitlePath: project.conventionalCommitTitles
-            ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+            ? taskCommitTitlePath(
+                await resolveSessionsDirWithFallback(app, backend, {
+                  taskId: task.id,
+                  hostId: project.hostId,
+                }),
+                task.id,
+              )
             : undefined,
         });
         await autoReturnTask(app, task, project, { reason: "review", seedPrompt: prompt });
@@ -2673,30 +2695,30 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // write that flips this task to "reviewing" also carries its
             // title, and task-promote.ts's createOrRecoverPR (called via
             // maybeOpenDraftPR just below) sees it on its very first PR
-            // create. Local-only for now (`existsSync`/`readFileSync`
-            // directly, not routed through `SessionBackend`) — same
-            // known limitation `#778` tracks for the review-findings
-            // SEED path: a remote-hosted task's worker writes this file
-            // on its own host, which this process can't read directly.
-            // Absent, unreadable, or malformed all fall back identically:
-            // `prTitle` stays `null`, and task-promote.ts falls back to
-            // the raw task title.
-            const commitTitlePath = project.conventionalCommitTitles
-              ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
-              : null;
+            // create. #778 — routed through SessionBackend so a
+            // remote-hosted task's worker's title file (written on its own
+            // host) is actually reachable, not just this process's local
+            // filesystem. Absent, unreadable, or malformed all fall back
+            // identically: `prTitle` stays `null`, and task-promote.ts
+            // falls back to the raw task title — never blocking the
+            // transition, so a `readTaskCommitTitle` throw (host
+            // unreachable, version skew) gets the same graceful fallback as
+            // a local read failure, not a "wait and retry" like the
+            // stricter review-findings ingest above.
             let prTitle: string | null = null;
-            if (commitTitlePath && existsSync(commitTitlePath)) {
+            if (project.conventionalCommitTitles) {
               try {
-                prTitle = parseCommitTitle(readFileSync(commitTitlePath, "utf8"));
-                if (prTitle === null) {
+                const content = await backend.readTaskCommitTitle(task.id);
+                prTitle = content === null ? null : parseCommitTitle(content);
+                if (content !== null && prTitle === null) {
                   app.log.warn(
-                    { taskId: task.id, commitTitlePath },
+                    { taskId: task.id },
                     "task reconcile: worker's PR title file didn't parse as a Conventional Commits title — falling back to the raw task title",
                   );
                 }
               } catch (err) {
                 app.log.warn(
-                  { err, taskId: task.id, commitTitlePath },
+                  { err, taskId: task.id },
                   "task reconcile: failed to read the worker's PR title file — falling back to the raw task title",
                 );
               }

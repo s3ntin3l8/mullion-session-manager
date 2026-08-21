@@ -1,4 +1,3 @@
-import path from "node:path";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
@@ -9,7 +8,11 @@ import { projects, tasks } from "../db/schema.js";
 // buildLiveInfo/withLiveInfo/withLiveStatus split.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
 import { withLiveStatus } from "./session-live-info.js";
-import { resolveBackend, type SessionBackend } from "./session-backend.js";
+import {
+  resolveBackend,
+  resolveSessionsDirWithFallback,
+  type SessionBackend,
+} from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { resolveHostBaseRef } from "./host-git.js";
 import { getStoredSettings } from "./settings.js";
@@ -308,8 +311,9 @@ export async function dispatchClaimedTask(
   // what `committed` guards.
   let committed = false;
   try {
+    const backend = resolveBackend(app, project.hostId);
     // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
-    const clearResult = await resolveBackend(app, project.hostId).clearOrphanedTaskWorktree(
+    const clearResult = await backend.clearOrphanedTaskWorktree(
       project.cwd,
       predictedWorktreePath,
       branchName,
@@ -346,17 +350,16 @@ export async function dispatchClaimedTask(
       // difference, not a correctness gate the way no-seed-channel is.
       auto: false,
       mode: "claim",
-      // #761 — same known limitation #778 already tracks for the
-      // review-findings seed path: this is always the PRIMARY's own
-      // sessionsDir, not necessarily where a remote-hosted task's worker
-      // actually runs. Not fixed here (would need the same "ask the
-      // remote host for its own sessionsDir first" work #778 already
-      // scopes) — worst case for a mismatched host, the title file lands
-      // somewhere the reconciler never reads, and task-reconciler.ts's
-      // ingest step falls back to the raw task title, same as any other
-      // malformed/absent title.
+      // #778 — resolved against the OWNING host's own sessionsDir; see
+      // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
-        ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+        ? taskCommitTitlePath(
+            await resolveSessionsDirWithFallback(app, backend, {
+              taskId: task.id,
+              hostId: project.hostId,
+            }),
+            task.id,
+          )
         : undefined,
     });
     const result = await createSessionRecord(app, {
@@ -671,11 +674,9 @@ export async function retryTask(
     // resolveWithinRoots 400, not just a missing route), so this checks
     // `statusCode === 404` specifically rather than the class alone; any
     // other HostRequestError falls through to the generic catch below.
+    const backend = resolveBackend(app, project.hostId);
     try {
-      worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
-        project.cwd,
-        branchName,
-      );
+      worktree = await backend.resumeTaskWorktree(project.cwd, branchName);
     } catch (err) {
       if (err instanceof HostRequestError && err.statusCode === 404) {
         await release("this host's agent build doesn't support retrying a remote-hosted task yet");
@@ -719,17 +720,16 @@ export async function retryTask(
       // therefore watching, so the "don't stop to ask" bullet stays off.
       auto: false,
       mode: "retry",
-      // #761 — same known limitation #778 already tracks for the
-      // review-findings seed path: this is always the PRIMARY's own
-      // sessionsDir, not necessarily where a remote-hosted task's worker
-      // actually runs. Not fixed here (would need the same "ask the
-      // remote host for its own sessionsDir first" work #778 already
-      // scopes) — worst case for a mismatched host, the title file lands
-      // somewhere the reconciler never reads, and task-reconciler.ts's
-      // ingest step falls back to the raw task title, same as any other
-      // malformed/absent title.
+      // #778 — resolved against the OWNING host's own sessionsDir; see
+      // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
-        ? taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), task.id)
+        ? taskCommitTitlePath(
+            await resolveSessionsDirWithFallback(app, backend, {
+              taskId: task.id,
+              hostId: project.hostId,
+            }),
+            task.id,
+          )
         : undefined,
     });
     const result = await createSessionRecord(app, {

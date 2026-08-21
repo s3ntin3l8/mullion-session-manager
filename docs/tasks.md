@@ -1259,15 +1259,21 @@ write). `task-promote.ts`'s `createOrRecoverPR` then uses
 
 Absent (feature off) or malformed (didn't match the pattern, or exceeded the
 length bound) both fall back identically to the raw task title, one
-`app.log.warn` — this never blocks promotion. The read is **local-only**
-today (plain `existsSync`/`readFileSync`, not routed through
-`SessionBackend`) — same known limitation `#778` already tracks for the
-review-findings _seed_ path: a remote-hosted task's worker writes this file
-on its own host, which the primary can't read directly, so the feature
-silently no-ops for a remote-hosted project until that's fixed. The merge
-sweep passes the commit title explicitly so the result is deterministic
-regardless of the repo's own squash-title setting, but neither this nor the
-sweep gates the merge on a prefix check — that's this repo's own policy, not
+`app.log.warn` — this never blocks promotion. Both the SEED path (telling a
+worker where to write the file — `task-claim.ts`'s claim/retry spawns,
+`task-reconciler.ts`'s rebase/CI-return/PR-comment-return/review-round
+re-seeds, and `routes/tasks.ts`'s reject re-seed) and the READ path
+(`task-reconciler.ts`'s `-> reviewing` ingest) are routed through
+`SessionBackend` (`resolveSessionsDirWithFallback`/`readTaskCommitTitle`,
+`#778`), so a remote-hosted task's worker writes to — and the primary reads
+from — the OWNING host's own `sessionsDir`, not the primary's. A failure to
+resolve the remote sessionsDir (host unreachable, version skew) falls back
+to the primary's local path with a warn rather than blocking the spawn; a
+failure to read the title file falls back to the raw task title, same as a
+malformed one. The merge sweep passes the commit title explicitly so the
+result is deterministic regardless of the repo's own squash-title setting,
+but neither this nor the sweep gates the merge on a prefix check — that's
+this repo's own policy, not
 a Mullion-wide one.
 
 **The title is never re-synced to GitHub after the PR is created (`#782`).**
@@ -1396,21 +1402,27 @@ caller-supplied path fragment at all, the same "target never a
 caller-supplied path" safety `/internal/agent-rules` already relies on for
 its own global-scope targets.
 
-The one thing this deliberately did **not** do: a remote-hosted review
-agent's _seed prompt_ (`buildReviewPrompt`, telling it where to write) is
-still computed from THIS process's own local `sessionsDir` — a
-pre-existing, separate gap in the write/seed side, not the read/ingest
-side `#760` addresses. Fixing it needs a way to ask a remote host for its
-own `sessionsDir` before the prompt is built; tracked as `#778`, not
-blocking this one. Note this is a real (not merely theoretical) risk for a
-remote host whose `sessionsDir` differs from the primary's — the read side
-sees a genuinely-absent file (`null`, not an error) and, once
+**The seed-side gap this left is now closed too (`#778`).** A remote-hosted
+review agent's _seed prompt_ (`buildReviewPrompt`, telling it where to
+write) used to be computed from THIS process's own local `sessionsDir`
+unconditionally — a real (not merely theoretical) risk for a remote host
+whose `sessionsDir` differs from the primary's: the read side would see a
+genuinely-absent file (`null`, not an error) and, once
 `REVIEW_FINDINGS_GRACE_MS` elapses, that reads identically to "the agent
-never wrote anything," so the task is ingested as **inconclusive** with a
-posted PR comment — a confident wrong answer, not the honest stall this
-gap produced before `#760`. It only fully coincides today for hosts
-provisioned identically (e.g. via `deploy/install.sh`), where both sides'
-`sessionsDir` are byte-identical strings.
+never wrote anything," ingesting the task as **inconclusive** with a posted
+PR comment — a confident wrong answer, worse than the honest stall this
+gap produced before `#760`. Fixed via `SessionBackend.resolveSessionsDir()`
+— `LocalBackend` returns `path.dirname(app.pty.hookSocketPath)` as before;
+`RemoteBackend` asks the peer's own `/internal/config` route (already
+existed, issue #247/roadmap 7.4) for its `sessionsDir`. Deliberately
+uncached (a spawn happens once per round, not once per sweep tick, and
+caching risks staleness across a remote host redeploy the primary never
+restarts for); a resolution failure falls back to the primary's local path
+with a warn rather than blocking the spawn. The same primitive fixes the
+identical gap in the Conventional Commits title's seed path (`#761`'s
+`commitTitlePath`, at every worker/re-seed spawn site) and adds a matching
+`readTaskCommitTitle`/`/internal/task-commit-title` pair for its READ side
+— see the Commit title section above.
 
 **New PR review comments return the task to the worker (`#757`).** A human
 leaving inline review comments directly on GitHub — not through Mullion's
@@ -1536,17 +1548,23 @@ extensive design comments.
 ## Known limitations
 
 - **Promotion, issue ingest, the boot-time orphan sweep, Retry, and
-  review-findings ingestion all now work for remote-hosted projects
-  (`#484`, `#760`).** The one remaining gap is version skew: a remote host
-  running an agent build older than the feature in question degrades
-  per-path rather than breaking — promotion 501s with
-  `remote-not-supported` (see Task → PR promotion above), Retry 501s the
-  same way, the ingest/orphan sweeps just log and skip that host, and a
-  remote host too old to have `/internal/task-review-findings` (`#760`)
-  makes `readTaskReviewFindings` throw a `HostRequestError` — logged and
-  retried next tick, same as a genuinely unreachable host, never
-  misread as "the review wrote nothing." Update the agent build on that
-  host to close the gap.
+  review-findings/commit-title ingestion and seeding all now work for
+  remote-hosted projects (`#484`, `#760`, `#778`).** The one remaining gap
+  is version skew: a remote host running an agent build older than the
+  feature in question degrades per-path rather than breaking — promotion
+  501s with `remote-not-supported` (see Task → PR promotion above), Retry
+  501s the same way, the ingest/orphan sweeps just log and skip that host,
+  and a remote host too old to have `/internal/task-review-findings`
+  (`#760`) or `/internal/task-commit-title` (`#778`) makes
+  `readTaskReviewFindings`/`readTaskCommitTitle` throw a `HostRequestError`
+  — logged and either retried next tick (review-findings) or gracefully
+  falling back to the raw task title (commit-title), same as a genuinely
+  unreachable host, never misread as "the review/worker wrote nothing."
+  `resolveSessionsDir()`'s own failure (a peer too old to have
+  `/internal/config` — unlikely, since that route long predates `#778` —
+  or simply unreachable) falls back to the primary's local path with a
+  warn, the seed-side equivalent of the same posture. Update the agent
+  build on that host to close the gap.
 - **`git-push.ts`'s push credential is https-transport only.** A task's
   branch is pushed via `git -c http.extraHeader=...`, which only applies to
   an `origin` configured over https — a remote-hosted project whose
