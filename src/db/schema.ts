@@ -127,6 +127,16 @@ export const projects = sqliteTable("projects", {
   // "reviewing" task on its own once its review agent's last verdict is
   // "clean" AND CI on the PR head is green — see tasks.lastReviewVerdict.
   autoApprove: integer("auto_approve", { mode: "boolean" }),
+  // #772's roadmap follow-up — the per-project override of how many
+  // automatic "reviewing -> in_progress" rounds a task may spend across its
+  // lifecycle (tasks.autoReturnRounds/lastAutoReturnReason). Null means
+  // "use the install default" (resolveMaxAutoReturnRounds,
+  // task-reconciler.ts, currently 2) — same nullable-override shape as
+  // defaultAgent above, not the no-install-wide-tier posture
+  // mergeOnApprove/autoApprove use: unlike merging, a round cap has a
+  // sensible default that works for every project, so a global fallback is
+  // useful here where it wasn't for those two.
+  maxAutoReturnRounds: integer("max_auto_return_rounds"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -354,6 +364,16 @@ export const tasks = sqliteTable(
     // spawned worker session. Cascades to null (not delete) on session
     // removal since the task record itself should survive a killed session
     // for history/debugging.
+    //
+    // #772 — a normal transition that supersedes or ends this link
+    // (approve, give-up, retry, the force re-seed behind an auto-return
+    // round) now kills the OLD session first, before writing the new value
+    // or nulling this column. Before that fix, the old session was simply
+    // left running — no path in the task lifecycle ever terminated it once
+    // this pointer moved on, so it lingered indefinitely as a live process
+    // with no task attached to it. See task-approve.ts's cleanupTaskSessions
+    // and task-claim.ts's retryTask for the two call sites that touch this
+    // column directly.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
     // Claimed-task-never-starts-a-turn fix — whether the worker's most
     // recent spawn (claim/auto-claim/retry) actually delivered an initial
@@ -372,6 +392,14 @@ export const tasks = sqliteTable(
     // agent design decision). Independent lifecycle from sessionId: it's
     // spawned fresh each time a task enters "reviewing" and never resumed
     // across a reject cycle.
+    //
+    // #772 — every fresh "-> reviewing" entry now kills the OLD review
+    // session (task-reconciler.ts) before nulling this column, same
+    // reasoning as sessionId's own comment above. A reject-and-re-review
+    // cycle previously orphaned the prior round's review session with no
+    // task row pointing at it at all — strictly less recoverable than
+    // sessionId's own equivalent gap, since there was no pointer left to
+    // even find it by.
     reviewSessionId: integer("review_session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
@@ -416,17 +444,31 @@ export const tasks = sqliteTable(
     // have been ingested yet — could be a task with no review agent
     // configured, one still running, or one that genuinely found nothing.
     reviewFindings: text("review_findings"),
-    // How many times this task's review findings have already driven an
-    // automatic "reviewing -> in_progress" round back to the worker.
-    // Bounded at 1 (task-reconciler.ts's review-feedback loop checks
-    // `reviewRounds < 1` before auto-returning) and, once incremented,
-    // NEVER reset — not by Retry, not by a human Reject — so a task can
-    // auto-return at most once across its whole lifecycle no matter how
-    // many times a human sends it back around by hand.
-    reviewRounds: integer("review_rounds").notNull().default(0),
+    // How many times this task has already driven an automatic
+    // "reviewing -> in_progress" round back to the worker — not just from a
+    // changes-requested review verdict anymore (#772's roadmap follow-up):
+    // see `lastAutoReturnReason` below for the full trigger vocabulary.
+    // Bounded by the resolved per-project cap
+    // (`resolveMaxAutoReturnRounds`/`projects.maxAutoReturnRounds`,
+    // task-reconciler.ts) — previously hardcoded to a single round
+    // (`reviewRounds < 1`) — and, once incremented, NEVER reset — not by
+    // Retry, not by a human Reject — so a task's auto-return budget is
+    // spent once per lifecycle no matter how many times a human sends it
+    // back around by hand. The TS property was renamed from `reviewRounds`
+    // to `autoReturnRounds` to match; the underlying SQL column stays
+    // `review_rounds` deliberately — every other migration in this repo is
+    // a purely additive `ALTER TABLE ... ADD`, and a genuine column rename
+    // risks drizzle-kit treating it as a drop-and-add against a live DB.
+    autoReturnRounds: integer("review_rounds").notNull().default(0),
+    // Which trigger most recently drove an auto-return round — distinct
+    // from the verdict itself (`lastReviewVerdict`, below), since not every
+    // trigger is a review verdict. Null until the first auto-return.
+    lastAutoReturnReason: text("last_auto_return_reason", {
+      enum: ["review", "ci", "pr-comment"],
+    }),
     // The reviewSessionId whose findings have already been read and acted
     // on (comment posted, review_findings appended, auto-return decided) —
-    // NOT the same question reviewRounds answers. A task can sit in
+    // NOT the same question autoReturnRounds answers. A task can sit in
     // "reviewing" for a long time with its review agent finished and ZERO
     // findings (nothing to auto-return for), and the reconciler polls every
     // "reviewing" task on every tick; without this marker that task would

@@ -62,7 +62,7 @@ vi.mock("../../src/services/task-promote.js", async (importOriginal) => {
 });
 
 // Hermes review, PR #580 — the review-feedback auto-return's rollback of a
-// spent `reviewRounds` when the re-seed fails needs a controllable failure;
+// spent `autoReturnRounds` when the re-seed fails needs a controllable failure;
 // engineering a REAL terminate/spawn failure through this file's full
 // integration setup (real createSessionRecord, mocked node-pty/
 // child_process that always "succeed") isn't practical. Pass-through by
@@ -211,7 +211,7 @@ mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
-const { tasks, sessions } = await import("../../src/db/schema.js");
+const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
@@ -480,6 +480,91 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
+  // #772 — a reject-and-re-review cycle leaves the PRIOR round's review
+  // session attached as `task.reviewSessionId` right up until this same
+  // "-> reviewing" transition nulls it. Before this fix, nothing ever
+  // terminated that stale session — it was simply orphaned, still "active"
+  // in the DB with no task row pointing at it anymore.
+  it("kills the prior round's review session when re-entering reviewing (reject-and-re-review)", async () => {
+    const app = await buildApp();
+    const { taskId, projectId } = await createSessionAndTask(app, "in_progress").then(async (r) => {
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, r.taskId)).all();
+      return { ...r, projectId: row.projectId };
+    });
+    const staleReview = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const staleReviewSessionId = staleReview.json().id as number;
+    app.db
+      .update(tasks)
+      .set({ reviewSessionId: staleReviewSessionId })
+      .where(eq(tasks.id, taskId))
+      .run();
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(staleReviewSessionId)) return { toInfo: () => fakeInfo() } as never;
+      return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+    });
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.reviewSessionId).not.toBe(staleReviewSessionId);
+    const { sessions } = await import("../../src/db/schema.js");
+    const [staleRow] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, staleReviewSessionId))
+      .all();
+    expect(staleRow.status).toBe("killed");
+
+    await app.close();
+  });
+
+  it("does not block the '-> reviewing' transition when killing the stale review session fails", async () => {
+    const app = await buildApp();
+    const { taskId, projectId } = await createSessionAndTask(app, "in_progress").then(async (r) => {
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, r.taskId)).all();
+      return { ...r, projectId: row.projectId };
+    });
+    const staleReview = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const staleReviewSessionId = staleReview.json().id as number;
+    app.db
+      .update(tasks)
+      .set({ reviewSessionId: staleReviewSessionId })
+      .where(eq(tasks.id, taskId))
+      .run();
+    vi.spyOn(app.pty, "get").mockImplementation((id) => {
+      if (id === String(staleReviewSessionId)) return { toInfo: () => fakeInfo() } as never;
+      return { toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }) } as never;
+    });
+    const sessionsModule = await import("../../src/services/session-lifecycle.js");
+    const killSpy = vi
+      .spyOn(sessionsModule, "killSession")
+      .mockRejectedValueOnce(new Error("boom"));
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    // Fire-and-forget — flush microtasks before asserting the warn fired.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, reviewSessionId: staleReviewSessionId }),
+      "task reconcile: failed to kill the superseded review session",
+    );
+
+    killSpy.mockRestore();
+    await app.close();
+  });
+
   it("leaves in_progress alone while the session is still actively working", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");
@@ -546,6 +631,11 @@ describe("reconcileTasks", () => {
       expect(row.failureReason).toContain("budget exceeded");
       expect(row.completedAt).not.toBeNull();
       expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+      // #772 — killSession, not a bare backend.terminate: the row itself
+      // must flip to "killed".
+      const { sessions } = await import("../../src/db/schema.js");
+      const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      expect(sessionRow.status).toBe("killed");
 
       await app.close();
     } finally {
@@ -2014,6 +2104,12 @@ describe("reconcileTasks", () => {
       expect(row.failureReason).toContain("mullion/task-999");
       expect(mockCommitWipChanges).toHaveBeenCalledWith("/tmp/mullion-task-worktree");
       expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+      // #772 — killSession, not a bare backend.terminate: the session row
+      // itself must flip to "killed", not linger "active" until the 30s
+      // exited-session reconciler eventually marks it "exited".
+      const { sessions } = await import("../../src/db/schema.js");
+      const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      expect(sessionRow.status).toBe("killed");
 
       await app.close();
     });
@@ -2300,7 +2396,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("in_progress");
-      expect(row.reviewRounds).toBe(1);
+      expect(row.autoReturnRounds).toBe(1);
       expect(row.reviewFindings).toContain("Fix the null check on line 42.");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       // The worker session was force-terminated and replaced — nobody was
@@ -2329,7 +2425,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toBeNull();
       expect(row.reviewFindingsIngestedSessionId).toBeNull();
       expect(row.sessionId).toBe(workerSessionId);
@@ -2388,7 +2484,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("inconclusive");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
@@ -2487,7 +2583,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("no issues found");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
@@ -2519,7 +2615,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("in_progress");
-      expect(row.reviewRounds).toBe(1);
+      expect(row.autoReturnRounds).toBe(1);
       expect(row.reviewFindings).toContain("cmd/branchdam/main_test.go:669");
       expect(row.reviewFindings).toContain("error return is unchecked");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
@@ -2544,7 +2640,12 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("does not auto-return once reviewRounds already used its one round — findings are still captured", async () => {
+    // #756 — the round cap is no longer hardcoded to 1; the DEFAULT cap
+    // (`DEFAULT_MAX_AUTO_RETURN_ROUNDS`, currently 2) is what this task has
+    // already spent, not a literal "1". A separate test below (using a
+    // project-level override) proves the cap is genuinely configurable, not
+    // just a renamed constant.
+    it("does not auto-return once the round cap is reached — findings are still captured", async () => {
       const app = await buildApp();
       const project = await app.inject({
         method: "POST",
@@ -2565,11 +2666,11 @@ describe("reconcileTasks", () => {
         .insert(tasks)
         .values({
           projectId: project.json().id,
-          title: "already used its round",
+          title: "already at the round cap",
           status: "reviewing",
           sessionId: workerSession.json().id,
           reviewSessionId: reviewSession.json().id,
-          reviewRounds: 1,
+          autoReturnRounds: 2,
           worktreePath: "/tmp",
           agentCommand: "claude",
           claimedAt: new Date(),
@@ -2577,15 +2678,117 @@ describe("reconcileTasks", () => {
         .returning()
         .all();
       mockFinishedSessionIds(app, reviewSession.json().id);
-      writeFindings(app, task.id, 1, "A second-round finding, arriving too late to auto-return.");
+      writeFindings(app, task.id, 2, "A third-round finding, arriving after the cap.");
 
       await reconcileTasks(app);
 
       const row = await getTask(app, task.id);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(1);
-      expect(row.reviewFindings).toContain("arriving too late to auto-return");
+      expect(row.autoReturnRounds).toBe(2);
+      expect(row.reviewFindings).toContain("arriving after the cap");
       expect(row.sessionId).toBe(workerSession.json().id);
+
+      await app.close();
+    });
+
+    // #756's whole point: a project with the default cap gets a SECOND
+    // automatic round, where the pre-#756 behavior would have stalled in
+    // "reviewing" after the first.
+    it("auto-returns for a second round under the default cap (2)", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "p-second-round", cwd: "/tmp" },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "spending its second round",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          autoReturnRounds: 1,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      mockFinishedSessionIds(app, reviewSession.json().id);
+      writeFindings(app, task.id, 1, "A second finding, still under the cap.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("in_progress");
+      expect(row.autoReturnRounds).toBe(2);
+      expect(row.lastAutoReturnReason).toBe("review");
+      expect(row.reviewFindings).toContain("still under the cap");
+
+      await app.close();
+    });
+
+    // A per-project override must actually be read, not just the default —
+    // a cap of 1 makes THIS task's first round the last one it's allowed.
+    it("honors a per-project maxAutoReturnRounds override lower than the default", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "p-low-cap", cwd: "/tmp" },
+      });
+      const projectId = project.json().id;
+      app.db
+        .update(projects)
+        .set({ maxAutoReturnRounds: 1 })
+        .where(eq(projects.id, projectId))
+        .run();
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "capped at one round by project override",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          autoReturnRounds: 1,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      mockFinishedSessionIds(app, reviewSession.json().id);
+      writeFindings(app, task.id, 1, "Blocked by this project's own lower cap.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      expect(row.autoReturnRounds).toBe(1);
+      expect(row.reviewFindings).toContain("Blocked by this project's own lower cap");
 
       await app.close();
     });
@@ -2797,7 +3000,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("should reach the drawer and the PR");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
@@ -2834,7 +3037,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("Possibly a partial review");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
@@ -2877,7 +3080,7 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("Looked clean right before the crash.");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
       expect(row.sessionId).toBe(workerSessionId);
@@ -2885,7 +3088,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    // Hermes review, PR #580 — reviewRounds is spent in the same CAS that
+    // Hermes review, PR #580 — autoReturnRounds is spent in the same CAS that
     // flips status to in_progress, before the re-seed's own outcome is
     // known. A re-seed failure (terminate/spawn error, or a lost race —
     // see reseedTaskIfSessionExited's own doc comment) previously left the
@@ -2902,9 +3105,14 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.status).toBe("in_progress");
-      expect(row.reviewRounds).toBe(0);
+      expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("should not cost the task its one round");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      // Fresh subagent review, PR #774 — a rolled-back attempt means no
+      // auto-return round actually completed, so lastAutoReturnReason must
+      // roll back to whatever it was before too (null, here), not linger
+      // at "review" for a round that never happened.
+      expect(row.lastAutoReturnReason).toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId, rolledBack: true }),
         expect.stringContaining("rolled back the spent auto-return round"),

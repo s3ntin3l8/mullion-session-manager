@@ -16,6 +16,13 @@ import { resolveBackend } from "./session-backend.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord } from "./session-lifecycle.js";
+// Not killSession() here (see the doc comment at its call site below) — but
+// killSession's OTHER two side effects (this one and cleanupPreviewWorktree)
+// still need to happen on a confirmed-successful terminate, or they silently
+// never run for this call site (fresh subagent review, PR #773 follow-up).
+// cleanupPreviewWorktree is a no-op here regardless — a task worker session
+// is never registered in the preview-worktree map — so only this one matters.
+import { closeSessionBrowserBindings } from "./session-browsers.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -65,6 +72,24 @@ export async function reseedTaskIfSessionExited(
     if (!opts.force) return false;
     try {
       await resolveBackend(app, project.hostId).terminate(String(task.sessionId));
+      // Flip the superseded session's row to "killed" now that termination
+      // is CONFIRMED to have succeeded — deliberately not killSession()
+      // here, which marks a row "killed" even when its own terminate call
+      // fails (the right call for a human-initiated kill, where nothing
+      // downstream depends on confirmed death). This function's catch
+      // block below has a stronger requirement: it must NOT fall through
+      // to spawning a second agent into this worktree while the old one
+      // might still be alive, so the status write only happens on the
+      // success path. Without this, the superseded session stays
+      // "active" until the 30s reconciler notices and marks it "exited"
+      // — never "killed" — which is the one status the sidebar and the
+      // Unified Board's ad-hoc lane don't already filter out.
+      app.db
+        .update(sessions)
+        .set({ status: "killed" })
+        .where(eq(sessions.id, task.sessionId))
+        .run();
+      closeSessionBrowserBindings(app, task.sessionId);
     } catch (err) {
       // Do NOT fall through to spawning anyway — a terminate failure means
       // the old session might still be alive and still writing to this

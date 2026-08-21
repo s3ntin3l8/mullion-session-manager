@@ -8,7 +8,7 @@ import { canTransition, recordTaskTransition, type TaskStatus } from "../service
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
-import { approveTask, cleanupTaskWorktree } from "../services/task-approve.js";
+import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import { resetMergeBackoff } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 
@@ -137,7 +137,13 @@ const TASK_ROW_COLUMNS = {
   // to any API response.
   reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
   reviewFindings: tasks.reviewFindings,
-  reviewRounds: tasks.reviewRounds,
+  // #756 — renamed from reviewRounds: this counter is no longer
+  // review-verdict-only (a red required CI check and an unresolved PR
+  // review comment are later auto-return triggers on the same model — see
+  // task-reconciler.ts's AutoReturnReason). lastAutoReturnReason names
+  // which trigger most recently spent a round.
+  autoReturnRounds: tasks.autoReturnRounds,
+  lastAutoReturnReason: tasks.lastAutoReturnReason,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
@@ -854,6 +860,10 @@ export async function tasksRoute(app: FastifyInstance) {
         // own doc comment already describes exactly this case (its other,
         // and previously only, call site is approve).
         cleanupTaskWorktree(app, updated, project);
+        // Same reasoning as approveTask's own call — a task leaving
+        // "reviewing" for good must not leave its worker/review sessions
+        // running with nothing left to do.
+        cleanupTaskSessions(app, updated);
         // A draft PR may already be open (task-promote.ts's
         // openDraftPRForTask, best-effort at "-> reviewing") — give-up is
         // the only route that resolves "reviewing" -> "failed" (a

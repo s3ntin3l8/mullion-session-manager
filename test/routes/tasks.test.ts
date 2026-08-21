@@ -1762,6 +1762,62 @@ describe("tasks route", () => {
       resolveBackendSpy.mockRestore();
       await app.close();
     });
+
+    // #772 — nothing terminated a task's sessions on give-up either; both
+    // lingered indefinitely once the task reached "failed".
+    it("kills both the worker and review sessions on give-up", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "give-up-sessions-p", cwd: "/tmp/give-up-sessions" },
+      });
+      const projectId = project.json().id;
+      const worker = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const reviewer = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          sessionId: worker.json().id,
+          reviewSessionId: reviewer.json().id,
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/give-up`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+
+      const { sessions } = await import("../../src/db/schema.js");
+      const [workerRow] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, worker.json().id))
+        .all();
+      const [reviewRow] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, reviewer.json().id))
+        .all();
+      expect(workerRow.status).toBe("killed");
+      expect(reviewRow.status).toBe("killed");
+
+      await app.close();
+    });
   });
 
   describe("GET /api/tasks filters (6.2/#215)", () => {

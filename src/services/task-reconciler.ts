@@ -103,20 +103,20 @@ async function spawnReviewAgentNow(
     // an unattended review agent idling exactly like an unattended worker
     // did before this fix.
     const seedCapable = commandSupportsSeed(reviewCommand);
-    // task.reviewRounds is the round THIS review belongs to: 0 for the
+    // task.autoReturnRounds is the round THIS review belongs to: 0 for the
     // first review, 1 for the one spawned after an auto-returned round —
     // see taskReviewFindingsPath's own doc comment for why round-suffixing
     // matters here.
     const findingsPath = taskReviewFindingsPath(
       path.dirname(app.pty.hookSocketPath),
       task.id,
-      task.reviewRounds,
+      task.autoReturnRounds,
     );
     // Task Master trial 220921 / PR #743's incident left exactly this file
     // on disk: `processReviewingTasks`'s own unlink-on-ingest ran before the
     // real (late-arriving) findings file existed, so it found nothing to
     // remove, and the file that appeared 21 seconds later was never cleaned
-    // up. `reviewRounds` doesn't change on a same-round re-review (a
+    // up. `autoReturnRounds` doesn't change on a same-round re-review (a
     // rejected task's next review reuses this exact round-suffixed path —
     // see `taskReviewFindingsPath`'s own doc comment on why round-suffixing
     // exists at all), so a leftover from a PRIOR attempt at this round would
@@ -665,10 +665,16 @@ async function failReviewingGate(
     via: "reconcile",
     context: { sessionId: session.id, reason: failureReason },
   });
-  await backend.terminate(String(session.id)).catch((err) => {
+  // killSession, not a bare backend.terminate — this task just left
+  // claimed/in_progress for good, and nothing else will ever flip this
+  // session's row to "killed." A bare terminate leaves it "active" until
+  // the 30s exited-session reconciler notices and marks it "exited" —
+  // never "killed", the one status the sidebar and the Unified Board's
+  // ad-hoc lane don't already filter out of view.
+  await killSession(app, session.id).catch((err) => {
     app.log.warn(
       { err, taskId: task.id, sessionId: session.id },
-      "task reconcile: failed to terminate session after the no-commits gate failure",
+      "task reconcile: failed to kill session after the no-commits gate failure",
     );
   });
   await syncTaskTransition(
@@ -1361,19 +1367,26 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
  *    (`postReviewFindingsComment`, task-github-sync.ts).
  *  - appends it to `tasks.reviewFindings` under a "## Round N" header —
  *    never replaces, so an earlier round survives a later one.
- *  - if the verdict is "changes-requested" AND this task hasn't already used
- *    its one auto-return (`reviewRounds < 1`) AND Task Master is enabled:
- *    flips the task back to "in_progress", increments `reviewRounds` (a
- *    compare-and-swap write, same as every other transition in this file —
- *    a concurrent approve/reject/give-up simply wins the race and this
- *    loop no-ops), and re-seeds the worker
- *    (`reseedTaskIfSessionExited`, task-reseed.ts, shared with reject's own
- *    re-seed but called with `force: true` here — see that function's own
- *    doc comment on why: nobody is watching to type into a still-alive
- *    worker session the way a human reviewing a reject is) with the
- *    findings as its prompt. A "clean" verdict never auto-returns — that's
- *    the whole reason file-existence stopped being the signal (see
- *    `parseReviewFindings`'s doc comment).
+ *  - if the verdict is "changes-requested" AND this task hasn't already spent
+ *    its round budget (`task.autoReturnRounds` vs. the resolved per-project
+ *    cap — `resolveMaxAutoReturnRounds`, default
+ *    `DEFAULT_MAX_AUTO_RETURN_ROUNDS`; #756 replaced the original hardcoded
+ *    single round) AND Task Master is enabled: hands off to `autoReturnTask`
+ *    (`reason: "review"`), the mechanism shared by every automatic
+ *    "reviewing -> in_progress" trigger — flips the task back to
+ *    "in_progress", increments `autoReturnRounds` (a compare-and-swap write,
+ *    same as every other transition in this file — a concurrent
+ *    approve/reject/give-up simply wins the race and this loop no-ops), and
+ *    re-seeds the worker (`reseedTaskIfSessionExited`, task-reseed.ts,
+ *    shared with reject's own re-seed but called with `force: true` here —
+ *    see that function's own doc comment on why: nobody is watching to type
+ *    into a still-alive worker session the way a human reviewing a reject
+ *    is) with the findings as its prompt. A "clean" verdict never
+ *    auto-returns — that's the whole reason file-existence stopped being
+ *    the signal (see `parseReviewFindings`'s doc comment). A task that
+ *    wanted another round but had none left gets one extra sentence folded
+ *    into its posted comment instead, naming the cap, so a human can tell
+ *    a capped task apart from one that was never going to auto-return.
  *
  * Gated on `resolveTaskMasterConfig(app).enabled` for the auto-return step
  * only (same reasoning as the claimed/in_progress loop's own "enabled"
@@ -1381,6 +1394,119 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
  * visibility, ungated, so a disabled install still surfaces "review
  * finished" instead of going silent.
  */
+
+// #772's roadmap follow-up — a task's auto-return budget was previously
+// hardcoded to exactly one round, gated on a changes-requested review
+// verdict alone. This is the shared model every automatic "send it back to
+// the worker" trigger now registers against, so the cap/give-up posture and
+// the DB write itself exist in exactly one place rather than drifting
+// across a growing list of triggers (review feedback here; a red required
+// CI check and an unresolved PR review comment are later triggers on the
+// same model — see the roadmap plan).
+export type AutoReturnReason = "review" | "ci" | "pr-comment";
+
+// `via` naming for recordTaskTransition — kept distinct from
+// AutoReturnReason itself (rather than reusing the reason string directly)
+// so a future reason can pick its own `via` wording without also having to
+// match a stable enum value stored durably on the row.
+const AUTO_RETURN_VIA: Record<AutoReturnReason, string> = {
+  review: "review-feedback",
+  ci: "ci-feedback",
+  "pr-comment": "pr-comment-feedback",
+};
+
+// Today's default — a single automatic round for an advisory review agent's
+// own findings was a reasonable default; a closed automatic loop (this
+// follow-up's whole point) needs more than one chance before it strands a
+// task in "reviewing" waiting for a human. Overridable per project via
+// `projects.maxAutoReturnRounds` (null = use this default).
+export const DEFAULT_MAX_AUTO_RETURN_ROUNDS = 2;
+
+export function resolveMaxAutoReturnRounds(project: {
+  maxAutoReturnRounds: number | null;
+}): number {
+  return project.maxAutoReturnRounds ?? DEFAULT_MAX_AUTO_RETURN_ROUNDS;
+}
+
+/**
+ * Sends a "reviewing" task back to its worker for one automatic round —
+ * the mechanism shared by every auto-return trigger (see `AutoReturnReason`
+ * above). Callers decide WHETHER a round is affordable
+ * (`resolveMaxAutoReturnRounds` vs. `task.autoReturnRounds`) before calling
+ * this; it does not check the cap itself and always spends one round once
+ * it runs.
+ *
+ * CAS on `status = "reviewing"` — a concurrent approve/reject/give-up
+ * racing this call simply wins outright; this function then does nothing
+ * further and returns `{ ok: false }`.
+ *
+ * On a failed re-seed (`reseedTaskIfSessionExited` returning `false` —
+ * terminate/spawn error, or ITS OWN lost race against a still-later
+ * transition), the round increment is rolled back, CAS'd on the exact
+ * value this call itself just wrote, so a genuinely later round can still
+ * use it. Deliberately does NOT roll `status` back to "reviewing" on that
+ * same failure — a pre-existing quirk of the review-feedback loop this
+ * function was extracted from (Hermes review, PR #580), preserved exactly
+ * rather than expanding this change's scope to also fix it.
+ */
+export async function autoReturnTask(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  opts: { reason: AutoReturnReason; seedPrompt: string },
+): Promise<{ ok: boolean }> {
+  const updated = app.db
+    .update(tasks)
+    .set({
+      status: "in_progress",
+      autoReturnRounds: task.autoReturnRounds + 1,
+      lastAutoReturnReason: opts.reason,
+    })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+    .run();
+  if (updated.changes === 0) return { ok: false };
+
+  recordTaskTransition(app, {
+    taskId: task.id,
+    projectId: project.id,
+    from: "reviewing",
+    to: "in_progress",
+    via: AUTO_RETURN_VIA[opts.reason],
+  });
+
+  // force: true — nobody is watching an automated auto-return round the way
+  // a human reviewing a reject is; see reseedTaskIfSessionExited's own doc
+  // comment on why force is the right default for every unattended caller.
+  const reseeded = await reseedTaskIfSessionExited(
+    app,
+    task,
+    project,
+    opts.seedPrompt,
+    `task auto-return (${opts.reason})`,
+    { force: true },
+  );
+  if (!reseeded) {
+    const rolledBack = app.db
+      .update(tasks)
+      .set({
+        autoReturnRounds: task.autoReturnRounds,
+        // Fresh subagent review, PR #774 — a rolled-back attempt means no
+        // auto-return round actually completed, so leaving this set to
+        // whatever reason the earlier CAS just wrote would contradict this
+        // column's own doc comment (schema.ts): "which trigger most
+        // recently drove an auto-return round" — this one didn't.
+        lastAutoReturnReason: task.lastAutoReturnReason,
+      })
+      .where(and(eq(tasks.id, task.id), eq(tasks.autoReturnRounds, task.autoReturnRounds + 1)))
+      .run();
+    app.log.warn(
+      { taskId: task.id, reason: opts.reason, rolledBack: rolledBack.changes > 0 },
+      "task reconcile: auto-return re-seed failed — rolled back the spent auto-return round so a later attempt can still use it",
+    );
+  }
+  return { ok: reseeded };
+}
+
 function unlinkFindingsFileIfPresent(
   app: FastifyInstance,
   taskId: number,
@@ -1466,7 +1592,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           info: defaultDeriveStatusInfo(info),
         });
 
-        const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.reviewRounds);
+        const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.autoReturnRounds);
         let findings: string | null = null;
         try {
           if (existsSync(findingsPath)) {
@@ -1535,7 +1661,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                 now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS);
         if (!isUsableSignal) continue;
 
-        const roundLabel = `## Round ${task.reviewRounds + 1}`;
+        const roundLabel = `## Round ${task.autoReturnRounds + 1}`;
         // Hermes review, PR #754 — wording keyed on `derived.status`
         // itself, not just "was it exited," so a session ingested via the
         // grace-elapsed branch above (which — per the comment on
@@ -1588,15 +1714,23 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // buildReviewPrompt) would have made a clean review indistinguishable
         // from one requesting changes, spending the task's one auto-return
         // round respawning the worker with nothing to do.
-        const shouldAutoReturn =
+        // #756 — "wants to" is now distinct from "is allowed to": a verdict
+        // of "changes-requested" alone no longer decides the outcome, the
+        // resolved per-project cap does too. Split so a capped task can
+        // still be told WHY it's stuck (see cappedNote below) rather than
+        // silently doing nothing, which was the pre-#756 behavior once a
+        // task had already spent its one round.
+        const wantsAutoReturn =
           derived.status === "finished" &&
           parsed !== null &&
           parsed.verdict === "changes-requested" &&
-          task.reviewRounds < 1 &&
           resolvedTaskMaster.enabled &&
           task.worktreePath !== null &&
           task.agentCommand !== null &&
           commandSupportsSeed(task.agentCommand);
+        const maxRounds = resolveMaxAutoReturnRounds(project);
+        const capReached = task.autoReturnRounds >= maxRounds;
+        const shouldAutoReturn = wantsAutoReturn && !capReached;
 
         // Hermes review, PR #576 — record BEFORE posting the PR comment
         // (previously the reverse), and CAS on `status = "reviewing"` even
@@ -1613,29 +1747,31 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // whether auto-approve exists/is enabled on this project: the write
         // is inert until read, and landing it now means real verdict data
         // has already accumulated by the time auto-approve ships.
+        //
+        // #756 — no longer bundles the round-increment fields (autoReturnRounds/
+        // status/lastAutoReturnReason): those now live in autoReturnTask's own
+        // CAS write, shared with every other auto-return trigger, not just this
+        // one. This write stays CAS'd on `status = "reviewing"` on its own —
+        // splitting the two writes narrows, but doesn't remove, the same
+        // "a concurrent decision wins outright" guarantee: if THIS write's CAS
+        // succeeds and a concurrent approve/reject/give-up lands before
+        // autoReturnTask's own CAS runs, that second CAS simply fails and
+        // autoReturnTask returns `{ ok: false }` — no round is spent, no
+        // transition is recorded.
         const updated = app.db
           .update(tasks)
-          .set(
-            shouldAutoReturn
-              ? {
-                  status: "in_progress",
-                  reviewFindings: appendedFindings,
-                  reviewFindingsIngestedSessionId: task.reviewSessionId,
-                  reviewRounds: task.reviewRounds + 1,
-                  lastReviewVerdict: parsed?.verdict ?? "inconclusive",
-                }
-              : {
-                  reviewFindings: appendedFindings,
-                  reviewFindingsIngestedSessionId: task.reviewSessionId,
-                  lastReviewVerdict: parsed?.verdict ?? "inconclusive",
-                },
-          )
+          .set({
+            reviewFindings: appendedFindings,
+            reviewFindingsIngestedSessionId: task.reviewSessionId,
+            lastReviewVerdict: parsed?.verdict ?? "inconclusive",
+          })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
           .run();
         // Lost the race — the findings file is still stale for whatever
         // reconcile this task next (a rejected task keeps the same
-        // reviewRounds, so its next review reuses this exact round-suffixed
-        // path), so unlink it here too, before giving up on this row.
+        // autoReturnRounds, so its next review reuses this exact
+        // round-suffixed path), so unlink it here too, before giving up on
+        // this row.
         if (updated.changes === 0) {
           unlinkFindingsFileIfPresent(app, task.id, findingsPath);
           continue;
@@ -1643,31 +1779,35 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
 
         // The DB write above is now durable — the file has nothing left to
         // offer a later reconcile pass, and leaving it in place is exactly
-        // what would cause a same-round re-review (reject keeps reviewRounds
-        // unchanged) to re-ingest THIS round's content as if it were fresh.
+        // what would cause a same-round re-review (reject keeps
+        // autoReturnRounds unchanged) to re-ingest THIS round's content as
+        // if it were fresh.
         unlinkFindingsFileIfPresent(app, task.id, findingsPath);
+        // #756 — a task that wanted another round but had none left gets one
+        // extra sentence folded into the SAME comment, rather than a second
+        // post: today's single-comment-per-round shape stays exactly that,
+        // shape, just occasionally longer. This is also the only place a
+        // human ever learns the round cap was the reason nothing moved —
+        // without it, a capped task looks identical to one that was never
+        // going to auto-return in the first place.
+        const cappedNote =
+          wantsAutoReturn && capReached
+            ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
+            : "";
         await postReviewFindingsComment(
           app,
           task,
           project,
           parsed
             ? {
-                body: commentBody,
+                body: commentBody + cappedNote,
                 reviewSummary: `${roundLabel}\n\n${parsed.summary}`,
                 findings: parsed.findings,
               }
-            : { body: commentBody },
+            : { body: commentBody + cappedNote },
         );
 
         if (!shouldAutoReturn) continue;
-
-        recordTaskTransition(app, {
-          taskId: task.id,
-          projectId: project.id,
-          from: "reviewing",
-          to: "in_progress",
-          via: "review-feedback",
-        });
 
         const prompt = buildReviewFeedbackPrompt({
           task,
@@ -1681,38 +1821,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           // worker should read prose, not the wire format Mullion parses.
           findings: renderReviewFindingsMarkdown(parsed!),
         });
-        // force: true — unlike reject's own re-seed, nobody is watching to
-        // type into a still-alive worker (the worker's own instructions
-        // tell it to stay running after finishing its turn, so "still
-        // alive but idle" is the COMMON case here, not an edge case). See
-        // reseedTaskIfSessionExited's own doc comment.
-        const reseeded = await reseedTaskIfSessionExited(
-          app,
-          task,
-          project,
-          prompt,
-          "task review-feedback",
-          { force: true },
-        );
-        // Hermes review, PR #580 — a failed re-seed (terminate/spawn error,
-        // or a lost race — see reseedTaskIfSessionExited's own doc comment)
-        // must not silently burn the task's one auto-return round: nobody
-        // received the findings, so a later, genuine round should still get
-        // its chance. reviewRounds is never reset elsewhere, so rolling it
-        // back here is the only way to keep that promise honest. Best-effort
-        // and CAS'd on the exact value this iteration itself just wrote —
-        // a concurrent write in between (e.g. approve/give-up) wins outright.
-        if (!reseeded) {
-          const rolledBack = app.db
-            .update(tasks)
-            .set({ reviewRounds: task.reviewRounds })
-            .where(and(eq(tasks.id, task.id), eq(tasks.reviewRounds, task.reviewRounds + 1)))
-            .run();
-          app.log.warn(
-            { taskId: task.id, rolledBack: rolledBack.changes > 0 },
-            "task reconcile: review-feedback re-seed failed — rolled back the spent auto-return round so a later review can still use it",
-          );
-        }
+        await autoReturnTask(app, task, project, { reason: "review", seedPrompt: prompt });
       }
     }),
   );
@@ -1856,10 +1965,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   via: "budget-exceeded",
                   context: { sessionId: session.id, budgetMinutes },
                 });
-                await backend.terminate(String(session.id)).catch((err) => {
+                // killSession, not a bare backend.terminate — same reasoning
+                // as failReviewingGate's identical swap above: this task
+                // just left claimed/in_progress for good, and a bare
+                // terminate would leave the session "active" until the 30s
+                // reconciler notices, never "killed."
+                await killSession(app, session.id).catch((err) => {
                   app.log.warn(
                     { err, taskId: task.id, sessionId: session.id },
-                    "task reconcile: failed to terminate over-budget session",
+                    "task reconcile: failed to kill over-budget session",
                   );
                 });
                 await syncTaskTransition(
@@ -1960,6 +2074,33 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
               .run();
             if (updated.changes > 0) {
+              // The write above just nulled reviewSessionId — on a
+              // reject-and-re-review cycle, `task.reviewSessionId` (captured
+              // before that write, still the OLD value in memory) is the
+              // now-unreachable prior round's review session. Kill it here:
+              // nothing else in this codebase ever terminates a review
+              // session on this path, so without this it's left "active"
+              // forever, no longer pointed to by any task row — exactly the
+              // orphan this PR exists to stop creating (see #772).
+              // Best-effort, fire-and-forget — deliberately NOT awaited,
+              // unlike retryTask's/failReviewingGate's own kill calls
+              // (task-claim.ts, above in this file): those run at the END
+              // of their function, with nothing left to do afterward, so
+              // awaiting costs nothing. This one sits in the MIDDLE of the
+              // "-> reviewing" transition, with `recordTaskTransition` and
+              // `syncTaskTransition` still to come — a kill failure must
+              // not block or delay either of those, so it fires and moves
+              // on rather than adding a network round-trip to this task's
+              // own transition. Both postures are correct for where they
+              // sit; this is not an inconsistency to "harmonize" later.
+              if (task.reviewSessionId !== null) {
+                void killSession(app, task.reviewSessionId).catch((err) => {
+                  app.log.warn(
+                    { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+                    "task reconcile: failed to kill the superseded review session",
+                  );
+                });
+              }
               recordTaskTransition(app, {
                 taskId: task.id,
                 projectId: project.id,
