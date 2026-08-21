@@ -3014,6 +3014,92 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Fresh-review follow-up on #760's own merge: a remote read that
+    // SUCCEEDS but genuinely finds nothing (returns `null`, not a throw) —
+    // e.g. because the remote host's `sessionsDir` doesn't match the one the
+    // seed prompt was built from (`#778`, the documented, still-open gap) —
+    // must still go through the exact same grace-window/inconclusive path a
+    // local task's missing file does, not something worse or silently
+    // different for remote hosts.
+    it("ingests a reachable remote-hosted task as inconclusive once the grace window elapses with a genuinely absent (not thrown) findings read", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-remote-review-absent", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [reviewSession] = app.db
+        .insert(sessions)
+        .values({
+          projectId,
+          command: "codex",
+          status: "active",
+          createdAt: new Date(Date.now() - 31 * 60_000),
+        })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "remote review, genuinely absent",
+          status: "reviewing",
+          sessionId: workerSession.id,
+          reviewSessionId: reviewSession.id,
+          worktreePath: "/remote/project",
+          agentCommand: "codex",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const deleteMock = vi.fn().mockResolvedValue(undefined);
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hId) => {
+          const real = realResolveBackend(appArg, hId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "liveStatus") {
+                return async () => ({
+                  [String(reviewSession.id)]: fakeInfo({
+                    lastTurnEndedAt: Date.now(),
+                  }),
+                });
+              }
+              if (prop === "readTaskReviewFindings") return async () => null;
+              if (prop === "deleteTaskReviewFindings") return deleteMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toContain("inconclusive");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSession.id);
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
     // Hermes review, PR #576, finding #2 — a review agent that ends its
     // process right after its turn (instead of staying running) derives
     // "exited", not "finished". Accepting "exited" unconditionally would

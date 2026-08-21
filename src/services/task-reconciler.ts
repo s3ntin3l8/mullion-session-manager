@@ -131,7 +131,7 @@ async function spawnReviewAgentNow(
     // path the agent is TOLD to write to via buildReviewPrompt below —
     // not the ingest-side read/delete this PR adds; fixing it needs a way
     // to ask a remote host for its own sessionsDir before the prompt is
-    // built, distinct work). `unlinkFindingsFileIfPresent` below is
+    // built, distinct work — tracked as issue #778). `unlinkFindingsFileIfPresent` below is
     // updated to go through `backend` purely so this call site still
     // compiles against the new signature and stays correct for the common
     // (local) case — it does not fix the remote seed-path mismatch.

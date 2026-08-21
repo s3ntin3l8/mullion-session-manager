@@ -1209,8 +1209,16 @@ agent's _seed prompt_ (`buildReviewPrompt`, telling it where to write) is
 still computed from THIS process's own local `sessionsDir` — a
 pre-existing, separate gap in the write/seed side, not the read/ingest
 side `#760` addresses. Fixing it needs a way to ask a remote host for its
-own `sessionsDir` before the prompt is built; tracked as its own follow-up,
-not blocking this one.
+own `sessionsDir` before the prompt is built; tracked as `#778`, not
+blocking this one. Note this is a real (not merely theoretical) risk for a
+remote host whose `sessionsDir` differs from the primary's — the read side
+sees a genuinely-absent file (`null`, not an error) and, once
+`REVIEW_FINDINGS_GRACE_MS` elapses, that reads identically to "the agent
+never wrote anything," so the task is ingested as **inconclusive** with a
+posted PR comment — a confident wrong answer, not the honest stall this
+gap produced before `#760`. It only fully coincides today for hosts
+provisioned identically (e.g. via `deploy/install.sh`), where both sides'
+`sessionsDir` are byte-identical strings.
 
 ## Worktree lifecycle
 
