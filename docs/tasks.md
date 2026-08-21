@@ -728,22 +728,40 @@ side, severity, body}]}` — written to a temp file and moved into place as
   rendered text is also appended to `tasks.reviewFindings` — durable across
   the worktree's own eventual removal, and rendered in the task detail
   drawer's Review card.
-- **Trigger one automatic `reviewing → in_progress` round.** If the verdict
-  is `changes-requested` and this task hasn't already used its one round
-  (`tasks.reviewRounds < 1`, a counter that's incremented but **never
-  reset** — not by Retry, not by a human Reject, so a task auto-returns at
-  most once across its whole lifecycle) and `taskMaster.enabled`: the task
-  flips back to `in_progress` and the worker is re-seeded with the findings
-  as its prompt (`task-reseed.ts`'s `reseedTaskIfSessionExited`, called with
-  `force: true`). That force flag matters: unlike Reject's own re-seed
-  (which leaves a still-alive session alone, since a human is expected to
-  type into it themselves), the worker's own prompt tells it to "End your
-  turn and stay running" — so the common case here is a still-`active` but
-  genuinely idle session with nobody watching to feed it anything. `force`
-  terminates that survivor first, then always spawns fresh via the same
-  argv-prompt mechanism every other Task Master spawn uses — it never
-  injects keystrokes into a live, possibly mid-tool-call TUI. A `clean`
-  verdict never auto-returns — nor does an inconclusive (missing-file) one.
+- **Trigger an automatic `reviewing → in_progress` round.** If the verdict
+  is `changes-requested`, this task hasn't already spent its round budget,
+  and `taskMaster.enabled`: the task flips back to `in_progress` and the
+  worker is re-seeded with the findings as its prompt — via `autoReturnTask`
+  (`task-reconciler.ts`), the mechanism shared by every automatic
+  "reviewing → in_progress" trigger (`#756`; a red required CI check and an
+  unresolved PR review comment are later triggers on the same model, see
+  `AutoReturnReason`). That helper wraps `task-reseed.ts`'s
+  `reseedTaskIfSessionExited`, called with `force: true`. That force flag
+  matters: unlike Reject's own re-seed (which leaves a still-alive session
+  alone, since a human is expected to type into it themselves), the
+  worker's own prompt tells it to "End your turn and stay running" — so the
+  common case here is a still-`active` but genuinely idle session with
+  nobody watching to feed it anything. `force` terminates that survivor
+  first, then always spawns fresh via the same argv-prompt mechanism every
+  other Task Master spawn uses — it never injects keystrokes into a live,
+  possibly mid-tool-call TUI. A `clean` verdict never auto-returns — nor
+  does an inconclusive (missing-file) one.
+- **The round budget** (`tasks.autoReturnRounds`, renamed from
+  `reviewRounds` — the TS property only; the SQL column stays
+  `review_rounds`, since every other migration in this repo is a purely
+  additive `ALTER TABLE ... ADD` and a genuine column rename risks
+  drizzle-kit treating it as a drop-and-add against a live DB) is a counter
+  that's incremented but **never reset** — not by Retry, not by a human
+  Reject, so a task's auto-return budget is spent once per lifecycle no
+  matter how many times a human sends it back around by hand. It's bounded
+  by a resolved per-project cap (`resolveMaxAutoReturnRounds`/
+  `projects.maxAutoReturnRounds`, `DEFAULT_MAX_AUTO_RETURN_ROUNDS = 2`) —
+  before `#756` this was hardcoded to a single round for every project.
+  `tasks.lastAutoReturnReason` records which trigger most recently spent a
+  round. A task that wants another round but has none left gets one extra
+  sentence folded into its posted review comment, naming the cap, so it's
+  distinguishable from a task that was never going to auto-return in the
+  first place — and stays in `reviewing` for a human either way.
 - A `clean` or inconclusive verdict (or a review agent whose adapter can't
   receive a seed at all — see `reviewSeedDelivered` below) simply stays in
   `reviewing`; the review still posts, so a finished review is never

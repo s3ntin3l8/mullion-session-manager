@@ -109,6 +109,13 @@ interface UpdateProjectBody {
   // see schema.ts's own doc comment on these two columns.
   mergeOnApprove?: boolean | null;
   autoApprove?: boolean | null;
+  // #756 — per-project override of the resolved auto-return round cap.
+  // `null` clears it (falls back to the install default,
+  // resolveMaxAutoReturnRounds/DEFAULT_MAX_AUTO_RETURN_ROUNDS in
+  // task-reconciler.ts) — unlike mergeOnApprove/autoApprove above, this HAS
+  // an install-wide default that works for every project, so a global
+  // fallback tier is useful here where it wasn't for those two.
+  maxAutoReturnRounds?: number | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -147,6 +154,7 @@ const updateProjectSchema = {
       defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
+      maxAutoReturnRounds: { type: ["integer", "null"], minimum: 1 },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -2030,6 +2038,7 @@ export async function projectsRoute(app: FastifyInstance) {
         defaultReviewAgent,
         mergeOnApprove,
         autoApprove,
+        maxAutoReturnRounds,
         createDir,
         gitInit,
       } = request.body;
@@ -2082,10 +2091,11 @@ export async function projectsRoute(app: FastifyInstance) {
         defaultAgent === undefined &&
         defaultReviewAgent === undefined &&
         mergeOnApprove === undefined &&
-        autoApprove === undefined
+        autoApprove === undefined &&
+        maxAutoReturnRounds === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, or autoApprove must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, or maxAutoReturnRounds must be provided.",
         );
       }
 
@@ -2141,6 +2151,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
+          ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

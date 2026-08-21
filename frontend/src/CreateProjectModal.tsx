@@ -47,6 +47,10 @@ interface CreateProjectModalProps {
     // `false` both mean off; the modal always sends a plain boolean.
     mergeOnApprove?: boolean | null;
     autoApprove?: boolean | null;
+    // #756 — per-project override of the auto-return round cap. `null`
+    // means "use the install default" — the modal sends `null` when the
+    // field is left blank, never `0` (the API rejects a cap below 1).
+    maxAutoReturnRounds?: number | null;
     // Confirm-first directory creation — only ever sent once the user has
     // clicked "Create folder" below, in response to a PROJECT_DIR_MISSING
     // rejection. `gitInit` only has an effect when `createDir` is also set.
@@ -81,6 +85,7 @@ interface CreateProjectModalProps {
   initialDefaultReviewAgent?: string | null;
   initialMergeOnApprove?: boolean | null;
   initialAutoApprove?: boolean | null;
+  initialMaxAutoReturnRounds?: number | null;
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -108,6 +113,7 @@ export function CreateProjectModal({
   initialDefaultReviewAgent = null,
   initialMergeOnApprove = null,
   initialAutoApprove = null,
+  initialMaxAutoReturnRounds = null,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
@@ -120,6 +126,13 @@ export function CreateProjectModal({
   );
   const [mergeOnApprove, setMergeOnApprove] = useState(initialMergeOnApprove ?? false);
   const [autoApprove, setAutoApprove] = useState(initialAutoApprove ?? false);
+  // String state, not number — an empty field means "use the install
+  // default" (sent as `null`, never `0`/NaN), and a controlled number
+  // input can't natively represent "no value typed yet" the way a string
+  // one can.
+  const [maxAutoReturnRounds, setMaxAutoReturnRounds] = useState(
+    initialMaxAutoReturnRounds !== null ? String(initialMaxAutoReturnRounds) : "",
+  );
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
@@ -236,6 +249,11 @@ export function CreateProjectModal({
           : undefined,
         mergeOnApprove: isEdit ? mergeOnApprove : undefined,
         autoApprove: isEdit ? autoApprove : undefined,
+        maxAutoReturnRounds: isEdit
+          ? maxAutoReturnRounds.trim() === ""
+            ? null
+            : Number(maxAutoReturnRounds)
+          : undefined,
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -505,6 +523,24 @@ export function CreateProjectModal({
                 Needs a review agent configured above — no review agent means no verdict, so a task
                 never auto-approves. Combined with merge on approve, a task can go from claimed to
                 merged with no human click.
+              </span>
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Max automatic rounds</span>
+              <input
+                type="number"
+                min={1}
+                placeholder="2 (install default)"
+                value={maxAutoReturnRounds}
+                onChange={(e) => setMaxAutoReturnRounds(e.target.value)}
+              />
+              <span className="create-modal-field-hint">
+                How many times a task may be sent back to its worker automatically — a
+                changes-requested review, a red required CI check, or an unresolved PR comment.
+                Blank uses the install default (currently 2).
               </span>
             </label>
           )}

@@ -834,6 +834,7 @@ function ProjectHeader({
               initialDefaultReviewAgent={project.defaultReviewAgent}
               initialMergeOnApprove={project.mergeOnApprove}
               initialAutoApprove={project.autoApprove}
+              initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -843,6 +844,7 @@ function ProjectHeader({
                 defaultReviewAgent,
                 mergeOnApprove,
                 autoApprove,
+                maxAutoReturnRounds,
                 createDir,
                 gitInit,
               }) =>
@@ -854,6 +856,7 @@ function ProjectHeader({
                   defaultReviewAgent,
                   mergeOnApprove,
                   autoApprove,
+                  maxAutoReturnRounds,
                   createDir,
                   gitInit,
                 })

@@ -758,6 +758,81 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // #756
+    it("sets, then clears, maxAutoReturnRounds", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "round-cap-p", cwd: "/tmp/round-cap-p" },
+      });
+      const { id } = created.json();
+      expect(created.json().maxAutoReturnRounds).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { maxAutoReturnRounds: 5 },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().maxAutoReturnRounds).toBe(5);
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { maxAutoReturnRounds: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().maxAutoReturnRounds).toBeNull();
+
+      await app.close();
+    });
+
+    it("rejects a maxAutoReturnRounds below 1", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "round-cap-invalid-p", cwd: "/tmp/round-cap-invalid-p" },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { maxAutoReturnRounds: 0 },
+      });
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    // Regression guard for the "nothing maps to a column" 400 check, same
+    // reasoning as the mergeOnApprove-only test above.
+    it("accepts a PATCH carrying only maxAutoReturnRounds", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "round-cap-only-field",
+          cwd: "/tmp/round-cap-only-field",
+        },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { maxAutoReturnRounds: 3 },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().maxAutoReturnRounds).toBe(3);
+
+      await app.close();
+    });
+
     it("accepts a PATCH carrying only autoApprove", async () => {
       const app = await buildApp();
       const created = await app.inject({

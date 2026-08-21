@@ -377,11 +377,13 @@ export function TaskCard({
           {task.failureReason}
         </div>
       )}
-      {/* D5 — "sent back to the worker once" is the single most useful fact
+      {/* D5 — "sent back to the worker" is the single most useful fact
           about a task sitting in Reviewing (mirrors TaskDetail.tsx's own
           round indicator in the drawer). */}
-      {task.status === "reviewing" && task.reviewRounds > 0 && (
-        <div className="task-card-review-round">Round {task.reviewRounds} · returned to worker</div>
+      {task.status === "reviewing" && task.autoReturnRounds > 0 && (
+        <div className="task-card-review-round">
+          Round {task.autoReturnRounds} · returned to worker
+        </div>
       )}
       {task.sessionId !== null && (
         <TaskSessionSlot
