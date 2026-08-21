@@ -1131,6 +1131,37 @@ describe("TaskDetail delete action", () => {
     expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
   });
 
+  // #746 — done tasks (local and GitHub-linked) get the same Delete
+  // affordance, with confirm copy noting the branch is untouched (and, for
+  // GitHub-linked, that the closed issue and its PR stay on GitHub — not
+  // "merged PR": approveTask only requests a merge when the project has
+  // mergeOnApprove on, so a done task's PR is often still open).
+  it("shows Delete for a done local task, with branch-untouched confirm copy", async () => {
+    tasks = [makeTask({ id: 1, status: "done", issueNumber: null })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    expect(screen.getByText(/The branch is untouched/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(deleteTask).toHaveBeenCalledWith(1);
+  });
+
+  it("shows Delete for a done GitHub-linked task, with closed-issue confirm copy", async () => {
+    tasks = [makeTask({ id: 1, status: "done", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    expect(
+      screen.getByText(/closed issue and its PR stay on GitHub, and the branch is untouched/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(deleteTask).toHaveBeenCalledWith(1);
+  });
+
   describe("agent selection and display", () => {
     it("renders agent dropdowns for backlog tasks and calls updateTask on change", async () => {
       tasks = [makeTask({ id: 1, status: "backlog", agent: null, reviewAgent: null })];

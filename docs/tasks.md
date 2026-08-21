@@ -80,6 +80,46 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   lost-label failure with the label put back, say) — use Retry for the
   claimed case, or re-fix the label/issue for the never-claimed one.
 
+  **Done tasks are deletable too (`#746`)**, for both local and
+  GitHub-linked rows, since the board otherwise accumulates finished tasks
+  forever. Local: no extra check — `done` is terminal, no Retry exists for
+  it, and the row itself carries no live state. GitHub-linked: reuses the
+  same fresh-`isIssueStillTrackable` round-trip the `failed` case above
+  uses, rather than trusting local status alone — the linked issue's own
+  closed-and-relabeled-`mullion-done` state usually confirms it, but a
+  maintainer could have reopened and relabeled it back to `mullion-task`
+  since the task finished, and that check is what catches it. Deliberately
+  does **not** extend the `branchName === null` guard to `done` — that
+  guard exists so Retry can still resume a `failed` task, and `done` has no
+  Retry to protect: every done task from the normal pipeline has a branch,
+  so requiring one to be absent would make this exception dead on arrival.
+  Deleting a done task's row only removes Mullion's own record: the closed
+  issue and its PR stay on GitHub untouched — not necessarily _merged_:
+  `approveTask` sets `prNumber`/`prUrl` unconditionally but only requests a
+  merge when the project has `mergeOnApprove` on (default off), and even
+  then the merge sweep is async/best-effort, so a done task's PR is often
+  still open — and the local branch is untouched too (worktree cleanup at
+  approve time already removed the worktree directory, never the branch —
+  see the Worktree lifecycle section below). `failed` task cleanup beyond
+  the `#729` case above is deliberately out of scope here — a separate
+  effort, since Retry must still be able to resume an ordinary
+  claimed-then-failed task.
+
+  **A "Hide done" board toggle (`#746`)** complements deletion for anyone
+  who wants finished tasks kept as reference rather than deleted: it
+  collapses the Done and Failed columns to header-only (title + count),
+  rather than filtering them out of `tasks` — collapsing keeps the count
+  visible; filtering would hide it too. Persisted client-side
+  (`crs.taskHideDone`, `frontend/src/lib/persistedState.ts`), alongside the
+  board's other filters (project, blocked-only, `#701`'s parent filter) —
+  not through `AppSettings`/the Settings panel, a deliberate deviation from
+  how the sidebar's own `hideEndedSessions`/`showTaskSessions` toggles work,
+  since this is a board filter sitting next to three others that already
+  use this mechanism. Rendered unconditionally, unlike the blocked-only
+  toggle (which only appears once something is actually blocked) — there's
+  no "nothing qualifies" state to gate on, so no render-time-reset dance is
+  needed either.
+
   A label-lost failure — never a close — also self-heals on its own,
   without needing the delete-and-recreate path above: if the same issue
   is re-sighted still open and labeled again, and the task never had a

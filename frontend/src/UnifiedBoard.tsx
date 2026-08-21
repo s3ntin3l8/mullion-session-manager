@@ -198,6 +198,22 @@ export function UnifiedBoard({
     setPrevHasBlockedTask(hasBlockedTask);
     if (blockedOnly && !hasBlockedTask) setBlockedOnly(false);
   }
+  // #746 — hides the Done (and Failed) columns' contents by default, so a
+  // board that accumulates finished tasks forever doesn't crowd out the
+  // columns still being worked. Collapses rather than removes the columns
+  // (TaskColumn's own `collapsed` prop) — the count stays visible either
+  // way, and going through the same `visibleTasks` filter every other
+  // board filter here uses would ALSO hide the count itself, which isn't
+  // what "collapse" is meant to mean. Rendered unconditionally (unlike
+  // blockedOnly's toggle above, which only appears while at least one task
+  // qualifies) precisely so it never needs the same render-time-reset
+  // dance — there's no "no tasks qualify" state for a toggle whose own
+  // condition doesn't depend on what's currently on the board.
+  const [hideDone, setHideDone] = useState(() => readBool(STORAGE_KEYS.taskHideDone, false));
+  useEffect(() => {
+    writeBool(STORAGE_KEYS.taskHideDone, hideDone);
+  }, [hideDone]);
+  const toggleHideDone = () => setHideDone((prev) => !prev);
   // #701 — parent/phase filter. Empty string = "All" (the default); a
   // reserved sentinel (not a real "repo#number" key, which always contains
   // "#") stands in for "(no parent)" so it can share the same string state
@@ -513,6 +529,8 @@ export function UnifiedBoard({
               useDashboardStore.getState().createTask(projectId, title)
             }
             onCreated={() => setCreating(false)}
+            hideDone={hideDone}
+            onToggleHideDone={toggleHideDone}
           />
           {/* Issue: a blocked task's card badge is easy to scroll past on a
               large board. Only worth showing once something is actually
@@ -696,6 +714,7 @@ export function UnifiedBoard({
                   onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
                   onDragBegin={setDraggingId}
                   onDragFinish={() => setDraggingId(null)}
+                  collapsed={hideDone && (column.id === "done" || column.id === "failed")}
                 />
               );
             })}

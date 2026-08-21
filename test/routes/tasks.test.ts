@@ -2429,5 +2429,124 @@ describe("tasks route", () => {
         await app.close();
       });
     });
+
+    // #746 — `done` widens the same DELETE handler #729 already exercises
+    // above. Local done tasks need no GitHub round-trip at all; GitHub-linked
+    // done tasks reuse isIssueStillTrackable exactly like the failed case
+    // does, including its tri-state contract (undefined "couldn't confirm"
+    // must never be treated as "confirmed untrackable").
+    describe("DELETE of a done task (#746)", () => {
+      it("deletes a done local task", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-done-1");
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "finished local", status: "done" })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(204);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(false);
+
+        await app.close();
+      });
+
+      it("deletes a done GitHub-linked task once its issue is confirmed closed", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-746-done");
+        const app = await buildApp();
+        await connectPat(app, "ghp_delete_done_closed");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "closed", labels: ["mullion-done"] });
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 701,
+            title: "shipped",
+            htmlUrl: "https://github.com/acme/widgets-746-done/issues/701",
+            status: "done",
+            worktreePath: null,
+            branchName: "mullion/task-701",
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(204);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(false);
+
+        getIssueStateSpy.mockRestore();
+        await app.close();
+      });
+
+      // The regression test that justifies keeping the round-trip rather
+      // than trusting local status alone (#746's own "Decisions (resolved)"
+      // argues the watcher won't re-ingest a done-and-closed issue — true,
+      // but doesn't cover a maintainer reopening and re-labeling it after
+      // the task finished).
+      it("refuses a done GitHub-linked task whose issue was reopened and relabeled", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-746-reopened");
+        const app = await buildApp();
+        await connectPat(app, "ghp_delete_done_reopened");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getIssueStateSpy = vi
+          .spyOn(githubWrite, "getIssueState")
+          .mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 702,
+            title: "reopened after shipping",
+            htmlUrl: "https://github.com/acme/widgets-746-reopened/issues/702",
+            status: "done",
+            branchName: "mullion/task-702",
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(409);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(true);
+
+        getIssueStateSpy.mockRestore();
+        await app.close();
+      });
+
+      it("refuses when a done task's issue state can't be confirmed (no GitHub connection)", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-746-noauth");
+        const app = await buildApp();
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 703,
+            title: "unconfirmable",
+            htmlUrl: "https://github.com/acme/widgets-746-noauth/issues/703",
+            status: "done",
+            branchName: "mullion/task-703",
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+        expect(res.statusCode).toBe(409);
+        await app.close();
+      });
+    });
   });
 });

@@ -630,6 +630,75 @@ describe("UnifiedBoard blocked-only filter", () => {
   });
 });
 
+// #746 — unlike blocked-only/parent above, this toggle is rendered
+// unconditionally (see UnifiedBoard.tsx's own comment on why): there's no
+// "nothing qualifies" state for a filter whose own condition doesn't depend
+// on what's currently on the board, so no render-time-reset dance is
+// needed either. Collapses the Done/Failed columns to header-only rather
+// than filtering `visibleTasks` — the count must stay visible, which a
+// shared filter array would also hide.
+describe("UnifiedBoard hide-done toggle (#746)", () => {
+  it("is rendered even when the board has no done/failed tasks", () => {
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready", title: "in flight" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Hide done/ })).toBeInTheDocument();
+  });
+
+  it("collapses the Done and Failed columns' cards, keeps their counts visible, and persists", async () => {
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", title: "in flight" }),
+      makeTask({ id: 2, projectId: 1, status: "done", title: "shipped task" }),
+      makeTask({ id: 3, projectId: 1, status: "failed", title: "dead task" }),
+    ];
+    const user = userEvent.setup();
+    const first = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("shipped task")).toBeInTheDocument();
+    expect(screen.getByText("dead task")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Hide done/ }));
+
+    expect(screen.queryByText("shipped task")).toBeNull();
+    expect(screen.queryByText("dead task")).toBeNull();
+    // The still-in-flight column is untouched.
+    expect(screen.getByText("in flight")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hide done/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(localStorage.getItem("crs.taskHideDone")).toBe("1");
+
+    // Collapsed, not removed — the count stays visible even with the cards
+    // gone.
+    const doneColumn = screen
+      .getByText("Done", { selector: ".kanban-column-title" })
+      .closest(".kanban-column");
+    expect(doneColumn?.querySelector(".kanban-column-count")?.textContent).toBe("1");
+    const failedColumn = screen
+      .getByText("Failed", { selector: ".kanban-column-title" })
+      .closest(".kanban-column");
+    expect(failedColumn?.querySelector(".kanban-column-count")?.textContent).toBe("1");
+
+    first.unmount();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText("shipped task")).toBeNull();
+    expect(screen.getByText("in flight")).toBeInTheDocument();
+  });
+
+  it("toggles back off and restores the collapsed columns' cards", async () => {
+    tasks = [makeTask({ id: 1, projectId: 1, status: "done", title: "shipped task" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Hide done/ }));
+    expect(screen.queryByText("shipped task")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Hide done/ }));
+    expect(screen.getByText("shipped task")).toBeInTheDocument();
+    expect(localStorage.getItem("crs.taskHideDone")).toBe("0");
+  });
+});
+
 // #701 — mirrors "UnifiedBoard blocked-only filter" above: composes with
 // the project/blocked filters via the same absoluteDropIndex path, so a
 // drag with the phase filter active must produce the same updateTask

@@ -13,12 +13,21 @@ export function TasksToolbar({
   projects,
   createTask,
   onCreated,
+  hideDone,
+  onToggleHideDone,
 }: {
   creating: boolean;
   onToggleCreate: () => void;
   projects: { id: number; name: string }[];
   createTask: (projectId: number, title: string) => Promise<unknown>;
   onCreated: () => void;
+  // #746 — placed here (not one of UnifiedBoard.tsx's own filter-bar chips)
+  // so it sits next to the board's other done-management affordance
+  // ("Clear done", a later follow-up), rather than beside the
+  // project/blocked-only/parent filters, which are about narrowing what's
+  // visible rather than managing finished work.
+  hideDone: boolean;
+  onToggleHideDone: () => void;
 }) {
   const [manualProjectId, setManualProjectId] = useState<number | null>(null);
   const projectId =
@@ -49,6 +58,14 @@ export function TasksToolbar({
       <button className="tasks-panel-new-btn" onClick={onToggleCreate}>
         <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
         New task
+      </button>
+      <button
+        type="button"
+        className={`sidebar-filter-chip tasks-panel-hide-done-toggle${hideDone ? " active" : ""}`}
+        aria-pressed={hideDone}
+        onClick={onToggleHideDone}
+      >
+        Hide done
       </button>
       {creating && (
         <div className="tasks-panel-new-form">
