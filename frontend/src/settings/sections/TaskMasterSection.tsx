@@ -1,8 +1,16 @@
 import { useState } from "react";
 import { useDashboardStore, FALLBACK_TASK_MASTER_ENV } from "../../store/index.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
-import { Eyebrow, NumberField, Row, SecondaryButton, Toggle } from "../../ui/primitives.js";
+import {
+  Dropdown,
+  Eyebrow,
+  NumberField,
+  Row,
+  SecondaryButton,
+  Toggle,
+} from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit, clampTaskMasterFieldMax } from "../clamp.js";
+import { AGENT_OPTIONS, REVIEW_AGENT_OPTIONS } from "../agentOptions.js";
 
 // Task Master Settings UI follow-up — the first place settings.taskMaster
 // is surfaced at all (it previously only had a backend/API surface, per
@@ -157,6 +165,26 @@ export function TaskMasterSection() {
         />
       </Row>
       <Row
+        label="Default agent"
+        desc="The install-wide fallback agent a claim spawns with when neither the task's Agent: line nor the project's Default agent (project kebab menu → Edit) picks one. Independent of Launchers & agents → Default agent, which only drives the terminal launcher."
+      >
+        <Dropdown
+          value={tm.defaultAgent}
+          onChange={(v) => updateSettings({ taskMaster: { defaultAgent: v } })}
+          options={AGENT_OPTIONS}
+        />
+      </Row>
+      <Row
+        label="Default review agent"
+        desc="The install-wide fallback review agent when neither the task's ReviewAgent: line nor the project's Default review agent picks one. None = a human reviews directly, today's behavior."
+      >
+        <Dropdown
+          value={tm.defaultReviewAgent}
+          onChange={(v) => updateSettings({ taskMaster: { defaultReviewAgent: v } })}
+          options={REVIEW_AGENT_OPTIONS}
+        />
+      </Row>
+      <Row
         label="Reset to environment defaults"
         desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle, Skip permissions) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim and Review-agent CI wait have no env equivalent and are left as-is."
       >
@@ -197,7 +225,7 @@ export function TaskMasterSection() {
 
       <Eyebrow
         title="Agent selection"
-        desc="Default Agent and Default Review Agent are per-project, not install-wide — set them on a project's kebab menu → Edit. With neither set, a claim falls back to Launchers & agents → Default agent."
+        desc="The Default agent / Default review agent dropdowns above are Task Master's own install-wide defaults — the lowest tier of resolution, independent of Launchers & agents → Default agent (which only drives the terminal launcher). A per-project setting (project kebab menu → Edit) or a task's own Agent: / ReviewAgent: line overrides them."
       />
     </>
   );

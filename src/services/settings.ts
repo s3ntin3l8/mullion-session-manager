@@ -296,6 +296,18 @@ export interface AppSettings {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    // #741 — Task Master's own install-wide worker-agent default, split out
+    // of settings.launchers.defaultAgent (which only drives the terminal
+    // launcher) so terminal and Task Master agent defaults are independent.
+    // The lowest tier of resolveAgentCommand's precedence (src/services/
+    // task-agent-resolve.ts). Independent, NOT a coupled fallback.
+    defaultAgent: string;
+    // #741 — Task Master's install-wide review-agent default. Previously the
+    // review agent had no global fallback tier at all (opt-in per
+    // project/task only); this is the new lowest tier of
+    // resolveReviewAgentCommand. "none"/empty means "no review agent, human
+    // reviews directly" — today's behavior, unchanged.
+    defaultReviewAgent: string;
     // Whether an unattended task spawn (claim/auto-claim/retry/review agent)
     // should pass skipPermissions through to the agent's own flag (e.g.
     // `--dangerously-skip-permissions`) — see getSkipPermissionFlag in
@@ -443,6 +455,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     progressCommentMinutes: -1,
     skipPermissions: "inherit",
     reviewCiWaitMinutes: 15,
+    defaultAgent: "claude",
+    defaultReviewAgent: "none",
   },
 };
 

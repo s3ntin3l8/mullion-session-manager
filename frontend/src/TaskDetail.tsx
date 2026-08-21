@@ -109,8 +109,13 @@ export function TaskDetail({
 
   const project = projects?.find((p) => p.id === task.projectId);
   const projectDefaultAgent =
-    project?.defaultAgent || settings?.launchers?.defaultAgent || "claude";
-  const projectDefaultReviewAgent = project?.defaultReviewAgent || "None";
+    project?.defaultAgent || settings?.taskMaster?.defaultAgent || "claude";
+  const projectDefaultReviewAgent =
+    project?.defaultReviewAgent || settings?.taskMaster?.defaultReviewAgent || "none";
+  // Hermes review — the resolved value is lowercase "none"; capitalize it in
+  // the dropdown label so it reads as "no review agent", not as an agent name.
+  const projectDefaultReviewAgentLabel =
+    projectDefaultReviewAgent === "none" ? "None" : projectDefaultReviewAgent;
   const isEditableStatus =
     task.status === "backlog" ||
     (task.status === "ready" && task.agentCommand === null) ||
@@ -261,7 +266,7 @@ export function TaskDetail({
                   [
                     {
                       value: UNSET_AGENT,
-                      label: `Project default (${projectDefaultReviewAgent})`,
+                      label: `Project default (${projectDefaultReviewAgentLabel})`,
                     },
                     { value: "none", label: "None (disabled)" },
                     ...agentOptions,

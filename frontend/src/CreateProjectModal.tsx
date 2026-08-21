@@ -3,6 +3,7 @@ import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
 import type { Host, Launcher } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
+import { useDashboardStore } from "./store/index.js";
 import { Dropdown } from "./ui/primitives.js";
 
 // Empty string represents "unset" (fall through to the next precedence
@@ -142,6 +143,11 @@ export function CreateProjectModal({
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
+  // #741 — the install-wide review-agent default this project's own unset
+  // option falls through to (TaskMasterSection's Default review agent),
+  // shown in the "Use global default (…)" label below.
+  const globalDefaultReviewAgent =
+    useDashboardStore((s) => s.settings?.taskMaster?.defaultReviewAgent) || "none";
 
   useAsyncData(
     () => {
@@ -449,7 +455,13 @@ export function CreateProjectModal({
                   value={defaultReviewAgent}
                   onChange={setDefaultReviewAgent}
                   options={optionsWithCurrentValue(
-                    [{ value: UNSET_AGENT, label: "None" }, ...agentOptions],
+                    [
+                      {
+                        value: UNSET_AGENT,
+                        label: `Use global default (${globalDefaultReviewAgent})`,
+                      },
+                      ...agentOptions,
+                    ],
                     defaultReviewAgent,
                   )}
                 />

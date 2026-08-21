@@ -283,6 +283,8 @@ describe("Settings -> Task Master", () => {
           progressCommentMinutes: 5,
           skipPermissions: "on",
           reviewCiWaitMinutes: 30,
+          defaultAgent: "codex",
+          defaultReviewAgent: "agy",
         },
       },
     });
@@ -323,11 +325,29 @@ describe("Settings -> Task Master", () => {
     );
   });
 
-  it("points at the project kebab menu for per-project agent selection, rather than duplicating that state here", async () => {
+  it("surfaces Task Master's own install-wide agent defaults as the lowest resolution tier", async () => {
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
-    expect(
-      await screen.findByText(/Default Agent and Default Review Agent are per-project/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Task Master's own install-wide defaults/i)).toBeInTheDocument();
+  });
+
+  it("lets the Default agent / Default review agent dropdowns override the install-wide defaults", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const defaultAgentRow = await screen.findByText("Default agent");
+    const defaultAgentSelect = defaultAgentRow
+      .closest(".settings-row")
+      ?.querySelector("select") as HTMLSelectElement;
+    await user.selectOptions(defaultAgentSelect, "codex");
+    expect(useDashboardStore.getState().settings.taskMaster.defaultAgent).toBe("codex");
+
+    const reviewRow = screen.getByText("Default review agent");
+    const reviewSelect = reviewRow
+      .closest(".settings-row")
+      ?.querySelector("select") as HTMLSelectElement;
+    expect(reviewSelect).toHaveValue("none");
+    await user.selectOptions(reviewSelect, "agy");
+    expect(useDashboardStore.getState().settings.taskMaster.defaultReviewAgent).toBe("agy");
   });
 
   it("falls back to a sane default before taskMasterEnv has ever loaded", async () => {

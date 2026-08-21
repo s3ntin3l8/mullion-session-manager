@@ -5,22 +5,12 @@ import type { Agent } from "../../api/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
 import { RefreshIcon } from "../../ui/icons.js";
 import { Dropdown, Eyebrow, Row, SecondaryButton, Toggle } from "../../ui/primitives.js";
+import { AGENT_OPTIONS } from "../agentOptions.js";
 
 const SHELL_OPTIONS = [
   { value: "zsh", label: "zsh" },
   { value: "bash", label: "bash" },
   { value: "fish", label: "fish" },
-];
-
-const AGENT_OPTIONS = [
-  { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "codex" },
-  { value: "opencode", label: "opencode" },
-  // Rich statuses (issue: extend surfaced session statuses) — was missing
-  // entirely, so agy could never be picked as the launcher's default agent
-  // even though agent-detect.ts's KNOWN_AGENTS and its own hook adapter have
-  // supported it since PR #301.
-  { value: "agy", label: "agy" },
 ];
 
 export function LaunchersSection() {

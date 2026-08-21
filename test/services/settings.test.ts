@@ -284,6 +284,17 @@ describe("sanitizeSettings", () => {
       expect(result.taskMaster.autoClaimPaused).toBe(true);
     });
 
+    // #741 — the two Task Master agent defaults are plain strings with no
+    // sentinel semantics (they have no env counterpart to inherit), so they
+    // must survive deepMerge end to end like any other string leaf.
+    it("defaultAgent/defaultReviewAgent merge like any other string, with no sentinel involved", () => {
+      const result = mergeSettings({
+        taskMaster: { defaultAgent: "codex", defaultReviewAgent: "agy" },
+      });
+      expect(result.taskMaster.defaultAgent).toBe("codex");
+      expect(result.taskMaster.defaultReviewAgent).toBe("agy");
+    });
+
     // skipPermissions (Task Master unattended-spawn fix) mirrors `enabled`'s
     // own "inherit"/"on"/"off" sentinel shape, not a numeric -1 — same
     // coverage pattern as the `enabled` tests above.

@@ -27,7 +27,7 @@ function parseDirectiveLine(body: string | null, re: RegExp): string | null {
  * 1. The task's own `agent` column (manual per-task override).
  * 2. The issue body's own `Agent: <name>` line.
  * 3. The project's `defaultAgent` column (6.9/#233).
- * 4. The install-wide `settings.launchers.defaultAgent`.
+ * 4. The install-wide `settings.taskMaster.defaultAgent` (#741).
  *
  * An unrecognized name at step 1, 2 or 3 is logged and falls through to the
  * next tier rather than failing the claim — a typo in an issue body
@@ -71,17 +71,19 @@ export function resolveAgentCommand(
     );
   }
 
-  return getStoredSettings(app.db).launchers.defaultAgent;
+  return getStoredSettings(app.db).taskMaster.defaultAgent;
 }
 
 /**
  * Review-agent resolution (6.2/#215) — same shape as the worker-agent
- * precedence above, but with no global-settings fallback tier: a review
- * agent is opt-in per project/task, not a new install-wide default, since
- * it's an additive advisory feature (see the Review agent design decision)
- * rather than a required part of the loop. Returns null when nothing
- * configures one or when explicitly set to "none" — "no review agent,
- * human reviews directly," today's behavior, unchanged.
+ * precedence above, now with a global-settings fallback tier (#741): the
+ * install-wide `settings.taskMaster.defaultReviewAgent` fills in when
+ * nothing per task/project/issue configures one. "none"/empty at any tier
+ * (including the global one) means "no review agent, human reviews
+ * directly" — today's behavior, unchanged; a review agent is still an
+ * additive advisory feature, it's just no longer required to be configured
+ * per project to engage install-wide. Returns null when nothing configures
+ * one or when explicitly set to "none".
  */
 export function resolveReviewAgentCommand(
   app: FastifyInstance,
@@ -126,6 +128,16 @@ export function resolveReviewAgentCommand(
     );
   }
 
+  const globalDefaultReviewAgent = getStoredSettings(app.db).taskMaster.defaultReviewAgent;
+  if (globalDefaultReviewAgent && globalDefaultReviewAgent !== "none") {
+    if ((KNOWN_AGENTS as readonly string[]).includes(globalDefaultReviewAgent)) {
+      return globalDefaultReviewAgent;
+    }
+    app.log.warn(
+      { name: globalDefaultReviewAgent },
+      "[task-agent-resolve] install-wide defaultReviewAgent names an unrecognized agent, resolving to no review agent",
+    );
+  }
   return null;
 }
 

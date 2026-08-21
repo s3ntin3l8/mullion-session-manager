@@ -67,14 +67,15 @@ export interface Project {
   ruleFiles: string[];
   createdAt: string;
   // Phase 6 Task Master (6.2/#215) agent-selection precedence tier 2 — an
-  // optional per-project override of settings.launchers.defaultAgent, used
+  // optional per-project override of settings.taskMaster.defaultAgent, used
   // to resolve which agent a claimed task spawns. Null means "fall through
   // to the global default." Mirrors src/db/schema.ts's projects.defaultAgent.
   defaultAgent: string | null;
   // Same precedence shape as defaultAgent, for the optional advisory review
-  // agent spawned when a task enters "reviewing" (see task-state.ts). Unlike
-  // defaultAgent there is no global-settings fallback — null means "no
-  // review agent configured," the unchanged pre-Phase-6 behavior.
+  // agent spawned when a task enters "reviewing" (see task-state.ts). Null
+  // means "no project-level review agent" — it falls through to the
+  // install-wide settings.taskMaster.defaultReviewAgent, which itself
+  // defaults to "none" (no review agent).
   defaultReviewAgent: string | null;
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. Approving a task also requests a merge for
@@ -865,7 +866,7 @@ export interface Task {
   agent: string | null;
   reviewAgent: string | null;
   // The resolved launch command actually used for the worker session (task.agent ->
-  // issue `Agent:` line -> projects.defaultAgent -> settings.launchers.defaultAgent),
+  // issue `Agent:` line -> projects.defaultAgent -> settings.taskMaster.defaultAgent),
   // recorded once at claim time.
   agentCommand: string | null;
   prUrl: string | null;
@@ -1141,6 +1142,11 @@ export interface AppSettings {
     budgetMinutes: number;
     progressCommentMinutes: number;
     skipPermissions: "inherit" | "on" | "off";
+    // #741 — Task Master's install-wide worker/review agent defaults,
+    // mirroring settings.ts's AppSettings.taskMaster 1:1. Independent of
+    // launchers.defaultAgent (which only drives the terminal launcher).
+    defaultAgent: string;
+    defaultReviewAgent: string;
     // No sentinel, no env counterpart — settings.ts's own doc comment on
     // this field explains why.
     reviewCiWaitMinutes: number;
