@@ -12,6 +12,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "../UnifiedBoard.js";
 import type {
+  ClearDoneResult,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -53,6 +54,12 @@ const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
+const clearDoneTasks = vi.fn(async (): Promise<ClearDoneResult> => ({
+  deleted: [],
+  failed: [],
+  branches: [],
+  remaining: 0,
+}));
 
 function storeState() {
   return {
@@ -69,6 +76,7 @@ function storeState() {
     refreshTasks,
     updateTask,
     createTask,
+    clearDoneTasks,
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
     events,
@@ -131,6 +139,8 @@ beforeEach(() => {
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
+  clearDoneTasks.mockReset();
+  clearDoneTasks.mockResolvedValue({ deleted: [], failed: [], branches: [], remaining: 0 });
   localStorage.clear();
 });
 
@@ -184,5 +194,141 @@ describe("UnifiedBoard task create form", () => {
 
     resolveCreate!();
     await vi.waitFor(() => expect(screen.queryByPlaceholderText("Task title")).toBeNull());
+  });
+});
+
+// #746 — bulk "Clear done" affordance in the same toolbar.
+describe("UnifiedBoard clear-done", () => {
+  it("shows a confirm step before calling clearDoneTasks", async () => {
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    expect(screen.getByText(/can't be undone/)).toBeInTheDocument();
+    expect(clearDoneTasks).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+    expect(clearDoneTasks).toHaveBeenCalledWith({
+      projectIds: undefined,
+      deleteBranches: false,
+    });
+  });
+
+  it("cancels back to the Clear done button without calling clearDoneTasks", async () => {
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("button", { name: "Clear done" })).toBeInTheDocument();
+    expect(clearDoneTasks).not.toHaveBeenCalled();
+  });
+
+  it("passes deleteBranches: true when the checkbox is checked", async () => {
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(clearDoneTasks).toHaveBeenCalledWith({
+      projectIds: undefined,
+      deleteBranches: true,
+    });
+  });
+
+  it("scopes projectIds to the active project filter", async () => {
+    tasks = [makeTask({ id: 1, projectId: 1, status: "ready" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    // Activate the project-1 chip in the sidebar-style filter bar.
+    await user.click(screen.getByRole("button", { name: "demo" }));
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(clearDoneTasks).toHaveBeenCalledWith({ projectIds: [1], deleteBranches: false });
+  });
+
+  it("loops until remaining is 0, accumulating results across calls", async () => {
+    clearDoneTasks
+      .mockResolvedValueOnce({ deleted: [1, 2], failed: [], branches: [], remaining: 1 })
+      .mockResolvedValueOnce({ deleted: [3], failed: [], branches: [], remaining: 0 });
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    await vi.waitFor(() => expect(clearDoneTasks).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Cleared 3 done task(s).")).toBeInTheDocument();
+  });
+
+  it("stops looping after a batch that deletes nothing, even if remaining stays positive", async () => {
+    // Regression for a dead-code guard: every candidate in a batch failing
+    // (e.g. rate-limited, or a relabeled GitHub issue that conflicts every
+    // pass) must not spin the client in an infinite re-POST loop.
+    clearDoneTasks.mockResolvedValue({
+      deleted: [],
+      failed: [{ id: 2, error: "GitHub rate limit in effect" }],
+      branches: [],
+      remaining: 5,
+    });
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(await screen.findByText("Cleared 0 done task(s).")).toBeInTheDocument();
+    expect(clearDoneTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the per-row failure list on partial failure, without discarding successes", async () => {
+    clearDoneTasks.mockResolvedValue({
+      deleted: [1],
+      failed: [{ id: 2, error: "still open and labeled" }],
+      branches: [],
+      remaining: 0,
+    });
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(await screen.findByText("Cleared 1 done task(s).")).toBeInTheDocument();
+    expect(screen.getByText(/Task #2: still open and labeled/)).toBeInTheDocument();
+  });
+
+  it("renders skipped-branch reasons alongside a successful row deletion", async () => {
+    clearDoneTasks.mockResolvedValue({
+      deleted: [1],
+      failed: [],
+      branches: [{ id: 1, branch: "mullion/task-1", deleted: false, reason: "not-merged" }],
+      remaining: 0,
+    });
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(
+      await screen.findByText(/Branch mullion\/task-1 not deleted: not-merged/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a generic error when clearDoneTasks rejects", async () => {
+    clearDoneTasks.mockRejectedValueOnce(new Error("network down"));
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(await screen.findByText("Failed to clear done tasks")).toBeInTheDocument();
   });
 });

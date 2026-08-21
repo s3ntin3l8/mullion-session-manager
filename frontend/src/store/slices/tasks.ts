@@ -130,6 +130,12 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       void get().refreshTasks();
     },
 
+    clearDoneTasks: async (opts) => {
+      const result = await api.clearDoneTasks(opts);
+      void get().refreshTasks();
+      return result;
+    },
+
     claimTask: async (id, opts) => {
       const task = await api.claimTask(id, opts);
       // Task-claim queueing (rate-limit-storm fix) — claim now only queues;

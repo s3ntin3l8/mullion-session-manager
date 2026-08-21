@@ -133,6 +133,8 @@ export type {
   ServerInfo,
   Task,
   TaskBlocker,
+  ClearDoneResult,
+  ClearDoneBranchResult,
   UpdateCheckResult,
   UpdatePhase,
   UpdateStatus,

@@ -1,7 +1,7 @@
 // Task Master CRUD + lifecycle transitions. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
-import type { Task, Session } from "./types.js";
+import type { Task, Session, ClearDoneResult } from "./types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
 export const tasksApi = {
@@ -55,6 +55,19 @@ export const tasksApi = {
   ) => request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+
+  // #746 — bulk companion to deleteTask, scoped to `done` tasks only. A
+  // single call; capped server-side (20/call) — `result.remaining > 0`
+  // means the caller (TasksToolbar's own "Clear done" handler) needs to
+  // call again to finish the sweep.
+  clearDoneTasks: (opts?: { projectIds?: number[]; deleteBranches?: boolean }) =>
+    request<ClearDoneResult>("/api/tasks/clear-done", {
+      method: "POST",
+      body: JSON.stringify({
+        projectIds: opts?.projectIds ?? undefined,
+        deleteBranches: opts?.deleteBranches ?? undefined,
+      }),
+    }),
 
   // Task-claim queueing (rate-limit-storm fix) — claiming a ready task now
   // unconditionally QUEUES it (status -> "claimed") and returns the task

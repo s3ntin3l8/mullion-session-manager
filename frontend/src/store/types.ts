@@ -17,6 +17,7 @@ import type {
   Session,
   SettingsPatch,
   Task,
+  ClearDoneResult,
   UpdateCheckResult,
   Workspace,
 } from "../api/index.js";
@@ -276,6 +277,13 @@ export interface TasksSlice {
     },
   ) => Promise<Task>;
   deleteTask: (id: number) => Promise<void>;
+  // #746 — a single call (server-capped at 20 rows); the caller loops on
+  // `result.remaining > 0` to finish a larger sweep. See TasksToolbar.tsx's
+  // own "Clear done" handler.
+  clearDoneTasks: (opts?: {
+    projectIds?: number[];
+    deleteBranches?: boolean;
+  }) => Promise<ClearDoneResult>;
   // Task-claim queueing (rate-limit-storm fix) — queues a ready task
   // (status -> "claimed") and returns the updated Task row. Dispatch (the
   // actual worktree/session spawn) happens asynchronously; watch the task's
