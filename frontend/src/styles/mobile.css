@@ -16,40 +16,22 @@
      this width query, so its styling has to be reachable at any width a
      coarse pointer shows up at, not just below 700px. */
 
-  .toolbar-lead {
-    width: auto !important;
-  }
+  /* `.toolbar-lead`'s own width-auto override, and the floating sidebar
+     drawer itself (`.sidebar-wrapper`/`.cmux-scrim`), moved to sidebar.css's
+     own `max-width: 1279.98px` block (floating-sidebar redesign) — both now
+     apply on tablet too, not just below this breakpoint, so they live next
+     to the desktop-collapse rule they replace at that width instead of
+     being split across two files. `.toolbar-center`/`.run-cmd-btn` stay
+     phone-only, deliberately, right here: tablet has the width to keep both
+     visible (this is the explicit decision, not an accidental inheritance
+     — `.toolbar-center`'s own `border-left` sitting right after the now-
+     auto-width lead icons, with no reserved-sidebar edge to align to, is
+     the same look phone already has and accepts). */
   .toolbar-center {
     display: none !important;
   }
   .run-cmd-btn {
     display: none !important;
-  }
-
-  .sidebar-wrapper {
-    position: fixed !important;
-    /* Matches .toolbar's own inset-aware height (its base rule, near the
-       top of this file) — a bare 44px here would let the drawer start
-       under the (now taller, on a notched device) toolbar. Genuinely
-       mobile-only, unlike .toolbar/.toolbar-actions/.grid-area-body's own
-       safe-area padding: this fixed-position overlay-with-scrim drawer only
-       exists at this breakpoint at all. */
-    top: calc(44px + env(safe-area-inset-top));
-    left: 0;
-    bottom: 0;
-    width: min(310px, 84vw) !important;
-    padding-left: env(safe-area-inset-left);
-    padding-bottom: env(safe-area-inset-bottom);
-    z-index: 45;
-    transform: translateX(-101%);
-    transition: transform 0.24s ease;
-    box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
-  }
-  .app.sb-open .sidebar-wrapper {
-    transform: none;
-  }
-  .app.sb-open .cmux-scrim {
-    display: block !important;
   }
 
   .mobile-tabs {
