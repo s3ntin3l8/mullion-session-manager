@@ -13,6 +13,7 @@ import { promoteTaskToPR } from "./task-promote.js";
 import { recordTaskTransition } from "./task-state.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { resolveBackend } from "./session-backend.js";
+import { killSession } from "./session-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -38,6 +39,32 @@ export function cleanupTaskWorktree(
         "task cleanup: removeWorktreeIfClean threw",
       );
     });
+}
+
+// Best-effort session cleanup once a task leaves "reviewing" for a terminal
+// state — the sibling of cleanupTaskWorktree above, same fire-and-forget
+// posture: cleanup succeeding or failing never changes whether the
+// transition itself is valid. Kills both the worker session and the
+// (optional) review session — neither is ever terminated anywhere else once
+// a task reaches "done", so leaving this out means both processes (and
+// their systemd scopes/dtach masters) keep running indefinitely, and the
+// sessions themselves linger as "active"/"exited" in the sidebar and the
+// Unified Board's ad-hoc lane (both of which filter out "killed", never
+// "active"/"exited"). Uses killSession, not a bare backend.terminate — the
+// row must flip to "killed" or it reads as an unexplained crash later (same
+// reasoning as the orphaned-review-spawn rollback in task-reconciler.ts).
+// Exported — give-up's route (routes/tasks.ts) calls this too, on the same
+// "left reviewing for a terminal state" posture.
+export function cleanupTaskSessions(
+  app: FastifyInstance,
+  task: { sessionId: number | null; reviewSessionId: number | null },
+): void {
+  for (const sessionId of [task.sessionId, task.reviewSessionId]) {
+    if (sessionId === null) continue;
+    void killSession(app, sessionId, "detach").catch((err) => {
+      app.log.warn({ err, sessionId }, "task cleanup: killSession threw");
+    });
+  }
 }
 
 export type ApproveOutcome =
@@ -123,6 +150,7 @@ export async function approveTask(
   // benefit. Fire-and-forget.
   void syncTaskTransition(app, updated, project, "done", { prUrl: updated.prUrl ?? undefined });
   cleanupTaskWorktree(app, updated, project);
+  cleanupTaskSessions(app, updated);
 
   return { ok: true, task: updated };
 }

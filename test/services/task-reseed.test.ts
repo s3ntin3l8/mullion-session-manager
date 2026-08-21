@@ -166,11 +166,16 @@ describe("reseedTaskIfSessionExited", () => {
     expect(mockCreateSessionRecord).toHaveBeenCalledTimes(1);
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(newSessionId);
+    // #772 — the OLD session's row must flip to "killed" once terminate is
+    // CONFIRMED to have succeeded, not left "active" for the 30s
+    // exited-session reconciler to eventually mark "exited".
+    const [oldSessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    expect(oldSessionRow.status).toBe("killed");
   });
 
   it("with force: true — does NOT spawn a second agent when terminate itself fails", async () => {
     mockTerminate.mockRejectedValue(new Error("host unreachable"));
-    const { task } = insertTaskWithSession("active");
+    const { task, sessionId } = insertTaskWithSession("active");
     const warnSpy = vi.spyOn(app.log, "warn");
 
     const result = await reseedTaskIfSessionExited(
@@ -190,6 +195,12 @@ describe("reseedTaskIfSessionExited", () => {
     );
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
+    // #772 — a FAILED terminate must NOT flip the row to "killed" — that
+    // would misrepresent a session we couldn't actually confirm is dead
+    // (and this function's own contract is to leave it as-is for a later
+    // pass to retry, not silently declare it gone).
+    const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    expect(sessionRow.status).toBe("active");
   });
 
   it("logs and does not update the task row when the spawn itself fails", async () => {

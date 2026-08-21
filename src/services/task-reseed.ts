@@ -65,6 +65,23 @@ export async function reseedTaskIfSessionExited(
     if (!opts.force) return false;
     try {
       await resolveBackend(app, project.hostId).terminate(String(task.sessionId));
+      // Flip the superseded session's row to "killed" now that termination
+      // is CONFIRMED to have succeeded — deliberately not killSession()
+      // here, which marks a row "killed" even when its own terminate call
+      // fails (the right call for a human-initiated kill, where nothing
+      // downstream depends on confirmed death). This function's catch
+      // block below has a stronger requirement: it must NOT fall through
+      // to spawning a second agent into this worktree while the old one
+      // might still be alive, so the status write only happens on the
+      // success path. Without this, the superseded session stays
+      // "active" until the 30s reconciler notices and marks it "exited"
+      // — never "killed" — which is the one status the sidebar and the
+      // Unified Board's ad-hoc lane don't already filter out.
+      app.db
+        .update(sessions)
+        .set({ status: "killed" })
+        .where(eq(sessions.id, task.sessionId))
+        .run();
     } catch (err) {
       // Do NOT fall through to spawning anyway — a terminate failure means
       // the old session might still be alive and still writing to this

@@ -664,10 +664,16 @@ async function failReviewingGate(
     via: "reconcile",
     context: { sessionId: session.id, reason: failureReason },
   });
-  await backend.terminate(String(session.id)).catch((err) => {
+  // killSession, not a bare backend.terminate — this task just left
+  // claimed/in_progress for good, and nothing else will ever flip this
+  // session's row to "killed." A bare terminate leaves it "active" until
+  // the 30s exited-session reconciler notices and marks it "exited" —
+  // never "killed", the one status the sidebar and the Unified Board's
+  // ad-hoc lane don't already filter out of view.
+  await killSession(app, session.id).catch((err) => {
     app.log.warn(
       { err, taskId: task.id, sessionId: session.id },
-      "task reconcile: failed to terminate session after the no-commits gate failure",
+      "task reconcile: failed to kill session after the no-commits gate failure",
     );
   });
   await syncTaskTransition(
@@ -1829,10 +1835,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   via: "budget-exceeded",
                   context: { sessionId: session.id, budgetMinutes },
                 });
-                await backend.terminate(String(session.id)).catch((err) => {
+                // killSession, not a bare backend.terminate — same reasoning
+                // as failReviewingGate's identical swap above: this task
+                // just left claimed/in_progress for good, and a bare
+                // terminate would leave the session "active" until the 30s
+                // reconciler notices, never "killed."
+                await killSession(app, session.id).catch((err) => {
                   app.log.warn(
                     { err, taskId: task.id, sessionId: session.id },
-                    "task reconcile: failed to terminate over-budget session",
+                    "task reconcile: failed to kill over-budget session",
                   );
                 });
                 await syncTaskTransition(
@@ -1933,6 +1944,24 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
               .run();
             if (updated.changes > 0) {
+              // The write above just nulled reviewSessionId — on a
+              // reject-and-re-review cycle, `task.reviewSessionId` (captured
+              // before that write, still the OLD value in memory) is the
+              // now-unreachable prior round's review session. Kill it here:
+              // nothing else in this codebase ever terminates a review
+              // session on this path, so without this it's left "active"
+              // forever, no longer pointed to by any task row — exactly the
+              // orphan this PR exists to stop creating (see #772).
+              // Best-effort, fire-and-forget — a kill failure here must not
+              // block the task's own "-> reviewing" transition.
+              if (task.reviewSessionId !== null) {
+                void killSession(app, task.reviewSessionId).catch((err) => {
+                  app.log.warn(
+                    { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+                    "task reconcile: failed to kill the superseded review session",
+                  );
+                });
+              }
               recordTaskTransition(app, {
                 taskId: task.id,
                 projectId: project.id,

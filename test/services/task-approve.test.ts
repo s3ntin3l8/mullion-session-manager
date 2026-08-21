@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vites
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { EventEmitter } from "node:events";
 
 // task-promote.ts's real implementation needs a pushed branch and a working
 // GitHub connection — mocked here so these tests exercise approveTask's own
@@ -12,6 +13,31 @@ const mockPromoteTaskToPR = vi.fn();
 vi.mock("../../src/services/task-promote.js", () => ({
   promoteTaskToPR: mockPromoteTaskToPR,
 }));
+
+// #772 — approveTask now kills the task's own sessions via killSession,
+// which spawns real OS processes (systemd-run, dtach) via PtyManager unless
+// faked. Same fakes as task-reconciler.test.ts / task-claim.test.ts.
+vi.mock("node-pty", () => ({
+  spawn: vi.fn(() => ({
+    onData: () => ({ dispose: () => {} }),
+    onExit: () => ({ dispose: () => {} }),
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+  })),
+}));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    spawn: vi.fn(() => {
+      const ee = new EventEmitter();
+      setImmediate(() => ee.emit("exit", 0));
+      return ee;
+    }),
+  };
+});
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
@@ -44,6 +70,7 @@ describe("approveTask", () => {
   async function createProjectAndReviewingTask(
     app: Awaited<ReturnType<typeof buildApp>>,
     mergeOnApprove = false,
+    withSessions = false,
   ) {
     const projRes = await app.inject({
       method: "POST",
@@ -59,9 +86,25 @@ describe("approveTask", () => {
       });
     }
     const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    let sessionId: number | null = null;
+    let reviewSessionId: number | null = null;
+    if (withSessions) {
+      const worker = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      sessionId = worker.json().id as number;
+      const reviewer = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      reviewSessionId = reviewer.json().id as number;
+    }
     const [task] = app.db
       .insert(tasks)
-      .values({ projectId, title: "under review", status: "reviewing" })
+      .values({ projectId, title: "under review", status: "reviewing", sessionId, reviewSessionId })
       .returning()
       .all();
     return { task, project };
@@ -161,6 +204,49 @@ describe("approveTask", () => {
     const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
     expect(check.json().status).toBe("in_progress");
     expect(check.json().prUrl).toBeNull();
+
+    await app.close();
+  });
+
+  // #772 — nothing terminated a task's worker/review sessions once it left
+  // "reviewing" for good; both lingered indefinitely as live processes with
+  // no task attached. approveTask now kills both.
+  it("kills both the worker and review sessions on approve", async () => {
+    const app = await buildApp();
+    const { task, project } = await createProjectAndReviewingTask(app, false, true);
+    expect(task.sessionId).not.toBeNull();
+    expect(task.reviewSessionId).not.toBeNull();
+
+    const outcome = await approveTask(app, task, project, "approve");
+    expect(outcome.ok).toBe(true);
+
+    const { sessions } = await import("../../src/db/schema.js");
+    const [workerRow] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.sessionId!))
+      .all();
+    const [reviewRow] = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId!))
+      .all();
+    expect(workerRow.status).toBe("killed");
+    expect(reviewRow.status).toBe("killed");
+
+    await app.close();
+  });
+
+  it("approve is a no-op on session cleanup when neither session id is set", async () => {
+    const app = await buildApp();
+    const { task, project } = await createProjectAndReviewingTask(app, false, false);
+    expect(task.sessionId).toBeNull();
+    expect(task.reviewSessionId).toBeNull();
+
+    // Would throw if cleanupTaskSessions dereferenced a null id instead of
+    // skipping it.
+    const outcome = await approveTask(app, task, project, "approve");
+    expect(outcome.ok).toBe(true);
 
     await app.close();
   });

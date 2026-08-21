@@ -6,7 +6,7 @@ import { projects, tasks } from "../db/schema.js";
 // service can reuse them directly rather than reaching into routes/ — see
 // those files' own doc comments for the createSessionRecord/killSession and
 // buildLiveInfo/withLiveInfo/withLiveStatus split.
-import { createSessionRecord } from "./session-lifecycle.js";
+import { createSessionRecord, killSession } from "./session-lifecycle.js";
 import { withLiveStatus } from "./session-live-info.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
@@ -554,6 +554,24 @@ export async function retryTask(
       reason: "not-failed",
       detail: `Task is not failed (status: ${reservation.currentStatus ?? "unknown"})`,
     };
+  }
+
+  // The reservation above already nulled tasks.sessionId — this task's
+  // OLD session (from `task`, read before the transaction) is now
+  // unreachable from the row, so kill it here rather than leaving it an
+  // orphan: nothing else in this codebase ever terminates it once the
+  // pointer is gone. Best-effort — a kill failure must not block the retry
+  // itself, same posture as every other fire-and-forget cleanup on this
+  // path (see `release`'s own worktree cleanup below).
+  if (task.sessionId !== null) {
+    try {
+      await killSession(app, task.sessionId, "detach");
+    } catch (err) {
+      app.log.warn(
+        { err, taskId, sessionId: task.sessionId },
+        "task retry: failed to kill the previous session, leaving it as-is",
+      );
+    }
   }
 
   // Mirrors claimTask's own release() — puts the reservation back rather

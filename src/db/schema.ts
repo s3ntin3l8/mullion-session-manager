@@ -354,6 +354,16 @@ export const tasks = sqliteTable(
     // spawned worker session. Cascades to null (not delete) on session
     // removal since the task record itself should survive a killed session
     // for history/debugging.
+    //
+    // #772 — a normal transition that supersedes or ends this link
+    // (approve, give-up, retry, the force re-seed behind an auto-return
+    // round) now kills the OLD session first, before writing the new value
+    // or nulling this column. Before that fix, the old session was simply
+    // left running — no path in the task lifecycle ever terminated it once
+    // this pointer moved on, so it lingered indefinitely as a live process
+    // with no task attached to it. See task-approve.ts's cleanupTaskSessions
+    // and task-claim.ts's retryTask for the two call sites that touch this
+    // column directly.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
     // Claimed-task-never-starts-a-turn fix — whether the worker's most
     // recent spawn (claim/auto-claim/retry) actually delivered an initial
@@ -372,6 +382,14 @@ export const tasks = sqliteTable(
     // agent design decision). Independent lifecycle from sessionId: it's
     // spawned fresh each time a task enters "reviewing" and never resumed
     // across a reject cycle.
+    //
+    // #772 — every fresh "-> reviewing" entry now kills the OLD review
+    // session (task-reconciler.ts) before nulling this column, same
+    // reasoning as sessionId's own comment above. A reject-and-re-review
+    // cycle previously orphaned the prior round's review session with no
+    // task row pointing at it at all — strictly less recoverable than
+    // sessionId's own equivalent gap, since there was no pointer left to
+    // even find it by.
     reviewSessionId: integer("review_session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
