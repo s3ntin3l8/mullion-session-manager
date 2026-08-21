@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.42](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.41...v0.2.42) (2026-08-21)
+
+
+### Features
+
+* float the sidebar over content on phone and tablet ([#793](https://github.com/s3ntin3l8/mullion-session-manager/issues/793)) ([36f1931](https://github.com/s3ntin3l8/mullion-session-manager/commit/36f19311825ec93780efab1e17396ed691657913))
+* **tasks:** let done tasks be deleted and hidden ([#795](https://github.com/s3ntin3l8/mullion-session-manager/issues/795)) ([c0fef12](https://github.com/s3ntin3l8/mullion-session-manager/commit/c0fef12e5261a47d49e21cf03c6ae2dc8581ee82))
+* **tasks:** re-sync an open PR's title when a later round changes it ([#794](https://github.com/s3ntin3l8/mullion-session-manager/issues/794)) ([89520c5](https://github.com/s3ntin3l8/mullion-session-manager/commit/89520c54b36cad9bbd27a1562ce5eb1d6a666059))
+
+
+### Bug Fixes
+
+* make touch scrolling work in alt-screen and mouse-tracking TUIs ([#789](https://github.com/s3ntin3l8/mullion-session-manager/issues/789)) ([44f5fc8](https://github.com/s3ntin3l8/mullion-session-manager/commit/44f5fc877a150cb95a938fe45d70fe8e4cc1b12a))
+* shrink the app shell around the keyboard on tablet too ([#792](https://github.com/s3ntin3l8/mullion-session-manager/issues/792)) ([d7cfa2a](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7cfa2a50535415b444d4e60c54b6a6af0b78491))
+* skip the WebGL terminal renderer on coarse-pointer devices ([#797](https://github.com/s3ntin3l8/mullion-session-manager/issues/797)) ([aecd1eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/aecd1ebd36face4d863f59166663472b63f22277))
+* stop the touch launcher forcing the keyboard open, and let the key bar scroll ([#790](https://github.com/s3ntin3l8/mullion-session-manager/issues/790)) ([2e64c8f](https://github.com/s3ntin3l8/mullion-session-manager/commit/2e64c8f540f3117f3040d289d99d90f9b8c90121))
+* stop tier transitions from permanently skewing dockview pane sizes ([#787](https://github.com/s3ntin3l8/mullion-session-manager/issues/787)) ([fd719f9](https://github.com/s3ntin3l8/mullion-session-manager/commit/fd719f9dfc309ae137582985f20d66e949b69887))
+* **tasks:** align task detail drawer header height with board toolbar ([#739](https://github.com/s3ntin3l8/mullion-session-manager/issues/739)) ([#799](https://github.com/s3ntin3l8/mullion-session-manager/issues/799)) ([cd40f1f](https://github.com/s3ntin3l8/mullion-session-manager/commit/cd40f1f3d091de30ba7694c819a816e592aaf4e8))
+* **tasks:** kill task sessions when a linked issue is closed directly ([#786](https://github.com/s3ntin3l8/mullion-session-manager/issues/786)) ([b5739b5](https://github.com/s3ntin3l8/mullion-session-manager/commit/b5739b51f0b069d1493a29109b3e30cff04ee35c))
+* **tasks:** resolve agent-file paths against the owning host ([#791](https://github.com/s3ntin3l8/mullion-session-manager/issues/791)) ([09a6b81](https://github.com/s3ntin3l8/mullion-session-manager/commit/09a6b81f2ace3e38cb7692bb008ccf6bf645c099)), closes [#778](https://github.com/s3ntin3l8/mullion-session-manager/issues/778)
+* **tasks:** scale detail drawer close icon to fill button box on desktop ([#740](https://github.com/s3ntin3l8/mullion-session-manager/issues/740)) ([#800](https://github.com/s3ntin3l8/mullion-session-manager/issues/800)) ([23b7c11](https://github.com/s3ntin3l8/mullion-session-manager/commit/23b7c1197612acc73027e49964596f26d8e8e589))
+* **ui:** prevent edit project modal cutoff and enable body scrolling ([#796](https://github.com/s3ntin3l8/mullion-session-manager/issues/796)) ([e11d9e6](https://github.com/s3ntin3l8/mullion-session-manager/commit/e11d9e67a7d1709504c2f2ee0cc53568efb11446))
+
 ## [0.2.41](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.40...v0.2.41) (2026-08-21)
 
 
