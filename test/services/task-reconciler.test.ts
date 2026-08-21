@@ -3040,8 +3040,16 @@ describe("reconcileTasks", () => {
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
         mockFetchPullRequestReviewThreads.mockResolvedValue({
           viewerLogin: "mullion-bot[bot]",
+          // The self-authored comment is the NEWER of the two, deliberately
+          // — if the self-filter were broken (comparing the wrong field, or
+          // applied after the newest-timestamp computation instead of
+          // before it), the cursor would land on 11:00, not 10:00, and this
+          // assertion would actually catch it. Making the human comment the
+          // newer one (as an earlier version of this test did) can't tell
+          // "the filter worked" apart from "Math.max just picked the newer
+          // of the two either way."
           threads: [
-            thread(false, "mullion-bot[bot]", "My own findings.", "2026-08-20T09:00:00Z"),
+            thread(false, "mullion-bot[bot]", "My own findings.", "2026-08-20T11:00:00Z"),
             thread(false, "octocat", "A genuine human comment.", "2026-08-20T10:00:00Z"),
           ],
           truncated: false,
@@ -3053,9 +3061,9 @@ describe("reconcileTasks", () => {
         expect(row.status).toBe("in_progress");
         expect(row.lastAutoReturnReason).toBe("pr-comment");
         // The cursor reflects only the genuine (non-self) comment's
-        // timestamp, not the self-authored one's — proves the self
-        // comment was excluded before the newest-timestamp computation,
-        // not just before the round-trigger decision.
+        // timestamp — proves the self comment was excluded before the
+        // newest-timestamp computation, not just before the round-trigger
+        // decision.
         expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T10:00:00.000Z");
 
         await app.close();
