@@ -1255,8 +1255,24 @@ async function attemptReturnRedCiToWorker(
     current.repoRef.repo,
     current.headSha,
   );
+  // Fresh-review finding: a bare `=== "failure"` missed `timed_out` and
+  // `action_required` — conclusions GitHub's own merge gate blocks on just
+  // like a plain failure, but which the coarse Workflow-Run pre-filter
+  // above (`computeCiStatus`) already treats as "not passing." Matching
+  // the same "not success, not skipped, not cancelled, not still-running"
+  // definition here keeps the two checks consistent — a required check
+  // that fails BOTH ways it can fail (a bare "failure", or one of these)
+  // now returns the worker either way, rather than reintroducing the
+  // exact "stalls in reviewing forever" gap #755 exists to close, just at
+  // a different conclusion value.
   const redRequired = checkRuns.some(
-    (c) => requiredContexts.includes(c.name) && c.conclusion === "failure",
+    (c) =>
+      requiredContexts.includes(c.name) &&
+      c.conclusion !== null &&
+      c.conclusion !== "success" &&
+      c.conclusion !== "skipped" &&
+      c.conclusion !== "cancelled" &&
+      c.conclusion !== "neutral",
   );
   if (!redRequired) return false;
 

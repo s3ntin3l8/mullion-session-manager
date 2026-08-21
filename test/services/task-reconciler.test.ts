@@ -2167,17 +2167,34 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
-      // Note: `ciCapCommentedRounds`'s dedup specifically covers a LATER
-      // tick, once `autoApproveRetryState`'s own ~30s-to-30min backoff has
-      // elapsed and this task becomes eligible for another attempt — not
-      // meaningfully exercisable here without fake timers, which this file
-      // deliberately never uses (see the plan's own note on why: time here
-      // is faked via backdated DB timestamps, not `vi.useFakeTimers`, and
-      // there's no DB-backed clock for an in-memory `Map`). The dedup check
-      // itself is a single `Map` lookup keyed on the exact
-      // `task.autoReturnRounds` value being observed, checked before either
-      // side effect (the comment post or the round spend) — reviewed by
-      // inspection rather than a synthetic multi-tick test.
+      // Note: `ciCapCommentedRounds`'s dedup ALSO covers a LATER tick, once
+      // `autoApproveRetryState`'s own ~30s-to-30min backoff has elapsed and
+      // this task becomes eligible for another attempt — that direction
+      // isn't meaningfully exercisable here without fake timers, which this
+      // file deliberately never uses (time here is faked via backdated DB
+      // timestamps, not `vi.useFakeTimers`, and there's no DB-backed clock
+      // for an in-memory `Map`). The test below covers what CAN be tested
+      // with this file's existing tooling: the dedup is keyed per-task, not
+      // shared/global — a mis-keying bug (e.g. accidentally keying on the
+      // round number alone) would under-post across different tasks in the
+      // very same tick, which needs no elapsed time to observe.
+      it("keys the cap-reached dedup per task, not globally — two different capped tasks in the same tick both get a comment", async () => {
+        const app = await buildApp();
+        await createRedCiCandidate(app, { autoReturnRounds: 2 });
+        await createRedCiCandidate(app, { autoReturnRounds: 2 });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
+
+        await app.close();
+      });
 
       it("does not return the task when the project's autoApprove is off", async () => {
         const app = await buildApp();

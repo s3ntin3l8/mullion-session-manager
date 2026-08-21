@@ -592,6 +592,16 @@ export interface CheckRunResult {
  * report a check-run `conclusion` other than the plain pass/fail GitHub
  * shows in its own merge-gate UI; not accounted for here, same scope
  * boundary `computeCiStatus` already draws for skipped/cancelled runs.
+ *
+ * Scope boundary, not covered here: `required_status_checks.contexts` can
+ * name either a Check Run (what this function reads) OR a legacy Statuses
+ * API context (`GET /commits/{sha}/status`) — this repo's own `main` uses
+ * only Check Run names today, but a Task Master project pointed at a repo
+ * whose branch protection requires a Statuses-API context would see that
+ * context invisible to this lookup, and `attemptReturnRedCiToWorker` would
+ * never fire for it (fails safe — the task just stays in `reviewing`, same
+ * as any other `redRequired === false`). Not fixed here; would need a
+ * second, differently-shaped call merged against the same required set.
  */
 export async function fetchCheckRunsForHead(
   token: string,
