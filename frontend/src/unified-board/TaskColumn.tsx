@@ -27,6 +27,7 @@ export function TaskColumn({
   onDrop,
   onDragBegin,
   onDragFinish,
+  collapsed,
 }: {
   title: string;
   tasks: Task[];
@@ -40,6 +41,10 @@ export function TaskColumn({
   onDrop: (draggedId: number, index: number) => void;
   onDragBegin: (id: number) => void;
   onDragFinish: () => void;
+  // #746 — the hide-done board filter collapses this column to header-only
+  // (title + count) rather than removing it, so the count stays visible
+  // without needing to hunt through a hidden column.
+  collapsed?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
 
@@ -51,23 +56,31 @@ export function TaskColumn({
   // actually work on" answerable at a glance, without opening each card.
   const blockedCount = tasks.filter((t) => t.blockedState === "blocked").length;
 
+  const header = (
+    <div className="kanban-column-header">
+      <span className="kanban-column-title">{title}</span>
+      <span className="kanban-column-count">{tasks.length}</span>
+      {blockedCount > 0 && (
+        <span
+          className="kanban-column-blocked-count"
+          role="img"
+          title={`${blockedCount} blocked`}
+          aria-label={`${blockedCount} blocked`}
+        >
+          <BlockedIcon size={10} aria-hidden="true" />
+          {blockedCount}
+        </span>
+      )}
+    </div>
+  );
+
+  if (collapsed) {
+    return <div className="kanban-column kanban-column-collapsed">{header}</div>;
+  }
+
   return (
     <div className={`kanban-column${tasks.length === 0 ? " kanban-column-is-empty" : ""}`}>
-      <div className="kanban-column-header">
-        <span className="kanban-column-title">{title}</span>
-        <span className="kanban-column-count">{tasks.length}</span>
-        {blockedCount > 0 && (
-          <span
-            className="kanban-column-blocked-count"
-            role="img"
-            title={`${blockedCount} blocked`}
-            aria-label={`${blockedCount} blocked`}
-          >
-            <BlockedIcon size={10} aria-hidden="true" />
-            {blockedCount}
-          </span>
-        )}
-      </div>
+      {header}
       <div
         className={`kanban-column-body${dropTarget ? " kanban-card-drop-target" : ""}`}
         onDragOver={(e) => {

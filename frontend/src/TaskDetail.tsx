@@ -188,14 +188,20 @@ export function TaskDetail({
             let the server's own guard decide" posture TaskActions already
             uses for Retry itself (a `failed` task with no preserved branch
             still shows the button and surfaces the 400 as an inline error
-            rather than hiding it). The server only actually allows the
-            delete once the linked issue is confirmed no longer trackable
-            (see routes/tasks.ts's DELETE handler); otherwise this button's
-            confirm step surfaces that as the same inline error, pointing
-            back at Retry. */}
-        {((task.issueNumber === null && (task.status === "backlog" || task.status === "ready")) ||
-          (task.issueNumber !== null && task.status === "failed")) && (
-          <DeleteTaskAction taskId={task.id} />
+            rather than hiding it).
+            #746 — `done` (local or GitHub-linked) is rendered too, once the
+            board's own cleanup path exists for it. The server only actually
+            allows the delete once a linked issue is confirmed no longer
+            trackable (see routes/tasks.ts's DELETE handler); otherwise this
+            button's confirm step surfaces that as the same inline error. */}
+        {((task.issueNumber === null &&
+          (task.status === "backlog" || task.status === "ready" || task.status === "done")) ||
+          (task.issueNumber !== null && (task.status === "failed" || task.status === "done"))) && (
+          <DeleteTaskAction
+            taskId={task.id}
+            isDone={task.status === "done"}
+            isGithubLinked={task.issueNumber !== null}
+          />
         )}
       </div>
 
@@ -471,7 +477,15 @@ export function TaskDetail({
 // task list no longer contains this id, TaskDetail's own `if (!task)` guard
 // above already renders "Task not found." — the same no-optimistic-state,
 // let-the-poll-reconcile posture the rest of this file follows.
-function DeleteTaskAction({ taskId }: { taskId: number }) {
+function DeleteTaskAction({
+  taskId,
+  isDone,
+  isGithubLinked,
+}: {
+  taskId: number;
+  isDone: boolean;
+  isGithubLinked: boolean;
+}) {
   const deleteTask = useDashboardStore((s) => s.deleteTask);
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -487,9 +501,21 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
     );
   }
 
+  // #746 — a done task's local row is the only thing this removes: the
+  // closed issue and merged PR stay on GitHub, and cleanupTaskWorktree
+  // already removed the worktree directory at approve time — the branch
+  // itself is untouched (see the DELETE route's own doc comment on why
+  // that's true for the GitHub-linked case).
+  const hint =
+    isDone && isGithubLinked
+      ? "Delete this task? The closed issue and merged PR stay on GitHub, and the branch is untouched. This can't be undone."
+      : isDone
+        ? "Delete this task? The branch is untouched. This can't be undone."
+        : "Delete this task? This can't be undone.";
+
   return (
     <div className="task-detail-actions task-detail-actions-delete">
-      <span className="task-detail-hint">Delete this task? This can't be undone.</span>
+      <span className="task-detail-hint">{hint}</span>
       <button
         className="notif-gate-btn notif-gate-deny-confirm"
         disabled={submitting}
