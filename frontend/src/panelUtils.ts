@@ -74,10 +74,16 @@ export function findSessionWorkspace(sessionId: number, workspaces: Workspace[])
 // "kanban"`) there is no terminal/workspace to receive a newly launched
 // terminal, so both the project-row "+" and the global launcher (⌘K) must be
 // inert there: launching would otherwise drop the panel into the unrelated
-// last-used workspace. Pure so the gate is unit-testable without mounting
+// last-used workspace.
+//
+// Allow-list (not a denylist) of the view modes that ARE a workspace: if a
+// new non-workspace mode is ever added it fails CLOSED (no launch) rather
+// than silently passing the gate. Pure so it's unit-testable without mounting
 // App.tsx (there is no App.test.tsx in this codebase).
+const WORKSPACE_VIEW_MODES = ["list"];
+
 export function canLaunchTerminal(viewMode: string): boolean {
-  return viewMode !== "kanban";
+  return WORKSPACE_VIEW_MODES.includes(viewMode);
 }
 
 // Issue #95 prerequisite — this app has no client-side router (no router

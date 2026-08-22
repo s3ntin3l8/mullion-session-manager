@@ -1924,8 +1924,8 @@ describe("canLaunchTerminal (issue #730 — no terminal launch from Task view)",
     expect(canLaunchTerminal("list")).toBe(true);
   });
 
-  it("allows from any other view mode", () => {
-    expect(canLaunchTerminal("something-else")).toBe(true);
+  it("refuses any unknown view mode (allow-list fails closed)", () => {
+    expect(canLaunchTerminal("something-else")).toBe(false);
   });
 });
 

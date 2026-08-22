@@ -463,6 +463,18 @@ export function App() {
     setSettingsOpen(true);
   }, []);
 
+  // Opens the global command palette. The single enforcement point for
+  // "terminals only launch from a workspace" (issue #730): gated on viewMode
+  // so both the toolbar/global-launcher button path and the ⌘K keyboard
+  // shortcut (useGlobalShortcuts.ts, which calls this) consult the same
+  // `canLaunchTerminal` check rather than each re-implementing it. Defined
+  // here (ahead of the `useGlobalShortcuts` call below) so it can be passed
+  // in as the keyboard handler's launcher.
+  const openGlobalLauncher = useCallback(() => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
+    setPalette({ open: true, scope: "global", projectId: null });
+  }, []);
+
   // Global keyboard shortcuts: ⌘K/Ctrl+K opens the launcher, ⌘,/Ctrl+, opens
   // settings, Esc closes whichever overlay is open. Registered once,
   // independent of what currently has DOM focus — extracted to
@@ -472,7 +484,7 @@ export function App() {
   // the ordering/coupling analysis proving this effect is independent of
   // every other effect in this file), but to keep the diff minimal and the
   // file's effect ordering easy to audit.
-  useGlobalShortcuts({ setPalette, setSettingsOpen, openSettings });
+  useGlobalShortcuts({ setPalette, setSettingsOpen, openSettings, openGlobalLauncher });
 
   // Check for updates on mount and re-check every 30 minutes.
   // The backend caches results for 1h, so most re-checks are no-ops.
@@ -986,11 +998,6 @@ export function App() {
     },
     [dockviewApi],
   );
-
-  const openGlobalLauncher = useCallback(() => {
-    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
-    setPalette({ open: true, scope: "global", projectId: null });
-  }, []);
 
   const openProjectLauncher = useCallback((projectId: number) => {
     if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
