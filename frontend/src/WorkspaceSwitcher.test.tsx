@@ -31,6 +31,19 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   };
 }
 
+function makeGroup(overrides: Partial<Group> = {}): Group {
+  return {
+    id: 1,
+    name: "My group",
+    icon: null,
+    color: null,
+    collapsed: false,
+    position: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 7,
@@ -218,19 +231,6 @@ describe("WorkspaceSwitcher", () => {
   // no keyboard support. Same role="button"/tabIndex/Enter-Space pattern as
   // Sidebar.tsx's SessionRow/ProjectHeader.
   describe("P10 — keyboard accessibility", () => {
-    function makeGroup(overrides: Partial<Group> = {}): Group {
-      return {
-        id: 1,
-        name: "My group",
-        icon: null,
-        color: null,
-        collapsed: false,
-        position: 0,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        ...overrides,
-      };
-    }
-
     it("workspace row is a focusable role=button that selects on Enter", async () => {
       const user = userEvent.setup();
       useDashboardStore.setState({ activeWorkspaceId: null });
@@ -361,6 +361,61 @@ describe("WorkspaceSwitcher", () => {
       // The underlying selection is untouched — only the paint is
       // suppressed, so leaving Tasks restores the real highlight.
       expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
+    });
+  });
+
+  describe("workspace selection", () => {
+    it("calls onSelectWorkspace when clicking an ungrouped workspace", async () => {
+      resetStore({
+        workspaces: [makeWorkspace({ id: 2, name: "Workspace Two", groupId: null })],
+        groups: [],
+        sessions: [makeSession()],
+        activeWorkspaceId: 1,
+      });
+      const onSelect = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher onSelectWorkspace={onSelect} />);
+      const item = container.querySelector(".workspace-item") as HTMLElement;
+
+      await user.click(item);
+
+      expect(onSelect).toHaveBeenCalledWith(2);
+    });
+
+    it("calls onSelectWorkspace when clicking a grouped workspace", async () => {
+      const group = makeGroup({ id: 1, collapsed: false });
+      vi.spyOn(api, "listGroups").mockResolvedValue([group]);
+      resetStore({
+        workspaces: [makeWorkspace({ id: 3, name: "Grouped Workspace", groupId: 1 })],
+        groups: [group],
+        sessions: [makeSession()],
+        activeWorkspaceId: 1,
+      });
+      const onSelect = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher onSelectWorkspace={onSelect} />);
+      const item = container.querySelector(".workspace-item") as HTMLElement;
+
+      await user.click(item);
+
+      expect(onSelect).toHaveBeenCalledWith(3);
+    });
+
+    it("falls back to store.showWorkspace when onSelectWorkspace is not provided", async () => {
+      resetStore({
+        workspaces: [makeWorkspace({ id: 4, name: "Fallback Workspace", groupId: null })],
+        groups: [],
+        sessions: [makeSession()],
+        activeWorkspaceId: 1,
+      });
+      const showWorkspaceSpy = vi.spyOn(useDashboardStore.getState(), "showWorkspace");
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      const item = container.querySelector(".workspace-item") as HTMLElement;
+
+      await user.click(item);
+
+      expect(showWorkspaceSpy).toHaveBeenCalledWith(4);
     });
   });
 });

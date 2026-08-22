@@ -1493,8 +1493,14 @@ export function TerminalPane(props: {
   // steal-back when the find bar was ALREADY open at the moment this pane
   // became active — useTerminalSearch's own findOpen-transition effect owns
   // focus in that case.
+  //
+  // Touch / coarse-pointer devices (phones, tablets): auto-focusing xterm's
+  // hidden textarea pops the on-screen software keyboard unbidden (e.g. on
+  // workspace navigation or tab switch), so coarse pointers skip this
+  // programmatic focus and rely on the user explicitly tapping the terminal
+  // or MobileKeyBar.
   useEffect(() => {
-    if (!props.active || findOpenRef.current) return;
+    if (!props.active || findOpenRef.current || isCoarsePointer) return;
     termRef.current?.focus();
     // `findOpenRef` (from useTerminalSearch) is a plain useRef — its
     // identity is stable across renders, same as before PR 35's extraction;
@@ -1502,7 +1508,7 @@ export function TerminalPane(props: {
     // ONLY on props.active's false->true transition). Opaque to the linter
     // across the custom-hook boundary, same as openFind above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.active]);
+  }, [props.active, isCoarsePointer]);
 
   // Auto-dismisses the "upload failed" toast — "uploading" instead clears
   // itself the moment uploadAndInjectImage's promise settles (see the mount
