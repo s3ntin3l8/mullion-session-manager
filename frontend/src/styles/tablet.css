@@ -188,7 +188,9 @@
   .session-item,
   .project-row-header,
   .workspace-item,
-  .settings-nav-item {
+  .settings-nav-item,
+  .cmd-palette-target-chip.clickable,
+  .cmd-row {
     min-height: 44px;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;

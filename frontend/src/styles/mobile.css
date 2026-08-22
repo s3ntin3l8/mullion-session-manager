@@ -312,6 +312,9 @@
   .cmd-palette-search input {
     font-size: 16px;
   }
+  .cmd-palette-change-target {
+    display: none !important;
+  }
 
   /* Item E — touch targets. Moved to tablet.css under `(pointer: coarse)`
      (tablet tier plan, PR 4) so the same sub-44px interactive rows/buttons
