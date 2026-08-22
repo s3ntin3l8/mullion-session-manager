@@ -5389,6 +5389,14 @@ describe("PtyManager", () => {
       // the "drive it through the real hook chain, not just internal methods"
       // gap the rest of this PR's tests already cover for the
       // resolution-hook cancel path (see the test just above).
+      //
+      // The clock is anchored with fake `Date` timers (mirroring the sibling
+      // settle test at pty-manager.test.ts's markHooksProven test) so the
+      // "well past the deadline" advance is explicit and deterministic rather
+      // than relying on real wall-clock time between arming and ticking. The
+      // kill + respawn run under that fake clock too, but only `Date` is
+      // faked (setImmediate/setTimeout stay real), so the respawn's
+      // waitForSpawn still resolves.
       async function spawnAndKillMidWindow(session: InstanceType<typeof Session>): Promise<void> {
         // Session dies before the settle window elapses.
         fakePtyChildren[0].kill();
@@ -5413,22 +5421,31 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
+
         const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
 
-        session.emitHookEvent({
-          kind: "permission_request",
-          tool: "Bash",
-          summary: "rm -rf /tmp/x",
-        });
-        // permissionState is truthful immediately — the sidebar must reflect
-        // the agent being genuinely blocked, even though nothing has been
-        // reported to the user yet.
-        expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: false });
+          session.emitHookEvent({
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          });
+          // permissionState is truthful immediately — the sidebar must reflect
+          // the agent being genuinely blocked, even though nothing has been
+          // reported to the user yet.
+          expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: false });
 
-        await spawnAndKillMidWindow(session);
+          await spawnAndKillMidWindow(session);
 
-        // Advance well past the original 2s deadline.
-        session.tick(Date.now() + 5_000);
+          // Advance well past the original 2s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
 
         const emitted = session.getEvents().slice(eventsBefore);
         // No permission_request row, no attention ping — nothing at all
@@ -5446,16 +5463,25 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
+
         const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
 
-        // progress:done arms the deferred agentIdle ping (3s window).
-        session.emitHookEvent({ kind: "progress", phase: "done" });
-        expect(session.toInfo().attention).toBe(false);
+          // progress:done arms the deferred agentIdle ping (3s window).
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          expect(session.toInfo().attention).toBe(false);
 
-        await spawnAndKillMidWindow(session);
+          await spawnAndKillMidWindow(session);
 
-        // Advance well past the original 3s deadline.
-        session.tick(Date.now() + 5_000);
+          // Advance well past the original 3s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
 
         const emitted = session.getEvents().slice(eventsBefore);
         // agentIdle carries no alsoEmit companion, so only the attention ping
@@ -5472,18 +5498,27 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
+
         const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
 
-        // Unlike permissionRequest, tool_failure emits its NotificationEvent
-        // IMMEDIATELY and only defers the attention ping (D1: the agent's own
-        // next output chunk resolves it). So the row is expected; the ping is not.
-        session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
-        expect(session.toInfo()).toMatchObject({ errorState: "tool_failure" });
+          // Unlike permissionRequest, tool_failure emits its NotificationEvent
+          // IMMEDIATELY and only defers the attention ping (D1: the agent's own
+          // next output chunk resolves it). So the row is expected; the ping is not.
+          session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+          expect(session.toInfo()).toMatchObject({ errorState: "tool_failure" });
 
-        await spawnAndKillMidWindow(session);
+          await spawnAndKillMidWindow(session);
 
-        // Advance well past the original 2s deadline.
-        session.tick(Date.now() + 5_000);
+          // Advance well past the original 2s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
 
         const emitted = session.getEvents().slice(eventsBefore);
         expect(emitted.some((e) => e.kind === "attention")).toBe(false);
@@ -5501,17 +5536,26 @@ describe("PtyManager", () => {
           rows: 24,
         });
         await waitForSpawn(session);
+
         const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
 
-        // stop_failure → api_error: NotificationEvent fires immediately, only
-        // the attention ping is deferred.
-        session.emitHookEvent({ kind: "stop_failure", error: "rate_limit" });
-        expect(session.toInfo()).toMatchObject({ errorState: "api_error" });
+          // stop_failure → api_error: NotificationEvent fires immediately, only
+          // the attention ping is deferred.
+          session.emitHookEvent({ kind: "stop_failure", error: "rate_limit" });
+          expect(session.toInfo()).toMatchObject({ errorState: "api_error" });
 
-        await spawnAndKillMidWindow(session);
+          await spawnAndKillMidWindow(session);
 
-        // Advance well past the original 2s deadline.
-        session.tick(Date.now() + 5_000);
+          // Advance well past the original 2s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
 
         const emitted = session.getEvents().slice(eventsBefore);
         expect(emitted.some((e) => e.kind === "attention")).toBe(false);
