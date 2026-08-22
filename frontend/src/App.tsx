@@ -147,6 +147,7 @@ export function App() {
   const [mobileDraftName, setMobileDraftName] = useState("");
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);
   const activeMobileTabRef = useRef<HTMLDivElement>(null);
+  const mobileTabsRef = useRef<HTMLDivElement>(null);
   const [palette, setPalette] = useState<PaletteState>({
     open: false,
     scope: "global",
@@ -458,6 +459,28 @@ export function App() {
       });
     }
   }, [isMobile, activePanelId]);
+
+  // React registers its onWheel/onTouchMove JSX handlers as passive
+  // listeners, so calling preventDefault() from a plain `onWheel` prop is a
+  // silent no-op in real browsers — the synthetic event reports
+  // defaultPrevented=true but the underlying native event doesn't, and the
+  // page still scrolls vertically underneath the tab bar. Attaching the
+  // listener manually with { passive: false } is the only way to actually
+  // stop that propagation.
+  useEffect(() => {
+    const el = mobileTabsRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (!e.deltaY) return;
+      // deltaMode 1 ("line") reports small integer deltas, not pixels;
+      // scale up so wheel scrolling isn't imperceptible.
+      const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      el.scrollLeft += delta;
+      e.preventDefault();
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, []);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -1254,7 +1277,7 @@ export function App() {
 
   return (
     <div
-      className={`app cmux-root tier-${layoutTier}${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
+      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
@@ -1441,14 +1464,7 @@ export function App() {
                 toggle (Toolbar.tsx) is the only one left at this breakpoint
                 — the second, redundant ☰ that used to render here is gone. */}
             {isMobile && mobilePanels.length > 0 && (
-              <div
-                className="mobile-tabs"
-                onWheel={(e) => {
-                  if (e.deltaY) {
-                    e.currentTarget.scrollLeft += e.deltaY;
-                  }
-                }}
-              >
+              <div className="mobile-tabs" ref={mobileTabsRef}>
                 {mobilePanels.map((panel) => {
                   const sessionId = panelSessionId(panel);
                   const session = sessions.find((s) => s.id === sessionId);

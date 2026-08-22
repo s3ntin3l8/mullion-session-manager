@@ -1485,9 +1485,6 @@
 .mobile-tabs::-webkit-scrollbar {
   display: none;
 }
-.app.tier-phone .mobile-tabs {
-  display: flex !important;
-}
 /* Mobile UI/UX overhaul, item A.5 — one wrap per panel so the active pane's
    trailing close/kebab buttons (added conditionally in App.tsx) sit next to
    its own tab without being swept into that tab's own flex sizing. */
