@@ -1087,6 +1087,11 @@ export function App() {
     [dockviewApi, splitRequest, onOpenSession, projects],
   );
 
+  const handleSelectWorkspace = useCallback((workspaceId: number) => {
+    useDashboardStore.getState().showWorkspace(workspaceId);
+    setSidebarOpen(false);
+  }, []);
+
   // One toggle, two meanings depending on breakpoint: phone/tablet's
   // `sidebarOpen` is a closed-by-default overlay flag (App.tsx-local, not
   // persisted — resets to closed every navigation, which is the right
@@ -1296,7 +1301,7 @@ export function App() {
           {layoutTier === "desktop" && !sidebarCollapsed && (
             <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
           )}
-          <WorkspaceSwitcher />
+          <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
           <Sidebar
             onOpenSession={onOpenSession}
             onOpenSessionAsFloat={onOpenSessionAsFloat}
@@ -1667,6 +1672,7 @@ export function App() {
           onOpenIntegrationsSettings={() => openSettings("integrations")}
           onOpenBlankBrowser={onOpenBlankBrowser}
           onOpenBrowserUrl={onOpenBrowserUrl}
+          onShowWorkspace={handleSelectWorkspace}
         />
       )}
       {settingsOpen && (

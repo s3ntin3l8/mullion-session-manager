@@ -2109,6 +2109,42 @@ describe("TerminalPane pane-activation focus (U7)", () => {
 
     expect(getLatestTermInstance().focus).toHaveBeenCalledTimes(1);
   });
+
+  it("does not focus the terminal on active transition under a coarse pointer (mobile/tablet)", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    stubFakeWebSocket(true);
+    const { rerender } = renderPane();
+    const term = getLatestTermInstance();
+    expect(term.focus).not.toHaveBeenCalled();
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} />);
+
+    expect(term.focus).not.toHaveBeenCalled();
+  });
+
+  it("does not focus when mounting already-active under a coarse pointer", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    stubFakeWebSocket(true);
+    renderPane({ active: true });
+
+    expect(getLatestTermInstance().focus).not.toHaveBeenCalled();
+  });
 });
 
 // P13 — the WS close listener used to retry with backoff regardless of why

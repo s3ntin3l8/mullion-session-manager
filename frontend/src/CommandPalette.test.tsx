@@ -1413,6 +1413,89 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     expect(screen.queryByText("idle session")).not.toBeInTheDocument();
     expect(screen.queryByText("idle workspace")).not.toBeInTheDocument();
   });
+
+  // PR #810 — the palette's own two workspace-select sites (Enter and
+  // click) used to call the store's `showWorkspace` directly, leaving a
+  // phone/tablet sidebar overlay open behind the closing palette. Both must
+  // route through `onShowWorkspace` when the caller (App.tsx) supplies one.
+  it("calls onShowWorkspace, not just the store action, when selecting a workspace via Enter", async () => {
+    const workspace = makeWorkspace({ id: 3, name: "bashful workspace" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      workspaces: [workspace],
+      activeWorkspaceId: null,
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    const onShowWorkspace = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        onShowWorkspace={onShowWorkspace}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "bashful");
+    await screen.findByText("bashful workspace");
+    await user.keyboard("{Enter}");
+
+    expect(onShowWorkspace).toHaveBeenCalledWith(3);
+  });
+
+  it("calls onShowWorkspace when clicking a workspace search result", async () => {
+    const workspace = makeWorkspace({ id: 4, name: "clickable workspace" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      workspaces: [workspace],
+      activeWorkspaceId: null,
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    const onShowWorkspace = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        onShowWorkspace={onShowWorkspace}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "clickable");
+    await user.click(await screen.findByText("clickable workspace"));
+
+    expect(onShowWorkspace).toHaveBeenCalledWith(4);
+  });
 });
 
 describe("CommandPalette -> target project picker (Launch in dropdown)", () => {

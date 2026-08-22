@@ -334,9 +334,22 @@ export class AttentionTracker {
     >,
     extras: Record<string, unknown>,
     alsoEmit: AlsoEmit[] = [],
+    // Defaults to Date.now() (identical production behavior) — a parameter
+    // rather than an unconditional internal read purely so tests can pin it
+    // to the same synthetic clock drainDeferred()/tick() are called with
+    // (same reasoning as tick()'s own `now` param doc comment). Without
+    // this, a caller that captures `now` and later drains at `now + settleMs`
+    // races against however many real milliseconds elapsed between that
+    // capture and THIS call's own now (test setup, GC, CI scheduling) — the
+    // window is closed by a few ms and the deferred emit never fires, an
+    // intermittent failure that gets more likely, not less, on a loaded
+    // CI runner (see test/services/pty-manager.test.ts's D4 sweep test and
+    // attention-tracker.test.ts's "confirm-after-window" test, both fixed
+    // alongside this).
+    now: number = Date.now(),
   ): void {
     const settleMs = ATTENTION_SETTLE_MS[kind] ?? 0;
-    this.deferred.set(kind, { extras, alsoEmit, dueAt: Date.now() + settleMs });
+    this.deferred.set(kind, { extras, alsoEmit, dueAt: now + settleMs });
   }
 
   /**

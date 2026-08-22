@@ -107,6 +107,16 @@ interface CommandPaletteProps {
   // Issue #109: opens a browser pane for a specific saved URL (favorited).
   // The same BrowserPanel component handles navigation once opened.
   onOpenBrowserUrl: (projectId: number, url: string, label: string) => void;
+  // Mobile/tablet workspace-nav fix (PR #810) — the palette's own two
+  // "select a Workspace search result" sites (U2's Workspaces group, Enter
+  // and click) used to call the store's `showWorkspace` directly, which
+  // left the phone/tablet sidebar overlay open behind the (now-closing)
+  // palette — the exact bug this PR fixes for WorkspaceSwitcher's own rows,
+  // reachable here too since the toolbar's launcher button that opens this
+  // palette stays tappable while that overlay is up. Optional (falls back
+  // to calling the store directly) so callers that don't care about the
+  // overlay — and every existing test — don't need to pass it.
+  onShowWorkspace?: (workspaceId: number) => void;
 }
 
 // The parent (App.tsx) only mounts this component while the palette is
@@ -129,6 +139,7 @@ export function CommandPalette({
   onOpenIntegrationsSettings,
   onOpenBlankBrowser,
   onOpenBrowserUrl,
+  onShowWorkspace,
 }: CommandPaletteProps) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `createSession`/`refreshProjectUrls` are pure
@@ -209,6 +220,18 @@ export function CommandPalette({
   const closeAfterAction = () => {
     suppressRestore();
     onClose();
+  };
+
+  // See `onShowWorkspace`'s own doc comment on CommandPaletteProps — falls
+  // back to the store action directly when the caller doesn't need to know
+  // about it, same optional-prop-with-fallback shape as WorkspaceSwitcher's
+  // own `onSelectWorkspace`.
+  const selectWorkspace = (workspaceId: number) => {
+    if (onShowWorkspace) {
+      onShowWorkspace(workspaceId);
+    } else {
+      useDashboardStore.getState().showWorkspace(workspaceId);
+    }
   };
 
   // Independent code review — `(pointer: coarse)` is deliberately not
@@ -530,7 +553,7 @@ export function CommandPalette({
                   onOpenSession(picked.session);
                   closeAfterAction();
                 } else if (picked.type === "workspace") {
-                  useDashboardStore.getState().showWorkspace(picked.workspace.id);
+                  selectWorkspace(picked.workspace.id);
                   closeAfterAction();
                 } else {
                   launch(picked.launcher);
@@ -964,7 +987,7 @@ export function CommandPalette({
                       className={`cmd-row${absoluteIndex === activeIndex ? " selected" : ""}`}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
-                        useDashboardStore.getState().showWorkspace(workspace.id);
+                        selectWorkspace(workspace.id);
                         closeAfterAction();
                       }}
                     >

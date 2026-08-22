@@ -2166,7 +2166,7 @@ export class Session {
    * provably scoped to just what's declared on SessionHookContext, not
    * Session's full surface.
    */
-  private buildHookContext(): SessionHookContext {
+  private buildHookContext(now: number = Date.now()): SessionHookContext {
     // The object literal's own get/set accessors below each have their OWN
     // dynamic `this` (bound to the ctx object itself, not this Session) —
     // an arrow function is the only way to close over the real Session
@@ -2403,7 +2403,7 @@ export class Session {
       emitAttentionSignalWithExtras: (kind, extras) =>
         self.attention.emitAttentionSignalWithExtras(kind, extras),
       emitAttentionSignalDeferred: (kind, extras, alsoEmit) =>
-        self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit),
+        self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit, now),
       cancelDeferred: (kind) => self.attention.cancelDeferred(kind),
       markStateDirty: () => self.stateFile.schedule(),
       clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
@@ -2417,7 +2417,15 @@ export class Session {
     };
   }
 
-  emitHookEvent(message: HookMessage): void {
+  // `now` defaults to Date.now() (identical production behavior) — a
+  // parameter purely so tests can drive a settle-window-eligible hook
+  // message (permission_request/tool_failure/api_error) and later
+  // tick()/drainDeferred() against the SAME synthetic clock, rather than
+  // racing this call's own internal Date.now() against a `now` the test
+  // captured slightly earlier — see emitAttentionSignalDeferred's own doc
+  // comment for the failure this caused (test/services/pty-manager.test.ts's
+  // D4 sweep test, intermittently on a loaded CI runner).
+  emitHookEvent(message: HookMessage, now: number = Date.now()): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
     // "progress"/"done" — proves this session's hook pipeline genuinely
     // fires, so this latches unconditionally before dispatch, ahead of every
@@ -2434,7 +2442,7 @@ export class Session {
     // error) is a silent no-op, same as the original switch's
     // `default: return`.
     const handler = HOOK_HANDLERS.get(message.kind);
-    if (handler) handler(this.buildHookContext(), message);
+    if (handler) handler(this.buildHookContext(now), message);
   }
 
   /**

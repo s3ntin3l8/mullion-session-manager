@@ -91,7 +91,11 @@ interface DragCtx {
   endDrag: () => void;
 }
 
-export function WorkspaceSwitcher() {
+export interface WorkspaceSwitcherProps {
+  onSelectWorkspace?: (workspaceId: number) => void;
+}
+
+export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps = {}) {
   // P1 perf fix — this used to be a single bare `useDashboardStore()` call
   // (no selector), subscribing to the ENTIRE store: any unrelated write
   // anywhere (settings, tasks, gitStatuses, the 4s sessions poll tick, …)
@@ -121,6 +125,14 @@ export function WorkspaceSwitcher() {
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+
+  const handleSelectWorkspace = (id: number) => {
+    if (onSelectWorkspace) {
+      onSelectWorkspace(id);
+    } else {
+      useDashboardStore.getState().showWorkspace(id);
+    }
+  };
 
   useEffect(() => {
     void useDashboardStore.getState().refreshGroups();
@@ -223,7 +235,7 @@ export function WorkspaceSwitcher() {
           sessions={sessions}
           sessionIdsByWorkspace={sessionIdsByWorkspace}
           activeWorkspaceId={displayActiveWorkspaceId}
-          onSelect={(id) => useDashboardStore.getState().showWorkspace(id)}
+          onSelect={(id) => handleSelectWorkspace(id)}
           onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
           onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
           onToggleCollapsed={() =>
@@ -260,7 +272,7 @@ export function WorkspaceSwitcher() {
         activeWorkspaceId={displayActiveWorkspaceId}
         sessions={sessions}
         sessionIdsByWorkspace={sessionIdsByWorkspace}
-        onSelect={(id) => useDashboardStore.getState().showWorkspace(id)}
+        onSelect={(id) => handleSelectWorkspace(id)}
         onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
         onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
       />
@@ -270,7 +282,7 @@ export function WorkspaceSwitcher() {
           <NewWorkspaceForm
             onCreated={(workspace) => {
               setShowNewWorkspace(false);
-              useDashboardStore.getState().showWorkspace(workspace.id);
+              handleSelectWorkspace(workspace.id);
             }}
             onCancel={() => setShowNewWorkspace(false)}
             createWorkspace={(name) => useDashboardStore.getState().createWorkspace(name)}
