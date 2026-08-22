@@ -4345,11 +4345,19 @@ describe("PtyManager", () => {
         await waitForSpawn(session);
         const now = Date.now();
 
-        session.emitHookEvent({
-          kind: "permission_request",
-          tool: "Bash",
-          summary: "rm -rf /tmp/x",
-        });
+        // `now` pinned here (rather than emitHookEvent's own default
+        // Date.now()) so the settle window's dueAt and this tick() below
+        // race against the identical synthetic clock, not two independent
+        // real-time reads a few CI-scheduling milliseconds apart — see
+        // emitAttentionSignalDeferred's own doc comment.
+        session.emitHookEvent(
+          {
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          },
+          now,
+        );
         // Confirm it (settle window) — the sweep this test exercises only
         // makes sense against an already-CONFIRMED flag, per the test's own
         // name ("...it confirmed").

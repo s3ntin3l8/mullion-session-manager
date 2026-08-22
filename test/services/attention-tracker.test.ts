@@ -314,10 +314,16 @@ describe("AttentionTracker settle window (emitAttentionSignalDeferred/drainDefer
     const { tracker, emitEvent } = makeTracker();
     const now = Date.now();
 
+    // `now` pinned here (rather than emitAttentionSignalDeferred's own
+    // default Date.now()) so dueAt and the drainDeferred() below race
+    // against the identical synthetic clock, not two independent real-time
+    // reads a few CI-scheduling milliseconds apart — see
+    // emitAttentionSignalDeferred's own doc comment.
     tracker.emitAttentionSignalDeferred(
       "permissionRequest",
       { tool: "Bash", summary: "rm -rf /tmp/x" },
       [{ kind: "permission_request", payload: { tool: "Bash", summary: "rm -rf /tmp/x" } }],
+      now,
     );
     expect(emitEvent).not.toHaveBeenCalled();
 
