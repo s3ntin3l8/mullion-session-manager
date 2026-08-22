@@ -27,15 +27,16 @@
 // per-agent precedence table, Codex reads this file *instead of* AGENTS.md
 // whenever it exists at project scope — and Mullion's Agent Rules Editor can
 // create it. If it exists, it is checked here too: its briefing region must
-// be byte-identical to AGENTS.md's inside the markers (content outside the
-// markers is free to diverge — override files are meant to diverge in
-// general, just not on this one block). This is the invariant that keeps
-// src/services/project-briefing.ts's SessionStart injection (which reads
-// AGENTS.md/CLAUDE.md/.agents/briefing.md — never the override) in sync with
-// what Codex reads natively; without it, an override silently cuts Codex off
-// from every tier-1 rule with nothing in the diff looking wrong. Only the
-// project-scope override is covered — a repo-local check can't and shouldn't
-// police $CODEX_HOME/AGENTS.override.md in a user's home directory.
+// match AGENTS.md's inside the markers, save for leading/trailing whitespace
+// (content outside the markers is free to diverge — override files are meant
+// to diverge in general, just not on this one block). This is the invariant
+// that keeps src/services/project-briefing.ts's SessionStart injection
+// (which reads AGENTS.md/CLAUDE.md/.agents/briefing.md — never the override)
+// in sync with what Codex reads natively; without it, an override silently
+// cuts Codex off from every tier-1 rule with nothing in the diff looking
+// wrong. Only the project-scope override is covered — a repo-local check
+// can't and shouldn't police $CODEX_HOME/AGENTS.override.md in a user's home
+// directory.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

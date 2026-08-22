@@ -36,9 +36,18 @@ function geminiMd(region = REGION): string {
 }
 
 function runScript(root?: string) {
-  return execFileAsync("node", [SCRIPT], {
-    env: root ? { ...process.env, BRIEFING_SYNC_ROOT: root } : process.env,
-  });
+  // Explicitly clear BRIEFING_SYNC_ROOT rather than passing bare
+  // `process.env` when `root` is omitted — an ambient BRIEFING_SYNC_ROOT
+  // leaked into this process's env (e.g. from a shell export) would
+  // otherwise silently redirect the "unset" case to a fixture too, defeating
+  // the one test that's supposed to exercise the real default-root fallback.
+  const env = { ...process.env };
+  if (root) {
+    env.BRIEFING_SYNC_ROOT = root;
+  } else {
+    delete env.BRIEFING_SYNC_ROOT;
+  }
+  return execFileAsync("node", [SCRIPT], { env });
 }
 
 describe("scripts/check-briefing-sync.mjs", () => {
