@@ -1672,6 +1672,7 @@ export function App() {
           onOpenIntegrationsSettings={() => openSettings("integrations")}
           onOpenBlankBrowser={onOpenBlankBrowser}
           onOpenBrowserUrl={onOpenBrowserUrl}
+          onShowWorkspace={handleSelectWorkspace}
         />
       )}
       {settingsOpen && (
