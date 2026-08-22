@@ -294,6 +294,18 @@ export function CommandPalette({
     Math.max(0, filteredProjects.length - 1),
   );
 
+  // Same scrollIntoView-on-active-index convention as CustomSelect.tsx
+  // (data-index + querySelector, rather than one ref per row) — keeps the
+  // ArrowUp/ArrowDown-highlighted project visible in a long, scrollable list.
+  const projectListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const item = projectListRef.current?.querySelector(
+      `[data-index="${activeProjectIndex}"]`,
+    ) as HTMLElement | null;
+    item?.scrollIntoView?.({ block: "nearest" });
+  }, [pickerOpen, activeProjectIndex]);
+
   // `query` is shared with the main search box (useCommandSearch owns it) —
   // the picker repurposes it as its own filter text while open, so opening
   // must stash whatever the user had already typed and closing (by any of
@@ -473,6 +485,11 @@ export function CommandPalette({
               }
             }}
             placeholder={pickerOpen ? "Filter projects…" : "Launch a session or run a command…"}
+            aria-activedescendant={
+              pickerOpen && filteredProjects.length > 0
+                ? `cmd-palette-project-opt-${activeProjectIndex}`
+                : undefined
+            }
             onKeyDown={(e) => {
               if (pickerOpen) {
                 if (e.key === "Escape") {
@@ -626,7 +643,7 @@ export function CommandPalette({
         )}
 
         {pickerOpen ? (
-          <div className="cmux-scroll cmd-palette-list" role="listbox">
+          <div className="cmux-scroll cmd-palette-list" role="listbox" ref={projectListRef}>
             <div className="cmd-palette-group-label">
               {filteredProjects.length === 0 ? "No matching projects" : "Choose a project"}
             </div>
@@ -634,8 +651,10 @@ export function CommandPalette({
               <button
                 type="button"
                 key={p.id}
+                id={`cmd-palette-project-opt-${idx}`}
                 role="option"
                 aria-selected={idx === activeProjectIndex}
+                data-index={idx}
                 className={`cmd-row${idx === activeProjectIndex ? " selected" : ""}`}
                 onClick={() => {
                   setManualTargetProjectId(p.id);
