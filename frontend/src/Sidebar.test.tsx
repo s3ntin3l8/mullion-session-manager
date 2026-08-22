@@ -73,6 +73,8 @@ function storeState() {
     deleteSession,
     subscribeToGitHubProject,
     unsubscribeFromGitHubProject,
+    mutedSessionIds: [],
+    toggleSessionMute: vi.fn(),
   };
 }
 

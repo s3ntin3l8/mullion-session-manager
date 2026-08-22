@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "../Sidebar.js";
+import { useDashboardStore } from "../store/index.js";
 import {
   type GitBranchesResult,
   type GitDiffStats,
@@ -35,8 +36,14 @@ let sessions: Session[];
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
 const renameSessionMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("../store/index.js", () => ({
-  useDashboardStore: (selector: (s: unknown) => unknown) =>
+// #719 — stable per-session mute toggle mock, defined at module scope (NOT
+// inside the hoisted vi.mock factory) so both the reactive selector and
+// getState() return the SAME instance — the kebab test asserts on
+// getState().toggleSessionMute after a click, which would miss a fresh
+// vi.fn() created per getState() call.
+const toggleSessionMuteMock = vi.fn();
+vi.mock("../store/index.js", () => {
+  const useDashboardStore = (selector: (s: unknown) => unknown) =>
     selector({
       settings: { sessions: { confirmBeforeKill: false } },
       theme: "dark",
@@ -46,11 +53,20 @@ vi.mock("../store/index.js", () => ({
       gitBranchesByProject,
       prsByProject,
       sessions,
+      mutedSessionIds: [],
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
       renameSession: renameSessionMock,
-    }),
-}));
+      toggleSessionMute: toggleSessionMuteMock,
+    });
+  useDashboardStore.getState = () => ({
+    events,
+    sessions,
+    mutedSessionIds: [],
+    toggleSessionMute: toggleSessionMuteMock,
+  });
+  return { useDashboardStore };
+});
 
 const PROJECT: Project = makeProject();
 
@@ -75,6 +91,24 @@ describe("SessionRow row 1 — header: kebab menu", () => {
       />,
     );
     expect(screen.queryByTitle("More…")).not.toBeInTheDocument();
+  });
+
+  it("offers 'Mute notifications' in the kebab and toggles the session (#719)", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionRow
+        session={makeSession({ status: "active" })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    const muteItem = screen.getByText("Mute notifications");
+    await user.click(muteItem);
+
+    expect(useDashboardStore.getState().toggleSessionMute).toHaveBeenCalledWith(expect.any(Number));
   });
 });
 

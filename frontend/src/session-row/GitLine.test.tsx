@@ -50,6 +50,8 @@ vi.mock("../store/index.js", () => ({
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
       renameSession: renameSessionMock,
+      mutedSessionIds: [],
+      toggleSessionMute: vi.fn(),
     }),
 }));
 

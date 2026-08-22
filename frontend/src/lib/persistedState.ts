@@ -54,6 +54,13 @@ export const STORAGE_KEYS = {
   // is what makes them survive closing and reopening the panel.
   timelineKinds: "crs.timelineKinds",
   timelineOnlyAttention: "crs.timelineOnlyAttention",
+  // #719 — per-session mute / do-not-disturb. A `number[]` of muted session
+  // ids (not a Set, so it round-trips through JSON cleanly): read/written in
+  // one place each (store/slices/ui.ts's state init + toggleSessionMute),
+  // same localStorage-only, no-backend-field posture as every other key
+  // above. Survives reload/reconnect like the rest; not shared across
+  // devices (web-push to other subscribers is untouched — see the issue).
+  mutedSessions: "crs.mutedSessions",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
@@ -153,4 +160,26 @@ export function readJSON<T>(key: StorageKey, fallback: T): T {
 
 export function writeJSON(key: StorageKey, value: unknown): void {
   writeRaw(key, JSON.stringify(value));
+}
+
+// #719 — per-session mute set, stored as a plain `number[]` so it survives a
+// JSON round-trip (a Set would silently serialize to `{}`). A malformed or
+// non-array value collapses to `[]` (same defensive posture as readJSON's
+// other callers), and any non-number entries are dropped on read so a stale/
+// hand-edited blob can't later poison an `includes()` lookup with a cast that
+// lies about its element type.
+export function readMutedSessionIds(): number[] {
+  const raw = readRaw(STORAGE_KEYS.mutedSessions);
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id): id is number => typeof id === "number");
+  } catch {
+    return [];
+  }
+}
+
+export function writeMutedSessionIds(ids: number[]): void {
+  writeJSON(STORAGE_KEYS.mutedSessions, ids);
 }

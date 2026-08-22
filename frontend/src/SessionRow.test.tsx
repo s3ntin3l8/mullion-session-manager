@@ -51,8 +51,13 @@ const renameSessionMock = vi.fn().mockResolvedValue(undefined);
 // Issue #351 — session.hookEmits (matched adapter emits surfaced on each
 // session) determines whether statusEstimated renders. Tests that don't
 // care about estimated status get hookEmits: [] from makeSession's default.
-vi.mock("./store/index.js", () => ({
-  useDashboardStore: (selector: (s: unknown) => unknown) =>
+vi.mock("./store/index.js", () => {
+  // The state object is built INSIDE the selector callback (call-time, during
+  // render) rather than at mock-definition (hoisted) time, so the `let`
+  // module-level fixtures (events/sessions/...) are initialized by the time
+  // the component actually reads them — referencing them at definition time
+  // would hit the temporal-dead-zone error vitest warns about.
+  const useDashboardStore = (selector: (s: unknown) => unknown) =>
     selector({
       settings: { sessions: { confirmBeforeKill: false } },
       theme: "dark",
@@ -62,11 +67,20 @@ vi.mock("./store/index.js", () => ({
       gitBranchesByProject,
       prsByProject,
       sessions,
+      mutedSessionIds: [],
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
       renameSession: renameSessionMock,
-    }),
-}));
+      toggleSessionMute: vi.fn(),
+    });
+  useDashboardStore.getState = () => ({
+    events,
+    sessions,
+    mutedSessionIds: [],
+    toggleSessionMute: vi.fn(),
+  });
+  return { useDashboardStore };
+});
 
 const PROJECT: Project = makeProject();
 

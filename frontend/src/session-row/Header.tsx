@@ -3,7 +3,14 @@ import type { ReactNode } from "react";
 import type { GitStatus } from "../api/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
-import { ChevronDownIcon, CloseIcon, GitBranchIcon, RenameIcon } from "../ui/icons.js";
+import {
+  BellIcon,
+  BellOffIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  GitBranchIcon,
+  RenameIcon,
+} from "../ui/icons.js";
 
 // SessionRow's row 1 — the `.session-item-row` strip (status dot, agent
 // logo/name, rename-in-place, status label, git-details toggle, kebab menu,
@@ -47,6 +54,11 @@ export interface HeaderProps {
   onRename: (value: string) => void;
   childCount: number;
   confirmBeforeKill: boolean;
+  // #719 — per-session mute. `isMuted` is the live derived state and
+  // `onToggleMute` the store action, both supplied by SessionRow (which owns
+  // the session + store wiring) so this component stays prop-driven.
+  isMuted: boolean;
+  onToggleMute: () => void;
   // Named onConfirmEnd (not onEnd) deliberately: SessionRow's own `onEnd`
   // prop is the caller's raw ender (`() => void | Promise<void>`, per that
   // prop's own doc comment) — this is SessionRow's already-wrapped
@@ -74,6 +86,8 @@ export function Header({
   onRename,
   childCount,
   confirmBeforeKill,
+  isMuted,
+  onToggleMute,
   onConfirmEnd,
 }: HeaderProps) {
   const [renaming, setRenaming] = useState(false);
@@ -191,6 +205,16 @@ export function Header({
                 label: "Promote to worktree…",
                 icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
                 onClick: onPromote,
+              } as const,
+              {
+                key: "mute",
+                label: isMuted ? "Unmute notifications" : "Mute notifications",
+                icon: isMuted ? (
+                  <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
+                ) : (
+                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
+                ),
+                onClick: onToggleMute,
               } as const,
             ]}
           />

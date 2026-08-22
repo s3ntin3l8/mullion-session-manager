@@ -55,6 +55,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // would vanish from the panel yet still count here, which is exactly the
   // "don't break tab-badge/panel agreement" case #169 has to avoid.
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
+  // #719 — a muted session shows no unread tab badge (the disturbance is
+  // silenced); the events still surface in the timeline/feed when opened.
+  const muted = useDashboardStore((s) => s.mutedSessionIds.includes(sessionId));
   // Full session list (not just this tab's own `session` above) — needed to
   // check sibling panels' attention state for the #98 group-accent
   // underline below, since that's a property of *other* sessions this tab
@@ -90,12 +93,15 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // mobile pane bar via eventDescriptions.ts's unreadEventSummary (Hermes
   // review, PR #613), which is where the "bell wins over check when both are
   // present" note now lives.
-  const { count: unreadCount, kind: unreadIconKind } = unreadEventSummary(
+  // #719 — when muted, suppress the tab's unread badge entirely (mirrors the
+  // toolbar bell's own muted skip in NotificationBell.tsx's countUnread).
+  const { count: rawUnreadCount, kind: unreadIconKind } = unreadEventSummary(
     sessionId,
     events,
     lastSeenSeq,
     dismissedEventKeys,
   );
+  const unreadCount = muted ? 0 : rawUnreadCount;
 
   // #98 item 1 — tab-group underline accent. dockview 7.0.2's own
   // `tabGroupAccent`/`--dv-tab-group-color` (what the issue's proposed code

@@ -89,6 +89,20 @@ export const SERVER_ENV_KEYS = [
   "MULLION_SOCKET_PATH",
   "MULLION_SESSION_ID",
   "NODE_ENV",
+  // OPENCODE_CONFIG_CONTENT is a per-session injection Mullion sets on the
+  // env of a spawned opencode session (hook-adapters/opencode.ts's
+  // prepareLaunch, applied AFTER buildSessionEnv() returns — so listing it
+  // here never clobbers the intended per-session value). It must be stripped
+  // from the inherited environment for the same nested-Mullion reason as the
+  // MULLION_* keys just above: when Mullion itself runs inside a Mullion-
+  // managed session (e.g. `make dev` from a terminal inside prod Mullion, the
+  // exact issue #70 scenario), the server process carries the OUTER session's
+  // OPENCODE_CONFIG_CONTENT, and every session it spawns would otherwise
+  // inherit that stale agent-guide pointer instead of getting its own. The
+  // opencode test in test/services/pty-manager.test.ts exercises this gate
+  // (omits OPENCODE_CONFIG_CONTENT when getInjectAgentGuide is off) and only
+  // fails on a host where a live Mullion has the var in its own env.
+  "OPENCODE_CONFIG_CONTENT",
 ] as const;
 
 /**

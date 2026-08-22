@@ -146,4 +146,20 @@ describe("NotificationBell unread/feed split (P3)", () => {
     const button = getByRole("button", { name: /2 unread/i });
     expect(button).toBeInTheDocument();
   });
+
+  it("excludes a muted session from the unread badge (#719)", async () => {
+    // Counts toward the toolbar badge by default (the test above asserts
+    // "2 unread"); muting session 1 must drop it to zero so the button reads
+    // plain "Notifications" with no unread count.
+    useDashboardStore.setState({ mutedSessionIds: [1] });
+    const { getByRole } = render(
+      <NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} />,
+    );
+    await act(async () => {});
+    // Muting drops the count to zero, so the bell reads "none unread" rather
+    // than "N unread" — assert it no longer carries an unread count.
+    const button = getByRole("button", { name: /none unread/i });
+    expect(button).toBeInTheDocument();
+    useDashboardStore.setState({ mutedSessionIds: [] });
+  });
 });

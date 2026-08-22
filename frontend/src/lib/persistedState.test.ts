@@ -4,11 +4,13 @@ import {
   STORAGE_KEYS,
   readBool,
   readJSON,
+  readMutedSessionIds,
   readNumber,
   readString,
   removeItem,
   writeBool,
   writeJSON,
+  writeMutedSessionIds,
   writeNumber,
   writeString,
 } from "./persistedState.js";
@@ -18,9 +20,9 @@ beforeEach(() => {
 });
 
 describe("STORAGE_KEYS", () => {
-  it("has 23 entries, each a distinct crs.* key", () => {
+  it("has 24 entries, each a distinct crs.* key", () => {
     const values = Object.values(STORAGE_KEYS);
-    expect(values).toHaveLength(23);
+    expect(values).toHaveLength(24);
     expect(new Set(values).size).toBe(values.length);
     for (const key of values) {
       expect(key.startsWith("crs.")).toBe(true);
@@ -127,6 +129,37 @@ describe("removeItem", () => {
     expect(localStorage.getItem(STORAGE_KEYS.dismissedUpdateVersion)).toBe("1.2.3");
     removeItem(STORAGE_KEYS.dismissedUpdateVersion);
     expect(localStorage.getItem(STORAGE_KEYS.dismissedUpdateVersion)).toBeNull();
+  });
+});
+
+describe("readMutedSessionIds / writeMutedSessionIds (#719)", () => {
+  it("returns [] when the key is absent", () => {
+    expect(readMutedSessionIds()).toEqual([]);
+  });
+
+  it("round-trips a written array of ids", () => {
+    writeMutedSessionIds([7, 12]);
+    expect(readMutedSessionIds()).toEqual([7, 12]);
+    expect(localStorage.getItem(STORAGE_KEYS.mutedSessions)).toBe("[7,12]");
+  });
+
+  it("returns [] on malformed JSON", () => {
+    localStorage.setItem(STORAGE_KEYS.mutedSessions, "not json");
+    expect(readMutedSessionIds()).toEqual([]);
+  });
+
+  it("drops non-numbers from a hand-edited blob", () => {
+    localStorage.setItem(STORAGE_KEYS.mutedSessions, '[1, "x", null, true, 9]');
+    expect(readMutedSessionIds()).toEqual([1, 9]);
+  });
+
+  it("falls back to [] when localStorage throws (e.g. private mode)", () => {
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    expect(() => readMutedSessionIds()).not.toThrow();
+    expect(readMutedSessionIds()).toEqual([]);
+    spy.mockRestore();
   });
 });
 
