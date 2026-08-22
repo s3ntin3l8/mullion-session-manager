@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.44](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.43...v0.2.44) (2026-08-21)
+
+
+### Features
+
+* **git:** add fast-forward git pull action to GitPanel and SourceControlSection ([#802](https://github.com/s3ntin3l8/mullion-session-manager/issues/802)) ([270994e](https://github.com/s3ntin3l8/mullion-session-manager/commit/270994e695045d500560bd32a9b82fa3331bfd8d))
+
 ## [0.2.43](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.42...v0.2.43) (2026-08-21)
 
 
