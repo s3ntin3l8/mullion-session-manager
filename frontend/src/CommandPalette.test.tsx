@@ -1637,4 +1637,83 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
     expect(screen.getByText("bash alpha")).toBeInTheDocument();
   });
+
+  it("restores the pre-picker search query after selecting a project, instead of leaking the picker's filter text into it", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const searchInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    await user.type(searchInput, "bash");
+    expect(screen.getByText("bash alpha")).toBeInTheDocument();
+
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    await user.click(targetButton);
+    const filterInput = screen.getByPlaceholderText("Filter projects…");
+    await user.type(filterInput, "beta");
+    await user.click(screen.getByText("beta-project"));
+
+    // The main search box should show the pre-picker query ("bash"), not
+    // the picker's own leftover filter text ("beta") — and the launcher
+    // list should reflect that restored query rather than sitting empty.
+    const restoredInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    expect(restoredInput).toHaveValue("bash");
+    await screen.findByText("bash beta");
+    expect(screen.queryByText("No matching launchers.")).not.toBeInTheDocument();
+  });
+
+  it("restores the pre-picker search query after closing the picker with Escape", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const searchInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    await user.type(searchInput, "bash");
+
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    await user.click(targetButton);
+    const filterInput = screen.getByPlaceholderText("Filter projects…");
+    await user.type(filterInput, "beta");
+    await user.keyboard("{Escape}");
+
+    const restoredInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    expect(restoredInput).toHaveValue("bash");
+    expect(screen.getByText("bash alpha")).toBeInTheDocument();
+  });
 });

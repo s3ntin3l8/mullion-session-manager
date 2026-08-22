@@ -294,16 +294,31 @@ export function CommandPalette({
     Math.max(0, filteredProjects.length - 1),
   );
 
+  // `query` is shared with the main search box (useCommandSearch owns it) —
+  // the picker repurposes it as its own filter text while open, so opening
+  // must stash whatever the user had already typed and closing (by any of
+  // the four paths: toggle-off, Escape, Enter-select, row click) must put it
+  // back. Without this, leftover picker-filter text (e.g. "beta") silently
+  // filters "Matching commands" down to nothing right after picking a
+  // project — see PR #811 review.
+  const savedQueryRef = useRef("");
+
   const openProjectPicker = () => {
+    savedQueryRef.current = query;
     setQuery("");
     const currentIdx = projects.findIndex((p) => p.id === effectiveProjectId);
     setProjectIndex(currentIdx >= 0 ? currentIdx : 0);
     setPickerOpen(true);
   };
 
+  const closeProjectPicker = () => {
+    setQuery(savedQueryRef.current);
+    setPickerOpen(false);
+  };
+
   const toggleProjectPicker = () => {
     if (pickerOpen) {
-      setPickerOpen(false);
+      closeProjectPicker();
     } else {
       openProjectPicker();
     }
@@ -463,7 +478,7 @@ export function CommandPalette({
                 if (e.key === "Escape") {
                   e.preventDefault();
                   e.stopPropagation();
-                  setPickerOpen(false);
+                  closeProjectPicker();
                 } else if (e.key === "ArrowDown") {
                   e.preventDefault();
                   setProjectIndex(Math.min(activeProjectIndex + 1, filteredProjects.length - 1));
@@ -475,7 +490,7 @@ export function CommandPalette({
                   const pickedProject = filteredProjects[activeProjectIndex];
                   if (pickedProject) {
                     setManualTargetProjectId(pickedProject.id);
-                    setPickerOpen(false);
+                    closeProjectPicker();
                   }
                 }
                 return;
@@ -619,10 +634,12 @@ export function CommandPalette({
               <button
                 type="button"
                 key={p.id}
+                role="option"
+                aria-selected={idx === activeProjectIndex}
                 className={`cmd-row${idx === activeProjectIndex ? " selected" : ""}`}
                 onClick={() => {
                   setManualTargetProjectId(p.id);
-                  setPickerOpen(false);
+                  closeProjectPicker();
                 }}
                 onMouseEnter={() => setProjectIndex(idx)}
               >
