@@ -567,6 +567,18 @@ export interface UiSlice {
   // of the time. Returns a cleanup function; called once from App.tsx
   // alongside startLiveRefresh.
   startThemeWatch: () => () => void;
+  // #719 — per-session mute / do-not-disturb. A `number[]` of muted session
+  // ids, seeded from localStorage (persistedState.ts's readMutedSessionIds)
+  // at store creation so every consumer has a sane value immediately.
+  // Client-only (no backend field): mute silences that session's OS desktop
+  // notification + sound + in-app unread badge on THIS browser, surviving
+  // reload/reconnect. Does NOT suppress web-push to other devices — that
+  // would need per-session server state, deliberately out of scope.
+  mutedSessionIds: number[];
+  // Flips a session's membership in `mutedSessionIds` and writes the new list
+  // through to localStorage (persistedState.ts's writeMutedSessionIds), so
+  // the preference survives reload like every other per-browser UI pref.
+  toggleSessionMute: (sessionId: number) => void;
 }
 
 // Stays one store object, so every `useDashboardStore(s => s.x)` selector

@@ -13,9 +13,12 @@ import { playNotificationSound } from "../notifySound.js";
 // Mirrors useAppStreams.test.ts's own store-mock shape: a `storeState()`
 // factory serving `useDashboardStore.getState()`, the only call form this
 // hook uses (openNotificationsPanel, from the Notification's onclick).
+// `mutedSessionIds` is the one extra field this hook now subscribes to
+// (#719); kept mutable so the mute test can flip it without re-mocking.
 const openNotificationsPanel = vi.fn();
+let mutedSessionIds: number[] = [];
 function storeState() {
-  return { openNotificationsPanel };
+  return { openNotificationsPanel, mutedSessionIds };
 }
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
@@ -85,6 +88,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(FIXED_NOW);
   notificationInstances = [];
+  mutedSessionIds = [];
   FakeNotification.permission = "granted";
   FakeNotification.requestPermission.mockClear();
   vi.stubGlobal("Notification", FakeNotification);
@@ -353,6 +357,20 @@ describe("useAttentionNotifications — desktop notification effect", () => {
     });
 
     expect(notificationInstances[0].title).toBe("My Session");
+  });
+
+  it("suppresses the OS notification, sound, and permission prompt for a muted session (#719)", () => {
+    // A fresh notifiable event that would otherwise fire (see the first test
+    // above) — muted must produce no Notification, no sound, and must NOT
+    // trigger a permission request, since the whole alerting branch is
+    // skipped for the session.
+    mutedSessionIds = [1];
+    const event = makeEvent({ ts: FIXED_NOW + 1 });
+    renderAttentionNotifications({ events: { 1: [event] } });
+
+    expect(notificationInstances).toHaveLength(0);
+    expect(playNotificationSound).not.toHaveBeenCalled();
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
   });
 });
 

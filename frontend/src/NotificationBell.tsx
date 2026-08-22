@@ -207,9 +207,14 @@ function countUnread(
   events: Record<number, NotificationEvent[]>,
   lastSeenSeq: Record<number, number>,
   dismissedEventKeys: Record<string, true>,
+  mutedSessionIds: ReadonlySet<number>,
 ): number {
   let count = 0;
   for (const session of sessions) {
+    // #719 — a muted session doesn't count toward the toolbar's unread badge
+    // (it's been deliberately silenced — see useAttentionNotifications.ts),
+    // but its events still live in the feed/history when the panel is opened.
+    if (mutedSessionIds.has(session.id)) continue;
     const sessionEvents = events[session.id];
     if (!sessionEvents || sessionEvents.length === 0) continue;
     const cursor = lastSeenSeq[session.id] ?? 0;
@@ -277,6 +282,7 @@ export function NotificationBell({
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   const markEventSeen = useDashboardStore((s) => s.markEventSeen);
   const dismissEvents = useDashboardStore((s) => s.dismissEvents);
+  const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
   const openRequest = useDashboardStore((s) => s.notificationsPanelOpenRequest);
 
   const [open, setOpen] = useState(false);
@@ -306,8 +312,8 @@ export function NotificationBell({
   // panel is open, and countUnread (above) gets there without paying for
   // buildFeedItems' sort.
   const unreadCount = useMemo(
-    () => countUnread(sessions, events, lastSeenSeq, dismissedEventKeys),
-    [sessions, events, lastSeenSeq, dismissedEventKeys],
+    () => countUnread(sessions, events, lastSeenSeq, dismissedEventKeys, new Set(mutedSessionIds)),
+    [sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
   );
 
   const rowVirtualizer = useVirtualizer({

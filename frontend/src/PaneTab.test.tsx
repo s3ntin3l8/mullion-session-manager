@@ -55,6 +55,9 @@ let sessionGitStatuses: Record<number, GitStatus | null>;
 let events: Record<number, NotificationEvent[]>;
 let lastSeenSeq: Record<number, number>;
 let dismissedEventKeys: Record<string, true>;
+// #719 — per-session mute set. Mutable so the mute test can flip it without
+// re-mocking the store; defaults empty (unmuted) like the real store init.
+let mutedSessionIds: number[] = [];
 const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   const current = lastSeenSeq[sessionId] ?? 0;
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
@@ -73,6 +76,7 @@ function storeState() {
     events,
     lastSeenSeq,
     dismissedEventKeys,
+    mutedSessionIds,
     renameSession: vi.fn(),
     deleteSession: vi.fn().mockResolvedValue(undefined),
     theme: "dark",
@@ -215,6 +219,7 @@ beforeEach(() => {
   events = {};
   lastSeenSeq = {};
   dismissedEventKeys = {};
+  mutedSessionIds = [];
   markEventSeen.mockClear();
   requestSplit.mockClear();
   vi.stubGlobal(
@@ -439,6 +444,18 @@ describe("PaneTab", () => {
       const { container } = render(<PaneTab {...makeProps()} />);
       const badge = container.querySelector(".pane-tab-unread-badge");
       expect(badge).toHaveClass("attention");
+    });
+
+    it("shows no unread badge for a muted session (#719)", () => {
+      // Same single attention event that produces a badge above — muting the
+      // session must suppress the tab's unread badge entirely (the events
+      // still exist; only the disturbance is silenced).
+      mutedSessionIds = [session.id];
+      events = {
+        [session.id]: [makeEvent({ seq: 1, kind: "attention", payload: { attention: true } })],
+      };
+      const { container } = render(<PaneTab {...makeProps()} />);
+      expect(container.querySelector(".pane-tab-unread-badge")).not.toBeInTheDocument();
     });
 
     it("shows the check icon when the only unread event is an exit", () => {

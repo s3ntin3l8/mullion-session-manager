@@ -5,6 +5,8 @@ import type { DockviewApi, DockviewPanelApi } from "dockview";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
 import {
+  BellIcon,
+  BellOffIcon,
   GitBranchIcon,
   GridIcon,
   KillIcon,
@@ -96,6 +98,13 @@ export function PaneActionsMenu({
   );
   const projects = useDashboardStore((s) => s.projects);
   const layout = useLayoutContext();
+  // #719 — per-session mute toggle. `muted` is derived from the store's
+  // mutedSessionIds (not a local state) so the menu item's label/icon reflect
+  // the live state and the toolbar bell + tab badge stay in sync.
+  const toggleSessionMute = useDashboardStore((s) => s.toggleSessionMute);
+  const muted = useDashboardStore((s) =>
+    sessionId === undefined ? false : s.mutedSessionIds.includes(sessionId),
+  );
   // Issue: narrow headers overflow — PaneHeaderActions.tsx's own
   // split-right/split-down buttons hide below a certain group width, and
   // this is where they're still reachable from once they do (same
@@ -464,6 +473,27 @@ export function PaneActionsMenu({
               </button>
             )}
             {session && <div className="pane-tab-overflow-divider" />}
+            {session && (
+              <button
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() => closeMenuAfterAction(() => toggleSessionMute(session.id))}
+                title={
+                  muted
+                    ? "Notifications for this session are muted — click to unmute"
+                    : "Silence notifications for this session (OS popup, sound, and unread badge)"
+                }
+              >
+                {muted ? (
+                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
+                ) : (
+                  <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
+                )}
+                <span style={{ flex: 1 }}>
+                  {muted ? "Unmute notifications" : "Mute notifications"}
+                </span>
+              </button>
+            )}
             {session && (
               <button
                 className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}

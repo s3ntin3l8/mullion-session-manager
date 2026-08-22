@@ -40,6 +40,19 @@ export function BellIcon(props: IconProps) {
   );
 }
 
+// #719 — the per-session mute toggle's "muted" state, a bell with a
+// diagonal slash (mirrors the common notification-off glyph). Same stroke
+// defaults as BellIcon above so they pair visually in the same menu.
+export function BellOffIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+      <line x1="3" y1="3" x2="21" y2="21" />
+    </Svg>
+  );
+}
+
 export function PlusIcon(props: IconProps) {
   return (
     <Svg strokeWidth={2} strokeLinecap="round" {...props}>

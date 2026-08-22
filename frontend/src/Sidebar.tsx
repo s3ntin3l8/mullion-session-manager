@@ -1297,6 +1297,9 @@ export function SessionRow({
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
+  // #719 — per-session mute, read from the store so the sidebar kebab's label
+  // stays in sync with the tab overflow menu / toolbar bell.
+  const isMuted = useDashboardStore((s) => s.mutedSessionIds.includes(session.id));
   // Phase 5 (Track B, issue #196 5.6) — killSession's default is "detach"
   // (a live child becomes an independent top-level session, never
   // silently killed), but that consequence still needs to be visible in
@@ -1567,6 +1570,8 @@ export function SessionRow({
           gitLineExpanded={gitLineExpanded}
           onToggleGitLineExpanded={toggleGitLineExpanded}
           isTerminal={isTerminal}
+          isMuted={isMuted}
+          onToggleMute={() => useDashboardStore.getState().toggleSessionMute(session.id)}
           onOpenAsFloat={onOpenAsFloat}
           onPromote={() => setPromoteOpen(true)}
           onRename={(value) => {

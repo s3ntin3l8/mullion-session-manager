@@ -40,6 +40,12 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   origin. **On iOS Safari, notification permission can only be granted from
   the installed home-screen app, never from a regular browser tab** — install
   first, then enable the toggle from there.
+- **Per-session mute / do-not-disturb.** Silence a single noisy session —
+  its OS desktop notification, sound, and in-app unread badge — without
+  turning off notifications globally. Toggle it from the session tab's
+  overflow menu or the session row's `…` menu; the preference is saved in
+  this browser and survives reload/reconnect (timeline history and the
+  notification feed are kept). Web-push to other devices is unaffected.
 - **Multi-host.** Run sessions on more than one machine from a single
   dashboard — every other machine runs the same Mullion build, just started
   as an `agent` instead of the `primary`. See

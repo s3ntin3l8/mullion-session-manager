@@ -6,9 +6,11 @@ import { resolveTaskMaster } from "../../taskConfig.js";
 import {
   STORAGE_KEYS,
   readBool,
+  readMutedSessionIds,
   readString,
   removeItem,
   writeBool,
+  writeMutedSessionIds,
   writeNumber,
   writeString,
 } from "../../lib/persistedState.js";
@@ -111,6 +113,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     dismissedUpdateVersion: readString(STORAGE_KEYS.dismissedUpdateVersion, null),
     codexHookTrust: null,
     dismissedCodexHookTrustVersion: readString(STORAGE_KEYS.dismissedCodexHookTrustVersion, null),
+    // #719 — per-session mute set, hydrated from localStorage so a reload
+    // keeps the same mutes. A plain array (not a Set) to match
+    // persistedState.ts's readMutedSessionIds/writeMutedSessionIds encoding.
+    mutedSessionIds: readMutedSessionIds(),
 
     bumpDockConfigRefreshTrigger: () =>
       set((state) => ({ dockConfigRefreshTrigger: state.dockConfigRefreshTrigger + 1 })),
@@ -282,6 +288,21 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         writeString(STORAGE_KEYS.dismissedCodexHookTrustVersion, version);
       }
       set({ dismissedCodexHookTrustVersion: version ?? null });
+    },
+
+    // #719 — toggle a session's mute. Read-modify-write against the current
+    // array (not in place — zustand needs a new reference to re-render
+    // subscribers), persist the new list, then commit to state. A session id
+    // that appears twice can't happen (the toggle removes on re-click rather
+    // than appending a duplicate), so `includes` stays a correct membership
+    // test for callers.
+    toggleSessionMute: (sessionId) => {
+      const current = get().mutedSessionIds;
+      const next = current.includes(sessionId)
+        ? current.filter((id) => id !== sessionId)
+        : [...current, sessionId];
+      writeMutedSessionIds(next);
+      set({ mutedSessionIds: next });
     },
   };
 };

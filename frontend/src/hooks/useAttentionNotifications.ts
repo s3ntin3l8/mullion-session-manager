@@ -116,6 +116,11 @@ export function useAttentionNotifications({
   // most one sound/desktop-notification every NOTIFICATION_COALESCE_MS,
   // not one per event.
   const lastNotifiedAtRef = useRef<Map<number, number>>(new Map());
+  // #719 — per-session mute. Subscribed (not read via getState()) so this
+  // effect re-runs the instant a mute toggles and the change takes effect on
+  // the very next candidate event, not only on the next events/sessions/
+  // settings tick.
+  const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   // Issue #170: fires a browser Notification (and/or the notification
   // sound) when the live /ws/events channel (issue #166, store.ts's
@@ -160,6 +165,13 @@ export function useAttentionNotifications({
       if (event.kind === "dev_server_detected") continue;
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) continue;
+      // #719 — a muted session produces no OS notification, no sound, and no
+      // permission prompt: skip the whole alerting branch for it. The event
+      // still lands in the event stream / timeline (history, not an alert),
+      // and `processedThrough` above already advanced its seq so it's never
+      // reconsidered — muting only suppresses the *disturbance*, not the
+      // record.
+      if (mutedSessionIds.includes(sessionId)) continue;
       if (!notificationChannelEnabled(session.sessionStatus, settings.notifications)) continue;
 
       const now = Date.now();
@@ -209,7 +221,7 @@ export function useAttentionNotifications({
         notification.close();
       };
     }
-  }, [events, sessions, settings.notifications, activePanelId]);
+  }, [events, sessions, settings.notifications, activePanelId, mutedSessionIds]);
 
   // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
   // tab previously gave no signal at all that something happened (static

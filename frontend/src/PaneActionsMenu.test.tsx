@@ -51,6 +51,10 @@ let promoteSessionMock: ReturnType<typeof vi.fn>;
 // for PaneHeaderActions.tsx's own header-level buttons, which hide entirely
 // below a certain group width) read this off the store.
 const requestSplit = vi.fn();
+// #719 — per-session mute. Mocked so the mute-item test can assert on the
+// toggle call; `mutedSessionIds` is mutable so the label reflects mute state.
+const toggleSessionMute = vi.fn();
+let mutedSessionIds: number[] = [];
 
 function storeState() {
   return {
@@ -66,6 +70,8 @@ function storeState() {
     promoteSession: promoteSessionMock,
     declinePromote: vi.fn().mockResolvedValue(undefined),
     requestSplit,
+    mutedSessionIds,
+    toggleSessionMute,
   };
 }
 
@@ -144,6 +150,8 @@ beforeEach(() => {
   projects = [];
   promoteSessionMock = vi.fn();
   requestSplit.mockClear();
+  toggleSessionMute.mockClear();
+  mutedSessionIds = [];
   canResetTiledGroupWidths.mockClear();
   canResetTiledGroupWidths.mockReturnValue(true);
 });
@@ -496,5 +504,49 @@ describe("PaneActionsMenu", () => {
       { tier: "desktop", tabletPaneCap: 2 },
       projects,
     );
+  });
+});
+
+// #719 — per-session mute toggle in the overflow menu.
+describe("PaneActionsMenu — mute notifications (#719)", () => {
+  it("offers 'Mute notifications' and toggles the session on click", async () => {
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    const muteItem = screen.getByText("Mute notifications");
+    await user.click(muteItem);
+
+    expect(toggleSessionMute).toHaveBeenCalledWith(session.id);
+    // closeMenuAfterAction closes the menu after the toggle.
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("labels the item 'Unmute notifications' and toggles when already muted", async () => {
+    mutedSessionIds = [session.id];
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    const unmuteItem = screen.getByText("Unmute notifications");
+    await user.click(unmuteItem);
+
+    expect(toggleSessionMute).toHaveBeenCalledWith(session.id);
   });
 });
