@@ -85,4 +85,17 @@ describe("Toolbar — Tasks view (viewMode === kanban)", () => {
     await user.click(back);
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
+
+  it("disables the New-session and Command-palette buttons (issue #730 — no launch from Task view)", () => {
+    render(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.getByTitle("New session (unavailable in Task view)")).toBeDisabled();
+    expect(screen.getByTitle("Command palette (unavailable in Task view)")).toBeDisabled();
+  });
+
+  it("does not call onOpenLauncher when the disabled New-session button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Toolbar {...NOOP_PROPS} />);
+    await user.click(screen.getByTitle("New session (unavailable in Task view)"));
+    expect(NOOP_PROPS.onOpenLauncher).not.toHaveBeenCalled();
+  });
 });

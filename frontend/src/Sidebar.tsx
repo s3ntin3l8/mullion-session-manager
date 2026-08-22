@@ -681,6 +681,9 @@ function ProjectHeader({
   // overwriting with null) — this is what stops the dot from flickering
   // green→grey on a single flaky poll tick.
   const gitStatus = useDashboardStore((s) => s.gitStatuses[project.id]);
+  // Issue #730 — the New-session button is inert in the Task view (no
+  // workspace to open a terminal in), so it reads viewMode to disable itself.
+  const viewMode = useDashboardStore((s) => s.viewMode);
   const gitDotClass = !gitStatus
     ? "none"
     : gitStatus.hasConflicts
@@ -789,7 +792,12 @@ function ProjectHeader({
         <span className="project-session-count">{sessions.length}</span>
         <button
           className="project-add-session"
-          title="New session in project"
+          title={
+            viewMode === "kanban"
+              ? "New session (unavailable in Task view)"
+              : "New session in project"
+          }
+          disabled={viewMode === "kanban"}
           onClick={(e) => {
             e.stopPropagation();
             onOpenLauncher();
