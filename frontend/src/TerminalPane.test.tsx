@@ -2747,6 +2747,43 @@ describe("TerminalPane geometry sync (issue: small panes/floating windows ignori
     expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
     expect(fakeWsSend.mock.calls.length).toBe(sendsBeforeGrow);
   });
+
+  it("down-fits from backend default 80 cols to mobile container size (45 cols) without showing Pane too small", () => {
+    stubFakeWebSocket(true);
+    const resizeObserver = stubManualResizeObserver();
+    mockInitialTermSize.cols = 45;
+    mockInitialTermSize.rows = 24;
+
+    renderPane();
+    act(() => {
+      resizeObserver.fire();
+    });
+
+    const term = getLatestTermInstance();
+    fitCallbackQueue.push(() => {
+      term.cols = 45;
+      term.rows = 24;
+    });
+
+    // Backend echoes initial 80x24 session geometry with 40x10 floor
+    const sendsBeforeEcho = fakeWsSend.mock.calls.length;
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({
+          data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+        });
+      }
+    });
+
+    // Container is 45 cols >= 40 floor, so "Pane too small" must NOT show
+    expect(screen.queryByText("Pane too small")).not.toBeInTheDocument();
+
+    expect(term.cols).toBe(45);
+    const resizeMessages = fakeWsSend.mock.calls
+      .slice(sendsBeforeEcho)
+      .map(([data]) => JSON.parse(data as string) as { type?: string; cols?: number });
+    expect(resizeMessages.some((m) => m.type === "resize" && m.cols === 45)).toBe(true);
+  });
 });
 
 // Issue #676's frontend follow-up — the backend clamp (pty-manager.ts's

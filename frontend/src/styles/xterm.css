@@ -145,6 +145,8 @@
      scrollbar, not dockview's custom thumb — not a usable touch target
      either way, and it only eats height out of the ~35px strip. */
   .cmux-root .dv-tabs-container {
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
     scrollbar-width: none;
   }
   .cmux-root .dv-tabs-container::-webkit-scrollbar {

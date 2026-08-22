@@ -146,6 +146,7 @@ export function App() {
   const [mobileRenamingPanelId, setMobileRenamingPanelId] = useState<string | null>(null);
   const [mobileDraftName, setMobileDraftName] = useState("");
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);
+  const activeMobileTabRef = useRef<HTMLDivElement>(null);
   const [palette, setPalette] = useState<PaletteState>({
     open: false,
     scope: "global",
@@ -445,6 +446,18 @@ export function App() {
       current !== null && current !== activePanelId ? null : current,
     );
   }, [activePanelId]);
+
+  // Keep the active tab scrolled into view inside .mobile-tabs as tabs are
+  // activated or opened.
+  useEffect(() => {
+    if (isMobile && activePanelId) {
+      activeMobileTabRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    }
+  }, [isMobile, activePanelId]);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -1241,7 +1254,7 @@ export function App() {
 
   return (
     <div
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
+      className={`app cmux-root tier-${layoutTier}${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <Toolbar
@@ -1428,7 +1441,14 @@ export function App() {
                 toggle (Toolbar.tsx) is the only one left at this breakpoint
                 — the second, redundant ☰ that used to render here is gone. */}
             {isMobile && mobilePanels.length > 0 && (
-              <div className="mobile-tabs">
+              <div
+                className="mobile-tabs"
+                onWheel={(e) => {
+                  if (e.deltaY) {
+                    e.currentTarget.scrollLeft += e.deltaY;
+                  }
+                }}
+              >
                 {mobilePanels.map((panel) => {
                   const sessionId = panelSessionId(panel);
                   const session = sessions.find((s) => s.id === sessionId);
@@ -1458,7 +1478,11 @@ export function App() {
                     void useDashboardStore.getState().renameSession(sessionId, value);
                   };
                   return (
-                    <div key={panel.id} className="mobile-tab-wrap">
+                    <div
+                      key={panel.id}
+                      ref={isActive ? activeMobileTabRef : undefined}
+                      className="mobile-tab-wrap"
+                    >
                       {isRenaming ? (
                         <input
                           ref={mobileRenameInputRef}

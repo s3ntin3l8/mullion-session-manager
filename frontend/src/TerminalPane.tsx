@@ -589,8 +589,10 @@ export function TerminalPane(props: {
       // terminal.
       if (cappedBelowFloor) {
         const proposed = fitAddon.proposeDimensions();
+        const floorCols = fitFloorRef.current?.cols ?? lastCols;
+        const floorRows = fitFloorRef.current?.rows ?? lastRows;
         const stillCapped =
-          proposed === undefined || proposed.cols < lastCols || proposed.rows < lastRows;
+          proposed === undefined || proposed.cols < floorCols || proposed.rows < floorRows;
         // Independent code review, PR #708 — re-evaluate (and clear) the
         // "Pane too small" hint here too, not only in the geometry handler
         // below. That handler only ever runs after a resize round trip, but
@@ -1045,10 +1047,14 @@ export function TerminalPane(props: {
           // during a drag). Treating that as "not too small" hid the hint
           // exactly when the pane was most unusable; undefined now counts
           // as too small, same as a proposed size that's genuinely smaller
-          // than the applied geometry.
+          // than the floor.
           const proposed = fitAddon.proposeDimensions();
+          const floorCols =
+            fitFloorRef.current?.cols ?? (typeof geo.minCols === "number" ? geo.minCols : geo.cols);
+          const floorRows =
+            fitFloorRef.current?.rows ?? (typeof geo.minRows === "number" ? geo.minRows : geo.rows);
           const tooSmall =
-            proposed === undefined || geo.cols > proposed.cols || geo.rows > proposed.rows;
+            proposed === undefined || proposed.cols < floorCols || proposed.rows < floorRows;
           cappedBelowFloor = tooSmall;
           setPaneTooSmall(tooSmall);
         }
