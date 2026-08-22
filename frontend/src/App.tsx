@@ -51,6 +51,7 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
+import { attachMobileTabsWheelScroll } from "./lib/mobileTabsWheelScroll.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
@@ -460,34 +461,16 @@ export function App() {
     }
   }, [isMobile, activePanelId]);
 
-  // React registers its onWheel/onTouchMove JSX handlers as passive
-  // listeners, so calling preventDefault() from a plain `onWheel` prop is a
-  // silent no-op in real browsers — the synthetic event reports
-  // defaultPrevented=true but the underlying native event doesn't, and the
-  // page still scrolls vertically underneath the tab bar. Attaching the
-  // listener manually with { passive: false } is the only way to actually
-  // stop that propagation. Depends on `isMobile` (not `[]`) because
-  // `.mobile-tabs` only renders when isMobile is true — a desktop-first
-  // mount would otherwise find `mobileTabsRef.current` null and never
-  // re-attach on a later desktop-to-mobile resize.
+  // Depends on `isMobile` (not `[]`) because `.mobile-tabs` only renders
+  // when isMobile is true — a desktop-first mount would otherwise find
+  // `mobileTabsRef.current` null and never re-attach on a later
+  // desktop-to-mobile resize. See lib/mobileTabsWheelScroll.ts for why this
+  // is a manually-attached native listener rather than a JSX onWheel prop.
   useEffect(() => {
     if (!isMobile) return;
     const el = mobileTabsRef.current;
     if (!el) return;
-    const handleWheel = (e: WheelEvent) => {
-      if (!e.deltaY) return;
-      // Only intervene when the bar actually overflows horizontally —
-      // otherwise this would permanently block vertical page scroll over a
-      // tab bar with nothing to scroll.
-      if (el.scrollWidth <= el.clientWidth) return;
-      // deltaMode 1 ("line") reports small integer deltas, not pixels;
-      // scale up so wheel scrolling isn't imperceptible.
-      const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-      el.scrollLeft += delta;
-      e.preventDefault();
-    };
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
+    return attachMobileTabsWheelScroll(el);
   }, [isMobile]);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
