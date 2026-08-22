@@ -86,15 +86,21 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      # Keeps AGENTS.md/GEMINI.md's shared briefing region from drifting when
-      # only one of the two is edited — see the script's own header comment
-      # for why it's an explicit file list, not a glob, and why CLAUDE.md
-      # isn't included.
+      # Keeps AGENTS.md/GEMINI.md/AGENTS.override.md's shared briefing region
+      # from drifting when only one of them is edited — see the script's own
+      # header comment for why it's an explicit file list, not a glob, and
+      # why CLAUDE.md isn't included. This hook is the fast staged-file path;
+      # the unconditional working-tree probe that also catches an untracked
+      # AGENTS.override.md (e.g. one just created by the Agent Rules Editor,
+      # never staged) comes from `npm run lint`'s check:briefing-sync step.
+      # Deliberately kept `files:`-scoped rather than `always_run: true`, per
+      # this repo's file-scoped hook convention (see CLAUDE.md's Worktrees
+      # section).
       - id: briefing-sync
-        name: agent briefing sync (AGENTS.md / GEMINI.md)
+        name: agent briefing sync (AGENTS.md / GEMINI.md / AGENTS.override.md)
         entry: node scripts/check-briefing-sync.mjs
         language: system
-        files: '^(AGENTS|GEMINI)\.md$'
+        files: '^(AGENTS(\.override)?|GEMINI)\.md$'
         pass_filenames: false
         stages: [pre-commit]
 

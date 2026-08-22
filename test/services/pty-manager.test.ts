@@ -5379,6 +5379,190 @@ describe("PtyManager", () => {
       expect(session.getEvents().slice(eventsBefore)).toEqual([]);
     });
 
+    describe("settle-window cancel on session exit/respawn (issue #720)", () => {
+      // Each test arms a deferred attention signal through the REAL hook
+      // chain (emitHookEvent), then kills the attach-client before the settle
+      // window elapses — exercising pty-manager.ts:2021's onExit
+      // clearDeferred() AND, via the forced respawn, pty-manager.ts:1628's
+      // spawn()-reset clearDeferred() — then advances the clock well past the
+      // original deadline and asserts the deferred emit never fires. This is
+      // the "drive it through the real hook chain, not just internal methods"
+      // gap the rest of this PR's tests already cover for the
+      // resolution-hook cancel path (see the test just above).
+      //
+      // The clock is anchored with fake `Date` timers (mirroring the sibling
+      // settle test at pty-manager.test.ts's markHooksProven test) so the
+      // "well past the deadline" advance is explicit and deterministic rather
+      // than relying on real wall-clock time between arming and ticking. The
+      // kill + respawn run under that fake clock too, but only `Date` is
+      // faked (setImmediate/setTimeout stay real), so the respawn's
+      // waitForSpawn still resolves.
+      async function spawnAndKillMidWindow(session: InstanceType<typeof Session>): Promise<void> {
+        // Session dies before the settle window elapses.
+        fakePtyChildren[0].kill();
+        // Force the respawn so the spawn()-reset clearDeferred path is also
+        // exercised (the kill's onExit already ran its own clearDeferred).
+        manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+      }
+
+      it("settle-window cancel on exit/respawn: a pending permissionRequest deferred emit is dropped with ZERO events", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          session.emitHookEvent({
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          });
+          // permissionState is truthful immediately — the sidebar must reflect
+          // the agent being genuinely blocked, even though nothing has been
+          // reported to the user yet.
+          expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: false });
+
+          await spawnAndKillMidWindow(session);
+
+          // Advance well past the original 2s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
+
+        const emitted = session.getEvents().slice(eventsBefore);
+        // No permission_request row, no attention ping — nothing at all
+        // escaped the settle window for a session that no longer exists.
+        expect(emitted.some((e) => e.kind === "attention")).toBe(false);
+        expect(emitted.some((e) => e.kind === "permission_request")).toBe(false);
+      });
+
+      it("settle-window cancel on exit/respawn: a pending agentIdle deferred emit is dropped with ZERO events", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          // progress:done arms the deferred agentIdle ping (3s window).
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          expect(session.toInfo().attention).toBe(false);
+
+          await spawnAndKillMidWindow(session);
+
+          // Advance well past the original 3s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
+
+        const emitted = session.getEvents().slice(eventsBefore);
+        // agentIdle carries no alsoEmit companion, so only the attention ping
+        // would have fired — and it must not.
+        expect(emitted.some((e) => e.kind === "attention")).toBe(false);
+      });
+
+      it("settle-window cancel on exit/respawn: a pending toolFailure deferred ping is dropped (the immediate tool_failure row still fires)", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          // Unlike permissionRequest, tool_failure emits its NotificationEvent
+          // IMMEDIATELY and only defers the attention ping (D1: the agent's own
+          // next output chunk resolves it). So the row is expected; the ping is not.
+          session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+          expect(session.toInfo()).toMatchObject({ errorState: "tool_failure" });
+
+          await spawnAndKillMidWindow(session);
+
+          // Advance well past the original 2s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
+
+        const emitted = session.getEvents().slice(eventsBefore);
+        expect(emitted.some((e) => e.kind === "attention")).toBe(false);
+        // The immediate notification event must still be present — only the
+        // deferred ping was cancelled.
+        expect(emitted.some((e) => e.kind === "tool_failure")).toBe(true);
+      });
+
+      it("settle-window cancel on exit/respawn: a pending apiError deferred ping is dropped (the immediate stop_failure row still fires)", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const eventsBefore = session.getEvents().length;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          // stop_failure → api_error: NotificationEvent fires immediately, only
+          // the attention ping is deferred.
+          session.emitHookEvent({ kind: "stop_failure", error: "rate_limit" });
+          expect(session.toInfo()).toMatchObject({ errorState: "api_error" });
+
+          await spawnAndKillMidWindow(session);
+
+          // Advance well past the original 2s deadline.
+          vi.setSystemTime(start + 5_000);
+          session.tick(Date.now());
+        } finally {
+          vi.useRealTimers();
+        }
+
+        const emitted = session.getEvents().slice(eventsBefore);
+        expect(emitted.some((e) => e.kind === "attention")).toBe(false);
+        expect(emitted.some((e) => e.kind === "stop_failure")).toBe(true);
+      });
+    });
+
     it("plan_resolved: clears planState and a confirmed planReady attention signal", async () => {
       const session = manager.getOrCreate({
         id: "1",

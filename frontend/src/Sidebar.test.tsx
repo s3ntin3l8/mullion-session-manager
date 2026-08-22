@@ -696,3 +696,29 @@ describe("DiscoverProjects — a failed Add surfaces an inline error", () => {
     expect(screen.getByText("Add")).toBeInTheDocument();
   });
 });
+
+describe("project-row New-session button (issue #730 — no launch from Task view)", () => {
+  it("is enabled in the workspace view and opens the project launcher", async () => {
+    viewMode = "list";
+    const onOpenProjectLauncher = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenProjectLauncher });
+
+    const btn = screen.getByTitle("New session in project");
+    expect(btn).not.toBeDisabled();
+    await user.click(btn);
+    expect(onOpenProjectLauncher).toHaveBeenCalledWith(PROJECT.id);
+  });
+
+  it("is disabled in the Task (Kanban) view and opens nothing", async () => {
+    viewMode = "kanban";
+    const onOpenProjectLauncher = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenProjectLauncher });
+
+    const btn = screen.getByTitle("New session (unavailable in Task view)");
+    expect(btn).toBeDisabled();
+    await user.click(btn);
+    expect(onOpenProjectLauncher).not.toHaveBeenCalled();
+  });
+});
