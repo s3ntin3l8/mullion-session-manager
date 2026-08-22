@@ -44,6 +44,8 @@ function storeState() {
     markEventSeen,
     dismissEvents,
     notificationsPanelOpenRequest,
+    mutedSessionIds: [],
+    toggleSessionMute: vi.fn(),
   };
 }
 

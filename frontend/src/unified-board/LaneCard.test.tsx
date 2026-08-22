@@ -65,6 +65,8 @@ function storeState() {
     gitDiffStats,
     gitBranchesByProject,
     prsByProject,
+    mutedSessionIds: [],
+    toggleSessionMute: vi.fn(),
   };
 }
 

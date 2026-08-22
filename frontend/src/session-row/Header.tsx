@@ -210,9 +210,9 @@ export function Header({
                 key: "mute",
                 label: isMuted ? "Unmute notifications" : "Mute notifications",
                 icon: isMuted ? (
-                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
-                ) : (
                   <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
+                ) : (
+                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
                 ),
                 onClick: onToggleMute,
               } as const,

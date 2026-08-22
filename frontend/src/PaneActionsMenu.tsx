@@ -485,9 +485,9 @@ export function PaneActionsMenu({
                 }
               >
                 {muted ? (
-                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
-                ) : (
                   <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
+                ) : (
+                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
                 )}
                 <span style={{ flex: 1 }}>
                   {muted ? "Unmute notifications" : "Mute notifications"}
