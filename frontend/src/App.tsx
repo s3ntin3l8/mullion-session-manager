@@ -51,6 +51,7 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
+import { attachMobileTabsWheelScroll } from "./lib/mobileTabsWheelScroll.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
@@ -146,6 +147,8 @@ export function App() {
   const [mobileRenamingPanelId, setMobileRenamingPanelId] = useState<string | null>(null);
   const [mobileDraftName, setMobileDraftName] = useState("");
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);
+  const activeMobileTabRef = useRef<HTMLDivElement>(null);
+  const mobileTabsRef = useRef<HTMLDivElement>(null);
   const [palette, setPalette] = useState<PaletteState>({
     open: false,
     scope: "global",
@@ -445,6 +448,30 @@ export function App() {
       current !== null && current !== activePanelId ? null : current,
     );
   }, [activePanelId]);
+
+  // Keep the active tab scrolled into view inside .mobile-tabs as tabs are
+  // activated or opened.
+  useEffect(() => {
+    if (isMobile && activePanelId) {
+      activeMobileTabRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    }
+  }, [isMobile, activePanelId]);
+
+  // Depends on `isMobile` (not `[]`) because `.mobile-tabs` only renders
+  // when isMobile is true — a desktop-first mount would otherwise find
+  // `mobileTabsRef.current` null and never re-attach on a later
+  // desktop-to-mobile resize. See lib/mobileTabsWheelScroll.ts for why this
+  // is a manually-attached native listener rather than a JSX onWheel prop.
+  useEffect(() => {
+    if (!isMobile) return;
+    const el = mobileTabsRef.current;
+    if (!el) return;
+    return attachMobileTabsWheelScroll(el);
+  }, [isMobile]);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -1428,7 +1455,7 @@ export function App() {
                 toggle (Toolbar.tsx) is the only one left at this breakpoint
                 — the second, redundant ☰ that used to render here is gone. */}
             {isMobile && mobilePanels.length > 0 && (
-              <div className="mobile-tabs">
+              <div className="mobile-tabs" ref={mobileTabsRef}>
                 {mobilePanels.map((panel) => {
                   const sessionId = panelSessionId(panel);
                   const session = sessions.find((s) => s.id === sessionId);
@@ -1458,7 +1485,11 @@ export function App() {
                     void useDashboardStore.getState().renameSession(sessionId, value);
                   };
                   return (
-                    <div key={panel.id} className="mobile-tab-wrap">
+                    <div
+                      key={panel.id}
+                      ref={isActive ? activeMobileTabRef : undefined}
+                      className="mobile-tab-wrap"
+                    >
                       {isRenaming ? (
                         <input
                           ref={mobileRenameInputRef}
