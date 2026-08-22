@@ -466,12 +466,20 @@ export function App() {
   // defaultPrevented=true but the underlying native event doesn't, and the
   // page still scrolls vertically underneath the tab bar. Attaching the
   // listener manually with { passive: false } is the only way to actually
-  // stop that propagation.
+  // stop that propagation. Depends on `isMobile` (not `[]`) because
+  // `.mobile-tabs` only renders when isMobile is true — a desktop-first
+  // mount would otherwise find `mobileTabsRef.current` null and never
+  // re-attach on a later desktop-to-mobile resize.
   useEffect(() => {
+    if (!isMobile) return;
     const el = mobileTabsRef.current;
     if (!el) return;
     const handleWheel = (e: WheelEvent) => {
       if (!e.deltaY) return;
+      // Only intervene when the bar actually overflows horizontally —
+      // otherwise this would permanently block vertical page scroll over a
+      // tab bar with nothing to scroll.
+      if (el.scrollWidth <= el.clientWidth) return;
       // deltaMode 1 ("line") reports small integer deltas, not pixels;
       // scale up so wheel scrolling isn't imperceptible.
       const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
@@ -480,7 +488,7 @@ export function App() {
     };
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
-  }, []);
+  }, [isMobile]);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —

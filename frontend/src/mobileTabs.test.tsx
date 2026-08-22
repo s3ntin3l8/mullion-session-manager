@@ -6,22 +6,27 @@ import { render } from "@testing-library/react";
 // Mirrors App.tsx's .mobile-tabs wheel handling: a manually-attached,
 // non-passive native `wheel` listener (not a JSX `onWheel` prop) — React
 // registers JSX onWheel handlers as passive, so preventDefault() called from
-// one is a silent no-op in real browsers.
-function MobileTabs() {
+// one is a silent no-op in real browsers. Depends on `isMobile` (not `[]`)
+// so a desktop-first mount re-attaches once the tab bar actually renders.
+function MobileTabs({ isMobile = true }: { isMobile?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!isMobile) return;
     const el = ref.current;
     if (!el) return;
     const handleWheel = (e: WheelEvent) => {
       if (!e.deltaY) return;
+      if (el.scrollWidth <= el.clientWidth) return;
       const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       el.scrollLeft += delta;
       e.preventDefault();
     };
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
-  }, []);
+  }, [isMobile]);
+
+  if (!isMobile) return null;
 
   return (
     <div className="mobile-tabs" ref={ref}>
@@ -29,6 +34,11 @@ function MobileTabs() {
       <button className="mobile-tab">Tab 2</button>
     </div>
   );
+}
+
+function setOverflowing(el: HTMLDivElement, overflowing: boolean) {
+  Object.defineProperty(el, "scrollWidth", { value: overflowing ? 400 : 100, configurable: true });
+  Object.defineProperty(el, "clientWidth", { value: 100, configurable: true });
 }
 
 function dispatchWheel(el: HTMLDivElement, deltaY: number, deltaMode = 0) {
@@ -44,6 +54,7 @@ describe("Mobile Tabs horizontal scrolling", () => {
     const { container } = render(<MobileTabs />);
     const tabsContainer = container.querySelector(".mobile-tabs") as HTMLDivElement;
     expect(tabsContainer).not.toBeNull();
+    setOverflowing(tabsContainer, true);
     tabsContainer.scrollLeft = 0;
 
     dispatchWheel(tabsContainer, 40);
@@ -56,6 +67,7 @@ describe("Mobile Tabs horizontal scrolling", () => {
   it("scales line-mode wheel deltas instead of applying them as pixels", () => {
     const { container } = render(<MobileTabs />);
     const tabsContainer = container.querySelector(".mobile-tabs") as HTMLDivElement;
+    setOverflowing(tabsContainer, true);
     tabsContainer.scrollLeft = 0;
 
     // deltaMode 1 = DOM_DELTA_LINE; a 3-line wheel tick should not collapse
@@ -67,8 +79,34 @@ describe("Mobile Tabs horizontal scrolling", () => {
   it("prevents the default vertical scroll so the ancestor doesn't also page-scroll", () => {
     const { container } = render(<MobileTabs />);
     const tabsContainer = container.querySelector(".mobile-tabs") as HTMLDivElement;
+    setOverflowing(tabsContainer, true);
 
     const event = dispatchWheel(tabsContainer, 40);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves vertical scroll alone when the tab bar doesn't overflow", () => {
+    const { container } = render(<MobileTabs />);
+    const tabsContainer = container.querySelector(".mobile-tabs") as HTMLDivElement;
+    setOverflowing(tabsContainer, false);
+    tabsContainer.scrollLeft = 0;
+
+    const event = dispatchWheel(tabsContainer, 40);
+    expect(event.defaultPrevented).toBe(false);
+    expect(tabsContainer.scrollLeft).toBe(0);
+  });
+
+  it("re-attaches the listener when isMobile flips from false to true after mount", () => {
+    const { container, rerender } = render(<MobileTabs isMobile={false} />);
+    expect(container.querySelector(".mobile-tabs")).toBeNull();
+
+    rerender(<MobileTabs isMobile={true} />);
+    const tabsContainer = container.querySelector(".mobile-tabs") as HTMLDivElement;
+    expect(tabsContainer).not.toBeNull();
+    setOverflowing(tabsContainer, true);
+    tabsContainer.scrollLeft = 0;
+
+    dispatchWheel(tabsContainer, 40);
+    expect(tabsContainer.scrollLeft).toBe(40);
   });
 });
