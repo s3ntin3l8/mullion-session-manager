@@ -54,6 +54,9 @@ interface CreateProjectModalProps {
     // #761 — per-project only, no install-wide tier, same edit-mode-only
     // framing as mergeOnApprove/autoApprove above.
     conventionalCommitTitles?: boolean | null;
+    // #744 — per-project only, no install-wide tier, same posture as
+    // conventionalCommitTitles above.
+    autoTagRelease?: boolean | null;
     // Confirm-first directory creation — only ever sent once the user has
     // clicked "Create folder" below, in response to a PROJECT_DIR_MISSING
     // rejection. `gitInit` only has an effect when `createDir` is also set.
@@ -90,6 +93,7 @@ interface CreateProjectModalProps {
   initialAutoApprove?: boolean | null;
   initialMaxAutoReturnRounds?: number | null;
   initialConventionalCommitTitles?: boolean | null;
+  initialAutoTagRelease?: boolean | null;
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -119,6 +123,7 @@ export function CreateProjectModal({
   initialAutoApprove = null,
   initialMaxAutoReturnRounds = null,
   initialConventionalCommitTitles = null,
+  initialAutoTagRelease = null,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
@@ -141,6 +146,7 @@ export function CreateProjectModal({
   const [conventionalCommitTitles, setConventionalCommitTitles] = useState(
     initialConventionalCommitTitles ?? false,
   );
+  const [autoTagRelease, setAutoTagRelease] = useState(initialAutoTagRelease ?? false);
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
@@ -263,6 +269,7 @@ export function CreateProjectModal({
             : Number(maxAutoReturnRounds)
           : undefined,
         conventionalCommitTitles: isEdit ? conventionalCommitTitles : undefined,
+        autoTagRelease: isEdit ? autoTagRelease : undefined,
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -569,6 +576,25 @@ export function CreateProjectModal({
                 Off by default: the PR title is the raw task title. On, the worker is asked to write
                 a "type(scope): description" title alongside its usual completion signal — a
                 malformed or missing one silently falls back to the raw task title.
+              </span>
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Auto-tag release</span>
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={autoTagRelease}
+                  onChange={(e) => setAutoTagRelease(e.target.checked)}
+                />
+                Trigger release-please automatically after a task's PR merges
+              </label>
+              <span className="create-modal-field-hint">
+                Off by default — an unattended release trigger is an explicit opt-in. Requires
+                release-please to be configured in the repo (release-please-config.json /
+                .release-please-manifest.json).
               </span>
             </label>
           )}

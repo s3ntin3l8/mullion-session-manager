@@ -227,6 +227,10 @@ export function TaskMasterSection() {
         title="Agent selection"
         desc="The Default agent / Default review agent dropdowns above are Task Master's own install-wide defaults — the lowest tier of resolution, independent of Launchers & agents → Default agent (which only drives the terminal launcher). A per-project setting (project kebab menu → Edit) or a task's own Agent: / ReviewAgent: line overrides them."
       />
+      <Eyebrow
+        title="Auto-tag release"
+        desc="Whether a task's merged PR automatically triggers release-please to create or update a release PR is configured per project (project kebab menu → Edit → Auto-tag release), not here. Off by default — an explicit per-project opt-in."
+      />
     </>
   );
 }

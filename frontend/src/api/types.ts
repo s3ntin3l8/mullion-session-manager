@@ -99,6 +99,9 @@ export interface Project {
   // worker is asked to write a Conventional Commits title alongside its
   // usual completion signal. Mirrors projects.conventionalCommitTitles.
   conventionalCommitTitles: boolean | null;
+  // #744 — off by default: task PR merges don't automatically trigger
+  // release-please. Mirrors src/db/schema.ts's projects.autoTagRelease.
+  autoTagRelease: boolean | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live

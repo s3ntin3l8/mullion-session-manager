@@ -888,6 +888,59 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("updates autoTagRelease (true/false) on a project", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "auto-tag-release-p", cwd: "/tmp/auto-tag-release-p" },
+      });
+      const { id } = created.json();
+      expect(created.json().autoTagRelease).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { autoTagRelease: true },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().autoTagRelease).toBe(true);
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { autoTagRelease: false },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().autoTagRelease).toBe(false);
+
+      await app.close();
+    });
+
+    it("accepts a PATCH carrying only autoTagRelease", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "auto-tag-release-only-field",
+          cwd: "/tmp/auto-tag-release-only-field",
+        },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { autoTagRelease: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().autoTagRelease).toBe(true);
+
+      await app.close();
+    });
+
     it("accepts a PATCH carrying only autoApprove", async () => {
       const app = await buildApp();
       const created = await app.inject({
