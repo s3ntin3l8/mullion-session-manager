@@ -43,6 +43,7 @@ export const projectsApi = {
         | "autoApprove"
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
+        | "autoTagRelease"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>

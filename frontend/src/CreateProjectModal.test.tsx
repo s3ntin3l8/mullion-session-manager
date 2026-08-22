@@ -279,6 +279,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       autoApprove: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
+      autoTagRelease: false,
     });
   });
 
@@ -316,6 +317,45 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       autoApprove: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: true,
+      autoTagRelease: false,
+    });
+  });
+
+  it("passes autoTagRelease through to onCreate on save, toggled on", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /Trigger release-please automatically after a task's PR merges/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "mullion",
+      cwd: "/home/x/mullion",
+      hostId: undefined,
+      devServerUrl: null,
+      defaultAgent: null,
+      defaultReviewAgent: null,
+      mergeOnApprove: false,
+      autoApprove: false,
+      maxAutoReturnRounds: null,
+      conventionalCommitTitles: false,
+      autoTagRelease: true,
     });
   });
 
@@ -354,6 +394,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       autoApprove: true,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
+      autoTagRelease: false,
     });
   });
 
@@ -621,6 +662,7 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       autoApprove: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
+      autoTagRelease: false,
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });

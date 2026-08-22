@@ -122,6 +122,9 @@ interface UpdateProjectBody {
   // follows Conventional Commits is a property of that repo, not a
   // Mullion-wide default.
   conventionalCommitTitles?: boolean | null;
+  // #744 — per-project only, no install-wide tier, same posture as
+  // conventionalCommitTitles above.
+  autoTagRelease?: boolean | null;
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
@@ -162,6 +165,7 @@ const updateProjectSchema = {
       autoApprove: { type: ["boolean", "null"] },
       maxAutoReturnRounds: { type: ["integer", "null"], minimum: 1 },
       conventionalCommitTitles: { type: ["boolean", "null"] },
+      autoTagRelease: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -2079,6 +2083,7 @@ export async function projectsRoute(app: FastifyInstance) {
         autoApprove,
         maxAutoReturnRounds,
         conventionalCommitTitles,
+        autoTagRelease,
         createDir,
         gitInit,
       } = request.body;
@@ -2133,10 +2138,11 @@ export async function projectsRoute(app: FastifyInstance) {
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
         maxAutoReturnRounds === undefined &&
-        conventionalCommitTitles === undefined
+        conventionalCommitTitles === undefined &&
+        autoTagRelease === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, or conventionalCommitTitles must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, or autoTagRelease must be provided.",
         );
       }
 
@@ -2194,6 +2200,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
           ...(conventionalCommitTitles !== undefined ? { conventionalCommitTitles } : {}),
+          ...(autoTagRelease !== undefined ? { autoTagRelease } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

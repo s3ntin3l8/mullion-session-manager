@@ -93,6 +93,7 @@ export interface ProjectsSlice {
         | "autoApprove"
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
+        | "autoTagRelease"
       >
     > &
       CreateProjectDirOptions,

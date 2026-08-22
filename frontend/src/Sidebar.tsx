@@ -859,6 +859,7 @@ function ProjectHeader({
               initialAutoApprove={project.autoApprove}
               initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
               initialConventionalCommitTitles={project.conventionalCommitTitles}
+              initialAutoTagRelease={project.autoTagRelease}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -870,6 +871,7 @@ function ProjectHeader({
                 autoApprove,
                 maxAutoReturnRounds,
                 conventionalCommitTitles,
+                autoTagRelease,
                 createDir,
                 gitInit,
               }) =>
@@ -883,6 +885,7 @@ function ProjectHeader({
                   autoApprove,
                   maxAutoReturnRounds,
                   conventionalCommitTitles,
+                  autoTagRelease,
                   createDir,
                   gitInit,
                 })

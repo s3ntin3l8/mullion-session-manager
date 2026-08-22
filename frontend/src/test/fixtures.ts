@@ -91,6 +91,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     autoApprove: null,
     maxAutoReturnRounds: null,
     conventionalCommitTitles: null,
+    autoTagRelease: null,
     ...overrides,
   };
 }

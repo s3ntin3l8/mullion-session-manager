@@ -143,6 +143,14 @@ export const projects = sqliteTable("projects", {
   // convention, not a Mullion-wide default. Null/false = off — the raw
   // task title is used as the PR title, today's unchanged behavior.
   conventionalCommitTitles: integer("conventional_commit_titles", { mode: "boolean" }),
+  // #744 — per-project only, no install-wide tier, same posture as
+  // mergeOnApprove/autoApprove/conventionalCommitTitles above: whether
+  // a task's merged PR should automatically trigger a release-please run
+  // is a property of that repo's release workflow, not a Mullion-wide
+  // default. Null/false = off; default-off matters since an unattended
+  // release trigger is outward-facing and must not silently enable itself
+  // for existing projects at upgrade.
+  autoTagRelease: integer("auto_tag_release", { mode: "boolean" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
