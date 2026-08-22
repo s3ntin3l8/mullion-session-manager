@@ -68,6 +68,18 @@ export function findSessionWorkspace(sessionId: number, workspaces: Workspace[])
   return null;
 }
 
+// Issue #730 — a terminal can only be launched from a workspace (list view),
+// where there is a live dockview to open it in (the active workspace, whose
+// id is `activeWorkspaceId`). From the Task view (Kanban — `viewMode ===
+// "kanban"`) there is no terminal/workspace to receive a newly launched
+// terminal, so both the project-row "+" and the global launcher (⌘K) must be
+// inert there: launching would otherwise drop the panel into the unrelated
+// last-used workspace. Pure so the gate is unit-testable without mounting
+// App.tsx (there is no App.test.tsx in this codebase).
+export function canLaunchTerminal(viewMode: string): boolean {
+  return viewMode !== "kanban";
+}
+
 // Issue #95 prerequisite — this app has no client-side router (no router
 // dependency, no history.pushState/hash usage anywhere in frontend/src),
 // and src/plugins/static.ts serves the built frontend with no SPA rewrite,

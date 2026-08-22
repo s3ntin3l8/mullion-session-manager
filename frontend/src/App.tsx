@@ -43,6 +43,7 @@ import {
   shouldAutoOpenChildPanels,
   panelSessionId,
   isTiledPanel,
+  canLaunchTerminal,
 } from "./panelUtils.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
@@ -987,10 +988,12 @@ export function App() {
   );
 
   const openGlobalLauncher = useCallback(() => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
     setPalette({ open: true, scope: "global", projectId: null });
   }, []);
 
   const openProjectLauncher = useCallback((projectId: number) => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
     setPalette({ open: true, scope: "project", projectId });
   }, []);
 

@@ -80,7 +80,14 @@ export function Toolbar({
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
         />
-        <button className="toolbar-icon-btn" onClick={onOpenLauncher} title="New session (⌘K)">
+        <button
+          className="toolbar-icon-btn"
+          onClick={onOpenLauncher}
+          title={
+            viewMode === "kanban" ? "New session (unavailable in Task view)" : "New session (⌘K)"
+          }
+          disabled={viewMode === "kanban"}
+        >
           <PlusIcon size={18} />
         </button>
       </div>
@@ -103,7 +110,14 @@ export function Toolbar({
         )}
       </div>
       <div className="toolbar-actions">
-        <button className="run-cmd-btn" onClick={onOpenLauncher} title="Command palette">
+        <button
+          className="run-cmd-btn"
+          onClick={onOpenLauncher}
+          title={
+            viewMode === "kanban" ? "Command palette (unavailable in Task view)" : "Command palette"
+          }
+          disabled={viewMode === "kanban"}
+        >
           <SearchIcon size={14} strokeWidth={1.9} />
           <span style={{ fontSize: 12 }}>Run command…</span>
           <span className="kbd">⌘K</span>
