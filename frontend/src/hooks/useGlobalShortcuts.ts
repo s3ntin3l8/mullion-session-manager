@@ -34,6 +34,12 @@ export interface UseGlobalShortcutsParams {
   // `useCallback` with an empty dependency array) — same reasoning as
   // `setPalette`/`setSettingsOpen` above.
   openSettings: () => void;
+  // Issue #730 — the ⌘K handler routes through this rather than calling
+  // `setPalette` directly, so the "terminals only launch from a workspace"
+  // gate (`canLaunchTerminal`, enforced inside `openGlobalLauncher`) is
+  // consulted for the keyboard path too — a single enforcement point shared
+  // with the toolbar/global-launcher button.
+  openGlobalLauncher: () => void;
 }
 
 // Extracted from App.tsx (PR 34d of the hook-extraction series) — the single
@@ -75,12 +81,16 @@ export function useGlobalShortcuts({
   setPalette,
   setSettingsOpen,
   openSettings,
+  openGlobalLauncher,
 }: UseGlobalShortcutsParams): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setPalette((p) => ({ ...p, open: true, scope: "global" }));
+        // Issue #730 — route through openGlobalLauncher so the workspace-
+        // context gate is enforced for the keyboard shortcut, not just the
+        // toolbar button.
+        openGlobalLauncher();
       } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
         openSettings();
@@ -112,5 +122,5 @@ export function useGlobalShortcuts({
     // stable. Same "list it for the linter, not because it changes
     // anything" pattern as `useMobileLayout`'s `[dockviewApi, setIsMobile]`
     // and `useWorkspacePersistence`'s equivalent params.
-  }, [openSettings, setPalette, setSettingsOpen]);
+  }, [openSettings, openGlobalLauncher, setPalette, setSettingsOpen]);
 }

@@ -28,6 +28,7 @@ import {
   childPanelPosition,
   shouldAutoOpenChildPanels,
   extractSessionIds,
+  canLaunchTerminal,
   resolveActiveProjectId,
   parseDeepLinkSessionId,
   handleGlobalEscape,
@@ -1911,6 +1912,20 @@ describe("shouldAutoOpenChildPanels", () => {
 
   it("blocks during the same-tick workspace-switch restore window (issue #447)", () => {
     expect(shouldAutoOpenChildPanels({ ...allTrue, restoring: true })).toBe(false);
+  });
+});
+
+describe("canLaunchTerminal (issue #730 — no terminal launch from Task view)", () => {
+  it("refuses when in the Kanban/Task view", () => {
+    expect(canLaunchTerminal("kanban")).toBe(false);
+  });
+
+  it("allows from the workspace (list) view", () => {
+    expect(canLaunchTerminal("list")).toBe(true);
+  });
+
+  it("refuses any unknown view mode (allow-list fails closed)", () => {
+    expect(canLaunchTerminal("something-else")).toBe(false);
   });
 });
 
