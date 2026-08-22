@@ -156,6 +156,7 @@ export function CommandPalette({
   });
   const [manualTargetProjectId, setManualTargetProjectId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [projectIndex, setProjectIndex] = useState(0);
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
@@ -278,6 +279,35 @@ export function CommandPalette({
     launchers,
     hiddenAgents: settings.launchers.hiddenAgents,
   });
+
+  const filteredProjects = useMemo(() => {
+    if (!pickerOpen) return projects;
+    const q = query.trim().toLowerCase();
+    if (!q) return projects;
+    return projects.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.cwd.toLowerCase().includes(q),
+    );
+  }, [pickerOpen, query, projects]);
+
+  const activeProjectIndex = Math.min(
+    Math.max(0, projectIndex),
+    Math.max(0, filteredProjects.length - 1),
+  );
+
+  const openProjectPicker = () => {
+    setQuery("");
+    const currentIdx = projects.findIndex((p) => p.id === effectiveProjectId);
+    setProjectIndex(currentIdx >= 0 ? currentIdx : 0);
+    setPickerOpen(true);
+  };
+
+  const toggleProjectPicker = () => {
+    if (pickerOpen) {
+      setPickerOpen(false);
+    } else {
+      openProjectPicker();
+    }
+  };
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
@@ -421,11 +451,40 @@ export function CommandPalette({
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Launch a session or run a command…"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (pickerOpen) {
+                setProjectIndex(0);
+              }
+            }}
+            placeholder={pickerOpen ? "Filter projects…" : "Launch a session or run a command…"}
             onKeyDown={(e) => {
+              if (pickerOpen) {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPickerOpen(false);
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setProjectIndex(Math.min(activeProjectIndex + 1, filteredProjects.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setProjectIndex(Math.max(activeProjectIndex - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  const pickedProject = filteredProjects[activeProjectIndex];
+                  if (pickedProject) {
+                    setManualTargetProjectId(pickedProject.id);
+                    setPickerOpen(false);
+                  }
+                }
+                return;
+              }
               if (e.key === "Escape") {
                 onClose();
+              } else if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                openProjectPicker();
               } else if (e.key === "ArrowDown") {
                 e.preventDefault();
                 setSelectedIndex(Math.min(activeIndex + 1, entries.length - 1));
@@ -474,17 +533,25 @@ export function CommandPalette({
             <div className="cmd-palette-target-row">
               <span className="cmd-palette-target-label">Launch in</span>
               <button
-                className="cmd-palette-target-chip clickable"
+                type="button"
+                className={`cmd-palette-target-chip clickable${pickerOpen ? " open" : ""}`}
                 title={target?.cwd ?? ""}
-                onClick={() => setPickerOpen((v) => !v)}
+                onClick={toggleProjectPicker}
+                aria-expanded={pickerOpen}
+                aria-haspopup="listbox"
+                aria-label={`Target project: ${target?.name ?? "choose a project"}. Tap to change.`}
               >
                 <FolderIcon size={13} style={{ color: "var(--accent-solid)" }} />
                 <span className="cmd-palette-target-name">
                   {target?.name ?? "choose a project"}
                 </span>
-                <ChevronDownIcon size={13} strokeWidth={2.2} />
+                <ChevronDownIcon
+                  size={13}
+                  strokeWidth={2.2}
+                  className={`cmd-palette-target-chevron${pickerOpen ? " open" : ""}`}
+                />
               </button>
-              <span className="cmd-palette-change-target">⌘↓ change target</span>
+              {!pickerOpen && <span className="cmd-palette-change-target">⌘↓ change target</span>}
             </div>
           )}
           {scope === "global" && (
@@ -495,7 +562,7 @@ export function CommandPalette({
           {/* Issue #271, option 1 — opt-in worktree isolation at launch time.
               Not shown until a project target is resolved (mirrors every
               other target-dependent affordance in this strip). */}
-          {effectiveProjectId !== null && (
+          {!pickerOpen && effectiveProjectId !== null && (
             <WorktreeOptions
               projectId={effectiveProjectId}
               enabled={worktreeEnabled}
@@ -506,19 +573,16 @@ export function CommandPalette({
           )}
         </div>
 
-        {effectiveProjectId !== null && (
+        {!pickerOpen && effectiveProjectId !== null && (
           <div className="cmd-palette-options-strip">
             <div
               style={{
                 visibility:
-                  !pickerOpen &&
-                  activeEntry?.type === "launcher" &&
-                  activeEntry.launcher.kind === "agent"
+                  activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent"
                     ? "visible"
                     : "hidden",
               }}
               aria-hidden={
-                pickerOpen ||
                 !(activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent")
               }
             >
@@ -547,16 +611,20 @@ export function CommandPalette({
         )}
 
         {pickerOpen ? (
-          <div className="cmux-scroll cmd-palette-list">
-            <div className="cmd-palette-group-label">Choose a project</div>
-            {projects.map((p) => (
+          <div className="cmux-scroll cmd-palette-list" role="listbox">
+            <div className="cmd-palette-group-label">
+              {filteredProjects.length === 0 ? "No matching projects" : "Choose a project"}
+            </div>
+            {filteredProjects.map((p, idx) => (
               <button
+                type="button"
                 key={p.id}
-                className="cmd-row"
+                className={`cmd-row${idx === activeProjectIndex ? " selected" : ""}`}
                 onClick={() => {
                   setManualTargetProjectId(p.id);
                   setPickerOpen(false);
                 }}
+                onMouseEnter={() => setProjectIndex(idx)}
               >
                 <span
                   className="cmd-row-icon"
@@ -568,6 +636,7 @@ export function CommandPalette({
                   <span className="cmd-row-title">{p.name}</span>
                   <span className="cmd-row-subtitle">{p.cwd}</span>
                 </span>
+                {idx === activeProjectIndex && <span className="kbd">↵</span>}
               </button>
             ))}
           </div>
@@ -950,12 +1019,21 @@ export function CommandPalette({
             {/* Reflects whichever entry is actually selected, not just the
                 launch-a-command case — "Launch in X" would be misleading
                 once the highlighted row is an existing session/workspace. */}
-            {activeEntry?.type === "session"
-              ? "Open session"
-              : activeEntry?.type === "workspace"
-                ? "Switch workspace"
-                : `Launch in ${target?.name ?? "…"}`}
+            {pickerOpen
+              ? filteredProjects[activeProjectIndex]?.name
+                ? `Select ${filteredProjects[activeProjectIndex]?.name}`
+                : "Select project"
+              : activeEntry?.type === "session"
+                ? "Open session"
+                : activeEntry?.type === "workspace"
+                  ? "Switch workspace"
+                  : `Launch in ${target?.name ?? "…"}`}
           </span>
+          {pickerOpen && (
+            <span className="cmd-palette-footer-item">
+              <span className="kbd">esc</span>Back
+            </span>
+          )}
         </div>
       </div>
     </div>

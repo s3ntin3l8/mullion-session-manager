@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ComponentProps } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store/index.js";
@@ -1412,5 +1412,229 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
     expect(screen.queryByText("idle session")).not.toBeInTheDocument();
     expect(screen.queryByText("idle workspace")).not.toBeInTheDocument();
+  });
+});
+
+describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
+  const PROJECT_A: Project = {
+    ...PROJECT,
+    id: 1,
+    name: "alpha-project",
+    cwd: "/home/x/alpha",
+  };
+  const PROJECT_B: Project = {
+    ...PROJECT,
+    id: 2,
+    name: "beta-project",
+    cwd: "/home/x/beta",
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string | URL | Request) => {
+        const u = typeof url === "string" ? url : url.toString();
+        if (u.includes("/api/projects/1/actions")) {
+          return Promise.resolve(
+            jsonResponse(200, [
+              { id: "shell:bash-alpha", kind: "shell", title: "bash alpha", command: "bash" },
+            ]),
+          );
+        }
+        if (u.includes("/api/projects/2/actions")) {
+          return Promise.resolve(
+            jsonResponse(200, [
+              { id: "shell:bash-beta", kind: "shell", title: "bash beta", command: "bash" },
+            ]),
+          );
+        }
+        return Promise.resolve(jsonResponse(200, []));
+      }),
+    );
+    useDashboardStore.setState({
+      projects: [PROJECT_A, PROJECT_B],
+      sessions: [],
+      workspaces: [],
+      settings: DEFAULT_SETTINGS,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("toggles the project picker open and closed when clicking the 'Launch in' chip", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    expect(targetButton).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(targetButton);
+    expect(targetButton).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Choose a project")).toBeInTheDocument();
+    expect(screen.getByText("beta-project")).toBeInTheDocument();
+
+    await user.click(targetButton);
+    expect(targetButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
+  });
+
+  it("filters the project list by query while picker is open", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    await user.click(targetButton);
+
+    const input = screen.getByPlaceholderText("Filter projects…");
+    await user.type(input, "beta");
+
+    const listbox = screen.getByRole("listbox");
+    // alpha-project should be filtered out of the project list
+    expect(within(listbox).queryByText("alpha-project")).not.toBeInTheDocument();
+    expect(within(listbox).getByText("beta-project")).toBeInTheDocument();
+  });
+
+  it("selects a project on click and switches launchers to the new project", async () => {
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    await user.click(targetButton);
+
+    await user.click(screen.getByText("beta-project"));
+    expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
+    await screen.findByText("bash beta");
+  });
+
+  it("navigates projects with ArrowDown/ArrowUp and selects with Enter without launching background commands", async () => {
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={onLaunched}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    await user.click(targetButton);
+
+    // Focus the search input so our onKeyDown intercepts ArrowDown/Enter
+    const input = screen.getByPlaceholderText("Filter projects…");
+    await user.click(input);
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(onLaunched).not.toHaveBeenCalled();
+    await screen.findByText("bash beta");
+  });
+
+  it("closes the project picker on Escape without closing the whole command palette", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={onClose}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("bash alpha");
+    const targetButton = screen.getByRole("button", { name: /Target project:/ });
+    await user.click(targetButton);
+    expect(screen.getByText("Choose a project")).toBeInTheDocument();
+
+    // Focus the search input so our onKeyDown intercepts Escape
+    const input = screen.getByPlaceholderText("Filter projects…");
+    await user.click(input);
+    await user.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText("Choose a project")).not.toBeInTheDocument();
+    expect(screen.getByText("bash alpha")).toBeInTheDocument();
   });
 });
