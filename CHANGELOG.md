@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.45](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.44...v0.2.45) (2026-08-23)
+
+
+### Features
+
+* add autoTagRelease per-project setting ([#744](https://github.com/s3ntin3l8/mullion-session-manager/issues/744) foundation) ([#812](https://github.com/s3ntin3l8/mullion-session-manager/issues/812)) ([592f4f6](https://github.com/s3ntin3l8/mullion-session-manager/commit/592f4f607eacc8930e6cc59ed5883cae9d119a99))
+* per-session mute / do-not-disturb for notifications ([#719](https://github.com/s3ntin3l8/mullion-session-manager/issues/719)) ([#806](https://github.com/s3ntin3l8/mullion-session-manager/issues/806)) ([538b069](https://github.com/s3ntin3l8/mullion-session-manager/commit/538b069670baa7bea37d7b7569c259fa70eb91ce))
+
+
+### Bug Fixes
+
+* collapse sidebar and prevent keyboard popup on mobile workspace switch ([#810](https://github.com/s3ntin3l8/mullion-session-manager/issues/810)) ([8cd8112](https://github.com/s3ntin3l8/mullion-session-manager/commit/8cd8112d91b10808d771da9acf4486fa177c6bd2))
+* detect AGENTS.override.md silently shadowing the tier-1 briefing region ([#808](https://github.com/s3ntin3l8/mullion-session-manager/issues/808)) ([93c599c](https://github.com/s3ntin3l8/mullion-session-manager/commit/93c599cc7ab6d85a68760718d7851bb9bef90453))
+* fix mobile tab horizontal scrolling and terminal prompt wrapping ([#809](https://github.com/s3ntin3l8/mullion-session-manager/issues/809)) ([38d25d9](https://github.com/s3ntin3l8/mullion-session-manager/commit/38d25d9379bfa3eb2642c1792f24ee881445086a))
+* make command palette project dropdown functional on touch and mobile ([#811](https://github.com/s3ntin3l8/mullion-session-manager/issues/811)) ([43902cc](https://github.com/s3ntin3l8/mullion-session-manager/commit/43902cc76821d667616601afe67fb22c97bca4f0))
+* prevent terminal launch from the Task view (issue [#730](https://github.com/s3ntin3l8/mullion-session-manager/issues/730)) ([#804](https://github.com/s3ntin3l8/mullion-session-manager/issues/804)) ([962fc3a](https://github.com/s3ntin3l8/mullion-session-manager/commit/962fc3a7ea57690257dc87283ee011eab4198327))
+
 ## [0.2.44](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.43...v0.2.44) (2026-08-21)
 
 
