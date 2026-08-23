@@ -128,9 +128,9 @@ export const PROMOTE_TIMEOUT_MS = 290_000;
 // This reaches Claude Code, Codex, and agy sessions this way (issue #437,
 // landing per-agent): forwarder-core.mjs's formatSessionStartOutput
 // switches on `agent` and, as of this writing, produces a real reply for
-// `"claude-code"`, `"codex"`, and `"agy"` (agy's own dialect is UNVERIFIED
-// against a live SessionStart firing — see that case's own doc comment) —
-// opencode still falls through to `default: return {}`, silently dropping
+// `"claude-code"`, `"codex"`, and `"agy"` (agy's own dialect is confirmed
+// live against a real SessionStart firing, issue #715 — see that case's own
+// doc comment) — opencode still falls through to `default: return {}`, silently dropping
 // whatever additionalContext this plugin sends back (verified by reading
 // forwarder-core.mjs directly, not assumed).
 //

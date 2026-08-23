@@ -275,14 +275,11 @@ confirm which path got you here.
   this feature didn't exist.
 - **agy** — the same short pointer, but via agy's own protobuf-JSON hook
   reply shape: `{ injectSteps: [{ ephemeralMessage: "<pointer text>" }] }`.
-  This dialect is **unverified against a live SessionStart firing** — agy's
-  own bundled hook docs omit `SessionStart` from their "Supported Event
-  Types" table even though the installed binary's recognized hook-name set
-  includes it, carries real call-site symbols for it, and Mullion already
-  registers a handler for it unconditionally. If you're agy and never saw
-  a pointer message at startup at all, the dialect may need to move to the
-  documented `PreInvocation` event instead (see `forwarder-core.mjs`'s
-  `agy` case in `formatSessionStartOutput` for the full reasoning).
+  **Confirmed live** (issue #715, see below) — agy's own bundled hook docs
+  still omit `SessionStart` from their "Supported Event Types" table even
+  though the installed binary's recognized hook-name set includes it and
+  carries real call-site symbols for it, but the dialect decodes cleanly
+  and its content lands in the model's actual context regardless.
 - **opencode** — materially different in kind, not just dialect: opencode
   has no live hook round trip to reply to at all, so there's no per-event
   pointer sentence. Instead, Mullion points opencode's own `instructions`
@@ -311,6 +308,59 @@ for one of the reasons above, you got here some other way (or you're
 reading the on-disk copy directly) — you still have the full MCP tool
 surface and hook channel described above, there's just no automatic nudge
 pointing at this file.
+
+### Live end-to-end verification (issue #715)
+
+Everything above (and PRs #711-#714, which moved this injection from a
+pointer sentence to real tier-1 + project-briefing _content_) had only ever
+been verified at the unit-test level — proving Mullion composes and emits
+the right bytes, not that a real agent CLI's own runtime actually folds
+them into a live model turn. That's the exact gap the old pointer mechanism
+had: it also emitted correctly and still didn't work, because nothing ever
+read the file it pointed at. Verified live against this host's then-current
+deploy (`v0.2.45`) by asking each CLI, with no file reads and no tool
+calls, "what are this repo's branching/review rules and where did you
+learn them" — a question only answerable from injected context:
+
+- **Claude Code** — confirmed. The live `hookSpecificOutput.additionalContext`
+  payload (captured by invoking the deployed forwarder directly against the
+  running control socket) matched what actually appeared in a real
+  session's own context, tier-1 excerpt and `AGENTS.md` briefing both
+  included.
+- **Codex** — confirmed. `codex exec "<probe>"` answered correctly and
+  explicitly cited "the `AGENTS.md` instructions included in your message."
+  The one real caveat from the doc above still applies: this depends on a
+  one-time interactive `/hooks` trust grant, which was already present on
+  this host.
+- **opencode** — confirmed. `opencode run "<probe>"` answered correctly,
+  explicitly attributing it to "the `AGENTS.md` file injected into my
+  session context (the Mullion briefing block)" rather than any file read.
+- **agy** — confirmed (previously the one genuinely open question in this
+  section — see the bullet above). `agy --print "<probe>"`, run with
+  `GEMINI.md` temporarily removed from the working tree (to rule out agy's
+  own native project-file loading as the actual source), still answered
+  correctly and named "Project Briefing (`AGENTS.md`) — Injected by Mullion"
+  as its source. `injectSteps[].ephemeralMessage` is a real, working
+  channel, not just a decodable-but-inert shape.
+
+**Operational gotcha found along the way, not a code defect:** Codex's and
+agy's hook registrations live in _global_, host-wide files
+(`~/.codex/hooks.json`, `~/.gemini/config/hooks.json`), rewritten by each
+adapter's `managedInstall` only when a session of that agent type is
+actually spawned (`buildLaunchPlan` → `applyHookAdapters`) — unlike Claude
+Code's hook config, which is regenerated per-session fresh. On this host
+both files were found pointing at a `forwarder.mjs` path inside a
+`make dev` worktree (`.wt/feat-auto-tag-release`) that had since been
+deleted — i.e., stale from whoever last ran a dev instance, not from the
+production deploy. Spawning a fresh codex/agy session self-heals this (it
+did, here), but between a stale write and the next same-agent spawn, that
+agent's SessionStart (and every other hook) silently no-ops on this host —
+correct server-side code, broken by an on-disk artifact nothing had
+occasion to refresh. Worth knowing if `codex exec`/`agy --print` run
+outside a fresh Mullion-spawned session ever appear to have "lost" the
+injection: check `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`'s
+`SessionStart` command path against the currently-deployed
+`dist/hooks/forwarder.mjs` before assuming a code regression.
 
 ## If something 403s
 

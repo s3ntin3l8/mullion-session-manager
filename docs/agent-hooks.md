@@ -461,30 +461,28 @@ registration list above) against `write_to_file`/`replace_file_content`/
 back to `.FilePath`) — verified against those three tools' real payload
 shape, not the earlier generic example.
 
-**`SessionStart`'s reply** (issue #437b) is **unverified against a live
-firing**, in a narrower sense than "might never fire": `hook-adapters/agy.ts`
-registers `SessionStart` unconditionally, and `hooks.ts`'s reply is non-empty
-by default on any ordinary session, so this dispatches on Mullion's side on
-every agy `SessionStart` — not hypothetically. agy's own bundled `hooks.md`
-"Supported Event Types" table omits `SessionStart` entirely, but the
+**`SessionStart`'s reply** (issue #437b) is **confirmed working against a
+live firing** (issue #715): `hook-adapters/agy.ts` registers `SessionStart`
+unconditionally, and `hooks.ts`'s reply is non-empty by default on any
+ordinary session, so this dispatches on Mullion's side on every agy
+`SessionStart` — not hypothetically. agy's own bundled `hooks.md`
+"Supported Event Types" table still omits `SessionStart` entirely, but the
 hook-name set embedded in the installed `agy` binary itself does recognize
 it, and the binary carries real call-site symbols for it
 (`hookcaller.CallSessionStartHook`, `prehooks.NewSessionStartProviderHook` —
-not just a recognized name with no wiring behind it). The actual open
-question is whether agy's own decoder
-(`hookcaller.maybeParseProtoBytes`, proto-based) accepts the shape
+not just a recognized name with no wiring behind it). The open question
+this section used to raise — whether agy's own decoder
+(`hookcaller.maybeParseProtoBytes`, proto-based) actually accepts the shape
 `formatSessionStartOutput("agy", ...)` in `forwarder-core.mjs` sends —
-`{ injectSteps: [{ ephemeralMessage: additionalContext }] }`, extracted from
-the same embedded protobuf descriptor (`third_party/jetski/hooks_pb/
-hooks.proto`) as the rest of this section, not guessed. Shipped
-optimistically since a decode mismatch's worst case is a silent no-op (same
-as any agent without a dialect at all), not a crash. If it turns out the
-shape doesn't decode, the fallback is the documented `PreInvocation` event
-(same `inject_steps` field), which needs a server-side once-per-session
-latch since it fires before every model invocation rather than once per
-session — see the `agy` case's own doc comment in `forwarder-core.mjs` for
-the full reasoning. This is what carries the agent-guide pointer described
-in `docs/agent-guide.md`'s
+`{ injectSteps: [{ ephemeralMessage: additionalContext }] }` — is resolved:
+it decodes and the content reaches the model. Verified with `agy --print
+"<probe>"`, `GEMINI.md` removed from the working tree so agy's own native
+project-file loading (#711) couldn't be the source, and the answer still
+correctly cited "Project Briefing (`AGENTS.md`) — Injected by Mullion" as
+where it learned the repo's rules. See `docs/agent-guide.md`'s
+[Live end-to-end verification](agent-guide.md#live-end-to-end-verification-issue-715)
+section for the full probe transcript summary. This is what carries the
+agent-guide pointer described in `docs/agent-guide.md`'s
 [Auto-injection](agent-guide.md#auto-injection)
 section.
 
