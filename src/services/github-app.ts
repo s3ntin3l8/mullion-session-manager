@@ -213,7 +213,7 @@ export interface InstallationToken {
   expiresAt: Date;
 }
 
-// #489 (round 2, issue #489 remaining scope) — two permission sets, not
+// #489 (round 2, issue #489 remaining scope) — three permission sets, not
 // one widened one. Task Master's write paths need exactly WRITE_PERMISSIONS
 // and nothing more; the base integration's read-only surfaces (repo-status
 // widget, PR/CI poller) need Actions/PRs read access WRITE_PERMISSIONS
@@ -234,8 +234,33 @@ export const READ_PERMISSIONS = {
   metadata: "read",
   pull_requests: "read",
 } as const;
+// #744 — a third, narrower set for the release-please "Run" trigger, which
+// dispatches a workflow (`POST /actions/workflows/:id/dispatches`). That
+// endpoint needs `actions: write`, which neither set above grants, and by
+// the same least-privilege reasoning it must not be folded into
+// WRITE_PERMISSIONS: Task Master's ordinary issue/PR/push writes have no
+// business holding an Actions-write scope. Installations minted before this
+// scope existed 422 on the mint (see mintInstallationToken's doc comment)
+// until re-approved with the wider grant — getInstallationToken's existing
+// negative-cache-then-PAT-fallback handles that the same way it already
+// does for READ_PERMISSIONS.
+export const DISPATCH_PERMISSIONS = {
+  actions: "write",
+  metadata: "read",
+} as const;
 
-export type InstallationTokenScope = "write" | "read";
+export type InstallationTokenScope = "write" | "read" | "dispatch";
+
+function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
+  switch (scope) {
+    case "write":
+      return WRITE_PERMISSIONS;
+    case "read":
+      return READ_PERMISSIONS;
+    case "dispatch":
+      return DISPATCH_PERMISSIONS;
+  }
+}
 
 /**
  * Exchanges an App JWT for a short-lived installation token, narrowed to
@@ -273,7 +298,7 @@ export async function mintInstallationToken(
       },
       body: JSON.stringify({
         repositories: [repo],
-        permissions: scope === "write" ? WRITE_PERMISSIONS : READ_PERMISSIONS,
+        permissions: permissionsForScope(scope),
       }),
     });
   } catch (err) {

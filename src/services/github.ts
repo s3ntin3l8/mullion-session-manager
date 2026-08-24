@@ -511,6 +511,37 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
   }));
 }
 
+// #744 — the release-please routes need the repo's default branch (both to
+// filter the open release PR by `base` and as the dispatch `ref`) and must
+// never assume `main`, the same reasoning `getPullRequestByNumber`'s
+// `baseRef` field documents. `fetchActionsRuns` above already reads this
+// same field internally but doesn't expose it; this is that read, exported.
+// Unlike `fetchActionsRuns`'s degrade-to-`[]` posture, this throws
+// GitHubApiError on failure — callers here need to distinguish "couldn't
+// resolve the default branch" from "resolved it, there's just nothing
+// there," which a silent `null` would collapse.
+export async function getDefaultBranch(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<string> {
+  validateGitHubRepoRef(owner, repo);
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(`GitHub API error for repo info (HTTP ${res.status})`, res.status);
+  }
+  const data = (await res.json()) as GitHubRepoApiResponse;
+  if (!data.default_branch) {
+    throw new GitHubApiError("GitHub repo info did not include a default_branch", res.status);
+  }
+  return data.default_branch;
+}
+
 // Exported for task-reconciler.ts's review-spawn CI gate (#738 follow-up).
 // Never throws (see the try/catch below) — a lookup failure degrades to `[]`
 // the same way it already does for every other caller of this function,

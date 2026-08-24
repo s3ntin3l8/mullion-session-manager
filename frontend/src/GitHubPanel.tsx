@@ -7,6 +7,9 @@ import type {
   GitHubPRsStatus,
   GitHubPROrWithChecks,
   GitHubStatus,
+  ProjectReleaseStatus,
+  ReleaseRunReason,
+  ReleaseMergeReason,
 } from "./api/index.js";
 import { ChevronDownIcon, GitHubIcon } from "./ui/icons.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
@@ -217,9 +220,200 @@ function prSummaryText(summary: GitHubPRsStatus["prSummary"]): string {
   return `${summary.total} PR${summary.total === 1 ? "" : "s"} — ${parts.join(" ") || "no CI data"}`;
 }
 
+// #744 — reason→copy for the Release section's Run/Merge refusals. Same
+// "a domain refusal is a normal 200, only a real HTTP error throws"
+// contract GitPanel's own reasonMessage covers for Pull — see that
+// function's own doc comment.
+function runReasonMessage(
+  reason: ReleaseRunReason | undefined,
+  detail: string | undefined,
+): string {
+  switch (reason) {
+    case "no-workflow":
+      return "This repo has no release-please workflow configured.";
+    case "no-dispatch-trigger":
+      return "This repo's release workflow doesn't accept manual runs yet — add workflow_dispatch: to it.";
+    case "dispatch-failed":
+      return detail ? `Failed to start a release run: ${detail}` : "Failed to start a release run.";
+    default:
+      return "Failed to start a release run.";
+  }
+}
+
+function mergeReasonMessage(
+  reason: ReleaseMergeReason | undefined,
+  detail: string | undefined,
+): string {
+  switch (reason) {
+    case "no-release-pr":
+      return "No open release PR to merge.";
+    case "computing":
+      return "GitHub is still computing mergeability — try again shortly.";
+    case "behind":
+      // #744's own route doc comment: release-please owns and force-pushes
+      // this branch, so the fix is re-running release-please, not updating
+      // the branch (which this app never does for a release PR).
+      return "This PR is behind the default branch — re-run release-please to regenerate it, rather than updating the branch.";
+    case "blocked":
+      return "A required check is red or still pending.";
+    case "unstable":
+      return "A non-required check is failing or still running.";
+    case "dirty":
+      return "This PR has a merge conflict with the default branch.";
+    case "merge-failed":
+      return detail ? `Merge failed: ${detail}` : "Merge failed.";
+    default:
+      return "Merge failed.";
+  }
+}
+
+function ReleaseSection({
+  projectId,
+  release,
+  onChanged,
+}: {
+  projectId: number;
+  release: ProjectReleaseStatus;
+  onChanged: () => void;
+}) {
+  const [isRunning, setIsRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+
+  const handleRun = useCallback(async () => {
+    setIsRunning(true);
+    setRunError(null);
+    try {
+      const result = await api.postProjectReleaseRun(projectId);
+      if (result.dispatched) {
+        onChanged();
+      } else {
+        setRunError(runReasonMessage(result.reason, result.detail));
+      }
+    } catch (err) {
+      setRunError(
+        err instanceof Error ? err.message : "Failed to start a release run — try again.",
+      );
+    } finally {
+      setIsRunning(false);
+    }
+  }, [projectId, onChanged]);
+
+  const handleMerge = useCallback(async () => {
+    setIsMerging(true);
+    setMergeError(null);
+    try {
+      const result = await api.postProjectReleaseMerge(projectId);
+      if (result.merged) {
+        onChanged();
+      } else {
+        setMergeError(mergeReasonMessage(result.reason, result.detail));
+      }
+    } catch (err) {
+      setMergeError(err instanceof Error ? err.message : "Merge failed — try again.");
+    } finally {
+      setIsMerging(false);
+    }
+  }, [projectId, onChanged]);
+
+  // Hidden entirely when this repo isn't a release-please repo — but NOT
+  // collapsed together with "the token can't tell" (docs/github-
+  // integration.md's Current-limitations section already regrets doing
+  // exactly that for the CI dot: "no UI signal distinguishing 'no
+  // workflows' from 'no permission'"). "no-actions-scope" gets a small,
+  // dismissable-by-just-not-looking note instead of silence, so a repo that
+  // DOES use release-please but is missing `Actions: read` doesn't look
+  // indistinguishable from one that simply doesn't use it.
+  if (release.detection.kind === "not-configured") return null;
+  if (release.detection.kind === "no-actions-scope") {
+    return (
+      <div className="github-panel-section">
+        <div className="github-panel-section-title">Release</div>
+        <div className="github-panel-empty-row">
+          Can't check for a release-please workflow — the connected token lacks{" "}
+          <code>Actions: read</code>.
+        </div>
+      </div>
+    );
+  }
+
+  const pr = release.pr;
+  const canMerge =
+    pr !== null && !pr.draft && pr.mergeable === true && pr.mergeableState === "clean";
+
+  return (
+    <div className="github-panel-section">
+      <div className="github-panel-section-title">Release</div>
+      <div className="git-panel-sync-row">
+        <span className="git-panel-ahead-behind">
+          {pr ? (
+            <a
+              href={pr.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="github-panel-row-number"
+            >
+              #{pr.number}
+            </a>
+          ) : (
+            "No release PR open"
+          )}
+        </span>
+        <span className="git-panel-sync-controls">
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleRun}
+            disabled={isRunning}
+            title="Run release-please now, without waiting for the next push to the default branch"
+          >
+            {isRunning ? "⟳" : "▶"} Run
+          </button>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleMerge}
+            disabled={isMerging || !canMerge}
+            title={
+              pr === null
+                ? "No release PR open"
+                : canMerge
+                  ? "Merge this release"
+                  : `Not ready to merge (${pr.draft ? "draft" : pr.mergeableState})`
+            }
+          >
+            {isMerging ? "⟳" : "✓"} Merge
+          </button>
+        </span>
+      </div>
+      {pr && (
+        <div className="github-panel-branch-labels">
+          <span
+            className={`github-panel-ci-dot ${pr.ciStatus ? ciDotClass(pr.ciStatus) : "none"}`}
+          />
+          {pr.title}
+        </div>
+      )}
+      {runError && <div className="github-panel-empty-row github-panel-conflicts">{runError}</div>}
+      {mergeError && (
+        <div className="github-panel-empty-row github-panel-conflicts">{mergeError}</div>
+      )}
+    </div>
+  );
+}
+
 export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
   const [status, setStatus] = useState<GitHubStatus | null | undefined>(undefined);
   const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null | undefined>(undefined);
+  const [releaseStatus, setReleaseStatus] = useState<ProjectReleaseStatus | null | undefined>(
+    undefined,
+  );
+  // A dedicated trigger, separate from prsRefreshTrigger below — Run/Merge
+  // change release state Mullion itself just caused, which no webhook has
+  // pushed yet (a merge's `pull_request: closed` webhook event isn't
+  // correlated to anything release-specific — see the #744 plan's
+  // "explicitly out of scope" list). Bumping this alone re-fetches only
+  // the release section, not the PR/issue lists too.
+  const [releaseRefreshTrigger, setReleaseRefreshTrigger] = useState(0);
   const storePrs = useDashboardStore((s) => s.prsByProject[params.projectId]);
   const subscribeToGitHubProject = useDashboardStore((s) => s.subscribeToGitHubProject);
   const unsubscribeFromGitHubProject = useDashboardStore((s) => s.unsubscribeFromGitHubProject);
@@ -240,6 +434,13 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
     (s) => setPrsStatus(s ?? null),
     () => setPrsStatus(null),
     [params.projectId, prsRefreshTrigger],
+  );
+
+  useAsyncData(
+    () => api.getProjectRelease(params.projectId),
+    (s) => setReleaseStatus(s ?? null),
+    () => setReleaseStatus(null),
+    [params.projectId, prsRefreshTrigger, releaseRefreshTrigger],
   );
 
   // Subscribe to real-time GitHub WS updates for this project
@@ -273,6 +474,14 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
           <GitHubIcon size={14} />
           {status.repo.owner}/{status.repo.repo}
         </a>
+      )}
+
+      {releaseStatus && (
+        <ReleaseSection
+          projectId={params.projectId}
+          release={releaseStatus}
+          onChanged={() => setReleaseRefreshTrigger((n) => n + 1)}
+        />
       )}
 
       {effectivePrs && effectivePrs.prs.length > 0 && (

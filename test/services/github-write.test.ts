@@ -18,8 +18,17 @@ import {
   createPullRequestReview,
   fetchPullRequestReviewThreads,
   GitHubWriteScopeError,
+  listWorkflows,
+  findReleasePleaseWorkflow,
+  dispatchWorkflow,
+  findReleasePullRequest,
+  detectReleaseWorkflow,
+  clearReleaseWorkflowCacheForTests,
+  getCachedReleasePullRequestStatus,
+  invalidateReleaseCache,
+  clearReleasePrCacheForTests,
 } from "../../src/services/github-write.js";
-import { GitHubApiError } from "../../src/services/github.js";
+import { GitHubApiError, setRepoPRsStatus, computePRSummary } from "../../src/services/github.js";
 import {
   GitHubRateLimitError,
   isGitHubRateLimited,
@@ -46,11 +55,15 @@ describe("github-write service", () => {
     // #759's rate-limit budget is process-wide module state — reset it so a
     // rate limit recorded by one test never leaks into the next.
     resetGitHubRateLimitForTests();
+    clearReleaseWorkflowCacheForTests();
+    clearReleasePrCacheForTests();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     resetGitHubRateLimitForTests();
+    clearReleaseWorkflowCacheForTests();
+    clearReleasePrCacheForTests();
   });
 
   it("addLabels POSTs the labels array to the issue's labels endpoint", async () => {
@@ -644,6 +657,286 @@ describe("github-write service", () => {
     );
     const result = await findPullRequestByHead("tok", "owner", "repo", "owner:mullion/task-1");
     expect(result).toEqual({ number: 3, htmlUrl: "https://github.com/owner/repo/pull/3" });
+  });
+
+  it("listWorkflows GETs /actions/workflows and maps snake_case fields", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        total_count: 2,
+        workflows: [
+          { id: 1, name: "CI/CD", path: ".github/workflows/ci-cd.yml" },
+          { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+        ],
+      }),
+    );
+    const result = await listWorkflows("tok", "owner", "repo");
+    expect(result).toEqual([
+      { id: 1, name: "CI/CD", path: ".github/workflows/ci-cd.yml" },
+      { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/actions/workflows?per_page=100",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("findReleasePleaseWorkflow matches by path basename against known release-please filenames", () => {
+    const workflows = [
+      { id: 1, name: "CI/CD", path: ".github/workflows/ci-cd.yml" },
+      { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+    ];
+    expect(findReleasePleaseWorkflow(workflows)).toEqual({
+      id: 2,
+      name: "Release Please",
+      path: ".github/workflows/release-please.yml",
+    });
+  });
+
+  it("findReleasePleaseWorkflow returns null when no workflow matches a known filename", () => {
+    const workflows = [{ id: 1, name: "CI/CD", path: ".github/workflows/ci-cd.yml" }];
+    expect(findReleasePleaseWorkflow(workflows)).toBeNull();
+  });
+
+  it("dispatchWorkflow POSTs ref to the workflow's dispatches endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await dispatchWorkflow("tok", "owner", "repo", 2, "main");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/actions/workflows/2/dispatches",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ref: "main" }),
+      }),
+    );
+  });
+
+  it("dispatchWorkflow maps a 422 (no workflow_dispatch trigger) to a plain GitHubApiError, not a scope error", async () => {
+    fetchMock.mockResolvedValue(
+      textResponse(422, "Workflow does not have 'workflow_dispatch' trigger"),
+    );
+    await expect(dispatchWorkflow("tok", "owner", "repo", 2, "main")).rejects.toMatchObject({
+      name: "GitHubApiError",
+      statusCode: 422,
+    });
+  });
+
+  it("dispatchWorkflow maps a 403 to GitHubWriteScopeError, same as every REST write", async () => {
+    fetchMock.mockResolvedValue(textResponse(403, "Resource not accessible by integration"));
+    await expect(dispatchWorkflow("tok", "owner", "repo", 2, "main")).rejects.toBeInstanceOf(
+      GitHubWriteScopeError,
+    );
+  });
+
+  it("findReleasePullRequest GETs open PRs against base and filters to the release-please branch prefix", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [
+        {
+          number: 11,
+          html_url: "https://github.com/owner/repo/pull/11",
+          head: { ref: "some-human-branch" },
+          title: "unrelated PR",
+        },
+        {
+          number: 12,
+          html_url: "https://github.com/owner/repo/pull/12",
+          head: { ref: "release-please--branches--main--components--repo" },
+          title: "chore(main): release 0.2.45",
+        },
+      ]),
+    );
+    const result = await findReleasePullRequest("tok", "owner", "repo", "main");
+    expect(result).toEqual({
+      number: 12,
+      htmlUrl: "https://github.com/owner/repo/pull/12",
+      headRef: "release-please--branches--main--components--repo",
+      title: "chore(main): release 0.2.45",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls?state=open&base=main&sort=created&direction=desc",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("findReleasePullRequest returns null when no open PR has a release-please head branch", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [
+        {
+          number: 11,
+          html_url: "https://github.com/owner/repo/pull/11",
+          head: { ref: "some-human-branch" },
+          title: "unrelated PR",
+        },
+      ]),
+    );
+    expect(await findReleasePullRequest("tok", "owner", "repo", "main")).toBeNull();
+  });
+
+  describe("detectReleaseWorkflow", () => {
+    it("returns 'found' with the matching workflow", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [
+            { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+          ],
+        }),
+      );
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "found",
+        workflow: { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+      });
+    });
+
+    it("returns 'not-configured' when the list succeeds but nothing matches", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [{ id: 1, name: "CI/CD", path: ".github/workflows/ci-cd.yml" }],
+        }),
+      );
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "not-configured",
+      });
+    });
+
+    it("returns 'no-actions-scope' — not a thrown error — when the token can't list workflows", async () => {
+      fetchMock.mockResolvedValue(textResponse(403, "Resource not accessible by integration"));
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "no-actions-scope",
+      });
+    });
+
+    // Regression: a rate-limited 429 (or a 403 that's actually a rate limit,
+    // classified before the write-scope branch — see githubRequest's own
+    // doc comment) must NOT collapse to "no-actions-scope". Doing so is
+    // exactly the misdiagnosis #759 exists to prevent, one layer up — a
+    // process-wide rate limit the PR poller opened would otherwise make the
+    // Release section silently vanish for every project, for a token that
+    // actually has every scope it needs.
+    it("rethrows a rate limit rather than reporting it as no-actions-scope", async () => {
+      fetchMock.mockResolvedValue(textResponse(429, "rate limited", { "retry-after": "30" }));
+      await expect(detectReleaseWorkflow("tok", "owner", "repo")).rejects.toBeInstanceOf(
+        GitHubRateLimitError,
+      );
+    });
+
+    it("rethrows a plain 5xx rather than reporting it as no-actions-scope", async () => {
+      fetchMock.mockResolvedValue(textResponse(500, "server error"));
+      await expect(detectReleaseWorkflow("tok", "owner", "repo")).rejects.toMatchObject({
+        name: "GitHubApiError",
+        statusCode: 500,
+      });
+    });
+
+    it("caches a 'found' result — a second call within the TTL makes no new request", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [
+            { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+          ],
+        }),
+      );
+      await detectReleaseWorkflow("tok", "owner", "repo");
+      const callsAfterFirst = fetchMock.mock.calls.length;
+      await detectReleaseWorkflow("tok", "owner", "repo");
+      expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it("does NOT cache a 'no-actions-scope' result — the very next call retries", async () => {
+      fetchMock.mockResolvedValue(textResponse(403, "Resource not accessible by integration"));
+      await detectReleaseWorkflow("tok", "owner", "repo");
+      const callsAfterFirst = fetchMock.mock.calls.length;
+      await detectReleaseWorkflow("tok", "owner", "repo");
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    });
+  });
+
+  describe("getCachedReleasePullRequestStatus", () => {
+    // getDefaultBranch -> findReleasePullRequest -> getPullRequestByNumber,
+    // in that fixed order — three sequential mocks matching the call order.
+    function mockAssemblySequence() {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { default_branch: "main" }));
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [
+          {
+            number: 12,
+            html_url: "https://github.com/owner/repo/pull/12",
+            head: { ref: "release-please--branches--main--components--repo" },
+            title: "chore(main): release 0.2.46",
+          },
+        ]),
+      );
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          number: 12,
+          html_url: "https://github.com/owner/repo/pull/12",
+          node_id: "PR_release",
+          draft: false,
+          head: { sha: "deadbeef", ref: "release-please--branches--main--components--repo" },
+          base: { ref: "main" },
+          title: "chore(main): release 0.2.46",
+          state: "open",
+          merged: false,
+          mergeable: true,
+          mergeable_state: "clean",
+        }),
+      );
+    }
+
+    it("assembles the release PR's full status, merging in the poller's cached ciStatus", async () => {
+      mockAssemblySequence();
+      const cachedPr = {
+        number: 12,
+        title: "chore(main): release 0.2.46",
+        htmlUrl: "https://github.com/owner/repo/pull/12",
+        author: null,
+        headSha: "deadbeef",
+        headBranch: "release-please--branches--main--components--repo",
+        baseBranch: "main",
+        ciStatus: "success" as const,
+        actionsRuns: [],
+      };
+      setRepoPRsStatus("owner", "repo", {
+        prs: [cachedPr],
+        prSummary: computePRSummary([cachedPr]),
+      });
+
+      const result = await getCachedReleasePullRequestStatus("tok", "owner", "repo");
+      expect(result).toEqual({
+        number: 12,
+        htmlUrl: "https://github.com/owner/repo/pull/12",
+        title: "chore(main): release 0.2.46",
+        headRef: "release-please--branches--main--components--repo",
+        headSha: "deadbeef",
+        draft: false,
+        mergeable: true,
+        mergeableState: "clean",
+        ciStatus: "success",
+      });
+    });
+
+    it("returns null when no release PR is open, without a fourth request", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { default_branch: "main" }));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
+      expect(await getCachedReleasePullRequestStatus("tok", "owner", "repo")).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("caches the result — a second call within the TTL makes no new requests", async () => {
+      mockAssemblySequence();
+      await getCachedReleasePullRequestStatus("tok", "owner", "repo");
+      const callsAfterFirst = fetchMock.mock.calls.length;
+      await getCachedReleasePullRequestStatus("tok", "owner", "repo");
+      expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it("invalidateReleaseCache drops the cache — the next call re-fetches", async () => {
+      mockAssemblySequence();
+      await getCachedReleasePullRequestStatus("tok", "owner", "repo");
+      const callsAfterFirst = fetchMock.mock.calls.length;
+
+      invalidateReleaseCache("owner", "repo");
+      mockAssemblySequence();
+      await getCachedReleasePullRequestStatus("tok", "owner", "repo");
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    });
   });
 
   it("a 403 throws GitHubWriteScopeError naming the missing scope", async () => {

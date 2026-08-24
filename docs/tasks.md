@@ -1736,3 +1736,13 @@ extensive design comments.
   GitHub sync section's blocker-close read-back above requires a delivered
   `issues`/`closed` webhook or the next poll's own read-back to fire; there
   is no separate faster path for this specific case.
+- **The pipeline still ends at a merged task PR, not a merged release.**
+  "Merge on approve" (above) lands a task's own PR on the default branch —
+  it does not trigger, watch, or merge the release-please PR that push then
+  produces; a human still merges that one by hand. The GitHub panel's
+  Release section (`#744`) gives that human a one-click Run/Merge surface
+  instead of leaving them at a GitHub-native PR, but it's manual — there is
+  no per-project "release automatically once tasks land" toggle yet, no
+  post-merge trigger, and no durable release-failure field on the task row
+  (`#744`'s own tracking issue covers that remaining, deliberately deferred
+  half).

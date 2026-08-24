@@ -3,8 +3,25 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubPanel } from "./GitHubPanel.js";
-import type { GitHubJob, GitHubLogResponse, GitHubPRsStatus, GitHubStatus } from "./api/index.js";
+import type {
+  GitHubJob,
+  GitHubLogResponse,
+  GitHubPRsStatus,
+  GitHubStatus,
+  ProjectReleaseStatus,
+} from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+
+// Every test below that doesn't care about the Release section (the vast
+// majority) still triggers GitHubPanel's own GET .../release fetch — this
+// is the "not a release-please repo" default every mock in this file falls
+// back to, so ReleaseSection renders nothing and existing assertions about
+// the PR/issue sections stay unaffected. The Release-specific describe
+// block below overrides this per test.
+const RELEASE_NOT_CONFIGURED: ProjectReleaseStatus = {
+  detection: { kind: "not-configured" },
+  pr: null,
+};
 
 const STATUS: GitHubStatus = {
   repo: { owner: "acme", repo: "widgets", htmlUrl: "https://github.com/acme/widgets" },
@@ -71,6 +88,9 @@ function mockFetch(
       const p = "prs" in status ? status.prs : PRS_EMPTY;
       return Promise.resolve(jsonResponse(200, p));
     }
+    if (url.endsWith("/release")) {
+      return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
+    }
     return Promise.resolve(jsonResponse(200, status.status));
   });
 }
@@ -121,6 +141,9 @@ function mockFetchWithAccordion(opts: {
   return vi.fn((url: string) => {
     if (url.endsWith("/github/prs")) {
       return Promise.resolve(jsonResponse(200, PRS_WITH_RUN));
+    }
+    if (url.endsWith("/release")) {
+      return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
     }
     if (url.includes("/jobs/") && url.endsWith("/logs")) {
       if (opts.log === "error") return Promise.reject(new Error("log fetch failed"));
@@ -258,6 +281,8 @@ describe("GitHubPanel", () => {
       "fetch",
       vi.fn((url: string) => {
         if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, PRS_WITH_RUN));
+        if (url.endsWith("/release"))
+          return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
         if (url.includes("/jobs/") && url.endsWith("/logs")) {
           return logGate.promise.then((body) => jsonResponse(200, body));
         }
@@ -313,5 +338,187 @@ describe("GitHubPanel", () => {
     await userEvent.click(jobHeader.closest("button")!);
 
     expect(await screen.findByText("No log output")).toBeInTheDocument();
+  });
+
+  describe("Release section (#744)", () => {
+    const RELEASE_WORKFLOW = {
+      id: 2,
+      name: "Release Please",
+      path: ".github/workflows/release-please.yml",
+    };
+    const RELEASE_NO_PR: ProjectReleaseStatus = {
+      detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+      pr: null,
+    };
+
+    function releasePrFixture(
+      overrides: Partial<NonNullable<ProjectReleaseStatus["pr"]>> = {},
+    ): NonNullable<ProjectReleaseStatus["pr"]> {
+      return {
+        number: 12,
+        htmlUrl: "https://github.com/acme/widgets/pull/12",
+        title: "chore(main): release 0.2.46",
+        headRef: "release-please--branches--main--components--widgets",
+        headSha: "deadbeef",
+        draft: false,
+        mergeable: true,
+        mergeableState: "clean",
+        ciStatus: "success",
+        ...overrides,
+      };
+    }
+
+    function mockFetchRelease(opts: {
+      release: ProjectReleaseStatus;
+      run?: () => Response;
+      merge?: () => Response;
+    }) {
+      return vi.fn((url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, PRS_EMPTY));
+        if (url.endsWith("/release/run") && method === "POST") {
+          return Promise.resolve((opts.run ?? (() => jsonResponse(200, { dispatched: true })))());
+        }
+        if (url.endsWith("/release/merge") && method === "POST") {
+          return Promise.resolve((opts.merge ?? (() => jsonResponse(200, { merged: true })))());
+        }
+        if (url.endsWith("/release")) return Promise.resolve(jsonResponse(200, opts.release));
+        return Promise.resolve(jsonResponse(200, STATUS));
+      });
+    }
+
+    it("renders nothing when the repo has no release-please workflow", async () => {
+      vi.stubGlobal("fetch", mockFetchRelease({ release: RELEASE_NOT_CONFIGURED }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("acme/widgets");
+      expect(screen.queryByText("Release")).not.toBeInTheDocument();
+    });
+
+    // Regression: "not-configured" and "no-actions-scope" must NOT collapse
+    // to the same "render nothing" outcome — that's the exact ambiguity
+    // docs/github-integration.md already regrets for the CI dot ("no UI
+    // signal distinguishing 'no workflows' from 'no permission'"). A repo
+    // that DOES use release-please but has a scope-limited token should
+    // say so, not look identical to one that simply doesn't use it.
+    it("shows a note, not nothing, when the token can't check for a release-please workflow", async () => {
+      const release: ProjectReleaseStatus = { detection: { kind: "no-actions-scope" }, pr: null };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 27 }} />);
+
+      expect(await screen.findByText("Release")).toBeInTheDocument();
+      expect(screen.getByText(/Actions: read/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Run/ })).not.toBeInTheDocument();
+    });
+
+    it("shows Run enabled and Merge disabled when no release PR is open", async () => {
+      vi.stubGlobal("fetch", mockFetchRelease({ release: RELEASE_NO_PR }));
+      render(<GitHubPanel params={{ projectId: 21 }} />);
+
+      await screen.findByText("Release");
+      expect(screen.getByText("No release PR open")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Run/ })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /Merge/ })).toBeDisabled();
+    });
+
+    it("disables Merge and names the mergeableState in its title when the PR isn't clean", async () => {
+      const release: ProjectReleaseStatus = {
+        detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+        pr: releasePrFixture({ mergeableState: "behind" }),
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 22 }} />);
+
+      await screen.findByText("Release");
+      const mergeButton = screen.getByRole("button", { name: /Merge/ });
+      expect(mergeButton).toBeDisabled();
+      expect(mergeButton.getAttribute("title")).toContain("behind");
+    });
+
+    it("enables Merge for a clean PR, and a successful merge re-fetches release status", async () => {
+      const cleanRelease: ProjectReleaseStatus = {
+        detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+        pr: releasePrFixture(),
+      };
+      const mergedRelease: ProjectReleaseStatus = {
+        detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+        pr: null,
+      };
+      let releaseCallCount = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          const method = init?.method ?? "GET";
+          if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, PRS_EMPTY));
+          if (url.endsWith("/release/merge") && method === "POST") {
+            return Promise.resolve(jsonResponse(200, { merged: true }));
+          }
+          if (url.endsWith("/release")) {
+            releaseCallCount++;
+            return Promise.resolve(
+              jsonResponse(200, releaseCallCount === 1 ? cleanRelease : mergedRelease),
+            );
+          }
+          return Promise.resolve(jsonResponse(200, STATUS));
+        }),
+      );
+      const user = userEvent.setup();
+      render(<GitHubPanel params={{ projectId: 23 }} />);
+
+      const mergeButton = await screen.findByRole("button", { name: /Merge/ });
+      expect(mergeButton).toBeEnabled();
+      await user.click(mergeButton);
+
+      expect(await screen.findByText("No release PR open")).toBeInTheDocument();
+    });
+
+    it("clicking Run dispatches the workflow", async () => {
+      const runSpy = vi.fn(() => jsonResponse(200, { dispatched: true }));
+      vi.stubGlobal("fetch", mockFetchRelease({ release: RELEASE_NO_PR, run: runSpy }));
+      const user = userEvent.setup();
+      render(<GitHubPanel params={{ projectId: 24 }} />);
+
+      const runButton = await screen.findByRole("button", { name: /Run/ });
+      await user.click(runButton);
+
+      expect(runSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders a refusal banner when Run is refused", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetchRelease({
+          release: RELEASE_NO_PR,
+          run: () => jsonResponse(200, { dispatched: false, reason: "no-dispatch-trigger" }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<GitHubPanel params={{ projectId: 25 }} />);
+
+      const runButton = await screen.findByRole("button", { name: /Run/ });
+      await user.click(runButton);
+
+      expect(await screen.findByText(/doesn't accept manual runs yet/)).toBeInTheDocument();
+    });
+
+    it("renders a refusal banner when Merge is refused", async () => {
+      const release: ProjectReleaseStatus = {
+        detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+        pr: releasePrFixture(),
+      };
+      vi.stubGlobal(
+        "fetch",
+        mockFetchRelease({
+          release,
+          merge: () => jsonResponse(200, { merged: false, reason: "dirty" }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<GitHubPanel params={{ projectId: 26 }} />);
+
+      const mergeButton = await screen.findByRole("button", { name: /Merge/ });
+      await user.click(mergeButton);
+
+      expect(await screen.findByText(/merge conflict/)).toBeInTheDocument();
+    });
   });
 });

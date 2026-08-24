@@ -11,6 +11,9 @@ import type {
   GitHubIntegration,
   SetGitHubAppResult,
   DeviceFlowStatus,
+  ProjectReleaseStatus,
+  ReleaseRunResult,
+  ReleaseMergeResult,
 } from "./types.js";
 
 export const githubApi = {
@@ -43,6 +46,23 @@ export const githubApi = {
     request<GitHubLogResponse>(
       `/api/projects/${projectId}/github/actions/${runId}/jobs/${jobId}/logs${lines ? `?lines=${lines}` : ""}`,
     ),
+
+  // #744 — release-please detection + the open release PR's status, for
+  // GitHubPanel's Release section. undefined for the 204 "not applicable"
+  // response (no github.com remote / no token), same convention as
+  // getProjectGitHub above.
+  getProjectRelease: (projectId: number) =>
+    request<ProjectReleaseStatus | undefined>(`/api/projects/${projectId}/release`),
+
+  // Both of these follow the GitPullResult convention (see
+  // frontend/src/api/git.ts's own doc comment): a domain refusal
+  // (`dispatched`/`merged: false` with a `reason`) is a normal 200, not a
+  // thrown ApiError — only a genuine HTTP error throws.
+  postProjectReleaseRun: (projectId: number) =>
+    request<ReleaseRunResult>(`/api/projects/${projectId}/release/run`, { method: "POST" }),
+
+  postProjectReleaseMerge: (projectId: number) =>
+    request<ReleaseMergeResult>(`/api/projects/${projectId}/release/merge`, { method: "POST" }),
 
   enableGitHubWebhooks: () =>
     request<WebhookRegistrationResult>("/api/integrations/github/webhooks", {

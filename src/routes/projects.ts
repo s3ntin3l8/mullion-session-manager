@@ -56,6 +56,7 @@ import {
   computePRSummary,
   getWorkflowRunJobs,
   getJobLogs,
+  getDefaultBranch,
 } from "../services/github.js";
 import {
   buildWebhookUrl,
@@ -63,6 +64,23 @@ import {
   registerProjectWebhook,
   unregisterHook,
 } from "../services/github-webhook.js";
+import {
+  detectReleaseWorkflow,
+  dispatchWorkflow,
+  findReleasePullRequest,
+  getCachedReleasePullRequestStatus,
+  getPullRequestByNumber,
+  invalidateReleaseCache,
+  mergePullRequest,
+} from "../services/github-write.js";
+import { classifyMergeReadiness } from "../services/merge-readiness.js";
+import type {
+  ProjectReleaseStatus,
+  ReleaseDetectionResult,
+  ReleasePullRequestStatus,
+  ReleaseRunResult,
+  ReleaseMergeResult,
+} from "../shared/types.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 import {
   getComposeServices,
@@ -1328,6 +1346,241 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
       return { log: null, job, truncated: false, lineCount: 0 };
+    },
+  );
+
+  // #744 — release-please detection + the open release PR's status, for the
+  // GitHubPanel "Release" section. Uses the same 204-degrades-gracefully
+  // preamble as the other GitHub routes above; unlike them, `detection`
+  // itself is a discriminated result rather than a 204 (see
+  // ReleaseDetectionResult's own doc comment for why "not configured" and
+  // "token can't list workflows" must not collapse into the same shape).
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/release",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "release status",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+
+      let detection: ReleaseDetectionResult;
+      try {
+        detection = await detectReleaseWorkflow(token, repoRef.owner, repoRef.repo);
+      } catch (err) {
+        // detectReleaseWorkflow only ever throws a NON-scope failure now
+        // (a scope problem resolves to `no-actions-scope` instead) — a rate
+        // limit, a transient 5xx, a network error. Same degrade-to-204
+        // posture as GET .../github above for exactly that class of
+        // failure, rather than a 500.
+        if (!(err instanceof GitHubApiError)) throw err;
+        app.log.warn(
+          { err, owner: repoRef.owner, repo: repoRef.repo },
+          "release workflow detection unavailable",
+        );
+        reply.code(204);
+        return;
+      }
+
+      let pr: ReleasePullRequestStatus | null = null;
+      if (detection.kind === "found") {
+        try {
+          // Cached (getCachedReleasePullRequestStatus, github-write.ts) —
+          // the frontend refetches this route on every /ws/github frame
+          // (pr/issue/ci/push/release, not just release-relevant ones), so
+          // an uncached assembly here would spend 3 live calls per frame
+          // against the process-wide rate-limit budget the PR poller and
+          // every Task Master write also share.
+          pr = await getCachedReleasePullRequestStatus(token, repoRef.owner, repoRef.repo);
+        } catch (err) {
+          if (!(err instanceof GitHubApiError)) throw err;
+          app.log.warn(
+            { err, owner: repoRef.owner, repo: repoRef.repo },
+            "release PR status unavailable",
+          );
+        }
+      }
+
+      const result: ProjectReleaseStatus = { detection, pr };
+      return result;
+    },
+  );
+
+  // #744 — dispatches the repo's release-please workflow (the "Run" button).
+  // A domain refusal (no workflow, no workflow_dispatch trigger, or the
+  // dispatch call itself failing) is a normal 200 with `{dispatched: false,
+  // reason}`, same "refusal is 200, only a real HTTP error throws" contract
+  // as POST .../git-pull — see frontend/src/api/git.ts's doc comment on
+  // that convention. Needs a `"dispatch"`-scoped token (`actions: write`),
+  // which the read-scoped token from loadProjectRepoContext's default does
+  // NOT carry — resolved separately below.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/release/run",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "release run",
+        resolveToken: (ref) => resolveGitHubToken(app, ref, "dispatch"),
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+
+      // Detection lives in the same try as the dispatch itself now — a
+      // transient detectReleaseWorkflow failure (a rate limit, a 5xx) is a
+      // "couldn't start a release run" outcome exactly like a dispatch
+      // failure is, not a 500. Only "found"/"not-configured" (i.e. the
+      // call actually succeeded) get a meaningful reason distinct from
+      // dispatch-failed; see the loop-relative comment below.
+      try {
+        const detection = await detectReleaseWorkflow(token, repoRef.owner, repoRef.repo);
+        if (detection.kind !== "found") {
+          const result: ReleaseRunResult = { dispatched: false, reason: "no-workflow" };
+          return result;
+        }
+
+        const defaultBranch = await getDefaultBranch(token, repoRef.owner, repoRef.repo);
+        await dispatchWorkflow(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          detection.workflow.id,
+          defaultBranch,
+        );
+        // Best-effort freshness: a dispatched run typically takes a while
+        // to open its PR, so this rarely has anything new to show yet, but
+        // it costs nothing and covers the fast case.
+        invalidateReleaseCache(repoRef.owner, repoRef.repo);
+        const result: ReleaseRunResult = { dispatched: true };
+        return result;
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        const detail = err.message;
+        // GitHub 422s a workflow with no workflow_dispatch trigger — worth
+        // its own reason so the UI can say "add workflow_dispatch: to your
+        // release workflow" rather than a generic failure.
+        const reason = err.statusCode === 422 ? "no-dispatch-trigger" : "dispatch-failed";
+        app.log.warn(
+          { err, owner: repoRef.owner, repo: repoRef.repo },
+          "release-please run failed",
+        );
+        const result: ReleaseRunResult = { dispatched: false, reason, detail };
+        return result;
+      }
+    },
+  );
+
+  // #744 — merges the open release-please PR (the "Merge" button), gated
+  // hard on GitHub's own mergeability verdict via classifyMergeReadiness —
+  // never a force/override path. Takes NO pr number/sha from the client at
+  // all: the PR to merge is always re-resolved here via
+  // findReleasePullRequest, which itself only ever returns a PR whose head
+  // branch carries release-please's own RELEASE_PLEASE_BRANCH_PREFIX — so
+  // this endpoint can never be pointed at an arbitrary PR by construction,
+  // not by a separate check on its result.
+  //
+  // "behind" deliberately does NOT call updatePullRequestBranch, unlike the
+  // task-PR merge-on-approve sweep (task-reconciler.ts's attemptMerge):
+  // release-please owns and force-pushes this branch on every run, so a
+  // merge-base update either gets clobbered mid-flight or races the next
+  // run — and worse, the branch's version bump/CHANGELOG were computed from
+  // the commits present when release-please last generated it, so a
+  // squash-merge after updating the branch would tag a release whose
+  // CHANGELOG omits commits already on the base branch (they'd reappear a
+  // version late once build-tarball ships the code that's actually on the
+  // updated branch). The correct remedy for "behind" here is re-running
+  // release-please (the /release/run route above), which regenerates the
+  // branch off the current default branch with the right bump — so this
+  // just refuses and points the caller at Run. Same reasoning rules out an
+  // auto-rebase attempt on "dirty": attemptAutoRebase is task-PR-specific
+  // and spawns a worker into the task's own worktree, which a release PR
+  // doesn't have.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/release/merge",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      // Deliberately the default "read"-scoped token (loadProjectRepoContext
+      // falls back to resolveGitHubToken(..., "read") when no override is
+      // given) — every call below except the merge itself is a read, and
+      // WRITE_PERMISSIONS (github-app.ts) doesn't grant `metadata`, which
+      // GET /repos/{o}/{r} (getDefaultBranch) needs. A separate write-scoped
+      // token is resolved right before the one call that needs it.
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "release merge",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+
+      try {
+        const defaultBranch = await getDefaultBranch(token, repoRef.owner, repoRef.repo);
+        const summary = await findReleasePullRequest(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          defaultBranch,
+        );
+        if (!summary) {
+          const result: ReleaseMergeResult = { merged: false, reason: "no-release-pr" };
+          return result;
+        }
+
+        const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, summary.number);
+        const readiness = classifyMergeReadiness(pr);
+
+        switch (readiness) {
+          case "already-done": {
+            invalidateReleaseCache(repoRef.owner, repoRef.repo);
+            const result: ReleaseMergeResult = { merged: true };
+            return result;
+          }
+          case "clean": {
+            const writeToken = await resolveGitHubToken(app, repoRef, "write");
+            if (!writeToken) {
+              const result: ReleaseMergeResult = {
+                merged: false,
+                reason: "merge-failed",
+                detail: "No write-scoped GitHub token available",
+              };
+              return result;
+            }
+            await mergePullRequest(writeToken, repoRef.owner, repoRef.repo, summary.number, {
+              sha: pr.headSha,
+              commitTitle: pr.title,
+            });
+            // The PR this cache entry was holding just closed — drop it so
+            // the next GET .../release reflects that immediately rather
+            // than showing a stale "clean, ready to merge" PR for up to
+            // RELEASE_PR_CACHE_TTL_MS.
+            invalidateReleaseCache(repoRef.owner, repoRef.repo);
+            const result: ReleaseMergeResult = { merged: true };
+            return result;
+          }
+          case "behind":
+          case "blocked":
+          case "unstable":
+          case "dirty":
+          case "computing": {
+            const result: ReleaseMergeResult = { merged: false, reason: readiness };
+            return result;
+          }
+        }
+      } catch (err) {
+        // Covers a merge call itself failing — including a 405 ("not
+        // mergeable") or 409 (head-sha moved) racing this same read, both
+        // ordinary expected outcomes here, not alarms (mergePullRequest's
+        // own doc comment).
+        if (!(err instanceof GitHubApiError)) throw err;
+        app.log.warn({ err, owner: repoRef.owner, repo: repoRef.repo }, "release PR merge failed");
+        const result: ReleaseMergeResult = {
+          merged: false,
+          reason: "merge-failed",
+          detail: err.message,
+        };
+        return result;
+      }
     },
   );
 

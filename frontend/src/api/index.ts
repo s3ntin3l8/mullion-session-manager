@@ -145,6 +145,14 @@ export type {
   AppSettings,
   SettingsPatch,
   PushSubscriptionPayload,
+  ProjectReleaseStatus,
+  ReleaseDetectionResult,
+  ReleaseWorkflowInfo,
+  ReleasePullRequestStatus,
+  ReleaseRunReason,
+  ReleaseRunResult,
+  ReleaseMergeReason,
+  ReleaseMergeResult,
 } from "./types.js";
 
 export { ApiError, AuthExpiredError } from "./client.js";

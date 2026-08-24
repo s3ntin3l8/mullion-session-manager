@@ -577,6 +577,12 @@ Once the Task Master is operational, the remaining frontier is **team-scale orch
 - Task dependencies — a task blocks on another's completion
 - Scheduled/recurring tasks — e.g. "run dependency update every Monday"
 - Non-GitHub backends — GitLab, Bitbucket, Jira, Linear
+- Automatic versioning after tasks land — the manual half (`#744`) ships a
+  GitHub panel Release section (detect release-please, trigger a run,
+  merge the release PR once green); the automatic half — a per-project
+  "release after tasks land" toggle and a post-merge trigger closing the
+  loop from task PR merge through release-please through a merged release
+  — remains open on `#744`.
 
 These are not yet scoped into phases.
 
