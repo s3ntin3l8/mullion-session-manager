@@ -71,6 +71,25 @@ labels/comments on its GitHub issue, the task itself will say why. If
 you're setting this up ahead of time, save yourself that round trip and
 provision write access up front.
 
+#### Release (additional scope, #744)
+
+A repo whose `.github/workflows/` includes a `workflow_dispatch`-triggered
+release-please workflow gets a **Release** section in the GitHub panel: it
+shows the open `chore(main): release` PR (if any), a **Run** button that
+dispatches the workflow on demand instead of waiting for the next push to
+the default branch, and a **Merge** button gated hard on GitHub's own
+mergeability verdict — never a force/override path.
+
+**Run** needs `Actions: write` (classic PAT: the `workflow` scope) on top of
+whatever scope you've already provisioned above — none of the read/write
+sets do. Without it the button still renders (detecting the workflow only
+needs `Actions: read`, already covered by the base scope), but every click
+fails; the panel doesn't currently distinguish that from any other dispatch
+failure (see Current limitations below — the same gap this doc already
+notes for the CI dot). **Merge** reuses whatever write scope Task Master's
+own **Pull requests** permission already provisioned above; no separate
+grant needed.
+
 ### Device flow ("Connect with GitHub" button, opt-in)
 
 This requires one-time setup by whoever operates the Mullion instance:
@@ -121,9 +140,11 @@ Configuring one:
 1. Register a **GitHub App** at
    [github.com/settings/apps](https://github.com/settings/apps) (or your
    org's equivalent) with **Issues: Read & write**, **Pull requests: Read &
-   write**, **Contents: Read & write**, **Actions: Read-only**, and
-   **Metadata: Read-only** permissions. No webhook subscription is needed
-   here — that's the classic-App webhook path above.
+   write**, **Contents: Read & write**, **Actions: Read & write** (#744 —
+   `Read-only` covers the CI dot and repo-status widget, but not
+   dispatching the release-please workflow), and **Metadata: Read-only**
+   permissions. No webhook subscription is needed here — that's the
+   classic-App webhook path above.
 2. Generate a private key for it and install the App on whichever
    repositories/orgs it should cover.
 3. `PUT /api/integrations/github/app` with `{ "appId": "<numeric App id>",
@@ -144,7 +165,7 @@ Configuring one:
    never the private key itself, which no endpoint echoes back.
 
 Once configured, a call for `owner/repo` mints a short-lived (~1h)
-installation token scoped to exactly that repository and one of two
+installation token scoped to exactly that repository and one of three
 permission sets — never the App's full installation grant, and never bound
 to a single issue (a GitHub App installation token can't scope to an
 individual issue, only a repository):
@@ -153,12 +174,18 @@ individual issue, only a repository):
   writes and its issue-label ingest reads.
 - **read** — Actions, Metadata, Pull requests — used for the repo-status
   widget and PR/CI poller.
+- **dispatch** (#744) — Actions: write, Metadata — used only for the
+  release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
+  which needs `actions: write`, a permission neither of the other two sets
+  grants. Deliberately its own set rather than folded into `write`: Task
+  Master's ordinary issue/PR/push writes have no business holding an
+  Actions-write scope.
 
-The two are minted and cached independently, so an installation that only
+The three are minted and cached independently, so an installation that only
 granted the write set (e.g. one approved before Actions/Metadata were added
 to the App definition) still gets Task Master's writes covered while the
-read-scoped calls fall back to the PAT. If the App isn't installed on a
-given `owner`, a mint 422s because the installation never granted that
+read- and dispatch-scoped calls fall back to the PAT. If the App isn't
+installed on a given `owner`, a mint 422s because the installation never granted that
 permission set, or the mint fails outright (a transient GitHub outage), the
 call transparently falls back to the PAT/OAuth token instead of failing
 outright. The fallback itself is quiet — it's a debug/warn server log
@@ -409,12 +436,25 @@ performs its own HMAC verification and does not require app-level auth.
 | `/api/integrations/github/webhooks`        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                                                                                                                                                     |
 | `/api/integrations/github/webhooks`        | DELETE | Disable webhooks: tears down registered hooks                                                                                                                                                                                                                     |
 | `/api/projects/:id/github`                 | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                                                                                                                                                              |
+| `/api/projects/:id/release`                | GET    | release-please detection + the open release PR's status (#744). Rate-limited 30/min                                                                                                                                                                               |
+| `/api/projects/:id/release/run`            | POST   | Dispatches the release-please workflow. Needs a `dispatch`-scoped token. Rate-limited 10/min                                                                                                                                                                      |
+| `/api/projects/:id/release/merge`          | POST   | Merges the open release PR, gated hard on GitHub's own mergeability verdict. Rate-limited 10/min                                                                                                                                                                  |
 
 `GET /api/projects/:id/github` degrades gracefully rather than erroring: it
 returns 204 for no github.com remote, no connected account, or any GitHub
 API failure (private repo the token can't see, GitHub rate-limited, etc.).
 The only real error status is an unreachable _remote host_ on a multi-host
 project (see [`multi-host.md`](multi-host.md)) — 503.
+
+`GET .../release` follows the same 204 posture, but unlike `/github` its
+detection result is never collapsed into the 204 — see Current limitations
+below for why that distinction exists. `POST .../release/run` and
+`POST .../release/merge` follow a different convention from every other
+write in this table: a domain refusal (no workflow, checks not green, the
+branch moved) is a normal `200 { dispatched: false, reason }` /
+`{ merged: false, reason }`, not a thrown error — only a genuine HTTP
+failure does. Same posture as `POST /api/projects/:id/git-pull` (see
+[`git-panel.md`](git-panel.md)).
 
 ## Configuration reference
 
@@ -456,6 +496,27 @@ once did.
   updates in real time and the poller drops to a slower quiet cycle.
 - If the connected token lacks `Actions: read`, the CI dot just stays empty
   — there's no UI signal distinguishing "no workflows" from "no permission."
+  The Release section (#744) deliberately does NOT repeat this: its
+  detection result distinguishes `"not-configured"` (no release-please
+  workflow) from `"no-actions-scope"` (the token couldn't even list
+  workflows) — see `ProjectReleaseStatus` in `src/shared/types.ts`. Detection
+  matches the workflow file's basename against `release-please.yml`/`.yaml`
+  only — a repo whose release-please workflow lives under a different
+  filename reports `"not-configured"` too, indistinguishable from actually
+  having no release-please workflow at all. This is deliberate (a generic
+  `release.yml` is too common a name for something unrelated to safely
+  match), but it means renaming the workflow file away from the
+  release-please-action default silently drops the Release section.
+- The Release section's **Run** button is hidden only when the repo has no
+  detectable release-please workflow — it does NOT hide itself when the
+  token can list workflows but lacks the separate `Actions: write` dispatch
+  scope; every click just fails with a `dispatch-failed` reason. Symmetric
+  with the CI-dot gap above, not yet fixed for either.
+- `workflow_dispatch` only exists on a workflow file once that file is on
+  the repo's default branch — the Run button 422s with `reason:
+"no-dispatch-trigger"` for a repo whose release workflow hasn't picked up
+  a `workflow_dispatch:` trigger yet (including this repo itself, before
+  the PR that added it merges).
 - GitHub Enterprise and non-github.com remotes aren't supported.
 - `.../dependencies/blocked_by` and `.../dependencies/blocking` (`#667`)
   are each capped at one page (100 items), matching the issue/PR listing

@@ -247,6 +247,26 @@ describe("github-app (#489)", () => {
         pull_requests: "read",
       });
     });
+
+    // #744 — a third permission set for the release-please dispatch trigger.
+    // Deliberately its own set, not folded into WRITE_PERMISSIONS: Task
+    // Master's ordinary issue/PR/push writes have no business holding
+    // `actions: write`.
+    it("requests the dispatch permission set for scope: 'dispatch'", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets", "dispatch");
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body as string);
+      expect(body.permissions).toEqual({
+        actions: "write",
+        metadata: "read",
+      });
+    });
   });
 
   describe("getInstallationToken", () => {
@@ -385,6 +405,33 @@ describe("github-app (#489)", () => {
       const second = await getInstallationToken("123", privateKey, "acme", "widgets", "read");
       expect(second.token).toBeNull();
       // No second mint attempt — served from the negative cache.
+      expect(mintAttempts).toBe(1);
+    });
+
+    // #744 — same negative-cache-then-null posture as the "read" scope
+    // above, exercised for "dispatch": an installation not yet re-approved
+    // with `actions: write` 422s on the mint, and a repeat call within the
+    // TTL is served `token: null` from cache rather than re-attempting.
+    // resolveGitHubToken (github-integration.ts) is what turns that null
+    // into a PAT fallback — this only verifies the mint/cache half.
+    it("caches a mint failure for the 'dispatch' scope and stops retrying it", async () => {
+      let mintAttempts = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintAttempts++;
+        return Promise.resolve(jsonResponse(422, { message: "permissions not granted" }));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "dispatch"),
+      ).rejects.toThrow(GitHubAppError);
+      expect(mintAttempts).toBe(1);
+
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "dispatch");
+      expect(second.token).toBeNull();
       expect(mintAttempts).toBe(1);
     });
 

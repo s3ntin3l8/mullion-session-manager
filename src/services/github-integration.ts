@@ -10,6 +10,7 @@ import {
   computeKeyFingerprint,
   GitHubAppError,
 } from "./github-app.js";
+import type { InstallationTokenScope } from "./github-app.js";
 import { DecryptionError } from "./encryption.js";
 import { GitHubApiError } from "./github.js";
 import { githubApiFetch } from "./github-fetch.js";
@@ -411,18 +412,22 @@ export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAp
  * architecture difference from a token swap, not something this resolver
  * can paper over — and not by the device flow or `login`/`scopes`
  * display, which are user-identity concepts an installation token has no
- * equivalent for.
+ * equivalent for. #744 adds a third flavor, `scope: "dispatch"`, for the
+ * release-please "Run" trigger (`POST /actions/workflows/:id/dispatches`),
+ * which needs `actions: write` — a permission neither "write" nor "read"
+ * grants (see github-app.ts's DISPATCH_PERMISSIONS).
  */
 export async function resolveGitHubToken(
   app: FastifyInstance,
   repo: { owner: string; repo: string },
   // #489 remaining scope — "write" (the original slice: Task Master's own
-  // sync/promote/push) or "read" (the base integration's repo-status
-  // widget and PR/CI poller). Two flavors, not one widened token: a single
-  // token covering both would hand every Task Master *write* an `actions`
-  // scope it has no use for, undermining the least-privilege property
-  // #489 shipped for. See github-app.ts's WRITE_PERMISSIONS/READ_PERMISSIONS.
-  scope: "write" | "read" = "write",
+  // sync/promote/push), "read" (the base integration's repo-status widget
+  // and PR/CI poller), or "dispatch" (#744, the release-please trigger).
+  // Three flavors, not one widened token: a single token covering all of
+  // them would hand every Task Master *write* an `actions` scope it has no
+  // use for, undermining the least-privilege property #489 shipped for.
+  // See github-app.ts's WRITE_PERMISSIONS/READ_PERMISSIONS/DISPATCH_PERMISSIONS.
+  scope: InstallationTokenScope = "write",
 ): Promise<string | null> {
   try {
     // Hermes review, PR #504: the credentials read (which decrypts the

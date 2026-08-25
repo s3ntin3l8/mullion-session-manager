@@ -16,6 +16,14 @@ import type {
   GitStatus,
   GitPullReason,
   GitPullResult,
+  ProjectReleaseStatus,
+  ReleaseDetectionResult,
+  ReleaseWorkflowInfo,
+  ReleasePullRequestStatus,
+  ReleaseRunReason,
+  ReleaseRunResult,
+  ReleaseMergeReason,
+  ReleaseMergeResult,
   DockControl,
   Theme,
   CursorStyle,
@@ -27,6 +35,16 @@ import type {
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult };
+export type {
+  ProjectReleaseStatus,
+  ReleaseDetectionResult,
+  ReleaseWorkflowInfo,
+  ReleasePullRequestStatus,
+  ReleaseRunReason,
+  ReleaseRunResult,
+  ReleaseMergeReason,
+  ReleaseMergeResult,
+};
 
 export interface AuthStatus {
   methods: { token: boolean; oidc: boolean };

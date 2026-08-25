@@ -6,6 +6,7 @@ import {
   MAX_CACHE_ENTRIES,
   fetchRequiredStatusContexts,
   fetchCheckRunsForHead,
+  getDefaultBranch,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -337,6 +338,47 @@ describe("fetchRequiredStatusContexts", () => {
     const second = await fetchRequiredStatusContexts("tok", "o", "retry-after-403-repo", "main");
     expect(second).toEqual(["CI"]);
     expect(fetchMock.mock.calls.length).toBe(2);
+  });
+});
+
+describe("getDefaultBranch", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the repo's default_branch", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { default_branch: "main" }));
+    expect(await getDefaultBranch("tok", "o", "r")).toBe("main");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repos/o/r"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("throws GitHubApiError on a non-ok response", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    await expect(getDefaultBranch("tok", "o", "r")).rejects.toBeInstanceOf(GitHubApiError);
+  });
+
+  it("throws GitHubApiError when the response has no default_branch", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, {}));
+    await expect(getDefaultBranch("tok", "o", "r")).rejects.toBeInstanceOf(GitHubApiError);
+  });
+
+  it("rejects an invalid owner/repo before ever calling fetch", async () => {
+    await expect(getDefaultBranch("tok", "not valid/owner", "r")).rejects.toThrow(
+      /Invalid GitHub owner/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

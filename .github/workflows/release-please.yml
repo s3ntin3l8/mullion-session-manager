@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+  # #744 — lets Mullion's own "Run release-please" button
+  # (POST /api/projects/:id/release/run) dispatch this job on demand,
+  # without waiting for the next push to main. Only the caller here needs
+  # this trigger; the org's reusable workflow it calls into
+  # (s3ntin3l8/.github/.github/workflows/release-please.yml) stays
+  # workflow_call-only.
+  workflow_dispatch:
 
 jobs:
   release-please:

@@ -65,6 +65,7 @@ import {
   fetchCheckRunsForHead,
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
+import { classifyMergeReadiness } from "./merge-readiness.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -1277,15 +1278,15 @@ async function attemptMerge(
 
   try {
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+    const readiness = classifyMergeReadiness(pr);
 
-    if (pr.merged || pr.state === "closed") {
-      // Merged or closed out of band (a human merged it directly on GitHub,
-      // or closed it) — idempotent no-op, not an error.
-      clearMergeState(app, task, project);
-      return;
-    }
-
-    switch (pr.mergeableState) {
+    switch (readiness) {
+      case "already-done": {
+        // Merged or closed out of band (a human merged it directly on
+        // GitHub, or closed it) — idempotent no-op, not an error.
+        clearMergeState(app, task, project);
+        return;
+      }
       case "clean": {
         await mergePullRequest(token, repoRef.owner, repoRef.repo, task.prNumber, {
           sha: pr.headSha,
@@ -1349,7 +1350,7 @@ async function attemptMerge(
         recordMergeError(app, task.id, "Required checks are red or still pending");
         return;
       }
-      default: {
+      case "computing": {
         // "unknown" (pr.mergeable === null — GitHub is still computing
         // mergeability after a push) or any future state GitHub adds. Wait
         // and retry, no error recorded.

@@ -216,6 +216,87 @@ export interface GitPullResult {
 }
 
 // ---------------------------------------------------------------------------
+// routes/projects.ts — release-please detection/run/merge (#744)
+// ---------------------------------------------------------------------------
+//
+// Same "a domain refusal is a normal 200, only a genuine HTTP error throws"
+// contract as GitPullResult above (see frontend/src/api/git.ts's doc comment
+// on that convention) — ReleaseRunResult/ReleaseMergeResult follow it too.
+
+export interface ReleaseWorkflowInfo {
+  id: number;
+  name: string;
+  path: string;
+}
+
+// A repo not configured for release-please, and a token that can't even
+// list workflows, both surface as "no Release section" — but they are NOT
+// the same failure, and collapsing them repeats a regret this repo's own
+// docs already record (docs/github-integration.md's Current-limitations
+// note on the CI dot: "no UI signal distinguishing 'no workflows' from 'no
+// permission'"). `"found"` carries the workflow to dispatch against;
+// `"not-configured"` means the token could list workflows and none matched;
+// `"no-actions-scope"` means the list call itself was rejected — a PAT
+// without `Actions: read` is an explicitly supported configuration
+// (docs/github-integration.md), not an error.
+export type ReleaseDetectionResult =
+  | { kind: "found"; workflow: ReleaseWorkflowInfo }
+  | { kind: "not-configured" }
+  | { kind: "no-actions-scope" };
+
+export interface ReleasePullRequestStatus {
+  number: number;
+  htmlUrl: string;
+  title: string;
+  headRef: string;
+  headSha: string;
+  draft: boolean;
+  mergeable: boolean | null;
+  mergeableState: string;
+  // Warm-cache-only, same posture as /github/prs (github-pr-poller.ts) —
+  // null means "no signal yet," not "failing."
+  ciStatus: "success" | "failure" | "in_progress" | null;
+}
+
+export interface ProjectReleaseStatus {
+  detection: ReleaseDetectionResult;
+  pr: ReleasePullRequestStatus | null;
+}
+
+export type ReleaseRunReason = "no-workflow" | "no-dispatch-trigger" | "dispatch-failed";
+
+export interface ReleaseRunResult {
+  dispatched: boolean;
+  reason?: ReleaseRunReason;
+  detail?: string;
+}
+
+// One reason per `MergeReadiness` non-mergeable state (merge-readiness.ts),
+// plus `"no-release-pr"` (nothing to merge) and `"draft"` (mergeableState
+// can read "clean" on a draft PR — GitHub only refuses the merge itself, at
+// which point it'd otherwise surface as an opaque "merge-failed"). No
+// client-supplied PR number/id exists on this route — the PR to merge is
+// always re-resolved via findReleasePullRequest, which itself only ever
+// returns a PR whose head branch carries release-please's own prefix — so
+// there's no "resolved something that wasn't a release PR" case to
+// represent here.
+export type ReleaseMergeReason =
+  | "no-release-pr"
+  | "draft"
+  | "computing"
+  | "behind"
+  | "blocked"
+  | "unstable"
+  | "dirty"
+  | "merge-failed";
+
+export interface ReleaseMergeResult {
+  merged: boolean;
+  reason?: ReleaseMergeReason;
+  detail?: string;
+}
+
+// ---------------------------------------------------------------------------
 // git-diff.ts — GitDiffStats
 // ---------------------------------------------------------------------------
 
