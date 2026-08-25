@@ -39,13 +39,14 @@ function releasePr(
     mergeableState: string;
     merged: boolean;
     state: "open" | "closed";
+    draft: boolean;
   }> = {},
 ) {
   return {
     number: overrides.number ?? 12,
     html_url: `https://github.com/acme/widgets/pull/${overrides.number ?? 12}`,
     node_id: "PR_release",
-    draft: false,
+    draft: overrides.draft ?? false,
     head: { sha: "deadbeef", ref: RELEASE_HEAD_REF },
     base: { ref: "main" },
     title: "chore(main): release 0.2.46",
@@ -432,6 +433,30 @@ describe("release-please routes (#744)", () => {
           }),
         }),
       );
+    });
+
+    // GitHub can report mergeableState: "clean" on a draft PR — it only
+    // refuses the merge call itself. Assert the route catches this before
+    // ever attempting the merge, rather than surfacing GitHub's 405 as an
+    // opaque merge-failed.
+    it("refuses with reason: draft and does NOT attempt the merge", async () => {
+      const mergeSpy = vi.fn(() => jsonResponse(200, { merged: true, sha: "merged-sha" }));
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          prDetail: (n) => jsonResponse(200, releasePr({ number: n, draft: true })),
+          merge: mergeSpy,
+        }),
+      );
+      const app = await makeApp();
+      const { projectId } = await createConnectedProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/merge`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ merged: false, reason: "draft" });
+      expect(mergeSpy).not.toHaveBeenCalled();
     });
 
     it("refuses with reason: no-release-pr when nothing is open", async () => {

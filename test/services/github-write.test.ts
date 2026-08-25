@@ -697,6 +697,19 @@ describe("github-write service", () => {
     expect(findReleasePleaseWorkflow(workflows)).toBeNull();
   });
 
+  it("findReleasePleaseWorkflow does NOT match the generic release.yml/.yaml filenames", () => {
+    // Regression test for the deliberate narrowing documented on
+    // RELEASE_WORKFLOW_FILENAMES: release.yml/.yaml are common names for
+    // workflows unrelated to release-please (goreleaser, npm publish,
+    // semantic-release). Matching them would let the Run button dispatch
+    // an arbitrary outward-facing workflow under a "release-please" label.
+    const workflows = [
+      { id: 1, name: "Release", path: ".github/workflows/release.yml" },
+      { id: 2, name: "Release", path: ".github/workflows/release.yaml" },
+    ];
+    expect(findReleasePleaseWorkflow(workflows)).toBeNull();
+  });
+
   it("dispatchWorkflow POSTs ref to the workflow's dispatches endpoint", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
     await dispatchWorkflow("tok", "owner", "repo", 2, "main");

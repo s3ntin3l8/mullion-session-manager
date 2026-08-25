@@ -272,13 +272,23 @@ export interface ReleaseRunResult {
 }
 
 // One reason per `MergeReadiness` non-mergeable state (merge-readiness.ts),
-// plus `"no-release-pr"` (nothing to merge). No client-supplied PR
-// number/id exists on this route — the PR to merge is always re-resolved
-// via findReleasePullRequest, which itself only ever returns a PR whose
-// head branch carries release-please's own prefix — so there's no
-// "resolved something that wasn't a release PR" case to represent here.
+// plus `"no-release-pr"` (nothing to merge) and `"draft"` (mergeableState
+// can read "clean" on a draft PR — GitHub only refuses the merge itself, at
+// which point it'd otherwise surface as an opaque "merge-failed"). No
+// client-supplied PR number/id exists on this route — the PR to merge is
+// always re-resolved via findReleasePullRequest, which itself only ever
+// returns a PR whose head branch carries release-please's own prefix — so
+// there's no "resolved something that wasn't a release PR" case to
+// represent here.
 export type ReleaseMergeReason =
-  "no-release-pr" | "computing" | "behind" | "blocked" | "unstable" | "dirty" | "merge-failed";
+  | "no-release-pr"
+  | "draft"
+  | "computing"
+  | "behind"
+  | "blocked"
+  | "unstable"
+  | "dirty"
+  | "merge-failed";
 
 export interface ReleaseMergeResult {
   merged: boolean;

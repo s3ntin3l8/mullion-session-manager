@@ -1532,11 +1532,26 @@ export async function projectsRoute(app: FastifyInstance) {
 
         switch (readiness) {
           case "already-done": {
+            // Unreachable today — findReleasePullRequest only queries
+            // state=open, so it can never hand back an already-merged PR
+            // for this branch to see. Kept because classifyMergeReadiness
+            // is a shared classifier (task-reconciler.ts's attemptMerge
+            // reaches this case for real); removing it here would silently
+            // break if a future caller of this route resolved PRs some
+            // other way.
             invalidateReleaseCache(repoRef.owner, repoRef.repo);
             const result: ReleaseMergeResult = { merged: true };
             return result;
           }
           case "clean": {
+            if (pr.draft) {
+              // mergeableState can read "clean" on a draft PR — GitHub only
+              // refuses the merge call itself. Check explicitly so the
+              // caller gets a named reason instead of an opaque
+              // "merge-failed" from catching that 405.
+              const result: ReleaseMergeResult = { merged: false, reason: "draft" };
+              return result;
+            }
             const writeToken = await resolveGitHubToken(app, repoRef, "write");
             if (!writeToken) {
               const result: ReleaseMergeResult = {

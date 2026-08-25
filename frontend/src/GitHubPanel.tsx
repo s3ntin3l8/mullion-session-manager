@@ -247,6 +247,8 @@ function mergeReasonMessage(
   switch (reason) {
     case "no-release-pr":
       return "No open release PR to merge.";
+    case "draft":
+      return "This release PR is still a draft — mark it ready for review before merging.";
     case "computing":
       return "GitHub is still computing mergeability — try again shortly.";
     case "behind":
