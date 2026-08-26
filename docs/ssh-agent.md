@@ -117,13 +117,15 @@ set per-login-session by whatever agent is running (1Password's app,
 shown above — for any other agent, run `echo $SSH_AUTH_SOCK` in a regular
 terminal to get its real path and hardcode that instead.
 
-Load and manage the job with `launchctl`, not by double-clicking the file:
+Load and manage the job with `launchctl`, not by double-clicking the file.
+`load`/`unload` are deprecated on modern macOS — use `bootstrap`/`bootout`
+against the GUI domain instead:
 
 ```sh
-launchctl load ~/Library/LaunchAgents/de.s3ntin3l8.mullion-ssh-agent.your-mullion-host.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.s3ntin3l8.mullion-ssh-agent.your-mullion-host.plist
 launchctl list | grep mullion-ssh-agent   # confirm it's running (PID, not "-")
 tail -f /tmp/mullion-ssh-agent-your-mullion-host.log   # confirm no connect errors
-launchctl unload ~/Library/LaunchAgents/de.s3ntin3l8.mullion-ssh-agent.your-mullion-host.plist  # stop it
+launchctl bootout gui/$(id -u)/de.s3ntin3l8.mullion-ssh-agent.your-mullion-host  # stop it
 ```
 
 `KeepAlive: true` restarts the job whenever it exits for _any_ reason,
@@ -137,6 +139,18 @@ path is stable.
 
 ### Linux (systemd --user)
 
+**`$SSH_AUTH_SOCK` must be a literal path here too, not the environment
+variable** — same reasoning as the `launchd` case above, for a different
+reason: a `systemd --user` manager is a separate process from your login
+shell and does not source `.bash_profile`/`.zprofile` (where an agent
+typically sets this var), so `$SSH_AUTH_SOCK` expands empty in the unit
+below unless you explicitly import it. Hardcoding avoids that class of bug
+entirely rather than relying on an import step staying done. 1Password's own
+agent socket on Linux is at the fixed path `~/.1password/agent.sock`
+([1Password docs](https://developer.1password.com/docs/ssh/agent/config/));
+for any other agent, run `echo $SSH_AUTH_SOCK` in a regular terminal to get
+its real path and hardcode that instead.
+
 The same idea via a user unit,
 `~/.config/systemd/user/mullion-ssh-agent@.service`, templated on the
 target host so `systemctl --user start mullion-ssh-agent@your-mullion-host`
@@ -149,7 +163,7 @@ Description=Mullion SSH agent forward to %i
 [Service]
 ExecStart=/usr/bin/ssh -N -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-    -R /home/you/.local/state/mullion-ssh-agent/agent.sock:$SSH_AUTH_SOCK %i
+    -R /home/you/.local/state/mullion-ssh-agent/agent.sock:/home/you/.1password/agent.sock %i
 Restart=always
 RestartSec=5
 
@@ -158,11 +172,21 @@ WantedBy=default.target
 ```
 
 then `systemctl --user enable --now mullion-ssh-agent@your-mullion-host` and
-`loginctl enable-linger $(whoami)` so it survives logout. Unlike the
-`launchd` case, `$SSH_AUTH_SOCK` here IS inherited from the environment the
-unit is started in (assuming it's started from a real login session where an
-agent already set it) — but the same staleness caveat applies if that agent
-restarts later without the unit restarting too.
+`loginctl enable-linger $(whoami)` so it survives logout. Because the socket
+path above is a literal, not an inherited env var, this survives whether the
+unit is started interactively or (via the linger) at boot before any login
+shell ever runs — the same staleness caveat as the `launchd` case still
+applies if the agent itself restarts onto a different socket path later
+without the unit restarting too, though that isn't a concern with
+1Password's stable path.
+
+If you're using an agent whose socket path genuinely isn't stable and you
+need the running shell's actual `$SSH_AUTH_SOCK` instead of a hardcoded
+path, import it explicitly before starting the unit —
+`systemctl --user import-environment SSH_AUTH_SOCK` — but note this only
+captures whatever value is current in the shell you run it from, one time;
+it will not track a later change without re-running it and restarting the
+unit.
 
 **Approval cadence.** If your agent (e.g. 1Password) prompts for approval on
 every signature, a single `ansible-playbook` run across many hosts can mean
