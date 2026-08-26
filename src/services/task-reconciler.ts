@@ -1567,7 +1567,18 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
       const oldest = mergeRetryState.keys().next().value;
       if (oldest !== undefined) mergeRetryState.delete(oldest);
     }
-    mergeRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
+    // Hermes review, PR #827 (round 3): MUST spread `state` here — this
+    // write ran unconditionally, without preserving `lastReassertedSha`,
+    // immediately before every `attemptMerge` call. That silently wiped the
+    // re-assert memoization on the very next tick regardless of what
+    // `attemptMerge` itself had just recorded, making the round-2 fix a
+    // complete no-op: the exact "re-post an identical APPROVE every tick
+    // forever" spin it was written to prevent.
+    mergeRetryState.set(task.id, {
+      ...state,
+      lastAttemptedAt: now,
+      attempts: (state?.attempts ?? 0) + 1,
+    });
 
     await attemptMerge(app, task, project);
   }

@@ -2436,6 +2436,49 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // Hermes review, PR #827 (round 3): the round-2 memoization
+      // (`lastReassertedSha`) was silently defeated by `processMergeRequests`
+      // unconditionally overwriting the WHOLE `mergeRetryState` entry
+      // (without spreading the prior one) immediately before every
+      // `attemptMerge` call — so the re-assert-once-per-SHA guard never
+      // actually survived past the tick that set it. This file otherwise
+      // avoids `vi.useFakeTimers` (see the red-CI dedup describe block's own
+      // comment on why), but that precedent is about *DB-backed* timestamps
+      // having no fake-timer equivalent — this is a plain in-memory Map read
+      // via `Date.now()`, which fake timers control directly. Scoped tightly
+      // to this one test.
+      it("does not repost the re-assert APPROVE on the next tick for an unchanged head SHA", async () => {
+        const app = await buildApp();
+        await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview.mockResolvedValue({ id: 999, htmlUrl: "https://x" });
+
+        vi.useFakeTimers();
+        try {
+          await reconcileTasks(app);
+          expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+
+          // Past MERGE_RETRY_TTL_MS's own per-task backoff, so this second
+          // tick actually reaches attemptMerge again rather than being
+          // skipped by the unrelated rate limiter — isolating the
+          // memoization itself as what's under test.
+          vi.setSystemTime(Date.now() + 61_000);
+          await reconcileTasks(app);
+        } finally {
+          vi.useRealTimers();
+        }
+
+        // Still exactly once: the same head SHA (mockGetPullRequestByNumber
+        // never changes it) must have been recognized as already
+        // re-asserted, surviving processMergeRequests' own state write
+        // between the two ticks.
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+
+        await app.close();
+      });
+
       // Hermes review, PR #827: re-assert used to also fire on
       // CHANGES_REQUESTED, which would silently override a review posted
       // AFTER the task's own approval (a human on GitHub, or a later
