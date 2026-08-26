@@ -140,15 +140,17 @@ export interface LaunchPlan {
 }
 
 /**
- * Composes the argv/env for a session's dtach master launch — everything
- * `Session.bootstrapMaster()` (pty-manager.ts) used to compute inline before
- * PR 32's extraction: env scrub, shell-integration setup, the five
- * MULLION_* injections, agent-guide injection, hook-adapter wiring,
+ * Composes the argv/env for a session's dtach master launch — originally
+ * everything `Session.bootstrapMaster()` (pty-manager.ts) used to compute
+ * inline before PR 32's extraction (env scrub, shell-integration setup, the
+ * five MULLION_* injections, agent-guide injection, hook-adapter wiring,
  * skip-permissions handling, and initial-prompt composition, in that exact
- * order. See this module's own top-of-file doc comment for why this isn't
- * a *pure* function despite doing pure composition work. Behavior-preserving
- * only: every step below reproduces bootstrapMaster's prior inline logic
- * unchanged, just relocated.
+ * order — that part is still behavior-preserving, reproducing
+ * bootstrapMaster's prior inline logic unchanged, just relocated), plus the
+ * SSH_AUTH_SOCK injection added later (right after the five MULLION_*
+ * injections, before agent-guide injection), which has no such prior
+ * inline equivalent. See this module's own top-of-file doc comment for why
+ * this isn't a *pure* function despite doing pure composition work.
  */
 export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const shell = process.env.SHELL || "/bin/bash";

@@ -38,10 +38,14 @@ import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
 // MULLION_SSH_AUTH_SOCK (the config key that names the path launch-plan.ts
 // injects as SSH_AUTH_SOCK) is stripped for the same nested-Mullion reason as
 // every other key in this list. SSH_AUTH_SOCK itself is deliberately NOT
-// stripped here — see the "Deliberately NOT stripped" paragraph above; it's
-// overwritten unconditionally by launch-plan.ts when configured, and left
-// alone (passed through from whatever the session already inherited) when
-// it's not, exactly like TERM/COLORTERM's treatment below.
+// stripped here — grouped with the PATH/HOME/SHELL passthrough two
+// paragraphs up, NOT with TERM/COLORTERM below (those are the opposite
+// treatment: unconditionally overwritten regardless of what's inherited).
+// launch-plan.ts overwrites SSH_AUTH_SOCK when MULLION_SSH_AUTH_SOCK is
+// configured; when it's not, whatever this host's systemd --user manager (or
+// PAM, or a desktop keyring) already exports as SSH_AUTH_SOCK passes straight
+// through unexamined — this feature being "off" does not mean a session gets
+// no SSH_AUTH_SOCK, only that this feature isn't the one supplying it.
 // ZDOTDIR/MULLION_USER_ZDOTDIR (issue: sidebar worktree display,
 // shell-integration.ts's applyShellIntegrationEnv) are deliberately absent
 // from this list even though they're Mullion-owned: unlike every key below,

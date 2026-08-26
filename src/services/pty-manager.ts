@@ -884,8 +884,9 @@ export class Session {
   // blocking PreToolUse review gate for this session's launch.
   private readonly reviewGateEnabled: boolean;
   // Mirrors app.config.MULLION_SSH_AUTH_SOCK, passed down from PtyManager —
-  // see buildLaunchPlan's injection of this into LaunchPlanSession.sshAuthSock
-  // in bootstrapMaster() below.
+  // bootstrapMaster() below puts this into the LaunchPlanSession.sshAuthSock
+  // field it hands to buildLaunchPlan(), which reads it back out and injects
+  // it into the session's own SSH_AUTH_SOCK.
   private readonly sshAuthSock: string;
   // Issue #437c — the live sessions.injectAgentGuide setting's value AT
   // THIS SESSION'S CREATION (PtyManager.getOrCreate calls
@@ -1756,9 +1757,10 @@ export class Session {
    *
    * PR 32 (Wave 6) split this into two parts: buildLaunchPlan() (launch-
    * plan.ts) computes everything about WHAT gets launched — the env scrub,
-   * shell-integration setup, the five MULLION_* injections, agent-guide
-   * injection, hook-adapter wiring, skip-permissions handling, and
-   * initial-prompt composition — and this method now does only the actual
+   * shell-integration setup, the five MULLION_* injections, the
+   * SSH_AUTH_SOCK injection, agent-guide injection, hook-adapter wiring,
+   * skip-permissions handling, and initial-prompt composition — and this
+   * method now does only the actual
    * process launch: wrapping that plan's argv/env in the transient
    * `systemd --user` scope below. See launch-plan.ts's own doc comments for
    * the full step-by-step reasoning that used to live inline here.
@@ -3411,7 +3413,13 @@ export class PtyManager {
       ? path.resolve(opts.controlSocketPath)
       : path.join(this.sessionsDir, "mullion.sock");
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
-    this.sshAuthSock = opts.sshAuthSock ?? "";
+    // Resolved here, once, for the same reason as controlSocketPath just
+    // above: dtach (and every session shell) runs with cwd set to the
+    // *session's* project directory, not this process's cwd, so a relative
+    // MULLION_SSH_AUTH_SOCK would resolve against a different (and
+    // per-session-different) directory instead of the single stable path
+    // this feature depends on.
+    this.sshAuthSock = opts.sshAuthSock ? path.resolve(opts.sshAuthSock) : "";
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
     this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
 

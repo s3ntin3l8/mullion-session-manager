@@ -571,8 +571,13 @@ export const schema = {
     // injected as SSH_AUTH_SOCK into every spawned session (see
     // session-env.ts's "deliberately NOT stripped" comment and
     // launch-plan.ts's injection block). Empty (the default) leaves whatever
-    // SSH_AUTH_SOCK a session already inherits untouched — the feature is
-    // fully inert until this is set.
+    // SSH_AUTH_SOCK a session already inherits untouched — this feature adds
+    // no injection of its own, but that's not the same as every session
+    // getting no SSH_AUTH_SOCK at all: a systemd --user manager, PAM, or a
+    // desktop keyring routinely exports one ambiently regardless of this
+    // config (verified present on this host's own systemd --user
+    // environment). Leaving this empty means "don't touch it," not "unset
+    // it."
     //
     // The socket itself is not something Mullion creates or manages; it's
     // expected to be bound by something else entirely (e.g. `ssh -R

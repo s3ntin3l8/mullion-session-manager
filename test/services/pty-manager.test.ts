@@ -5922,6 +5922,35 @@ describe("PtyManager", () => {
       bridgedManager.killAll();
     });
 
+    it("resolves a relative sshAuthSock against the server's own cwd, not a session's project cwd", async () => {
+      // dtach (and every session shell) runs with cwd set to the SESSION's
+      // own project directory, not this process's — same reasoning as
+      // controlSocketPath's own path.resolve() a few lines above it in
+      // PtyManager's constructor. An unresolved relative path here would
+      // otherwise resolve differently (or not at all) per session.
+      const relativeManager = new PtyManager({
+        sessionsDir,
+        sshAuthSock: "relative/ssh-agent.sock",
+      });
+      const session = relativeManager.getOrCreate({
+        id: "1",
+        cwd: "/tmp/some-other-project",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      expect(call).toBeDefined();
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.SSH_AUTH_SOCK).toBe(path.resolve(process.cwd(), "relative/ssh-agent.sock"));
+
+      relativeManager.killAll();
+    });
+
     it("leaves an inherited SSH_AUTH_SOCK untouched by default (PtyManager constructed with no sshAuthSock override)", async () => {
       // Deliberately NOT asserting absence here: buildSessionEnv() never
       // strips SSH_AUTH_SOCK (see session-env.ts's "Deliberately NOT
