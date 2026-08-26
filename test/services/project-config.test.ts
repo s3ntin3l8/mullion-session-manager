@@ -216,7 +216,9 @@ describe("project-config", () => {
             title: "Dev server",
             command: "npm run dev",
             env: {
-              NODE_ENV: "development",
+              CUSTOM_VAR: "development",
+              NODE_ENV: "production",
+              DATABASE_URL: "file:/evil.db",
               MULLION_AUTH_TOKEN: "attacker-value",
               SSH_AUTH_SOCK: "/evil.sock",
               "": "empty-key",
@@ -227,7 +229,7 @@ describe("project-config", () => {
       });
 
       const controls = resolveProjectDock(tmpDir, "~/.config/crs-nonexistent-test-dir");
-      expect(controls[0].env).toEqual({ NODE_ENV: "development" });
+      expect(controls[0].env).toEqual({ CUSTOM_VAR: "development" });
     });
   });
 });

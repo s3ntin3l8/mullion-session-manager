@@ -14,6 +14,7 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
+import { isReservedSessionEnvKey } from "./session-env-keys.js";
 
 // Issue #822 — bounds shared between routes/sessions.ts's `env` schema
 // property, routes/internal-schemas.ts's duplicate for the agent-side
@@ -284,7 +285,13 @@ export type CreateSessionResult =
   | { ok: false; reason: "parent-wrong-project" }
   | { ok: false; reason: "parent-is-child" }
   | { ok: false; reason: "cwd-outside-project" }
-  | { ok: false; reason: "child-cap-exceeded" };
+  | { ok: false; reason: "child-cap-exceeded" }
+  // Hermes review, this PR — validated here (not just dock-config.ts's write
+  // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
+  // is bound by the same reserved-key rules as a dock control. See
+  // session-env-keys.ts's own comment for why this is the required second
+  // enforcement point, not a redundant one.
+  | { ok: false; reason: "reserved-env-key"; detail: string };
 
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
 // POST /api/sessions/:id/promote (option 2), and POST /api/tasks/:id/claim
@@ -312,6 +319,19 @@ export async function createSessionRecord(
     env,
   } = params;
   let cwd = params.cwd;
+
+  // Hermes review, this PR (issue #822) — dock-config.ts's validateOneControl
+  // is not the only producer of a session's `env`; a direct full-scope
+  // `POST /api/sessions` call bypasses it entirely. Enforce the same
+  // reserved-key rule here so it's bound regardless of caller, matching the
+  // parentSessionId validation immediately below (also re-validated here for
+  // exactly the same "not just the socket op" reason).
+  if (env !== undefined) {
+    const reservedKey = Object.keys(env).find(isReservedSessionEnvKey);
+    if (reservedKey !== undefined) {
+      return { ok: false, reason: "reserved-env-key", detail: reservedKey };
+    }
+  }
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };

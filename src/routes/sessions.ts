@@ -398,6 +398,9 @@ export async function sessionsRoute(app: FastifyInstance) {
         if (result.reason === "child-cap-exceeded") {
           return reply.tooManyRequests("this session has reached its live child-session cap");
         }
+        if (result.reason === "reserved-env-key") {
+          return reply.badRequest(`env key "${result.detail}" is reserved and cannot be set`);
+        }
         return reply.badGateway("Failed to spawn session on host");
       }
 

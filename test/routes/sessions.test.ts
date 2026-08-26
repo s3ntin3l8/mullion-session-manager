@@ -170,6 +170,40 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Hermes review, this PR (issue #822) — a direct full-scope POST
+  // /api/sessions call never goes through dock-config.ts's validateOneControl
+  // (that's the .crs/dock.json write path only), so the reserved-key check
+  // has to be enforced again in createSessionRecord itself or this route
+  // would silently re-introduce exactly the vars buildSessionEnv()'s scrub
+  // (issue #70) exists to strip. Covers a SERVER_ENV_KEYS member
+  // (DATABASE_URL) alongside the pre-existing MULLION_*/SSH_AUTH_SOCK
+  // classes, since those three are validated by the same shared predicate
+  // but were previously exercised only via dock-config.test.ts.
+  it.each([
+    ["a MULLION_-prefixed key", "MULLION_AUTH_TOKEN"],
+    ["SSH_AUTH_SOCK", "SSH_AUTH_SOCK"],
+    ["a SERVER_ENV_KEYS member (DATABASE_URL)", "DATABASE_URL"],
+  ])(
+    "rejects %s in env on direct POST /api/sessions, and creates no session",
+    async (_label, key) => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", env: { [key]: "attacker-value" } },
+      });
+      expect(created.statusCode).toBe(400);
+      expect(created.json().message).toMatch(new RegExp(key));
+
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      expect(list.json()).toEqual([]);
+
+      await app.close();
+    },
+  );
+
   // Regression test for the bug that shipped in PR #300: SessionInfo grew
   // permissionState/planState/errorState/endedReason, but withLiveInfo
   // (session-live-info.ts) hand-enumerated which live fields to copy onto each
