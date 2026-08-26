@@ -145,6 +145,7 @@ describe("release-please routes (#744)", () => {
     defaultBranch?: () => Response;
     workflows?: () => Response;
     releasePrs?: () => Response;
+    releasePrsAll?: () => Response;
     prDetail?: (number: number) => Response;
     dispatch?: () => Response;
     merge?: () => Response;
@@ -172,6 +173,16 @@ describe("release-please routes (#744)", () => {
         return Promise.resolve(
           (overrides.releasePrs ?? (() => jsonResponse(200, [releasePr()])))(),
         );
+      }
+      // #818 — resolveReleaseMerge's own out-of-band-merge fallback, only
+      // ever reached when the state=open lookup above found nothing.
+      // Defaults to "nothing there either," matching the pre-#818 behavior
+      // of every existing test in this file that doesn't override it.
+      if (
+        url ===
+        "https://api.github.com/repos/acme/widgets/pulls?state=all&base=main&sort=created&direction=desc"
+      ) {
+        return Promise.resolve((overrides.releasePrsAll ?? (() => jsonResponse(200, [])))());
       }
       const prDetailMatch = url.match(/\/repos\/acme\/widgets\/pulls\/(\d+)$/);
       if (prDetailMatch && method === "GET") {
@@ -560,6 +571,59 @@ describe("release-please routes (#744)", () => {
         expect.stringContaining("/merge"),
         expect.objectContaining({ method: "PUT" }),
       );
+    });
+
+    // #818 Hermes review — a human merging the release PR directly on
+    // GitHub, bypassing this route/the autorelease sweep entirely, used to
+    // report merged: false, reason: "no-release-pr" forever (the state=open
+    // lookup finds nothing once the PR is closed). The fallback lookup
+    // below distinguishes this from the ordinary "not generated yet" case.
+    it("treats a release PR merged out-of-band (no longer open) as merged: true", async () => {
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          releasePrs: () => jsonResponse(200, []),
+          releasePrsAll: () => jsonResponse(200, [releasePr({ number: 12 })]),
+          prDetail: (n) =>
+            jsonResponse(200, releasePr({ number: n, merged: true, state: "closed" })),
+        }),
+      );
+      const app = await makeApp();
+      const { projectId } = await createConnectedProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/merge`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ merged: true });
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("/merge"),
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+
+    // Same fallback lookup, but the most recent PR was closed WITHOUT
+    // merging (a deliberate "skip this cycle," not a shipped release) — must
+    // NOT be treated as merged: true, unlike the out-of-band-merge case
+    // above. The underlying commits are still unreleased.
+    it("does not treat a release PR closed without merging as merged: true", async () => {
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          releasePrs: () => jsonResponse(200, []),
+          releasePrsAll: () => jsonResponse(200, [releasePr({ number: 12 })]),
+          prDetail: (n) =>
+            jsonResponse(200, releasePr({ number: n, merged: false, state: "closed" })),
+        }),
+      );
+      const app = await makeApp();
+      const { projectId } = await createConnectedProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/merge`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ merged: false, reason: "no-release-pr" });
     });
   });
 });

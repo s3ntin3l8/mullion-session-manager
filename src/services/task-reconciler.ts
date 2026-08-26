@@ -57,6 +57,7 @@ import {
   updatePullRequestBranch,
   deleteRemoteBranch,
   fetchPullRequestReviewThreads,
+  detectReleaseWorkflow,
 } from "./github-write.js";
 import {
   computeCiStatus,
@@ -66,6 +67,8 @@ import {
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
+import { resolveReleaseMerge } from "./release-merge.js";
+import type { ReleaseMergeResult } from "../shared/types.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -1304,6 +1307,19 @@ async function attemptMerge(
             "task reconcile: merged the PR but failed to delete its remote branch",
           );
         }
+        // #744 — arm autorelease HERE ONLY, after the merge call above has
+        // actually succeeded. Deliberately not inside clearMergeState below:
+        // that helper is also reached from case "already-done", which covers
+        // a PR CLOSED without merging (classifyMergeReadiness collapses
+        // `pr.merged || pr.state === "closed"` into one state) — arming
+        // there would tag a release for code that never landed.
+        if (project.autoTagRelease) {
+          app.db
+            .update(tasks)
+            .set({ releaseRequestedAt: new Date() })
+            .where(eq(tasks.id, task.id))
+            .run();
+        }
         clearMergeState(app, task, project);
         return;
       }
@@ -1415,6 +1431,201 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
     mergeRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
 
     await attemptMerge(app, task, project);
+  }
+}
+
+// Autorelease sweep (#744's automatic half) — a per-project
+// projects.autoTagRelease setting has this sweep merge the repo's own open
+// release-please PR once every task armed since the last release has been
+// quiet for RELEASE_QUIET_MS, closing the last manual step of the loop: task
+// PR merges (attemptMerge's own case "clean" above arms
+// tasks.releaseRequestedAt) -> release-please's `on: push` regenerates the
+// release PR -> this sweep merges it (resolveReleaseMerge,
+// services/release-merge.ts — the same decision logic
+// POST .../release/merge uses).
+//
+// Intent is armed per-task, but this sweep groups by project and acts once
+// per project per tick — a burst of N task merges coalesces into ONE release
+// PR merge attempt, not N. The quiet window is what makes that safe without a
+// "was the release PR regenerated after the newest task landed" check of its
+// own: it has to outlast both release-please's own run (well under a minute,
+// measured on this repo) and GitHub's async mergeable_state recompute after
+// the regenerating push (seconds) by a wide margin.
+//
+// Deliberately does NOT gate on "no task on this project has
+// mergeRequestedAt set" — attemptMerge never clears that column for a task PR
+// stuck on dirty/blocked/unstable (see its own comment: never give up), so a
+// single permanently-conflicted task PR would silently block autorelease on
+// that project forever if this waited for it to clear first.
+const RELEASE_QUIET_MS = 10 * 60 * 1000;
+const RELEASE_RETRY_TTL_MS = 60 * 1000;
+const RELEASE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
+const MAX_RELEASE_ATTEMPTS_PER_SWEEP = 20;
+const MAX_RELEASE_RETRY_ENTRIES = 500;
+const releaseRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+
+function releaseRetryBackoffMs(attempts: number): number {
+  return Math.min(RELEASE_RETRY_TTL_MS * 2 ** (attempts - 1), RELEASE_RETRY_MAX_TTL_MS);
+}
+
+function recordReleaseError(app: FastifyInstance, taskIds: number[], message: string): void {
+  app.db.update(tasks).set({ releaseError: message }).where(inArray(tasks.id, taskIds)).run();
+}
+
+function releaseMergeErrorMessage(result: ReleaseMergeResult): string {
+  switch (result.reason) {
+    case "no-release-pr":
+      return "No open release-please PR yet — waiting for it to be generated";
+    case "draft":
+      return "Release PR is a draft — mark it ready for review";
+    case "computing":
+      return "GitHub is still computing the release PR's mergeability";
+    case "behind":
+      return "Release PR is behind main — waiting for release-please to regenerate it";
+    case "blocked":
+      return "Required checks on the release PR are red or still pending";
+    case "unstable":
+      return "A non-required check on the release PR is failing or still running";
+    case "dirty":
+      return "Release PR has a merge conflict with main";
+    case "merge-failed":
+    default:
+      return result.detail ?? "Release PR merge failed";
+  }
+}
+
+async function attemptRelease(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+  taskIds: number[],
+): Promise<void> {
+  // Hermes review, PR #818 — unlike attemptMerge's own repoRef/token
+  // resolution above (which silently no-ops on either failure), these two
+  // record a releaseError: every OTHER branch in this function does, and a
+  // project whose repo ref/token happens to be momentarily unavailable
+  // would otherwise leave every armed task showing "Release pending"
+  // forever, indistinguishable from a release that's genuinely still
+  // waiting on its quiet window or on GitHub.
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) {
+    recordReleaseError(app, taskIds, "Could not resolve this project's GitHub repo");
+    return;
+  }
+  const token = await resolveGitHubToken(app, repoRef, "read");
+  if (!token) {
+    recordReleaseError(app, taskIds, "No GitHub token available for this project");
+    return;
+  }
+
+  // Distinguish "genuinely not configured" (give up, clear the intent —
+  // retrying forever against a misconfigured toggle is pointless noise) from
+  // every other detection outcome, which self-heals or is worth retrying (a
+  // scope problem may get fixed; a transient failure resolves on its own) —
+  // same split detectReleaseWorkflow's own doc comment describes.
+  let detection;
+  try {
+    detection = await detectReleaseWorkflow(token, repoRef.owner, repoRef.repo);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    recordReleaseError(app, taskIds, `Release workflow detection failed: ${detail}`);
+    return;
+  }
+  if (detection.kind === "not-configured") {
+    // Give up (unlike every other branch here, which retries indefinitely):
+    // clear the durable intent AND the backoff entry (same as
+    // clearReleaseState), but — UNLIKE clearReleaseState — leave a message
+    // behind rather than nulling releaseError too, so the human sees WHY
+    // autorelease stopped instead of the row just silently going quiet.
+    app.db
+      .update(tasks)
+      .set({
+        releaseRequestedAt: null,
+        releaseError:
+          "Project has no release-please workflow — turn off Auto-tag release, or add one",
+      })
+      .where(inArray(tasks.id, taskIds))
+      .run();
+    releaseRetryState.delete(project.id);
+    return;
+  }
+  if (detection.kind === "no-actions-scope") {
+    recordReleaseError(app, taskIds, "GitHub token can't list Actions workflows");
+    return;
+  }
+
+  // resolveReleaseMerge itself clears tasks.releaseRequestedAt/releaseError
+  // for every task on this project on a `merged: true` outcome (see its own
+  // doc comment) — the same call the manual Merge route makes, so the DB
+  // side of "release shipped" only happens in one place regardless of which
+  // caller triggered it. Only the in-memory backoff entry is this sweep's
+  // own to clear.
+  const result = await resolveReleaseMerge(app, repoRef, token, project.id);
+  if (result.merged) {
+    releaseRetryState.delete(project.id);
+    return;
+  }
+  recordReleaseError(app, taskIds, releaseMergeErrorMessage(result));
+}
+
+async function processReleaseRequests(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  // Same gate as processMergeRequests above — a release merge is real GitHub
+  // state, not a passive read.
+  if (!resolvedTaskMaster.enabled) return;
+  if (skipSweepIfGitHubRateLimited(app, "processReleaseRequests")) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(and(isNotNull(tasks.releaseRequestedAt), eq(projects.autoTagRelease, true)))
+    .all();
+  if (rows.length === 0) return;
+
+  // Group by project — the coalescing: N tasks armed on the same project
+  // become ONE attemptRelease call per tick, not N.
+  const byProject = new Map<
+    number,
+    { project: typeof projects.$inferSelect; taskIds: number[]; maxRequestedAt: number }
+  >();
+  for (const { task, project } of rows) {
+    const requestedAt = task.releaseRequestedAt?.getTime() ?? 0;
+    const existing = byProject.get(project.id);
+    if (existing) {
+      existing.taskIds.push(task.id);
+      existing.maxRequestedAt = Math.max(existing.maxRequestedAt, requestedAt);
+    } else {
+      byProject.set(project.id, { project, taskIds: [task.id], maxRequestedAt: requestedAt });
+    }
+  }
+
+  const now = Date.now();
+  let attempted = 0;
+
+  for (const { project, taskIds, maxRequestedAt } of byProject.values()) {
+    if (attempted >= MAX_RELEASE_ATTEMPTS_PER_SWEEP) return;
+    if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
+
+    // Quiet gate: wait until no task on this project has landed for
+    // RELEASE_QUIET_MS since the MOST RECENT one — a fresh landing resets the
+    // window, so a steady trickle of merges never fires until it stops.
+    if (now - maxRequestedAt < RELEASE_QUIET_MS) continue;
+
+    const state = releaseRetryState.get(project.id);
+    if (state !== undefined && now - state.lastAttemptedAt < releaseRetryBackoffMs(state.attempts))
+      continue;
+
+    attempted++;
+    if (!releaseRetryState.has(project.id) && releaseRetryState.size >= MAX_RELEASE_RETRY_ENTRIES) {
+      const oldest = releaseRetryState.keys().next().value;
+      if (oldest !== undefined) releaseRetryState.delete(oldest);
+    }
+    releaseRetryState.set(project.id, {
+      lastAttemptedAt: now,
+      attempts: (state?.attempts ?? 0) + 1,
+    });
+
+    await attemptRelease(app, project, taskIds);
   }
 }
 
@@ -2524,6 +2735,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // outstanding needs to keep being retried regardless of what's currently
   // claimed/in_progress.
   await processMergeRequests(app);
+  // #744 — runs right after processMergeRequests, same tick and same
+  // independence reasoning: a project with tasks awaiting autorelease needs
+  // to keep being retried regardless of what's currently claimed/in_progress.
+  await processReleaseRequests(app);
 
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })

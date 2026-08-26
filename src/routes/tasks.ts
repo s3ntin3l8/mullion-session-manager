@@ -172,6 +172,20 @@ const TASK_ROW_COLUMNS = {
   agentCommand: tasks.agentCommand,
   prUrl: tasks.prUrl,
   prNumber: tasks.prNumber,
+  // Hermes review, PR #818 — merge-on-approve (#816) and autorelease (#744)
+  // both write these four columns (task-reconciler.ts's attemptMerge/
+  // attemptRelease, POST /api/tasks/:id/merge, resolveReleaseMerge) and both
+  // frontend TaskDetail.tsx components read them straight off the task
+  // object — but neither was ever added here, so GET /api/tasks and
+  // GET /api/tasks/:id never actually returned them. Every consumer of
+  // `undefined !== null` (both hint/error guards) read that as "true," so
+  // TaskMergeStatus's release-pending hint rendered unconditionally and a
+  // real releaseError/mergeError could never surface — this was the root
+  // cause, not the frontend guards themselves.
+  mergeRequestedAt: tasks.mergeRequestedAt,
+  mergeError: tasks.mergeError,
+  releaseRequestedAt: tasks.releaseRequestedAt,
+  releaseError: tasks.releaseError,
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
   githubSyncError: tasks.githubSyncError,

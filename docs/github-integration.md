@@ -90,6 +90,19 @@ notes for the CI dot). **Merge** reuses whatever write scope Task Master's
 own **Pull requests** permission already provisioned above; no separate
 grant needed.
 
+**Autorelease (`#744`, [Task Master](tasks.md)'s per-project
+`autoTagRelease` setting)** reuses the exact same Merge decision logic as the
+button above (`resolveReleaseMerge`, `services/release-merge.ts`), from a
+reconciler sweep instead of a click — same token scope as **Merge**, nothing
+additional. Unlike **Run**, the sweep never dispatches: a task PR's own merge
+is already the push that regenerates the release PR, so the sweep needs no
+`Actions: write`/`dispatch`-scoped token at all. See
+[Autorelease after tasks land](tasks.md#autorelease-after-tasks-land-744) for
+the trigger, the quiet-window batching, and the `workflow_dispatch`-only
+degradation (a repo without an `on: push` trigger on its release workflow
+never gets a release PR out of a task landing, so the sweep waits forever —
+the human still needs the manual **Run** button there).
+
 ### Device flow ("Connect with GitHub" button, opt-in)
 
 This requires one-time setup by whoever operates the Mullion instance:

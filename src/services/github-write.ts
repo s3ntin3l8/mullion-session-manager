@@ -1109,25 +1109,30 @@ export interface ReleasePullRequestSummary {
 }
 
 /**
- * Finds the open release-please PR for `base` (the repo's default branch),
+ * Finds the release-please PR for `base` (the repo's default branch),
  * identified by its head branch's fixed `release-please--branches--<base>`
  * prefix — release-please-action's own naming, not something a title-text
  * match could rely on (a human/bot can retitle a PR; release-please doesn't
- * rename its own branch). `state=open` + `sort=created&direction=desc`
- * mirrors `findPullRequestByHead`'s own reasoning above: release-please
- * closes/reopens rather than reusing a stale closed PR, but scoping to
- * `open` and taking the newest is strictly more correct regardless.
+ * rename its own branch). `sort=created&direction=desc` mirrors
+ * `findPullRequestByHead`'s own reasoning above: release-please closes/
+ * reopens rather than reusing a stale closed PR, so taking the newest by
+ * creation date is always the current one for this repo's release cycle,
+ * regardless of `state`.
  *
- * Returns only identifying fields — callers needing mergeability
- * (`mergeable`/`mergeableState`/`headSha`) call `getPullRequestByNumber`
- * with the returned `number`, the same two-step shape `findPullRequestByHead`
- * callers already use.
+ * `state` defaults to `"open"` — every caller wanting "the release PR a
+ * human can act on right now" (the GitHub panel's own Release section,
+ * `getCachedReleasePullRequestStatus` below) wants exactly that, and
+ * scoping to `open` there is strictly more correct: a closed one from a
+ * skipped/out-of-band cycle isn't something to show as pending.
+ * `resolveReleaseMerge` (release-merge.ts) passes `"all"` explicitly for
+ * its own fallback check — see that file's own doc comment on why.
  */
 export async function findReleasePullRequest(
   token: string,
   owner: string,
   repo: string,
   base: string,
+  state: "open" | "all" = "open",
 ): Promise<ReleasePullRequestSummary | null> {
   const results = await githubRequest<
     Array<{ number: number; html_url: string; head: { ref: string }; title: string }>
@@ -1136,7 +1141,7 @@ export async function findReleasePullRequest(
     owner,
     repo,
     "GET",
-    `/pulls?state=open&base=${encodeURIComponent(base)}&sort=created&direction=desc`,
+    `/pulls?state=${state}&base=${encodeURIComponent(base)}&sort=created&direction=desc`,
   );
   const match = results.find((pr) => pr.head.ref.startsWith(RELEASE_PLEASE_BRANCH_PREFIX));
   return match

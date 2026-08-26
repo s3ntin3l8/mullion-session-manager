@@ -1911,6 +1911,56 @@ describe("tasks route", () => {
       expect(res.statusCode).toBe(404);
       await app.close();
     });
+
+    // Hermes review, PR #818 — TASK_ROW_COLUMNS (this file) previously
+    // omitted mergeRequestedAt/mergeError/releaseRequestedAt/releaseError
+    // entirely, so both GET routes silently dropped them from the response
+    // even though the reconciler writes and TaskDetail.tsx reads all four.
+    // `undefined !== null` reads as true, so the frontend's pending hint
+    // rendered unconditionally and a real error could never surface — a
+    // regression that shipped invisibly because every test asserting these
+    // fields exercised a POST action's own `.returning()` response, never
+    // the GET read path. Covers both GET /api/tasks and GET /api/tasks/:id
+    // so a future TASK_ROW_COLUMNS edit can't silently drop them again.
+    it("GET /api/tasks and GET /api/tasks/:id include mergeRequestedAt/mergeError/releaseRequestedAt/releaseError", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "row-columns-p", cwd: "/tmp/row-columns" },
+      });
+      const { tasks } = await import("../../src/db/schema.js");
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "row-columns",
+          status: "done",
+          mergeRequestedAt: new Date(),
+          mergeError: "conflicts with main",
+          releaseRequestedAt: new Date(),
+          releaseError: "no open release-please PR yet",
+        })
+        .returning()
+        .all();
+
+      const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
+      const listed = (listRes.json() as Array<{ id: number }>).find((t) => t.id === row.id);
+      expect(listed).toMatchObject({
+        mergeError: "conflicts with main",
+        releaseError: "no open release-please PR yet",
+      });
+      expect(listed?.mergeRequestedAt).not.toBeNull();
+      expect(listed?.releaseRequestedAt).not.toBeNull();
+
+      const detailRes = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+      expect(detailRes.json()).toMatchObject({
+        mergeError: "conflicts with main",
+        releaseError: "no open release-please PR yet",
+      });
+
+      await app.close();
+    });
   });
 
   describe("local task CRUD (6.9/#233)", () => {

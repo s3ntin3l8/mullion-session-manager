@@ -1336,6 +1336,49 @@ change, and a round that doesn't touches nothing (`?? task.prTitle` on the
 write). `task-promote.ts`'s `createOrRecoverPR` then uses
 `task.prTitle ?? task.title`.
 
+### Autorelease after tasks land (`#744`)
+
+The manual half of `#744` (see `docs/github-integration.md`'s Release
+section) gives a human a Run/Merge pair for a repo's own release-please PR.
+**`autoTagRelease`** (Project Settings; a column on `projects`, same
+per-project-only, default-off posture as `mergeOnApprove`/`autoApprove`
+above) closes the last step: once a task's own PR merges (the `clean` branch
+of the merge-on-approve sweep's table above — nothing else, notably not
+`already-done`, which also covers a PR **closed without merging**), it arms
+`tasks.releaseRequestedAt`. **`autoTagRelease` does nothing on its own** — it
+only ever fires downstream of a task PR actually merging, so it requires
+`mergeOnApprove` too; with `mergeOnApprove` off, no task PR ever merges
+through Mullion and this setting is a no-op.
+
+A second reconciler sweep, `processReleaseRequests` (task-reconciler.ts, runs
+every tick right after `processMergeRequests`), groups every task with
+`releaseRequestedAt` set **by project** and, once no task on that project has
+landed for **10 minutes** (`RELEASE_QUIET_MS` — a quiet window, not a "wait
+for release-please" timer specifically; it just needs to comfortably outlast
+both release-please's own run and GitHub's async `mergeable_state`
+recompute), merges the repo's open release-please PR — using the exact same
+decision logic (`resolveReleaseMerge`, `services/release-merge.ts`) as the
+manual Merge button, so "behind"/"dirty" refuse and back off rather than
+update-branch/auto-rebase, for the same reasons that route's own doc comment
+gives. A burst of several task merges on the same project inside one quiet
+window coalesces into **one** release, not one per task — every armed task
+in the group clears together on success.
+
+The sweep only ever merges, never dispatches: the task PR's own merge is
+already the `on: push` that regenerates the release PR, so nothing here
+needs an `actions: write` token. A repo whose release workflow is
+`workflow_dispatch`-only (no `on: push` trigger at all) never gets a release
+PR out of a task landing — autorelease waits indefinitely in that
+configuration; a human still needs the manual Run button there.
+
+Failures are recorded per-task on `tasks.releaseError` (rendered in the task
+drawer, same posture as `mergeError`) and retried indefinitely — same
+never-give-up reasoning as the merge sweep's own table — with one exception:
+if the repo turns out to have no release-please workflow at all, the sweep
+gives up and clears the intent (retrying forever against a misconfigured
+toggle is pointless noise), but leaves the explanatory message in place so
+the failure stays visible instead of just going quiet.
+
 Absent (feature off) or malformed (didn't match the pattern, or exceeded the
 length bound) both fall back identically to the raw task title, one
 `app.log.warn` — this never blocks promotion. Both the SEED path (telling a

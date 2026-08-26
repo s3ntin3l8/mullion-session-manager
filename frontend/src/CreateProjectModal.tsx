@@ -592,9 +592,9 @@ export function CreateProjectModal({
                 Trigger release-please automatically after a task's PR merges
               </label>
               <span className="create-modal-field-hint">
-                Off by default — an unattended release trigger is an explicit opt-in. Requires
-                release-please to be configured in the repo (release-please-config.json /
-                .release-please-manifest.json).
+                Off by default — an unattended release trigger is an explicit opt-in. Requires the
+                repo to have a release-please Actions workflow, AND "Merge on approve" above — a
+                task's PR merging is what arms this; with merge-on-approve off, nothing ever does.
               </span>
             </label>
           )}

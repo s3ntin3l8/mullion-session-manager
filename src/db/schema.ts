@@ -593,6 +593,24 @@ export const tasks = sqliteTable(
     // REVIEW_SPAWN_CLAIM_STALE_MS's own reclaim reasoning. Cleared once the
     // merge sweep leaves the `dirty` state (clearMergeState).
     rebaseStartedAt: integer("rebase_started_at", { mode: "timestamp" }),
+    // #744 — durable intent to cut a release covering this task, armed by
+    // task-reconciler.ts's attemptMerge the moment this task's OWN PR
+    // actually merges (case "clean" only — never on "already-done", which
+    // also covers a PR closed WITHOUT merging; see that call site's own
+    // comment). Per-task, not per-project, so the failure surfaces on the
+    // task the way mergeError does; task-reconciler.ts's
+    // processReleaseRequests sweep groups armed tasks BY project, so N tasks
+    // landing in a burst coalesce into ONE release, not N. Gated on
+    // projects.autoTagRelease — see that column's own doc comment.
+    releaseRequestedAt: integer("release_requested_at", { mode: "timestamp" }),
+    // #744 — the last autorelease-sweep failure for this task (no release
+    // workflow configured, release PR blocked/dirty/behind, no write token,
+    // ...), surfaced in the task drawer. A separate column from mergeError
+    // (that sweep is already done by the time this one runs) and from
+    // githubSyncError (clearGithubSyncError would otherwise clobber it
+    // independently of this sweep's own state) — same reasoning mergeError
+    // itself already documents relative to githubSyncError above.
+    releaseError: text("release_error"),
     // Auto-approve — the review agent's most recently ingested verdict
     // ("clean" | "changes-requested" | "inconclusive"), written alongside
     // reviewFindingsIngestedSessionId in task-reconciler.ts's

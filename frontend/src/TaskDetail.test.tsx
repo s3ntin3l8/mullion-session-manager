@@ -92,6 +92,8 @@ function makeTask(overrides: Partial<Task>): Task {
     prNumber: null,
     mergeRequestedAt: null,
     mergeError: null,
+    releaseRequestedAt: null,
+    releaseError: null,
     lastReviewVerdict: null,
     assignee: null,
     failureReason: null,
@@ -908,6 +910,40 @@ describe("TaskDetail merge-on-approve status", () => {
 
     expect(screen.getByText("Conflicts with main — needs manual resolution")).toBeInTheDocument();
     expect(screen.queryByText(/Merge pending/)).toBeNull();
+  });
+
+  it("shows the release-pending hint once a release has been requested (#744)", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prNumber: 9,
+        prUrl: "https://x/pull/9",
+        releaseRequestedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText(/Release pending/)).toBeInTheDocument();
+  });
+
+  it("shows the recorded release error instead of the pending hint (#744)", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prNumber: 9,
+        prUrl: "https://x/pull/9",
+        releaseRequestedAt: "2026-01-01T00:00:00.000Z",
+        releaseError: "No open release-please PR yet — waiting for it to be generated",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(
+      screen.getByText("No open release-please PR yet — waiting for it to be generated"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Release pending/)).toBeNull();
   });
 
   it("renders nothing for a done task with no linked PR (a local-only task)", () => {

@@ -872,6 +872,18 @@ function TaskMergeStatus({ task }: { task: Task }) {
         </span>
       )}
       {task.mergeError && <span className="task-detail-error">{task.mergeError}</span>}
+      {/* #744 — releaseRequestedAt is only ever set AFTER this task's own PR
+          has merged (task-reconciler.ts's attemptMerge, case "clean"), so it
+          and mergeRequestedAt/mergeError above are never both "pending" at
+          once for the same task — no button here, the autorelease sweep is
+          project-wide and unattended, same as this project's autoTagRelease
+          toggle implies. */}
+      {task.releaseRequestedAt !== null && !task.releaseError && (
+        <span className="task-detail-hint">
+          Release pending — batching with any other recently landed tasks before merging.
+        </span>
+      )}
+      {task.releaseError && <span className="task-detail-error">{task.releaseError}</span>}
       {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
       {error && <span className="task-detail-error">{error}</span>}
     </div>
