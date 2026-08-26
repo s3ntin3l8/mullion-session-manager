@@ -32,12 +32,13 @@ a way that doesn't coerce to `false`).
 
 ## Database and sessions
 
-| Variable              | Default              | Description                                                                                                                              |
-| --------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`        | `file:./data/app.db` | SQLite `file:` URL                                                                                                                       |
-| `DB_ENCRYPTION_KEY`   | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                        |
-| `SESSIONS_DIR`        | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                        |
-| `MULLION_SOCKET_PATH` | _(empty)_            | path for the control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`socket-api.md`](socket-api.md) |
+| Variable                | Default              | Description                                                                                                                                                                                         |
+| ----------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`          | `file:./data/app.db` | SQLite `file:` URL                                                                                                                                                                                  |
+| `DB_ENCRYPTION_KEY`     | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                                                                                   |
+| `SESSIONS_DIR`          | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                                                                                   |
+| `MULLION_SOCKET_PATH`   | _(empty)_            | path for the control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`socket-api.md`](socket-api.md)                                                            |
+| `MULLION_SSH_AUTH_SOCK` | _(empty)_            | path to a unix socket implementing the SSH agent protocol, injected as `SSH_AUTH_SOCK` into every session; empty leaves an inherited `SSH_AUTH_SOCK` untouched — see [`ssh-agent.md`](ssh-agent.md) |
 
 Generate an encryption key:
 
@@ -146,12 +147,15 @@ unset for a `make dev` source checkout.
 ## Per-session (injected at spawn, not `@fastify/env`-validated)
 
 These aren't in the schema above — they're written into a spawned session's
-environment by `src/services/session-env.ts`, one set per session, not a
+environment by `src/services/launch-plan.ts`, one set per session, not a
 deploy-time default. See [`agent-hooks.md`](agent-hooks.md) and
 [`socket-api.md`](socket-api.md).
 
-| Variable              | Description                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------ |
-| `MULLION_HOOK_SOCKET` | path to this session's hook socket, read by the hook forwarder/adapters              |
-| `MULLION_HOOK_TOKEN`  | per-session token authenticating that socket connection                              |
-| `MULLION_SESSION_ID`  | this session's own id, read by the `mullion` CLI and MCP client to scope calls to it |
+| Variable                      | Description                                                                                                                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MULLION_HOOK_SOCKET`         | path to this session's hook socket, read by the hook forwarder/adapters                                                                                                                    |
+| `MULLION_HOOK_TOKEN`          | per-session token authenticating that socket connection                                                                                                                                    |
+| `MULLION_SOCKET_PATH`         | path to the control socket, so the `mullion` CLI run from inside a session defaults its targeting to that session with no flags                                                            |
+| `MULLION_SESSION_ID`          | this session's own id, read by the `mullion` CLI and MCP client to scope calls to it                                                                                                       |
+| `MULLION_REVIEW_GATE_ENABLED` | mirrors the config value of the same name, read by the hook forwarder                                                                                                                      |
+| `SSH_AUTH_SOCK`               | set to `MULLION_SSH_AUTH_SOCK`'s configured path when that's non-empty; otherwise this session's inherited `SSH_AUTH_SOCK` (if any) is left untouched — see [`ssh-agent.md`](ssh-agent.md) |

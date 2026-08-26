@@ -5899,6 +5899,89 @@ describe("PtyManager", () => {
       gatedManager.killAll();
     });
 
+    it("injects SSH_AUTH_SOCK from the spawned systemd-run env only when PtyManager is constructed with sshAuthSock set", async () => {
+      const bridgedManager = new PtyManager({ sessionsDir, sshAuthSock: "/tmp/ssh-agent.sock" });
+      const session = bridgedManager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      expect(call).toBeDefined();
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.SSH_AUTH_SOCK).toBe("/tmp/ssh-agent.sock");
+
+      // Same "this test's own manager, clean up its own timers/sessions"
+      // reasoning as the reviewGateEnabled gatedManager test above.
+      bridgedManager.killAll();
+    });
+
+    it("resolves a relative sshAuthSock against the server's own cwd, not a session's project cwd", async () => {
+      // dtach (and every session shell) runs with cwd set to the SESSION's
+      // own project directory, not this process's — same reasoning as
+      // controlSocketPath's own path.resolve() a few lines above it in
+      // PtyManager's constructor. An unresolved relative path here would
+      // otherwise resolve differently (or not at all) per session.
+      const relativeManager = new PtyManager({
+        sessionsDir,
+        sshAuthSock: "relative/ssh-agent.sock",
+      });
+      const session = relativeManager.getOrCreate({
+        id: "1",
+        cwd: "/tmp/some-other-project",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      expect(call).toBeDefined();
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.SSH_AUTH_SOCK).toBe(path.resolve(process.cwd(), "relative/ssh-agent.sock"));
+
+      relativeManager.killAll();
+    });
+
+    it("leaves an inherited SSH_AUTH_SOCK untouched by default (PtyManager constructed with no sshAuthSock override)", async () => {
+      // Deliberately NOT asserting absence here: buildSessionEnv() never
+      // strips SSH_AUTH_SOCK (see session-env.ts's "Deliberately NOT
+      // stripped" comment), so the default-off behavior is pass-through, not
+      // removal — matching whatever this test process itself inherited, set
+      // explicitly here so the assertion doesn't depend on the host's own
+      // ambient environment.
+      const original = process.env.SSH_AUTH_SOCK;
+      process.env.SSH_AUTH_SOCK = "/run/user/1000/gnupg/S.gpg-agent.ssh";
+      try {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        expect(call).toBeDefined();
+        const opts = call?.[2] as { env?: Record<string, string> };
+        expect(opts.env?.SSH_AUTH_SOCK).toBe("/run/user/1000/gnupg/S.gpg-agent.ssh");
+      } finally {
+        if (original === undefined) delete process.env.SSH_AUTH_SOCK;
+        else process.env.SSH_AUTH_SOCK = original;
+      }
+    });
+
     it("spawns a non-matching command completely unchanged, writing no settings file", async () => {
       const session = manager.getOrCreate({
         id: "1",

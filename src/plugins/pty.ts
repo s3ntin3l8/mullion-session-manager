@@ -153,6 +153,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   const manager = new PtyManager({
     sessionsDir,
     reviewGateEnabled: app.config.MULLION_REVIEW_GATE_ENABLED,
+    sshAuthSock: app.config.MULLION_SSH_AUTH_SOCK,
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),

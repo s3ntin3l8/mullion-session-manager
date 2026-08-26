@@ -92,6 +92,12 @@ export interface LaunchPlanSession {
   readonly controlSocketPath: string;
   readonly sessionsDir: string;
   readonly reviewGateEnabled: boolean;
+  /** MULLION_SSH_AUTH_SOCK (src/plugins/env.ts) — the path injected as this
+   * session's SSH_AUTH_SOCK, or "" (the default) to leave whatever value the
+   * session already inherited untouched. See buildLaunchPlan's injection of
+   * this below and session-env.ts's "Deliberately NOT stripped" comment for
+   * why SSH_AUTH_SOCK itself isn't in SERVER_ENV_KEYS. */
+  readonly sshAuthSock: string;
   readonly injectAgentGuide: boolean;
   readonly injectProjectBriefing: boolean;
   readonly skipPermissions: boolean;
@@ -134,15 +140,17 @@ export interface LaunchPlan {
 }
 
 /**
- * Composes the argv/env for a session's dtach master launch — everything
- * `Session.bootstrapMaster()` (pty-manager.ts) used to compute inline before
- * PR 32's extraction: env scrub, shell-integration setup, the five
- * MULLION_* injections, agent-guide injection, hook-adapter wiring,
+ * Composes the argv/env for a session's dtach master launch — originally
+ * everything `Session.bootstrapMaster()` (pty-manager.ts) used to compute
+ * inline before PR 32's extraction (env scrub, shell-integration setup, the
+ * five MULLION_* injections, agent-guide injection, hook-adapter wiring,
  * skip-permissions handling, and initial-prompt composition, in that exact
- * order. See this module's own top-of-file doc comment for why this isn't
- * a *pure* function despite doing pure composition work. Behavior-preserving
- * only: every step below reproduces bootstrapMaster's prior inline logic
- * unchanged, just relocated.
+ * order — that part is still behavior-preserving, reproducing
+ * bootstrapMaster's prior inline logic unchanged, just relocated), plus the
+ * SSH_AUTH_SOCK injection added later (right after the five MULLION_*
+ * injections, before agent-guide injection), which has no such prior
+ * inline equivalent. See this module's own top-of-file doc comment for why
+ * this isn't a *pure* function despite doing pure composition work.
  */
 export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const shell = process.env.SHELL || "/bin/bash";
@@ -179,6 +187,19 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // and conditionally skip the blocking review_gate for agents whose hook
   // is always registered (agy) rather than gated at registration time.
   sessionEnv.MULLION_REVIEW_GATE_ENABLED = String(session.reviewGateEnabled);
+  // MULLION_SSH_AUTH_SOCK — lets a session reach an SSH agent that lives
+  // outside this host (e.g. one forwarded in via `ssh -R`, see
+  // docs/ssh-agent.md) without a private key ever touching this host. Set
+  // unconditionally when configured, never gated on the socket being live
+  // right now: a session spawned while the far end is offline should start
+  // working the moment it reconnects, with no respawn — that's the whole
+  // reason the path is expected to be stable rather than per-connection.
+  // Left untouched when unset, so an inherited SSH_AUTH_SOCK (e.g. a local
+  // gpg-agent/ssh-agent) keeps working exactly as before this feature
+  // existed.
+  if (session.sshAuthSock) {
+    sessionEnv.SSH_AUTH_SOCK = session.sshAuthSock;
+  }
 
   // Issue #405 — writes this session's own copy of the shipped agent guide
   // doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,

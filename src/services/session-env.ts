@@ -35,6 +35,17 @@ import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
 // socket path(s)/token/id and mistake them for its own: the same env-leak
 // class buildSessionEnv() exists to prevent for every other Mullion-owned
 // config key.
+// MULLION_SSH_AUTH_SOCK (the config key that names the path launch-plan.ts
+// injects as SSH_AUTH_SOCK) is stripped for the same nested-Mullion reason as
+// every other key in this list. SSH_AUTH_SOCK itself is deliberately NOT
+// stripped here — grouped with the PATH/HOME/SHELL passthrough two
+// paragraphs up, NOT with TERM/COLORTERM below (those are the opposite
+// treatment: unconditionally overwritten regardless of what's inherited).
+// launch-plan.ts overwrites SSH_AUTH_SOCK when MULLION_SSH_AUTH_SOCK is
+// configured; when it's not, whatever this host's systemd --user manager (or
+// PAM, or a desktop keyring) already exports as SSH_AUTH_SOCK passes straight
+// through unexamined — this feature being "off" does not mean a session gets
+// no SSH_AUTH_SOCK, only that this feature isn't the one supplying it.
 // ZDOTDIR/MULLION_USER_ZDOTDIR (issue: sidebar worktree display,
 // shell-integration.ts's applyShellIntegrationEnv) are deliberately absent
 // from this list even though they're Mullion-owned: unlike every key below,
@@ -87,6 +98,7 @@ export const SERVER_ENV_KEYS = [
   "MULLION_HOOK_SOCKET",
   "MULLION_HOOK_TOKEN",
   "MULLION_SOCKET_PATH",
+  "MULLION_SSH_AUTH_SOCK",
   "MULLION_SESSION_ID",
   "NODE_ENV",
   // OPENCODE_CONFIG_CONTENT is a per-session injection Mullion sets on the
