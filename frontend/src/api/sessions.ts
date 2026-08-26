@@ -63,6 +63,8 @@ export const sessionsApi = {
       // periodically synced to the branch's latest commit.
       worktreeRefresh?: boolean;
       skipPermissions?: boolean;
+      // Issue #822 — a dock control's own env, forwarded verbatim.
+      env?: Record<string, string>;
     },
   ) =>
     request<Session>("/api/sessions", {

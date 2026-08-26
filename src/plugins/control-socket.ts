@@ -534,9 +534,18 @@ const OPS: Record<string, OpSpec> = {
       // full-scope gate exists to withhold. Full scope keeps both
       // (matching `sessions.create`'s own behavior for that scope) since a
       // full-scope caller already has this power directly.
+      //
+      // `env` (issue #822) joins this list for the same reason: without
+      // it, a NEW field added to POST /api/sessions' schema would silently
+      // widen session scope the moment it landed — this `...rest` spread
+      // forwards anything not explicitly named above. A session-scoped
+      // agent spawning a child of its own session has no legitimate need
+      // to hand that child arbitrary extra env; a full-scope caller
+      // already has this power directly (same as skipPermissions/kind).
       if (conn.scope === "session") {
         delete rest.skipPermissions;
         delete rest.kind;
+        delete rest.env;
       }
       const payload = {
         ...rest,

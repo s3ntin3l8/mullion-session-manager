@@ -56,6 +56,10 @@ export interface SessionBackend {
     // exist yet.
     resumeAgentSessionId?: string;
     projectId?: number;
+    // Issue #822 — see CreateSessionBody.env's own doc comment
+    // (session-lifecycle.ts). Forwarded to a remote host verbatim
+    // (RemoteBackend.spawn below), unlike resumeAgentSessionId.
+    env?: Record<string, string>;
   }): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
@@ -246,6 +250,7 @@ class LocalBackend implements SessionBackend {
     seedPrompt?: string;
     resumeAgentSessionId?: string;
     projectId?: number;
+    env?: Record<string, string>;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
     // throw synchronously (getOrCreate() is sync by design; a spawn failure
@@ -441,6 +446,7 @@ class RemoteBackend implements SessionBackend {
     seedPrompt?: string;
     resumeAgentSessionId?: string;
     projectId?: number;
+    env?: Record<string, string>;
   }): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment

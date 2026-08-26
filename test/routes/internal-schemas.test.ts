@@ -72,6 +72,11 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           initialPrompt: { type: "string" },
           seedPrompt: { type: "string" },
           projectId: { type: "integer" },
+          env: {
+            type: "object",
+            maxProperties: 64,
+            additionalProperties: { type: "string", maxLength: 4096 },
+          },
         },
       },
     });

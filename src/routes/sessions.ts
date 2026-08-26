@@ -20,6 +20,8 @@ import {
   createSessionRecord,
   killSession,
   resolveWorktreeCwd,
+  MAX_SESSION_ENV_ENTRIES,
+  MAX_SESSION_ENV_VALUE_LENGTH,
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
@@ -74,6 +76,11 @@ const createSessionSchema = {
       worktreeRefresh: { type: "boolean" },
       skipPermissions: { type: "boolean" },
       parentSessionId: { type: "integer" },
+      env: {
+        type: "object",
+        maxProperties: MAX_SESSION_ENV_ENTRIES,
+        additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
+      },
     },
   },
 };

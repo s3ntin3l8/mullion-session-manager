@@ -574,6 +574,7 @@ describe("CommandPalette -> focus management (P11)", () => {
       projectId: PROJECT.id,
       command: "bash",
       cwd: null,
+      env: null,
     } as Session);
     await vi.waitFor(() => expect(onLaunched).toHaveBeenCalled());
 
@@ -937,6 +938,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       nameLocked: false,
       command: "claude code",
       cwd: null,
+      env: null,
       kind: "terminal",
       status: "active",
       createdAt: "",
@@ -997,6 +999,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
             projectId: PROJECT.id,
             command: "bash",
             cwd: null,
+            env: null,
             status: "active",
           }),
         );

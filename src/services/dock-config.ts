@@ -41,6 +41,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { DockControl } from "./project-config.js";
+import { isReservedSessionEnvKey } from "./session-env-keys.js";
 
 // Re-exported so route layers only need to import from this module for the
 // dock-config triple, the same "one import surface per feature" shape
@@ -186,6 +187,16 @@ function validateOneControl(raw: unknown, index: number): DockControl {
     for (const [k, v] of Object.entries(c.env as Record<string, unknown>)) {
       if (typeof v !== "string") {
         throw new DockConfigValidationError(`controls[${index}].env.${k} must be a string`);
+      }
+      // Issue #822 — a dock control's env is applied before every
+      // Mullion-owned env write (launch-plan.ts's buildLaunchPlan), so it
+      // can never actually override MULLION_*/SSH_AUTH_SOCK — but silently
+      // doing nothing is exactly the bug class this feature exists to
+      // kill. Reject it here, where the user editing this file can see it.
+      if (isReservedSessionEnvKey(k)) {
+        throw new DockConfigValidationError(
+          `controls[${index}].env has a reserved key "${k}" (MULLION_* and SSH_AUTH_SOCK are set by Mullion itself and cannot be overridden)`,
+        );
       }
     }
     env = c.env as Record<string, string>;

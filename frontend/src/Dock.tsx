@@ -582,11 +582,13 @@ function DockColumn({
                 kind: "dock",
                 worktree: { branch: branchName },
                 worktreeRefresh: effectiveWorktreeRefresh,
+                ...(control.env ? { env: control.env } : {}),
               });
             }
             return useDashboardStore.getState().createSession(projectId, control.command, {
               ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
               kind: "dock",
+              ...(control.env ? { env: control.env } : {}),
             });
           };
 

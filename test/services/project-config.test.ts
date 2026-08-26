@@ -202,5 +202,32 @@ describe("project-config", () => {
       // confirm this doesn't throw and returns an empty/best-effort result.
       expect(() => resolveProjectDock(tmpDir, "~/.config/crs-nonexistent-test-dir")).not.toThrow();
     });
+
+    // Issue #822 — this is the lenient READ-side counterpart to
+    // dock-config.ts's strict write-side rejection: a dock.json written
+    // before this feature existed (or hand-edited around the validator)
+    // must still load, just without the reserved/invalid keys.
+    it("drops reserved/invalid env keys but keeps ordinary ones", () => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "project-config-test-"));
+      writeJson(path.join(tmpDir, ".crs", "dock.json"), {
+        controls: [
+          {
+            id: "dev-server",
+            title: "Dev server",
+            command: "npm run dev",
+            env: {
+              NODE_ENV: "development",
+              MULLION_AUTH_TOKEN: "attacker-value",
+              SSH_AUTH_SOCK: "/evil.sock",
+              "": "empty-key",
+              "FOO-BAR": "invalid-char",
+            },
+          },
+        ],
+      });
+
+      const controls = resolveProjectDock(tmpDir, "~/.config/crs-nonexistent-test-dir");
+      expect(controls[0].env).toEqual({ NODE_ENV: "development" });
+    });
   });
 });

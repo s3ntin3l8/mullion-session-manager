@@ -151,6 +151,8 @@ export interface SessionsSlice {
       worktree?: { baseRef: string; branchName?: string } | { branch: string };
       worktreeRefresh?: boolean;
       skipPermissions?: boolean;
+      // Issue #822 — a dock control's own env, forwarded verbatim.
+      env?: Record<string, string>;
     },
   ) => Promise<Session>;
   renameSession: (id: number, name: string) => Promise<void>;

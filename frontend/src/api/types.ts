@@ -297,6 +297,11 @@ export interface Session {
   nameLocked: boolean;
   command: string;
   cwd: string | null;
+  // Issue #822 — extra env vars this session was launched with (a dock
+  // control's own `env`, or a direct API caller's), parsed back into an
+  // object by withLiveInfo (session-live-info.ts) — NOT the raw JSON-as-text
+  // DB column verbatim. Null when none were set.
+  env: Record<string, string> | null;
   // "dock" sessions are spawned from a project's dock controls (persistent
   // monitors) rather than a one-shot launcher/manual "+ Session" — kept out
   // of the normal per-project session list, rendered in the Dock region.

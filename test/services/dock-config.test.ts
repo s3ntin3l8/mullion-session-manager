@@ -124,6 +124,31 @@ describe("dock-config service", () => {
       ).toThrow(/env must be an object/);
     });
 
+    // Issue #822 — a dock control's env is applied before every
+    // Mullion-owned env write, so it can never actually override one of
+    // these; reject at write time rather than silently doing nothing.
+    it.each([
+      ["a MULLION_-prefixed key", "MULLION_AUTH_TOKEN"],
+      ["SSH_AUTH_SOCK", "SSH_AUTH_SOCK"],
+      ["an empty key", ""],
+      ["a key with an invalid character", "FOO-BAR"],
+      ["a key starting with a digit", "1FOO"],
+    ])("rejects %s as a reserved/invalid env key", (_label, key) => {
+      expect(() =>
+        validateDockConfig({
+          controls: [{ id: "x", title: "X", command: "echo x", env: { [key]: "value" } }],
+        }),
+      ).toThrow(/reserved key/);
+    });
+
+    it("accepts an ordinary env key", () => {
+      expect(() =>
+        validateDockConfig({
+          controls: [{ id: "x", title: "X", command: "echo x", env: { NODE_ENV: "development" } }],
+        }),
+      ).not.toThrow();
+    });
+
     it("rejects a non-string cwd", () => {
       expect(() =>
         validateDockConfig({

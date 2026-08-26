@@ -132,6 +132,7 @@ const EXISTING_SESSION: Session = {
   name: null,
   nameLocked: false,
   cwd: null,
+  env: null,
   liveCwd: null,
   previewBranch: null,
   kind: "terminal",

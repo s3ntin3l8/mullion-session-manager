@@ -68,6 +68,7 @@ const BASE_SESSION_FIELDS = {
   name: null,
   nameLocked: false,
   cwd: null,
+  env: null,
   liveCwd: null,
   previewBranch: null,
   kind: "terminal" as const,

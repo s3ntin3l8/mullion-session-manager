@@ -10,6 +10,7 @@ import path from "node:path";
 // literal here) — no back-compat re-export needed for a name nothing ever
 // imported.
 import type { Launcher, LauncherKind, DockControl } from "../shared/types.js";
+import { isReservedSessionEnvKey } from "./session-env-keys.js";
 
 export type { Launcher, LauncherKind, DockControl };
 
@@ -282,9 +283,17 @@ function normalizeRawControl(raw: unknown, source: string): DockControl | null {
     ...(typeof c.worktreeRefresh === "boolean" ? { worktreeRefresh: c.worktreeRefresh } : {}),
     ...(c.env && typeof c.env === "object"
       ? {
+          // Issue #822 — drops non-string values (pre-existing) AND
+          // reserved keys (MULLION_*, SSH_AUTH_SOCK), leniently rather than
+          // rejecting the whole file: this is the read path, which never
+          // throws (see this module's own header comment on why every
+          // consumer here is "degrade to empty," not "surface an error").
+          // dock-config.ts's write-side validateOneControl is the strict
+          // counterpart that actually tells a user editing this file why.
           env: Object.fromEntries(
             Object.entries(c.env as Record<string, unknown>).filter(
-              (e): e is [string, string] => typeof e[1] === "string",
+              (e): e is [string, string] =>
+                typeof e[1] === "string" && !isReservedSessionEnvKey(e[0]),
             ),
           ),
         }

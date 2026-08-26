@@ -98,6 +98,14 @@ export interface LaunchPlanSession {
    * this below and session-env.ts's "Deliberately NOT stripped" comment for
    * why SSH_AUTH_SOCK itself isn't in SERVER_ENV_KEYS. */
   readonly sshAuthSock: string;
+  /** Issue #822 — extra env vars for this launch, applied FIRST (before
+   * the shell-integration setup and every MULLION_ var / SSH_AUTH_SOCK
+   * write below), so nothing here can ever override a Mullion-owned var.
+   * Reserved keys (the MULLION_ prefix, SSH_AUTH_SOCK) are rejected at the
+   * dock-config write path (services/dock-config.ts), not enforced here —
+   * this function trusts its caller the same way it already does for
+   * every other field. */
+  readonly env: Record<string, string>;
   readonly injectAgentGuide: boolean;
   readonly injectProjectBriefing: boolean;
   readonly skipPermissions: boolean;
@@ -146,11 +154,14 @@ export interface LaunchPlan {
  * five MULLION_* injections, agent-guide injection, hook-adapter wiring,
  * skip-permissions handling, and initial-prompt composition, in that exact
  * order — that part is still behavior-preserving, reproducing
- * bootstrapMaster's prior inline logic unchanged, just relocated), plus the
- * SSH_AUTH_SOCK injection added later (right after the five MULLION_*
- * injections, before agent-guide injection), which has no such prior
- * inline equivalent. See this module's own top-of-file doc comment for why
- * this isn't a *pure* function despite doing pure composition work.
+ * bootstrapMaster's prior inline logic unchanged, just relocated), plus two
+ * later additions with no such prior inline equivalent: the SSH_AUTH_SOCK
+ * injection (right after the five MULLION_* injections, before agent-guide
+ * injection) and the caller-supplied `env` (applied FIRST, immediately
+ * after the scrub, so it's always the one everything else can override —
+ * see this function's own `Object.assign(sessionEnv, session.env)` line).
+ * See this module's own top-of-file doc comment for why this isn't a
+ * *pure* function despite doing pure composition work.
  */
 export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const shell = process.env.SHELL || "/bin/bash";
@@ -161,6 +172,12 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // e.g. a `make dev` run from inside this session must not see this
   // process's PORT/DATABASE_URL (issue #70). See session-env.ts.
   const sessionEnv = buildSessionEnv();
+  // Issue #822 — applied immediately after the scrub and before every
+  // Mullion-owned write below (shell integration, the MULLION_* vars,
+  // SSH_AUTH_SOCK, hook-adapter envAdditions), so none of those can ever be
+  // overridden by it. A dock control or direct caller's env is real, but
+  // Mullion's own session plumbing always wins.
+  Object.assign(sessionEnv, session.env);
   // Issue: sidebar worktree display — injects the OSC 7 shell-integration
   // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
   // shell announces its cwd on every prompt draw, feeding Session.liveCwd.

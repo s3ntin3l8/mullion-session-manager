@@ -15,6 +15,15 @@ import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
 
+// Issue #822 — bounds shared between routes/sessions.ts's `env` schema
+// property and services/dock-config.ts's own env validation, so "how much
+// env is too much" has one answer regardless of which write path a caller
+// used. Not a security boundary (a full-scope caller can already achieve
+// an arbitrary env var via `command` composition, e.g. `FOO=bar claude`) —
+// just a sane cap against an accidental huge blob.
+export const MAX_SESSION_ENV_ENTRIES = 64;
+export const MAX_SESSION_ENV_VALUE_LENGTH = 4096;
+
 // Default terminal size for a session that hasn't had a browser attach yet
 // to report its real dimensions — the first WS attach immediately resizes
 // to whatever the client actually has (see terminal.ts).
@@ -81,6 +90,16 @@ export interface CreateSessionBody {
   // explicitly (see createSessionRecord's validation below) — the socket op
   // is the narrow, session-scoped path to the same outcome, not the only one.
   parentSessionId?: number;
+  // Issue #822 — extra env vars for this session's launch, on top of
+  // whatever a dock control (project-config.ts's normalizeRawControl) or
+  // direct caller supplies. Persisted to sessions.env (schema.ts) so a
+  // re-bootstrap on reattach after a Mullion restart reproduces the same
+  // launch plan — see that column's own doc comment. Applied in
+  // launch-plan.ts's buildLaunchPlan BEFORE every Mullion-owned env write
+  // (shell integration, the MULLION_* vars, SSH_AUTH_SOCK, hook-adapter
+  // envAdditions), so none of those can be overridden by it — enforced by
+  // reserved-key rejection at the dock-config write path, not here.
+  env?: Record<string, string>;
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -273,6 +292,7 @@ export async function createSessionRecord(
     initialPrompt,
     seedPrompt,
     resumeAgentSessionId,
+    env,
   } = params;
   let cwd = params.cwd;
 
@@ -399,6 +419,7 @@ export async function createSessionRecord(
         ...(nameLocked !== undefined ? { nameLocked } : {}),
         ...(skipPermissions !== undefined ? { skipPermissions } : {}),
         ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
+        ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
       })
       .returning()
       .all();
@@ -442,6 +463,7 @@ export async function createSessionRecord(
       seedPrompt,
       resumeAgentSessionId,
       projectId,
+      env,
     });
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):

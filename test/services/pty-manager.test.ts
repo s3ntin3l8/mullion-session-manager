@@ -5951,6 +5951,85 @@ describe("PtyManager", () => {
       relativeManager.killAll();
     });
 
+    it("injects env from CreateSessionOptions.env into the spawned systemd-run env", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        env: { CUSTOM_VAR: "hello" },
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      expect(call).toBeDefined();
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.CUSTOM_VAR).toBe("hello");
+    });
+
+    it("a MULLION_* injection wins over a colliding key in CreateSessionOptions.env", async () => {
+      const gatedManager = new PtyManager({ sessionsDir, reviewGateEnabled: true });
+      const session = gatedManager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        env: { MULLION_REVIEW_GATE_ENABLED: "attacker-value" },
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.MULLION_REVIEW_GATE_ENABLED).toBe("true");
+
+      gatedManager.killAll();
+    });
+
+    // Issue #822 — env is per-session config (CreateSessionOptions.env),
+    // not just a spawn-time input: a re-bootstrap on a FRESH PtyManager
+    // (simulating a Mullion process restart, same pattern as the hook-token
+    // persistence test above) must be re-supplied it — exactly what
+    // routes/terminal.ts's resolveAndAttach does by reading it back off the
+    // DB row and passing it into attachSocketToSession's getOrCreate call.
+    // This test proves PtyManager's own half of that contract: given the
+    // same env again, the respawned session's launch applies it.
+    it("re-applies env on a fresh PtyManager given the same env again (simulates reattach after a Mullion process restart)", async () => {
+      const first = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        env: { CUSTOM_VAR: "hello" },
+      });
+      await waitForSpawn(first);
+
+      const restarted = new PtyManager({ sessionsDir });
+      const reattached = restarted.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        env: { CUSTOM_VAR: "hello" },
+      });
+      await waitForSpawn(reattached);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.CUSTOM_VAR).toBe("hello");
+
+      restarted.killAll();
+    });
+
     it("leaves an inherited SSH_AUTH_SOCK untouched by default (PtyManager constructed with no sshAuthSock override)", async () => {
       // Deliberately NOT asserting absence here: buildSessionEnv() never
       // strips SSH_AUTH_SOCK (see session-env.ts's "Deliberately NOT

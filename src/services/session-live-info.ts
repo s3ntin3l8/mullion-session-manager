@@ -147,6 +147,12 @@ export function withLiveInfo(
     ...row,
     ...live,
     browserUrl,
+    // Issue #822 — same "parse the JSON-as-text column back into an object
+    // before it reaches the wire" convention as workspaces.ts's own
+    // `layout` field; without this override, the `...row` spread above
+    // would leak the raw JSON STRING (not the object a caller posted) as
+    // this session's `env`.
+    env: row.env ? (JSON.parse(row.env) as Record<string, string>) : null,
     // Dock preview sessions (PR #341) run inside a DETACHED-HEAD worktree
     // (git-worktree.ts's checkoutBranchWorktree), so neither `cwd` nor git
     // itself tells the frontend which branch is being previewed — this is
