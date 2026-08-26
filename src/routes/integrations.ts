@@ -6,6 +6,7 @@ import {
   disconnect,
   getIntegration,
   getGitHubAppStatus,
+  getConfiguredAppId,
   GITHUB_PROVIDER,
   GITHUB_REVIEWER_PROVIDER,
   InvalidTokenError,
@@ -128,14 +129,22 @@ export async function integrationsRoute(app: FastifyInstance) {
   // #737 — shared by both the primary App route and the reviewer-App route
   // below: same validation, same live-verify-before-persist sequence, same
   // response shape. `otherAppId`, when given, is the OTHER identity's
-  // currently-configured App id — passed so the reviewer route can reject
-  // reusing the primary App verbatim (see its own call site for why that
-  // specific case needs a dedicated check, not just "this key parses").
+  // currently-configured App id — both call sites pass it (Hermes review,
+  // PR #826: this used to be one-directional, checked only from the
+  // reviewer route, so re-pointing the PRIMARY at the reviewer's existing
+  // id sailed through unchecked), so reusing the same App as both
+  // identities is rejected regardless of which one is configured second.
   async function putGitHubAppLike(
     provider: string,
     body: SetGitHubAppBody,
     reply: FastifyReply,
-    otherAppId?: string | null,
+    // #737 (Hermes review, PR #826: originally one-directional, only passed
+    // by the reviewer route) — the OTHER identity's currently-configured
+    // App id, and a label naming which identity that is, so the rejection
+    // message is accurate regardless of which route triggered it: PUTting
+    // the primary against an id already configured as the reviewer reads
+    // "same App id as the reviewer App," not the other way around.
+    other?: { appId: string; label: string } | null,
   ) {
     // Hermes review, PR #504: validate at config time, not on the next
     // write — an unparseable key or malformed id otherwise surfaces only
@@ -146,14 +155,14 @@ export async function integrationsRoute(app: FastifyInstance) {
     if (!/^\d+$/.test(appId)) {
       return reply.badRequest("appId must be the numeric GitHub App id");
     }
-    // #737 — the reviewer App must be a genuinely different identity: the
-    // whole mechanism exists because GitHub 422s a review from the PR's own
-    // author, and configuring the same App id here would silently
-    // reintroduce that exact 422 at review time instead of at config time,
-    // where it's actually diagnosable.
-    if (otherAppId && appId === otherAppId) {
+    // #737 — the primary and reviewer identities must be genuinely
+    // different: the whole mechanism exists because GitHub 422s a review
+    // from the PR's own author, and configuring the same App id for both
+    // would silently reintroduce that exact 422 at review time instead of
+    // at config time, where it's actually diagnosable.
+    if (other && appId === other.appId) {
       return reply.badRequest(
-        "This is the same App id as the primary GitHub App — the reviewer must be a separate App, or GitHub will reject its review as coming from the PR's own author.",
+        `This is the same App id as ${other.label} — they must be separate Apps, or GitHub will reject the reviewer's review as coming from the PR's own author.`,
       );
     }
     let parsedKey: crypto.KeyObject;
@@ -201,7 +210,21 @@ export async function integrationsRoute(app: FastifyInstance) {
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
-    async (request, reply) => putGitHubAppLike(GITHUB_PROVIDER, request.body, reply),
+    async (request, reply) => {
+      // Hermes review, PR #826: the same-appId guard is symmetric — this
+      // side didn't check at all, so configuring the reviewer App FIRST and
+      // then re-pointing the primary at that same id sailed through here,
+      // silently reintroducing the 422 at review time instead of at
+      // config time. `getConfiguredAppId` is a cheap local read (no
+      // decrypt, no network call), unlike `getGitHubAppStatus`.
+      const reviewerAppId = getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER);
+      return putGitHubAppLike(
+        GITHUB_PROVIDER,
+        request.body,
+        reply,
+        reviewerAppId ? { appId: reviewerAppId, label: "the reviewer App" } : null,
+      );
+    },
   );
 
   app.delete("/api/integrations/github/app", async (_request, reply) => {
@@ -221,8 +244,13 @@ export async function integrationsRoute(app: FastifyInstance) {
     "/api/integrations/github/reviewer-app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const primary = await getGitHubAppStatus(app);
-      return putGitHubAppLike(GITHUB_REVIEWER_PROVIDER, request.body, reply, primary.appId);
+      const primaryAppId = getConfiguredAppId(app, GITHUB_PROVIDER);
+      return putGitHubAppLike(
+        GITHUB_REVIEWER_PROVIDER,
+        request.body,
+        reply,
+        primaryAppId ? { appId: primaryAppId, label: "the primary GitHub App" } : null,
+      );
     },
   );
 

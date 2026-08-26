@@ -432,6 +432,32 @@ describe("integrations route (issue #27)", () => {
       await app.close();
     });
 
+    // Hermes review, PR #826: the guard used to be one-directional — only
+    // the reviewer route checked against the primary's id, so re-pointing
+    // the PRIMARY at the reviewer's already-configured id sailed through.
+    it("PUT 400s the primary App id matching the already-configured reviewer App (the reverse direction)", async () => {
+      stubGithubFetch({ appId: "222" });
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "222", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "222", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/same App id as the reviewer App/);
+
+      // Nothing persisted for the primary row.
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: false }));
+      await app.close();
+    });
+
     it("PUT allows the reviewer App id when no primary App is configured yet", async () => {
       stubGithubFetch({ appId: "123" });
       const app = await buildApp();

@@ -29,6 +29,7 @@ import {
   disconnect,
   getIntegration,
   getGitHubAppStatus,
+  getConfiguredAppId,
   getToken,
   InvalidTokenError,
   setPat,
@@ -468,6 +469,30 @@ describe("github-integration service", () => {
   // needs its own coverage is "no PAT fallback, ever" — everything else
   // (mint success/failure/not-installed/decrypt-failure) is the same
   // getInstallationToken plumbing resolveGitHubToken already exercises.
+  // Hermes review, PR #826: added to back the symmetric same-appId guard in
+  // routes/integrations.ts, which reads both identities' ids via this
+  // cheap, local-only accessor rather than the network-calling
+  // getGitHubAppStatus.
+  describe("getConfiguredAppId (#737)", () => {
+    it("returns null when nothing is configured for that provider", async () => {
+      const app = await buildApp();
+      expect(getConfiguredAppId(app)).toBeNull();
+      expect(getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER)).toBeNull();
+      await app.close();
+    });
+
+    it("returns each provider's own appId independently, with no network call", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "111", FAKE_APP_PRIVATE_KEY);
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+
+      expect(getConfiguredAppId(app)).toBe("111");
+      expect(getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER)).toBe("222");
+      expect(fetchMock).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
   describe("resolveReviewerToken (#737)", () => {
     it("returns null (never the PAT) when no reviewer App is configured", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));

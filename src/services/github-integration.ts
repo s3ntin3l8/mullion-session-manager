@@ -105,6 +105,21 @@ export function getToken(app: FastifyInstance): string | null {
   return app.encryption.decryptString(row.authTokenEnc);
 }
 
+/**
+ * #737 — the numeric App id currently configured for `provider`, or `null`
+ * if none is. A cheap, local-only read (no decrypt, no network call) —
+ * deliberately narrower than `getGitHubAppStatus`, which does both, so the
+ * PUT routes' same-appId-as-the-other-identity check (`routes/
+ * integrations.ts`) doesn't pay for a live `listInstallations` round trip
+ * just to compare two ids.
+ */
+export function getConfiguredAppId(
+  app: FastifyInstance,
+  provider: string = GITHUB_PROVIDER,
+): string | null {
+  return getRow(app, provider)?.githubAppId ?? null;
+}
+
 function getGitHubAppCredentials(
   app: FastifyInstance,
   provider: string = GITHUB_PROVIDER,
