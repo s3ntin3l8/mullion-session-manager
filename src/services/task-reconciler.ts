@@ -1499,10 +1499,23 @@ async function attemptRelease(
   project: typeof projects.$inferSelect,
   taskIds: number[],
 ): Promise<void> {
+  // Hermes review, PR #818 — unlike attemptMerge's own repoRef/token
+  // resolution above (which silently no-ops on either failure), these two
+  // record a releaseError: every OTHER branch in this function does, and a
+  // project whose repo ref/token happens to be momentarily unavailable
+  // would otherwise leave every armed task showing "Release pending"
+  // forever, indistinguishable from a release that's genuinely still
+  // waiting on its quiet window or on GitHub.
   const repoRef = await resolveRepoRef(app, project);
-  if (!repoRef) return;
+  if (!repoRef) {
+    recordReleaseError(app, taskIds, "Could not resolve this project's GitHub repo");
+    return;
+  }
   const token = await resolveGitHubToken(app, repoRef, "read");
-  if (!token) return;
+  if (!token) {
+    recordReleaseError(app, taskIds, "No GitHub token available for this project");
+    return;
+  }
 
   // Distinguish "genuinely not configured" (give up, clear the intent —
   // retrying forever against a misconfigured toggle is pointless noise) from
