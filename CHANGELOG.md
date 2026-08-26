@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.46](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.45...v0.2.46) (2026-08-26)
+
+
+### Features
+
+* **github:** add release-please detection, run, and merge to the GitHub panel ([#816](https://github.com/s3ntin3l8/mullion-session-manager/issues/816)) ([dbe5887](https://github.com/s3ntin3l8/mullion-session-manager/commit/dbe5887c32df104beb2b56bc655dc0e63986a4cb))
+* inject SSH_AUTH_SOCK into sessions from MULLION_SSH_AUTH_SOCK ([#819](https://github.com/s3ntin3l8/mullion-session-manager/issues/819)) ([be25691](https://github.com/s3ntin3l8/mullion-session-manager/commit/be25691eca9faea0c5d2dd35a8492da97a93bbc3))
+* **tasks:** autorelease after tasks land — the automatic half of [#744](https://github.com/s3ntin3l8/mullion-session-manager/issues/744) ([#818](https://github.com/s3ntin3l8/mullion-session-manager/issues/818)) ([c407207](https://github.com/s3ntin3l8/mullion-session-manager/commit/c4072073547f199f691e24fad800cedbb827e105))
+
 ## [0.2.45](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.44...v0.2.45) (2026-08-23)
 
 
