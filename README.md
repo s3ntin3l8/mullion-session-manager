@@ -78,6 +78,12 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   (e.g. against Authentik) — either or both, off by default, composable
   with (not a replacement for) an external forwardAuth gateway. See
   [`docs/auth.md`](docs/auth.md) for setup.
+- **SSH agent access from a session.** Point `MULLION_SSH_AUTH_SOCK` at a
+  unix socket implementing the SSH agent protocol — e.g. one forwarded in
+  from a laptop's 1Password/`ssh-agent` via OpenSSH's native `ssh -R` unix-
+  socket forwarding — and every session gets a working `SSH_AUTH_SOCK`
+  without a private key ever touching this host. See
+  [`docs/ssh-agent.md`](docs/ssh-agent.md) for setup.
 - **Persistent, queryable session history (opt-in).** Turn on
   Settings' event-persistence toggle to mirror notification events to a
   durable `session_events` table (with configurable retention), queryable
