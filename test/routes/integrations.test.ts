@@ -8,6 +8,7 @@ import { closeDb } from "../../src/db/client.js";
 import {
   disconnect,
   clearGitHubApp,
+  setGitHubApp,
   GITHUB_REVIEWER_PROVIDER,
 } from "../../src/services/github-integration.js";
 import { resetDeviceFlowForTests } from "../../src/services/github-device-flow.js";
@@ -453,6 +454,43 @@ describe("integrations route (issue #27)", () => {
       expect(res.json().message).toMatch(/same App id as the reviewer App/);
 
       // Nothing persisted for the primary row.
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: false }));
+      await app.close();
+    });
+
+    // Independent review (fresh subagent, PR #826): the first version of
+    // the symmetric guard read the OTHER identity's appId once, before
+    // `verifyAppCredentials`'s network round trip — leaving a window where
+    // a concurrent PUT to the other route could persist the same appId in
+    // between. Simulates that race by having the fake GET /app response
+    // (awaited mid-request) itself write the OTHER row, then asserts the
+    // second, pre-persist re-check catches it rather than reusing the
+    // stale pre-network-call value.
+    it("PUT 400s when the OTHER identity is configured to the same appId WHILE this request's own verify call is in flight (TOCTOU)", async () => {
+      const app = await buildApp();
+      fetchMock.mockImplementation((url: string) => {
+        if (url.endsWith("/app")) {
+          // The race: by the time this (awaited) response resolves, the
+          // reviewer row now holds the same appId this primary-App PUT is
+          // trying to configure — something only a CONCURRENT request
+          // could do in production, injected here deterministically.
+          setGitHubApp(app, "999", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+          return Promise.resolve(jsonResponse(200, { id: 999, slug: "test-app" }));
+        }
+        return Promise.resolve(jsonResponse(200, {}));
+      });
+
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "999", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/same App id as the reviewer App/);
+      // The primary row must NOT have been persisted — the whole point of
+      // the pre-persist re-check.
       const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
       expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: false }));
       await app.close();

@@ -325,10 +325,17 @@ Configuring one:
    card, identical in shape to the App card above (App id, installation
    count, key fingerprint, rotation date) and rotated the same way.
 
-Once configured, a review round mints a short-lived installation token
-scoped to `pull_requests: write` + `metadata: read` for the repo in question
-(`resolveReviewerToken`, `src/services/github-integration.ts`) and uses it to
-post the round's verdict as a gating event:
+**Not wired up to a review yet.** As of this write-up, configuring a
+reviewer App provisions the credential and its resolver
+(`resolveReviewerToken`, `src/services/github-integration.ts` — mints a
+short-lived installation token scoped to `pull_requests: write` +
+`metadata: read` for a given repo) but **nothing in Task Master calls it
+yet**: `createPullRequestReview` (`src/services/github-write.ts`) still
+hardcodes `event: "COMMENT"` regardless of whether a reviewer App is
+configured. Configuring one today has no visible effect on the review
+agent's posted reviews — it's provisioning ahead of the follow-up change
+that actually maps a review verdict onto a gating event and calls this
+resolver. That follow-up will use exactly this shape:
 
 - review agent verdict `clean` → `event: "APPROVE"`
 - review agent verdict `changes-requested` → `event: "REQUEST_CHANGES"`
@@ -338,19 +345,20 @@ post the round's verdict as a gating event:
 never falls back to the shared PAT/OAuth token. Falling back would hand a
 gating review to the primary identity, reintroducing the 422-from-the-
 PR's-own-author problem this whole mechanism exists to avoid. Not
-configured, not installed on this particular owner, or a mint failure all
-mean the same thing: this round's review quietly downgrades to `COMMENT`
-from the primary identity, logged at `debug`, never surfaced as a
-`githubSyncError` — the same "this is the expected steady state for a repo
-the reviewer App isn't covering" posture `resolveGitHubToken` already has for
-the primary App.
+configured, not installed on this particular owner, or a mint failure will
+all mean the same thing once the caller exists: that round's review quietly
+downgrades to `COMMENT` from the primary identity, logged at `debug`, never
+surfaced as a `githubSyncError` — the same "this is the expected steady
+state for a repo the reviewer App isn't covering" posture `resolveGitHubToken`
+already has for the primary App.
 
 A reviewer App is **not** a substitute for a CODEOWNERS entry — a GitHub App
 can't be a CODEOWNER. It can only satisfy a branch protection rule's numeric
 "required approving reviews" count. See [`tasks.md`](tasks.md#merge-on-approve)
-for what this changes about merge behavior once branch protection actually
-requires an approval, including what happens when Mullion's own later pushes
-(an auto-rebase, a "branch is behind" update) dismiss that approval.
+for what this will change about merge behavior once both branch protection
+requires an approval and the follow-up review-wiring change has landed,
+including what happens when Mullion's own later pushes (an auto-rebase, a
+"branch is behind" update) dismiss that approval.
 
 ## Webhook delivery
 

@@ -128,23 +128,28 @@ export async function integrationsRoute(app: FastifyInstance) {
   // previously was a pure DB write.
   // #737 — shared by both the primary App route and the reviewer-App route
   // below: same validation, same live-verify-before-persist sequence, same
-  // response shape. `otherAppId`, when given, is the OTHER identity's
-  // currently-configured App id — both call sites pass it (Hermes review,
-  // PR #826: this used to be one-directional, checked only from the
-  // reviewer route, so re-pointing the PRIMARY at the reviewer's existing
-  // id sailed through unchecked), so reusing the same App as both
+  // response shape. `other`, when given, identifies the OTHER identity's
+  // row (provider + a label for error messages) — both call sites pass it
+  // (Hermes review, PR #826: this used to be one-directional, checked only
+  // from the reviewer route, so re-pointing the PRIMARY at the reviewer's
+  // existing id sailed through unchecked), so reusing the same App as both
   // identities is rejected regardless of which one is configured second.
   async function putGitHubAppLike(
     provider: string,
     body: SetGitHubAppBody,
     reply: FastifyReply,
-    // #737 (Hermes review, PR #826: originally one-directional, only passed
-    // by the reviewer route) — the OTHER identity's currently-configured
-    // App id, and a label naming which identity that is, so the rejection
-    // message is accurate regardless of which route triggered it: PUTting
-    // the primary against an id already configured as the reviewer reads
-    // "same App id as the reviewer App," not the other way around.
-    other?: { appId: string; label: string } | null,
+    // Independent review (fresh subagent, PR #826): the FIRST version of
+    // this symmetric fix took the other identity's appId as a value
+    // resolved once, before `verifyAppCredentials`'s network round trip —
+    // leaving a TOCTOU window where two concurrent PUTs (one per route,
+    // same appId) could each pass their check against the other's
+    // not-yet-written row and both persist, landing exactly the
+    // both-configured-as-the-same-App state this guard exists to prevent.
+    // Passing the OTHER provider (not a pre-resolved appId) lets this
+    // re-read it immediately before the persisting write below too,
+    // shrinking the window from a full network round trip to a single
+    // synchronous local read.
+    other?: { provider: string; label: string } | null,
   ) {
     // Hermes review, PR #504: validate at config time, not on the next
     // write — an unparseable key or malformed id otherwise surfaces only
@@ -159,8 +164,11 @@ export async function integrationsRoute(app: FastifyInstance) {
     // different: the whole mechanism exists because GitHub 422s a review
     // from the PR's own author, and configuring the same App id for both
     // would silently reintroduce that exact 422 at review time instead of
-    // at config time, where it's actually diagnosable.
-    if (other && appId === other.appId) {
+    // at config time, where it's actually diagnosable. Cheap early bail —
+    // avoids the network round trip below for the common case of an
+    // obvious, non-racing collision — re-checked again right before the
+    // write (see the second check's own comment).
+    if (other && appId === getConfiguredAppId(app, other.provider)) {
       return reply.badRequest(
         `This is the same App id as ${other.label} — they must be separate Apps, or GitHub will reject the reviewer's review as coming from the PR's own author.`,
       );
@@ -188,6 +196,20 @@ export async function integrationsRoute(app: FastifyInstance) {
     if (verification.status === "rejected" || verification.status === "mismatch") {
       return reply.badRequest(verification.message);
     }
+    // Independent review, PR #826: re-checked here, immediately before the
+    // write — `verifyAppCredentials` just awaited a real network round
+    // trip, during which a concurrent PUT to the OTHER route could have
+    // persisted this same appId. This doesn't make the two writes atomic
+    // (a DB-level unique constraint spanning two rows keyed by different
+    // `provider` values isn't a thing SQLite offers here), but it shrinks
+    // the race window from "a GitHub API round trip" to "a synchronous
+    // local read to the write below" — as tight as this route can get
+    // without a cross-row transaction.
+    if (other && appId === getConfiguredAppId(app, other.provider)) {
+      return reply.badRequest(
+        `This is the same App id as ${other.label} — they must be separate Apps, or GitHub will reject the reviewer's review as coming from the PR's own author.`,
+      );
+    }
     // Hermes review, PR #519: computed from the plaintext key already in
     // hand (rather than re-decrypting the just-persisted row — a pure
     // function of the same PEM either way) — and deliberately BEFORE
@@ -210,21 +232,16 @@ export async function integrationsRoute(app: FastifyInstance) {
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
-    async (request, reply) => {
+    async (request, reply) =>
       // Hermes review, PR #826: the same-appId guard is symmetric — this
-      // side didn't check at all, so configuring the reviewer App FIRST and
-      // then re-pointing the primary at that same id sailed through here,
-      // silently reintroducing the 422 at review time instead of at
-      // config time. `getConfiguredAppId` is a cheap local read (no
-      // decrypt, no network call), unlike `getGitHubAppStatus`.
-      const reviewerAppId = getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER);
-      return putGitHubAppLike(
-        GITHUB_PROVIDER,
-        request.body,
-        reply,
-        reviewerAppId ? { appId: reviewerAppId, label: "the reviewer App" } : null,
-      );
-    },
+      // side used to not check at all, so configuring the reviewer App
+      // FIRST and then re-pointing the primary at that same id sailed
+      // through here, silently reintroducing the 422 at review time
+      // instead of at config time.
+      putGitHubAppLike(GITHUB_PROVIDER, request.body, reply, {
+        provider: GITHUB_REVIEWER_PROVIDER,
+        label: "the reviewer App",
+      }),
   );
 
   app.delete("/api/integrations/github/app", async (_request, reply) => {
@@ -243,15 +260,11 @@ export async function integrationsRoute(app: FastifyInstance) {
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/reviewer-app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
-    async (request, reply) => {
-      const primaryAppId = getConfiguredAppId(app, GITHUB_PROVIDER);
-      return putGitHubAppLike(
-        GITHUB_REVIEWER_PROVIDER,
-        request.body,
-        reply,
-        primaryAppId ? { appId: primaryAppId, label: "the primary GitHub App" } : null,
-      );
-    },
+    async (request, reply) =>
+      putGitHubAppLike(GITHUB_REVIEWER_PROVIDER, request.body, reply, {
+        provider: GITHUB_PROVIDER,
+        label: "the primary GitHub App",
+      }),
   );
 
   app.delete("/api/integrations/github/reviewer-app", async (_request, reply) => {
