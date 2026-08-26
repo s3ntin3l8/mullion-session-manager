@@ -836,9 +836,9 @@ describe("RemoteHostClient", () => {
     // with the request line, the Bearer token, and the three HMAC signature
     // headers. This pins MAX_SESSION_ENV_ENTRIES/MAX_SESSION_ENV_VALUE_LENGTH
     // (session-lifecycle.ts) as load-bearing: raising either without
-    // re-running this test is how the old 64x4096 bound (~263 KB encoded)
-    // would have shipped a remote reattach that could never actually
-    // complete its WS upgrade.
+    // re-running this test is how the old 64x4096 bound (~263 KB encoded,
+    // well past --max-http-header-size) would have shipped a remote
+    // reattach whose WS upgrade request target can't fit the limit.
     const worstCaseEnv: Record<string, string> = {};
     for (let i = 0; i < 16; i++) {
       worstCaseEnv[`VAR_${i}`] = "x".repeat(256);

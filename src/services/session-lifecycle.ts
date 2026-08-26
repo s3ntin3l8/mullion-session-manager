@@ -33,8 +33,11 @@ import { resolveProjectHostId } from "./session-live-info.js";
 // the limit even alongside the other query params and auth headers. Do not
 // raise these without recomputing that encoded size (see the PR that added
 // this comment for the calculation) — the old 64×4096 bound encoded to
-// ~263 KB and would have broken every remote reattach the moment a dock
-// control actually used a meaningful chunk of it.
+// ~263 KB, well past --max-http-header-size, the moment a dock control
+// actually used a meaningful chunk of it. (Untested what Node/`ws` actually
+// do past the limit — a rejected upgrade or a hang, take your pick — the
+// point of this bound is staying clear of it, not characterizing the
+// failure.)
 export const MAX_SESSION_ENV_ENTRIES = 16;
 export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
 
