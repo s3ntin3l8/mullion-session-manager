@@ -16,6 +16,7 @@ import {
   updatePullRequestTitle,
   markPullRequestReadyForReview,
   createPullRequestReview,
+  getPullRequestReviewDecision,
   fetchPullRequestReviewThreads,
   GitHubWriteScopeError,
   listWorkflows,
@@ -445,16 +446,32 @@ describe("github-write service", () => {
     ]);
   });
 
-  // The self-review constraint createPullRequestReview's own doc comment
-  // documents: only COMMENT is ever sent, since GitHub 422s APPROVE/
-  // REQUEST_CHANGES from a PR's own author. This test just pins that no
-  // caller can accidentally widen `event` — there's no parameter for it.
-  it("never sends an event other than COMMENT", async () => {
+  // #737 — event defaults to COMMENT (the self-review constraint
+  // createPullRequestReview's own doc comment documents: GitHub 422s
+  // APPROVE/REQUEST_CHANGES from a PR's own author, so a caller with the
+  // primary token must never pass anything else) when the caller doesn't
+  // specify one at all.
+  it("defaults event to COMMENT when the caller doesn't specify one", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 1, html_url: "u" }));
     await createPullRequestReview("tok", "owner", "repo", 9, { body: "b", commitId: "c" });
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string).event).toBe("COMMENT");
   });
+
+  // #737 — a gating event IS now a valid parameter, for the reviewer
+  // identity's own calls (task-github-sync.ts's postReviewFindingsComment).
+  // This function has no way to know which identity `token` authenticates
+  // as, so it doesn't (and can't) enforce which token pairs with which
+  // event — that contract lives at the caller.
+  it.each(["APPROVE", "REQUEST_CHANGES"] as const)(
+    "sends an explicit %s event through unchanged",
+    async (event) => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 1, html_url: "u" }));
+      await createPullRequestReview("tok", "owner", "repo", 9, { body: "b", commitId: "c", event });
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).event).toBe(event);
+    },
+  );
 
   it("createPullRequestReview maps a 422 to a plain GitHubApiError (caller does the retry-without-anchors fallback)", async () => {
     fetchMock.mockResolvedValueOnce(
@@ -522,6 +539,68 @@ describe("github-write service", () => {
     await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toBeInstanceOf(
       GitHubWriteScopeError,
     );
+  });
+
+  // #737 — the aggregate verdict `attemptMerge`'s "blocked" arm reads to
+  // tell a missing/stale required review apart from a red required check.
+  describe("getPullRequestReviewDecision (#737)", () => {
+    it.each(["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"] as const)(
+      "returns %s straight through",
+      async (decision) => {
+        fetchMock.mockResolvedValueOnce(
+          jsonResponse(200, {
+            data: { repository: { pullRequest: { reviewDecision: decision } } },
+          }),
+        );
+        const result = await getPullRequestReviewDecision("tok", "owner", "repo", 9);
+        expect(result).toBe(decision);
+      },
+    );
+
+    it("returns null when GitHub reports no review decision at all (no review requirement configured)", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          data: { repository: { pullRequest: { reviewDecision: null } } },
+        }),
+      );
+      const result = await getPullRequestReviewDecision("tok", "owner", "repo", 9);
+      expect(result).toBeNull();
+    });
+
+    it("returns null (rather than throwing) if GitHub ever adds a value this doesn't recognize", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          data: { repository: { pullRequest: { reviewDecision: "SOME_FUTURE_VALUE" } } },
+        }),
+      );
+      const result = await getPullRequestReviewDecision("tok", "owner", "repo", 9);
+      expect(result).toBeNull();
+    });
+
+    it("returns null when the PR/repo isn't found, without throwing", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: { repository: null } }));
+      const result = await getPullRequestReviewDecision("tok", "owner", "repo", 9);
+      expect(result).toBeNull();
+    });
+
+    it("posts the expected GraphQL query with owner/repo/number as variables", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } },
+        }),
+      );
+      await getPullRequestReviewDecision("tok", "owner", "repo", 9);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string);
+      expect(body.variables).toEqual({ owner: "owner", repo: "repo", number: 9 });
+    });
+
+    it("maps a 403 to GitHubWriteScopeError, same as every other GraphQL call", async () => {
+      fetchMock.mockResolvedValueOnce(textResponse(403, "Resource not accessible by integration"));
+      await expect(getPullRequestReviewDecision("tok", "owner", "repo", 9)).rejects.toBeInstanceOf(
+        GitHubWriteScopeError,
+      );
+    });
   });
 
   it("fetchPullRequestReviewThreads posts a GraphQL query with owner/repo/number and returns viewerLogin plus threads", async () => {

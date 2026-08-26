@@ -113,6 +113,7 @@ const {
   mockCommitWipChanges,
   mockResolveRepoRef,
   mockResolveGitHubToken,
+  mockResolveReviewerToken,
   mockGetPullRequestByNumber,
   mockMergePullRequest,
   mockUpdatePullRequestBranch,
@@ -121,6 +122,7 @@ const {
   mockFetchRequiredStatusContexts,
   mockFetchCheckRunsForHead,
   mockCreatePullRequestReview,
+  mockGetPullRequestReviewDecision,
   mockResumeTaskWorktree,
   mockRemoveWorktree,
   mockFetchPullRequestReviewThreads,
@@ -133,6 +135,13 @@ const {
   mockCommitWipChanges: vi.fn(),
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
+  // #737 — no pass-through default (unlike mockResolveGitHubToken below):
+  // the real implementation mints a live installation token. Defaults to
+  // `null` every beforeEach (see below) — "no reviewer App configured" —
+  // so every pre-existing test in this file (none of which know about
+  // #737) never attempts the re-assert path. Only the dedicated #737
+  // tests override this.
+  mockResolveReviewerToken: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
   mockMergePullRequest: vi.fn(),
   mockUpdatePullRequestBranch: vi.fn(),
@@ -141,6 +150,12 @@ const {
   mockFetchRequiredStatusContexts: vi.fn(),
   mockFetchCheckRunsForHead: vi.fn(),
   mockCreatePullRequestReview: vi.fn(),
+  // #737 — no pass-through default, same reasoning as
+  // mockFetchPullRequestReviewThreads below: the real implementation hits
+  // GitHub's GraphQL endpoint. Defaults to `null` every beforeEach ("no
+  // review requirement configured on this repo") so every pre-existing
+  // "blocked" test keeps seeing the original generic message.
+  mockGetPullRequestReviewDecision: vi.fn(),
   // #744 — autorelease sweep (processReleaseRequests, via release-merge.ts's
   // resolveReleaseMerge). No pass-through default, same reasoning as
   // mockMergePullRequest etc. above: no pre-existing test's task ever sets
@@ -203,6 +218,7 @@ vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
   return {
     ...actual,
     resolveGitHubToken: mockResolveGitHubToken,
+    resolveReviewerToken: mockResolveReviewerToken,
   };
 });
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
@@ -214,6 +230,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     updatePullRequestBranch: mockUpdatePullRequestBranch,
     deleteRemoteBranch: mockDeleteRemoteBranch,
     createPullRequestReview: mockCreatePullRequestReview,
+    getPullRequestReviewDecision: mockGetPullRequestReviewDecision,
     fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
     findReleasePullRequest: mockFindReleasePullRequest,
     invalidateReleaseCache: mockInvalidateReleaseCache,
@@ -427,6 +444,12 @@ describe("reconcileTasks", () => {
     mockFetchRequiredStatusContexts.mockClear();
     mockFetchCheckRunsForHead.mockClear();
     mockCreatePullRequestReview.mockClear();
+    // #737 — reset (not just clear) so a leaked .mockResolvedValueOnce from
+    // one #737 test can't bleed into the next, then re-establish the
+    // fail-safe defaults every pre-existing "blocked" test relies on: no
+    // review requirement configured, no reviewer App configured.
+    mockGetPullRequestReviewDecision.mockReset().mockResolvedValue(null);
+    mockResolveReviewerToken.mockReset().mockResolvedValue(null);
     // #758 — fail-closed defaults (no pre-existing test's task has
     // mergeRequestedAt + a "dirty" mergeableState + autoApprove on, so
     // these are never reached outside the dedicated describe block below).
@@ -2333,6 +2356,205 @@ describe("reconcileTasks", () => {
       expect(row.mergeError).toContain("Required checks");
 
       await app.close();
+    });
+
+    // #737 — "blocked" collapses several distinct reasons; these pin the
+    // review-decision-aware message and the re-assert path.
+    describe("blocked -> review decision (#737)", () => {
+      it("reports a missing required review distinctly from a red/pending check", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
+
+        await reconcileTasks(app);
+
+        expect(mockMergePullRequest).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Waiting on a required approving review");
+
+        await app.close();
+      });
+
+      it("reports changes-requested distinctly, without re-asserting (no reviewer App configured)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("CHANGES_REQUESTED");
+        mockResolveReviewerToken.mockResolvedValue(null);
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Changes were requested on the PR");
+
+        await app.close();
+      });
+
+      it("falls back to the generic checks message when the review-decision read itself fails", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockRejectedValue(new Error("GraphQL error"));
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Required checks");
+
+        await app.close();
+      });
+
+      // Re-assert: `attemptMerge` only ever runs for `status: "done"` tasks
+      // (this suite's own createDoneTaskWithPendingMerge), so every case
+      // below already satisfies that half of the gate implicitly.
+      it("re-asserts an APPROVE from the reviewer identity when a prior approval was dismissed", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview.mockResolvedValue({
+          id: 999,
+          htmlUrl: "https://github.com/o/r/pull/9#pullrequestreview-999",
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith("reviewer_tok", "o", "r", 9, {
+          body: expect.any(String),
+          commitId: "sha-head",
+          event: "APPROVE",
+        });
+        expect(mockMergePullRequest).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        // No error recorded — the sweep re-classifies fresh state next tick
+        // rather than surfacing a message this tick already knows is stale.
+        expect(row.mergeError).toBeNull();
+
+        await app.close();
+      });
+
+      // Hermes review, PR #827 (round 3): the round-2 memoization
+      // (`lastReassertedSha`) was silently defeated by `processMergeRequests`
+      // unconditionally overwriting the WHOLE `mergeRetryState` entry
+      // (without spreading the prior one) immediately before every
+      // `attemptMerge` call — so the re-assert-once-per-SHA guard never
+      // actually survived past the tick that set it. This file otherwise
+      // avoids `vi.useFakeTimers` (see the red-CI dedup describe block's own
+      // comment on why), but that precedent is about *DB-backed* timestamps
+      // having no fake-timer equivalent — this is a plain in-memory Map read
+      // via `Date.now()`, which fake timers control directly. Scoped tightly
+      // to this one test.
+      it("does not repost the re-assert APPROVE on the next tick for an unchanged head SHA", async () => {
+        const app = await buildApp();
+        await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview.mockResolvedValue({ id: 999, htmlUrl: "https://x" });
+
+        vi.useFakeTimers();
+        try {
+          await reconcileTasks(app);
+          expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+
+          // Past MERGE_RETRY_TTL_MS's own per-task backoff, so this second
+          // tick actually reaches attemptMerge again rather than being
+          // skipped by the unrelated rate limiter — isolating the
+          // memoization itself as what's under test.
+          vi.setSystemTime(Date.now() + 61_000);
+          await reconcileTasks(app);
+        } finally {
+          vi.useRealTimers();
+        }
+
+        // Still exactly once: the same head SHA (mockGetPullRequestByNumber
+        // never changes it) must have been recognized as already
+        // re-asserted, surviving processMergeRequests' own state write
+        // between the two ticks.
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+
+        await app.close();
+      });
+
+      // Hermes review, PR #827: re-assert used to also fire on
+      // CHANGES_REQUESTED, which would silently override a review posted
+      // AFTER the task's own approval (a human on GitHub, or a later
+      // review-agent round) — exactly the "manufacture an approval nobody
+      // made" failure mode this mechanism must never become. Pins that a
+      // configured, working reviewer App does NOT change this outcome —
+      // the earlier "no reviewer App configured" case above already
+      // covered the message; this covers that the identity being available
+      // doesn't matter for CHANGES_REQUESTED specifically.
+      it("never re-asserts over CHANGES_REQUESTED even when a reviewer App is configured and working", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("CHANGES_REQUESTED");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview.mockResolvedValue({ id: 999, htmlUrl: "https://x" });
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Changes were requested on the PR");
+
+        await app.close();
+      });
+
+      it("does not re-assert when GitHub already reports APPROVED (no spin)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("APPROVED");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        // Still "blocked" on GitHub's mergeable_state despite an APPROVED
+        // review decision (e.g. a required CHECK, not a review, is what's
+        // actually red) — falls through to the generic checks message.
+        expect(row.mergeError).toContain("Required checks");
+
+        await app.close();
+      });
+
+      it("does not re-assert, and reports the specific message, when no reviewer App is configured", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
+        mockResolveReviewerToken.mockResolvedValue(null);
+
+        await reconcileTasks(app);
+
+        expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Waiting on a required approving review");
+
+        await app.close();
+      });
+
+      it("falls back to recording the message when the re-assert attempt itself fails", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 422"));
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Waiting on a required approving review");
+
+        await app.close();
+      });
     });
 
     it("waits with no error recorded while GitHub is still computing mergeability (mergeable: null)", async () => {
