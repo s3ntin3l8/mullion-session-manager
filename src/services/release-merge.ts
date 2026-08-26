@@ -79,6 +79,20 @@ function clearReleaseIntentForProject(app: FastifyInstance, projectId: number): 
  * pending or backed-off left that task showing a permanently stale "no open
  * release PR" error even though its release had, in fact, shipped.
  *
+ * A second, out-of-band variant of that same staleness (Hermes review, PR
+ * #818): a human merges the release PR directly on GitHub — bypassing this
+ * function's own "clean" branch entirely — rather than through Mullion's
+ * Merge button or the sweep. `findReleasePullRequest`'s primary,
+ * `state=open`-scoped lookup below then finds nothing, and returning
+ * `{merged:false, reason:"no-release-pr"}` for that would be actively
+ * wrong: every armed task's release genuinely already shipped, yet the
+ * sweep would keep recording "waiting for it to be generated" forever
+ * (`no-release-pr` never gives up, unlike `not-configured` — see
+ * task-reconciler.ts's own doc comment on that). Distinguished from the
+ * ordinary "no release PR generated yet" case with a fallback,
+ * `state="all"` lookup for the same PR — reachable ONLY on that path, so it
+ * costs nothing on the far more common "an open PR exists" tick.
+ *
  * Throws only a non-`GitHubApiError` (a genuine bug); any `GitHubApiError` —
  * including a merge call's ordinary 405 "not mergeable" / 409 head-sha-moved
  * races — is caught and folded into `{merged: false, reason: "merge-failed"}`.
@@ -92,18 +106,50 @@ export async function resolveReleaseMerge(
   try {
     const defaultBranch = await getDefaultBranch(token, repoRef.owner, repoRef.repo);
     const summary = await findReleasePullRequest(token, repoRef.owner, repoRef.repo, defaultBranch);
-    if (!summary) return { merged: false, reason: "no-release-pr" };
+    if (!summary) {
+      // See this function's own doc comment above on the out-of-band-merge
+      // fallback this is. Deliberately checks `.merged` specifically, NOT
+      // `classifyMergeReadiness(...) === "already-done"` (which also covers
+      // a release PR CLOSED without merging — a deliberate "skip this
+      // cycle" decision that must NOT clear intent; the underlying commits
+      // are still unreleased, and the next task to land will naturally
+      // sweep them into its own release cycle instead).
+      const mostRecent = await findReleasePullRequest(
+        token,
+        repoRef.owner,
+        repoRef.repo,
+        defaultBranch,
+        "all",
+      );
+      if (mostRecent) {
+        const pr = await getPullRequestByNumber(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          mostRecent.number,
+        );
+        if (pr.merged) {
+          invalidateReleaseCache(repoRef.owner, repoRef.repo);
+          clearReleaseIntentForProject(app, projectId);
+          return { merged: true };
+        }
+      }
+      return { merged: false, reason: "no-release-pr" };
+    }
 
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, summary.number);
     const readiness = classifyMergeReadiness(pr);
 
     switch (readiness) {
       case "already-done": {
-        // Unreachable via findReleasePullRequest's own state=open filter
-        // today — kept because classifyMergeReadiness is a shared classifier
-        // (task-reconciler.ts's attemptMerge reaches this case for real);
-        // removing it here would silently break if a future caller resolved
-        // release PRs some other way.
+        // Unreachable via findReleasePullRequest's own state=open filter on
+        // `summary` above today — kept because classifyMergeReadiness is a
+        // shared classifier (task-reconciler.ts's attemptMerge reaches this
+        // case for real); removing it here would silently break if a future
+        // caller resolved release PRs some other way. NOT the same path as
+        // the out-of-band-merge fallback above, which checks `.merged`
+        // directly rather than routing through this classifier — see that
+        // fallback's own comment for why the two must stay separate.
         invalidateReleaseCache(repoRef.owner, repoRef.repo);
         clearReleaseIntentForProject(app, projectId);
         return { merged: true };
