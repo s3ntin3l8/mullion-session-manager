@@ -966,7 +966,26 @@ const MERGE_RETRY_TTL_MS = 60 * 1000;
 const MERGE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
 const MAX_MERGE_RETRIES_PER_SWEEP = 20;
 const MAX_MERGE_RETRY_ENTRIES = 500;
-const mergeRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+const mergeRetryState = new Map<
+  number,
+  {
+    lastAttemptedAt: number;
+    attempts: number;
+    // #737 (Hermes review, PR #827) — the head SHA a re-assert APPROVE was
+    // last posted for. Without this, a re-assert whose APPROVE succeeds at
+    // the GitHub API level but doesn't actually satisfy the branch
+    // protection rule (the reviewer App isn't an eligible approver — the
+    // CODEOWNERS limitation this feature already documents) never flips
+    // `reviewDecision` to `APPROVED`, so the "can't spin" argument's
+    // premise fails: every backoff tick would re-post an identical APPROVE
+    // on the same commit forever, spam bounded by ticks, not pushes. Only
+    // cleared by `clearMergeState`/`resetMergeBackoff`, same lifecycle as
+    // the rest of this entry — a human's explicit "Merge now"/"Retry
+    // merge" click (which calls `resetMergeBackoff`) deliberately gets a
+    // fresh re-assert attempt even on an unchanged head.
+    lastReassertedSha?: string;
+  }
+>();
 
 function mergeRetryBackoffMs(attempts: number): number {
   return Math.min(MERGE_RETRY_TTL_MS * 2 ** (attempts - 1), MERGE_RETRY_MAX_TTL_MS);
@@ -1413,18 +1432,39 @@ async function attemptMerge(
         // against a future refactor calling this function from a context
         // where that's no longer guaranteed.
         //
-        // Why this can't spin: a successful re-assert flips
+        // Why this usually can't spin: a successful re-assert flips
         // `reviewDecision` to `"APPROVED"` and the condition below closes
         // immediately. It only reopens when something DISMISSES that
         // approval, which is always a push (`"behind"`'s
         // `updatePullRequestBranch` above, or an auto-rebase worker's
         // commits) — so the number of re-asserts this can ever produce is
         // bounded by the number of pushes to the head branch, not by how
-        // many sweep ticks pass while blocked. (A persistent failure to
-        // re-assert — e.g. a reviewer App that always 422s — still only
-        // retries at `processMergeRequests`' own per-task backoff cadence,
-        // same as every other `attemptMerge` call, not on every tick.)
-        if (reviewDecision === "REVIEW_REQUIRED" && task.status === "done") {
+        // many sweep ticks pass while blocked, PROVIDED the re-assert
+        // actually counts. Hermes review, PR #827 (round 2): that proviso
+        // can fail — the reviewer App's `APPROVE` can succeed at the GitHub
+        // API level without satisfying the branch protection rule at all
+        // (the App isn't an eligible approver — the CODEOWNERS limitation
+        // this feature already documents), in which case `reviewDecision`
+        // NEVER flips to `"APPROVED"` and the argument above breaks: every
+        // backoff tick would re-post an identical `APPROVE` on the same
+        // commit forever, spam bounded by ticks, not pushes. Guarded here
+        // by memoizing the head SHA a re-assert was last attempted for
+        // (`mergeRetryState`, shared with the rest of this task's merge
+        // backoff — same lifecycle, cleared by `clearMergeState`/
+        // `resetMergeBackoff`) and only trying again once `pr.headSha`
+        // actually changes — restoring "bounded by pushes" as a guarantee
+        // rather than an assumption, regardless of whether any given
+        // re-assert counts. (A persistent failure to re-assert — e.g. a
+        // reviewer App that always 422s — still only retries at
+        // `processMergeRequests`' own per-task backoff cadence, same as
+        // every other `attemptMerge` call, not on every tick — that part
+        // of the throttling was never the issue.)
+        const retryState = mergeRetryState.get(task.id);
+        if (
+          reviewDecision === "REVIEW_REQUIRED" &&
+          task.status === "done" &&
+          retryState?.lastReassertedSha !== pr.headSha
+        ) {
           const reviewerToken = await resolveReviewerToken(app, repoRef);
           if (reviewerToken) {
             try {
@@ -1439,6 +1479,10 @@ async function attemptMerge(
                   event: "APPROVE",
                 },
               );
+              // Record the SHA regardless of whether this ends up
+              // satisfying branch protection — that's precisely the case
+              // this memoization exists to stop from retrying forever.
+              mergeRetryState.set(task.id, { ...retryState!, lastReassertedSha: pr.headSha });
               // Don't record an error — the next sweep tick re-reads
               // GitHub's fresh mergeable_state instead of retrying a merge
               // this tick already knows is still blocked on stale data.

@@ -1321,13 +1321,23 @@ GitHub, or a later round — and re-asserting `APPROVE` over that would
 silently override an explicit rejection instead of re-affirming a decision
 that was already made. `CHANGES_REQUESTED` just gets the "Changes were
 requested on the PR" message above, same as `REVIEW_REQUIRED` with no
-reviewer App available. This can't spin:
-a successful re-assert flips `reviewDecision` back to `APPROVED` immediately,
-closing the condition, and it only reopens on the next dismissing push — so
+reviewer App available. A successful re-assert normally flips
+`reviewDecision` back to `APPROVED` immediately, closing the condition, so
 the number of re-asserts is bounded by pushes to the head branch, not by how
-long the sweep has been retrying. No reviewer App configured (or the
-re-assert attempt itself failing) just falls through to recording the
-review-decision-aware message above, same as before this existed.
+long the sweep has been retrying — **except** when the reviewer App's
+`APPROVE` doesn't actually satisfy branch protection at all (it isn't an
+eligible approver — the CODEOWNERS limitation below), in which case
+`reviewDecision` never flips and that argument breaks on its own (Hermes
+review, PR #827, round 2). Guarded separately: the sweep memoizes the head
+SHA a re-assert was last attempted for (alongside the rest of this task's
+merge backoff state) and only tries again once `pr.headSha` actually
+changes — bounding it to once per push regardless of whether any given
+re-assert counts, rather than relying on `reviewDecision` flipping as the
+only thing stopping it. A human's explicit "Merge now"/"Retry merge" click
+resets this along with the rest of the backoff, so it isn't stuck waiting
+for a push either. No reviewer App configured (or the re-assert attempt
+itself failing) just falls through to recording the review-decision-aware
+message above, same as before this existed.
 
 **What this needs in branch protection to actually gate anything.** None of
 this does anything unless the repo's branch protection has "Require a pull
