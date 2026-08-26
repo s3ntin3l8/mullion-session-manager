@@ -67,19 +67,15 @@ import {
 import {
   detectReleaseWorkflow,
   dispatchWorkflow,
-  findReleasePullRequest,
   getCachedReleasePullRequestStatus,
-  getPullRequestByNumber,
   invalidateReleaseCache,
-  mergePullRequest,
 } from "../services/github-write.js";
-import { classifyMergeReadiness } from "../services/merge-readiness.js";
+import { resolveReleaseMerge } from "../services/release-merge.js";
 import type {
   ProjectReleaseStatus,
   ReleaseDetectionResult,
   ReleasePullRequestStatus,
   ReleaseRunResult,
-  ReleaseMergeResult,
 } from "../shared/types.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 import {
@@ -1472,31 +1468,12 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  // #744 — merges the open release-please PR (the "Merge" button), gated
-  // hard on GitHub's own mergeability verdict via classifyMergeReadiness —
-  // never a force/override path. Takes NO pr number/sha from the client at
-  // all: the PR to merge is always re-resolved here via
-  // findReleasePullRequest, which itself only ever returns a PR whose head
-  // branch carries release-please's own RELEASE_PLEASE_BRANCH_PREFIX — so
-  // this endpoint can never be pointed at an arbitrary PR by construction,
-  // not by a separate check on its result.
-  //
-  // "behind" deliberately does NOT call updatePullRequestBranch, unlike the
-  // task-PR merge-on-approve sweep (task-reconciler.ts's attemptMerge):
-  // release-please owns and force-pushes this branch on every run, so a
-  // merge-base update either gets clobbered mid-flight or races the next
-  // run — and worse, the branch's version bump/CHANGELOG were computed from
-  // the commits present when release-please last generated it, so a
-  // squash-merge after updating the branch would tag a release whose
-  // CHANGELOG omits commits already on the base branch (they'd reappear a
-  // version late once build-tarball ships the code that's actually on the
-  // updated branch). The correct remedy for "behind" here is re-running
-  // release-please (the /release/run route above), which regenerates the
-  // branch off the current default branch with the right bump — so this
-  // just refuses and points the caller at Run. Same reasoning rules out an
-  // auto-rebase attempt on "dirty": attemptAutoRebase is task-PR-specific
-  // and spawns a worker into the task's own worktree, which a release PR
-  // doesn't have.
+  // #744 — merges the open release-please PR (the "Merge" button). The
+  // decision logic (gated hard on GitHub's own mergeability verdict, never a
+  // force/override path; why "behind"/"dirty" refuse rather than
+  // update-branch/auto-rebase like the task-PR merge-on-approve sweep does)
+  // lives in resolveReleaseMerge (services/release-merge.ts) — see that
+  // file's own doc comment. This route is a thin HTTP wrapper around it.
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/release/merge",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
@@ -1514,88 +1491,15 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!ctx) return;
       const { repoRef, token } = ctx;
 
-      try {
-        const defaultBranch = await getDefaultBranch(token, repoRef.owner, repoRef.repo);
-        const summary = await findReleasePullRequest(
-          token,
-          repoRef.owner,
-          repoRef.repo,
-          defaultBranch,
-        );
-        if (!summary) {
-          const result: ReleaseMergeResult = { merged: false, reason: "no-release-pr" };
-          return result;
-        }
-
-        const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, summary.number);
-        const readiness = classifyMergeReadiness(pr);
-
-        switch (readiness) {
-          case "already-done": {
-            // Unreachable today — findReleasePullRequest only queries
-            // state=open, so it can never hand back an already-merged PR
-            // for this branch to see. Kept because classifyMergeReadiness
-            // is a shared classifier (task-reconciler.ts's attemptMerge
-            // reaches this case for real); removing it here would silently
-            // break if a future caller of this route resolved PRs some
-            // other way.
-            invalidateReleaseCache(repoRef.owner, repoRef.repo);
-            const result: ReleaseMergeResult = { merged: true };
-            return result;
-          }
-          case "clean": {
-            if (pr.draft) {
-              // mergeableState can read "clean" on a draft PR — GitHub only
-              // refuses the merge call itself. Check explicitly so the
-              // caller gets a named reason instead of an opaque
-              // "merge-failed" from catching that 405.
-              const result: ReleaseMergeResult = { merged: false, reason: "draft" };
-              return result;
-            }
-            const writeToken = await resolveGitHubToken(app, repoRef, "write");
-            if (!writeToken) {
-              const result: ReleaseMergeResult = {
-                merged: false,
-                reason: "merge-failed",
-                detail: "No write-scoped GitHub token available",
-              };
-              return result;
-            }
-            await mergePullRequest(writeToken, repoRef.owner, repoRef.repo, summary.number, {
-              sha: pr.headSha,
-              commitTitle: pr.title,
-            });
-            // The PR this cache entry was holding just closed — drop it so
-            // the next GET .../release reflects that immediately rather
-            // than showing a stale "clean, ready to merge" PR for up to
-            // RELEASE_PR_CACHE_TTL_MS.
-            invalidateReleaseCache(repoRef.owner, repoRef.repo);
-            const result: ReleaseMergeResult = { merged: true };
-            return result;
-          }
-          case "behind":
-          case "blocked":
-          case "unstable":
-          case "dirty":
-          case "computing": {
-            const result: ReleaseMergeResult = { merged: false, reason: readiness };
-            return result;
-          }
-        }
-      } catch (err) {
-        // Covers a merge call itself failing — including a 405 ("not
-        // mergeable") or 409 (head-sha moved) racing this same read, both
-        // ordinary expected outcomes here, not alarms (mergePullRequest's
-        // own doc comment).
-        if (!(err instanceof GitHubApiError)) throw err;
-        app.log.warn({ err, owner: repoRef.owner, repo: repoRef.repo }, "release PR merge failed");
-        const result: ReleaseMergeResult = {
-          merged: false,
-          reason: "merge-failed",
-          detail: err.message,
-        };
-        return result;
-      }
+      // The decision itself — including the write-token mint, the draft
+      // check, every MergeReadiness branch, and clearing any outstanding
+      // per-task autorelease intent on this project once merged — lives in
+      // resolveReleaseMerge (services/release-merge.ts), shared with
+      // task-reconciler.ts's processReleaseRequests sweep (#744's automatic
+      // half). This route's own contribution is just resolving repoRef/token
+      // and returning the result as-is.
+      const result = await resolveReleaseMerge(app, repoRef, token, projectId);
+      return result;
     },
   );
 

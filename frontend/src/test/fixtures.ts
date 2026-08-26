@@ -125,6 +125,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     prNumber: null,
     mergeRequestedAt: null,
     mergeError: null,
+    releaseRequestedAt: null,
+    releaseError: null,
     lastReviewVerdict: null,
     assignee: null,
     failureReason: null,

@@ -942,6 +942,16 @@ export interface Task {
   // an outstanding merge request AND a recorded error at the same time
   // (the sweep keeps retrying). Null means no known problem.
   mergeError: string | null;
+  // #744 — set once this task's own PR merges, on a project with
+  // autoTagRelease on. The autorelease sweep clears this once the release PR
+  // merges (or the toggle turns out to be pointing at a repo with no
+  // release-please workflow). Non-null means a release is outstanding.
+  releaseRequestedAt: string | null;
+  // The autorelease sweep's last failure reason for this task (no release PR
+  // yet, checks blocked, no release workflow configured, ...), same
+  // independent-of-the-intent-column shape as mergeError above. Null means no
+  // known problem.
+  releaseError: string | null;
   // The review agent's most recently ingested verdict — "clean" |
   // "changes-requested" | "inconclusive" — or null if no round has been
   // ingested yet. Durable input to auto-approve's gate; not itself the
