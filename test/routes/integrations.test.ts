@@ -5,7 +5,11 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { disconnect } from "../../src/services/github-integration.js";
+import {
+  disconnect,
+  clearGitHubApp,
+  GITHUB_REVIEWER_PROVIDER,
+} from "../../src/services/github-integration.js";
 import { resetDeviceFlowForTests } from "../../src/services/github-device-flow.js";
 
 function jsonResponse(status: number, body: unknown) {
@@ -71,8 +75,14 @@ describe("integrations route (issue #27)", () => {
     resetDeviceFlowForTests();
     // Singleton row shared across this file's tests (see beforeAll) — reset
     // it so an earlier test's connected state never leaks into the next.
+    // #737 — also clears BOTH App rows: the Reviewer App describe block
+    // below depends on a clean primary-App slate (e.g. "no primary App
+    // configured yet"), which a prior "GitHub App" test leaving appId
+    // "123" configured would otherwise silently violate.
     const app = await buildApp();
     disconnect(app);
+    clearGitHubApp(app);
+    clearGitHubApp(app, GITHUB_REVIEWER_PROVIDER);
     await app.close();
   });
 
@@ -367,6 +377,111 @@ describe("integrations route (issue #27)", () => {
         expect(second.json().keyFingerprint).not.toBe(first.json().keyFingerprint);
         await app.close();
       });
+    });
+  });
+
+  describe("Reviewer App (#737)", () => {
+    it("PUT stores the reviewer App credentials independently of the primary App", async () => {
+      stubGithubFetch({ appId: "222", appSlug: "test-reviewer-app" });
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "222", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(
+        expect.objectContaining({
+          verified: true,
+          appSlug: "test-reviewer-app",
+          keyFingerprint: expect.any(String),
+        }),
+      );
+      expect(res.body).not.toMatch(/BEGIN RSA PRIVATE KEY/); // pragma: allowlist secret
+
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.body).not.toMatch(/BEGIN RSA PRIVATE KEY/); // pragma: allowlist secret
+      expect(get.json().reviewerApp).toEqual(
+        expect.objectContaining({ configured: true, appId: "222" }),
+      );
+      // The primary App is untouched — never configured in this test.
+      expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: false }));
+      await app.close();
+    });
+
+    it("PUT 400s the same appId as the already-configured primary App", async () => {
+      stubGithubFetch({ appId: "123" });
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/same App id as the primary/);
+
+      // Nothing persisted for the reviewer row.
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.json().reviewerApp).toEqual(expect.objectContaining({ configured: false }));
+      await app.close();
+    });
+
+    it("PUT allows the reviewer App id when no primary App is configured yet", async () => {
+      stubGithubFetch({ appId: "123" });
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("DELETE clears only the reviewer App, leaving the primary App configured", async () => {
+      const app = await buildApp();
+      stubGithubFetch({ appId: "123" });
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      stubGithubFetch({ appId: "222" });
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "222", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: "/api/integrations/github/reviewer-app",
+      });
+      expect(del.statusCode).toBe(204);
+
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.json().reviewerApp).toEqual(expect.objectContaining({ configured: false }));
+      expect(get.json().githubApp).toEqual(
+        expect.objectContaining({ configured: true, appId: "123" }),
+      );
+      await app.close();
+    });
+
+    it("PUT 400s a non-numeric reviewer appId", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "not-a-number", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
     });
   });
 

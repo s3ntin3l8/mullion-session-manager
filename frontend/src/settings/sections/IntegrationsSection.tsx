@@ -154,7 +154,38 @@ export function IntegrationsSection() {
       <WebhooksSection integration={integration} />
 
       <GitHubAppSection
+        testId="github-app-section"
+        rowTestId="github-app-row"
+        title="GitHub App"
+        desc="Optional. Scopes both Task Master's own writes (sync, promote, push, issue ingest) and the repo-status widget/PR & CI poller's reads to a short-lived, repo-scoped installation token instead of the shared PAT/OAuth token above. Repos not covered by an installed App fall back to it automatically."
+        notConfiguredSubtitle="Task Master writes use the shared PAT/OAuth token"
         githubApp={integration?.githubApp ?? null}
+        setApp={api.setGitHubApp}
+        clearApp={api.clearGitHubApp}
+        onChange={() =>
+          api
+            .getGitHubIntegration()
+            .then(setIntegration)
+            .catch(() => {})
+        }
+      />
+
+      {/* #737 — a second, independently-configured App identity used only
+          to submit PR reviews, so their `event` can be `APPROVE`/
+          `REQUEST_CHANGES` and actually gate merge — see
+          resolveReviewerToken (src/services/github-integration.ts) for why
+          the App above can never do this itself. Entirely optional: an
+          unconfigured reviewer App is the normal state, and every review
+          just keeps posting as a COMMENT the way it does today. */}
+      <GitHubAppSection
+        testId="github-reviewer-app-section"
+        rowTestId="github-reviewer-app-row"
+        title="Reviewer App"
+        desc="Optional. A separate GitHub App used only to submit Task Master's review-agent findings as an actual PR review (Approve/Request changes), so it can satisfy a required-review branch protection rule. Must be a different App from the one above — GitHub rejects a review from a PR's own author."
+        notConfiguredSubtitle="Review-agent findings post as a plain comment, with no merge-gating state"
+        githubApp={integration?.reviewerApp ?? null}
+        setApp={api.setReviewerApp}
+        clearApp={api.clearReviewerApp}
         onChange={() =>
           api
             .getGitHubIntegration()
@@ -187,11 +218,31 @@ export function IntegrationsSection() {
 // turns out to be wrong you've already thrown the working one away. This
 // deliberate divergence from the PAT panel's shape is the point, not
 // drift.
+//
+// #737 — parameterized (title/desc/testIds/setApp/clearApp/
+// notConfiguredSubtitle) rather than a component with the primary App
+// hardcoded, so the reviewer App (IntegrationsSection renders this twice)
+// gets the identical configure/rotate/clear behavior with no duplicated
+// logic — the two Apps differ only in copy and which route they PUT/DELETE.
 function GitHubAppSection({
+  testId,
+  rowTestId,
+  title,
+  desc,
+  notConfiguredSubtitle,
   githubApp,
+  setApp,
+  clearApp,
   onChange,
 }: {
+  testId: string;
+  rowTestId: string;
+  title: string;
+  desc: string;
+  notConfiguredSubtitle: string;
   githubApp: GitHubAppStatus | null;
+  setApp: (appId: string, privateKey: string) => Promise<SetGitHubAppResult>;
+  clearApp: () => Promise<void>;
   onChange: () => void;
 }) {
   const [appId, setAppId] = useState("");
@@ -225,8 +276,7 @@ function GitHubAppSection({
     setError(null);
     setResult(null);
     setSaving(true);
-    api
-      .setGitHubApp(id, key)
+    setApp(id, key)
       .then((res) => {
         setAppId("");
         setPrivateKey("");
@@ -250,8 +300,7 @@ function GitHubAppSection({
     setRotating(false);
     setAppId("");
     setPrivateKey("");
-    void api
-      .clearGitHubApp()
+    void clearApp()
       .then(onChange)
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
@@ -259,14 +308,11 @@ function GitHubAppSection({
   };
 
   return (
-    <div style={{ marginTop: 24 }}>
-      <GroupHeading
-        title="GitHub App"
-        desc="Optional. Scopes both Task Master's own writes (sync, promote, push, issue ingest) and the repo-status widget/PR & CI poller's reads to a short-lived, repo-scoped installation token instead of the shared PAT/OAuth token above. Repos not covered by an installed App fall back to it automatically."
-      />
+    <div data-testid={testId} style={{ marginTop: 24 }}>
+      <GroupHeading title={title} desc={desc} />
       <StyledList>
         <ListRow
-          testId="github-app-row"
+          testId={rowTestId}
           icon={<GitHubIcon size={16} />}
           dot={githubApp?.configured ? "on" : "off"}
           title={
@@ -293,7 +339,7 @@ function GitHubAppSection({
                 ]
                   .filter(Boolean)
                   .join(" · ")
-              : "Task Master writes use the shared PAT/OAuth token"
+              : notConfiguredSubtitle
           }
           trailing={
             githubApp?.configured ? (

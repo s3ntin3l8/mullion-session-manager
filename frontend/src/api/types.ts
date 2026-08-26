@@ -225,6 +225,11 @@ export interface GitHubIntegration {
   webhookBaseUrl: string;
   webhookRegisteredCount: number;
   githubApp: GitHubAppStatus;
+  // #737 — a second, independently-configured App identity used only to
+  // submit PR reviews (so their `event` can gate merge). Same
+  // `GitHubAppStatus` shape, own `configured` — absent/present regardless
+  // of `githubApp` above.
+  reviewerApp: GitHubAppStatus;
 }
 
 // Mirrors src/services/github-device-flow.ts's DeviceFlowSummary 1:1 — never

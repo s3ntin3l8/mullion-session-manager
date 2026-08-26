@@ -248,8 +248,19 @@ export const DISPATCH_PERMISSIONS = {
   actions: "write",
   metadata: "read",
 } as const;
+// #737 — the reviewer App's permission set. Only `pull_requests: write`
+// (needed to submit a review at all, including a gating `APPROVE`/
+// `REQUEST_CHANGES` event) and `metadata: read` (GitHub's own minimum for
+// any installation token). Deliberately excludes `issues`/`contents`: this
+// identity only ever calls `createPullRequestReview` — see
+// `resolveReviewerToken`, github-integration.ts — and must not be able to
+// touch anything else even if that call site had a bug.
+export const REVIEW_PERMISSIONS = {
+  pull_requests: "write",
+  metadata: "read",
+} as const;
 
-export type InstallationTokenScope = "write" | "read" | "dispatch";
+export type InstallationTokenScope = "write" | "read" | "dispatch" | "review";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -259,6 +270,8 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return READ_PERMISSIONS;
     case "dispatch":
       return DISPATCH_PERMISSIONS;
+    case "review":
+      return REVIEW_PERMISSIONS;
   }
 }
 

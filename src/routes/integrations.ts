@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
 import {
@@ -7,6 +7,7 @@ import {
   getIntegration,
   getGitHubAppStatus,
   GITHUB_PROVIDER,
+  GITHUB_REVIEWER_PROVIDER,
   InvalidTokenError,
   setPat,
   setGitHubApp,
@@ -82,8 +83,15 @@ export async function integrationsRoute(app: FastifyInstance) {
     // doc comment for why: this is the one call site that can afford the
     // live GitHub round trip a hot write path can't).
     const summary = getIntegration(app);
-    const githubApp = await getGitHubAppStatus(app);
-    return { ...summary, githubApp };
+    const [githubApp, reviewerApp] = await Promise.all([
+      getGitHubAppStatus(app),
+      // #737 — same never-secret status shape, second row. Independently
+      // absent/configured from `githubApp` above; an operator running only
+      // the primary App sees `reviewerApp: { configured: false, ... }`, not
+      // an error.
+      getGitHubAppStatus(app, GITHUB_REVIEWER_PROVIDER),
+    ]);
+    return { ...summary, githubApp, reviewerApp };
   });
 
   // Rate-limited like GET /api/projects/discover (src/routes/projects.ts) —
@@ -117,64 +125,109 @@ export async function integrationsRoute(app: FastifyInstance) {
   // #514 — rate-limited like the PAT/webhook routes above: this now makes
   // a live call to api.github.com (verifyAppCredentials), where it
   // previously was a pure DB write.
+  // #737 — shared by both the primary App route and the reviewer-App route
+  // below: same validation, same live-verify-before-persist sequence, same
+  // response shape. `otherAppId`, when given, is the OTHER identity's
+  // currently-configured App id — passed so the reviewer route can reject
+  // reusing the primary App verbatim (see its own call site for why that
+  // specific case needs a dedicated check, not just "this key parses").
+  async function putGitHubAppLike(
+    provider: string,
+    body: SetGitHubAppBody,
+    reply: FastifyReply,
+    otherAppId?: string | null,
+  ) {
+    // Hermes review, PR #504: validate at config time, not on the next
+    // write — an unparseable key or malformed id otherwise surfaces only
+    // as a repeated warn-logged failure on every subsequent Task Master
+    // write (each one paying the full sign/resolve flow before falling
+    // back to the PAT), discovered only by reading server logs.
+    const { appId, privateKey } = body;
+    if (!/^\d+$/.test(appId)) {
+      return reply.badRequest("appId must be the numeric GitHub App id");
+    }
+    // #737 — the reviewer App must be a genuinely different identity: the
+    // whole mechanism exists because GitHub 422s a review from the PR's own
+    // author, and configuring the same App id here would silently
+    // reintroduce that exact 422 at review time instead of at config time,
+    // where it's actually diagnosable.
+    if (otherAppId && appId === otherAppId) {
+      return reply.badRequest(
+        "This is the same App id as the primary GitHub App — the reviewer must be a separate App, or GitHub will reject its review as coming from the PR's own author.",
+      );
+    }
+    let parsedKey: crypto.KeyObject;
+    try {
+      parsedKey = crypto.createPrivateKey(privateKey);
+    } catch {
+      return reply.badRequest("privateKey is not a valid PEM private key");
+    }
+    // Hermes review, PR #504: createPrivateKey accepts any key type (EC,
+    // Ed25519, ...), but signAppJwt signs with RSA-SHA256 specifically —
+    // a non-RSA key would otherwise pass this check and only fail on the
+    // next write, silently degrading to the PAT fallback with a warn log.
+    if (parsedKey.asymmetricKeyType !== "rsa") {
+      return reply.badRequest("privateKey must be an RSA private key (GitHub App keys are RSA)");
+    }
+    // #514 — live verification against GitHub's own GET /app, on top of
+    // the local parse/type checks above. Only a genuine 401 (this key
+    // doesn't work) or a 200 with a mismatched App id (this key works,
+    // but for a DIFFERENT App) rejects the PUT — see
+    // verifyAppCredentials's own doc comment for why everything else
+    // (403/404/5xx/network failure) persists instead of blocking.
+    const verification = await verifyAppCredentials(appId, privateKey);
+    if (verification.status === "rejected" || verification.status === "mismatch") {
+      return reply.badRequest(verification.message);
+    }
+    // Hermes review, PR #519: computed from the plaintext key already in
+    // hand (rather than re-decrypting the just-persisted row — a pure
+    // function of the same PEM either way) — and deliberately BEFORE
+    // setGitHubApp, not after. If this ever threw (near-unreachable now
+    // that computeKeyFingerprint wraps its own failures, but not
+    // provably impossible), doing it after persisting would strand the
+    // App configured while the route 500s and the UI shows a failure for
+    // what was actually a successful configure.
+    const keyFingerprint = computeKeyFingerprint(privateKey);
+    setGitHubApp(app, appId, privateKey, provider);
+    if (verification.status === "verified") {
+      return { verified: true, appSlug: verification.appSlug, keyFingerprint };
+    }
+    // "unreachable" — persisted anyway (see verifyAppCredentials), but
+    // the caller gets told the credential is still unverified rather
+    // than a silent 200 identical to a confirmed-good configure.
+    return { verified: false, keyFingerprint, warning: verification.message };
+  }
+
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
-    async (request, reply) => {
-      // Hermes review, PR #504: validate at config time, not on the next
-      // write — an unparseable key or malformed id otherwise surfaces only
-      // as a repeated warn-logged failure on every subsequent Task Master
-      // write (each one paying the full sign/resolve flow before falling
-      // back to the PAT), discovered only by reading server logs.
-      const { appId, privateKey } = request.body;
-      if (!/^\d+$/.test(appId)) {
-        return reply.badRequest("appId must be the numeric GitHub App id");
-      }
-      let parsedKey: crypto.KeyObject;
-      try {
-        parsedKey = crypto.createPrivateKey(privateKey);
-      } catch {
-        return reply.badRequest("privateKey is not a valid PEM private key");
-      }
-      // Hermes review, PR #504: createPrivateKey accepts any key type (EC,
-      // Ed25519, ...), but signAppJwt signs with RSA-SHA256 specifically —
-      // a non-RSA key would otherwise pass this check and only fail on the
-      // next write, silently degrading to the PAT fallback with a warn log.
-      if (parsedKey.asymmetricKeyType !== "rsa") {
-        return reply.badRequest("privateKey must be an RSA private key (GitHub App keys are RSA)");
-      }
-      // #514 — live verification against GitHub's own GET /app, on top of
-      // the local parse/type checks above. Only a genuine 401 (this key
-      // doesn't work) or a 200 with a mismatched App id (this key works,
-      // but for a DIFFERENT App) rejects the PUT — see
-      // verifyAppCredentials's own doc comment for why everything else
-      // (403/404/5xx/network failure) persists instead of blocking.
-      const verification = await verifyAppCredentials(appId, privateKey);
-      if (verification.status === "rejected" || verification.status === "mismatch") {
-        return reply.badRequest(verification.message);
-      }
-      // Hermes review, PR #519: computed from the plaintext key already in
-      // hand (rather than re-decrypting the just-persisted row — a pure
-      // function of the same PEM either way) — and deliberately BEFORE
-      // setGitHubApp, not after. If this ever threw (near-unreachable now
-      // that computeKeyFingerprint wraps its own failures, but not
-      // provably impossible), doing it after persisting would strand the
-      // App configured while the route 500s and the UI shows a failure for
-      // what was actually a successful configure.
-      const keyFingerprint = computeKeyFingerprint(privateKey);
-      setGitHubApp(app, appId, privateKey);
-      if (verification.status === "verified") {
-        return { verified: true, appSlug: verification.appSlug, keyFingerprint };
-      }
-      // "unreachable" — persisted anyway (see verifyAppCredentials), but
-      // the caller gets told the credential is still unverified rather
-      // than a silent 200 identical to a confirmed-good configure.
-      return { verified: false, keyFingerprint, warning: verification.message };
-    },
+    async (request, reply) => putGitHubAppLike(GITHUB_PROVIDER, request.body, reply),
   );
 
   app.delete("/api/integrations/github/app", async (_request, reply) => {
     clearGitHubApp(app);
+    reply.code(204);
+  });
+
+  // #737 — the reviewer App: same shape as the primary App route above, a
+  // second identity Mullion uses only to submit PR reviews so their
+  // `event` can be `APPROVE`/`REQUEST_CHANGES` (see
+  // `resolveReviewerToken`, github-integration.ts, and
+  // `createPullRequestReview`'s doc comment, github-write.ts, for why the
+  // primary identity can never do this itself). Optional — an unconfigured
+  // reviewer App is the normal state, not a degraded one; every review just
+  // stays `COMMENT`-only as it does today.
+  app.put<{ Body: SetGitHubAppBody }>(
+    "/api/integrations/github/reviewer-app",
+    { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const primary = await getGitHubAppStatus(app);
+      return putGitHubAppLike(GITHUB_REVIEWER_PROVIDER, request.body, reply, primary.appId);
+    },
+  );
+
+  app.delete("/api/integrations/github/reviewer-app", async (_request, reply) => {
+    clearGitHubApp(app, GITHUB_REVIEWER_PROVIDER);
     reply.code(204);
   });
 
