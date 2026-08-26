@@ -69,11 +69,181 @@ a `launchd` `KeepAlive` job on macOS, a user systemd unit on Linux. One job
 per host. `ExitOnForwardFailure=yes` matters: without it, `ssh` can stay
 "connected" with a silently-dead forward.
 
+### macOS (launchd)
+
+A plain terminal running the `ssh -N -R ...` command works until you close
+the terminal, sleep the laptop past its network timeout, or reboot — none
+of which restart it for you. `launchd` does. Save this as
+`~/Library/LaunchAgents/de.s3ntin3l8.mullion-ssh-agent.<host>.plist`, one
+file per host you serve (the label and the socket path must both be
+host-specific, or two jobs will fight over the same forward):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>de.s3ntin3l8.mullion-ssh-agent.your-mullion-host</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ssh</string>
+    <string>-N</string>
+    <string>-o</string><string>ExitOnForwardFailure=yes</string>
+    <string>-o</string><string>ServerAliveInterval=30</string>
+    <string>-o</string><string>ServerAliveCountMax=3</string>
+    <string>-R</string>
+    <string>/home/you/.local/state/mullion-ssh-agent/agent.sock:/Users/you/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock</string>
+    <string>your-mullion-host</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/mullion-ssh-agent-your-mullion-host.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/mullion-ssh-agent-your-mullion-host.log</string>
+</dict>
+</plist>
+```
+
+**`$SSH_AUTH_SOCK` must be a literal path here, not the environment
+variable.** `launchd` jobs don't inherit your shell's `$SSH_AUTH_SOCK` — it's
+set per-login-session by whatever agent is running (1Password's app,
+`ssh-agent`), and `launchd` starts this job outside that session entirely.
+1Password's own agent socket is at the fixed path
+`~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock`
+([1Password docs](https://developer.1password.com/docs/ssh/agent/compatibility/)),
+shown above — for any other agent, run `echo $SSH_AUTH_SOCK` in a regular
+terminal to get its real path and hardcode that instead.
+
+Load and manage the job with `launchctl`, not by double-clicking the file.
+`load`/`unload` are deprecated on modern macOS — use `bootstrap`/`bootout`
+against the GUI domain instead:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.s3ntin3l8.mullion-ssh-agent.your-mullion-host.plist
+launchctl list | grep mullion-ssh-agent   # confirm it's running (PID, not "-")
+tail -f /tmp/mullion-ssh-agent-your-mullion-host.log   # confirm no connect errors
+launchctl bootout gui/$(id -u)/de.s3ntin3l8.mullion-ssh-agent.your-mullion-host  # stop it
+```
+
+`KeepAlive: true` restarts the job whenever it exits for _any_ reason,
+without backoff — if the host is unreachable, `launchd` will retry in a tight
+loop. That's the right default here (a working tunnel matters more than a
+brief noisy retry burst), but if `$SSH_AUTH_SOCK` came from a plain
+`ssh-agent` rather than 1Password, its path can change across a reboot or
+agent restart, silently turning every future retry into a connection to a
+dead socket — with 1Password's agent this isn't a concern since its socket
+path is stable.
+
+### Linux (systemd --user)
+
+**`$SSH_AUTH_SOCK` must be a literal path here too, not the environment
+variable** — same reasoning as the `launchd` case above, for a different
+reason: a `systemd --user` manager is a separate process from your login
+shell and does not source `.bash_profile`/`.zprofile` (where an agent
+typically sets this var), so `$SSH_AUTH_SOCK` expands empty in the unit
+below unless you explicitly import it. Hardcoding avoids that class of bug
+entirely rather than relying on an import step staying done. 1Password's own
+agent socket on Linux is at the fixed path `~/.1password/agent.sock`
+([1Password docs](https://developer.1password.com/docs/ssh/agent/config/));
+for any other agent, run `echo $SSH_AUTH_SOCK` in a regular terminal to get
+its real path and hardcode that instead.
+
+The same idea via a user unit,
+`~/.config/systemd/user/mullion-ssh-agent@.service`, templated on the
+target host so `systemctl --user start mullion-ssh-agent@your-mullion-host`
+starts one instance per host:
+
+```ini
+[Unit]
+Description=Mullion SSH agent forward to %i
+
+[Service]
+ExecStart=/usr/bin/ssh -N -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -R /home/you/.local/state/mullion-ssh-agent/agent.sock:/home/you/.1password/agent.sock %i
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+then `systemctl --user enable --now mullion-ssh-agent@your-mullion-host` and
+`loginctl enable-linger $(whoami)` so it survives logout. Because the socket
+path above is a literal, not an inherited env var, this survives whether the
+unit is started interactively or (via the linger) at boot before any login
+shell ever runs — the same staleness caveat as the `launchd` case still
+applies if the agent itself restarts onto a different socket path later
+without the unit restarting too, though that isn't a concern with
+1Password's stable path.
+
+If you're using an agent whose socket path genuinely isn't stable and you
+need the running shell's actual `$SSH_AUTH_SOCK` instead of a hardcoded
+path, import it explicitly before starting the unit —
+`systemctl --user import-environment SSH_AUTH_SOCK` — but note this only
+captures whatever value is current in the shell you run it from, one time;
+it will not track a later change without re-running it and restarting the
+unit.
+
 **Approval cadence.** If your agent (e.g. 1Password) prompts for approval on
 every signature, a single `ansible-playbook` run across many hosts can mean
 many prompts in a row. Check this on a small run before assuming a large one
 is usable — loosening the approval cadence is a real security trade-off, not
 a default to drift into.
+
+## Troubleshooting
+
+**`remote port forwarding failed for listen path <path>`** (client-side,
+printed by `ssh` itself). This error doesn't say which of two causes it is —
+check both, in order:
+
+1. **The parent directory doesn't exist on the host.** `sshd` will not
+   create it — see "Host setup" step 2 above. `ls -ld` the directory; if it's
+   missing, `mkdir -p -m 0700` it and reconnect.
+2. **A stale socket file is blocking the rebind**, because
+   `StreamLocalBindUnlink yes` (Host setup step 1) isn't set, or hasn't taken
+   effect yet (`systemctl reload ssh` on the host after adding it). Check
+   with `sshd -T | grep streamlocalbindunlink` on the host — if it prints
+   `no`, that's the cause. This specific failure mode only shows up on a
+   _reconnect_ (sleep, network drop, reboot), not the very first connection,
+   since there's no stale file yet the first time.
+
+**Debugging the transport separately from the injection.** These are two
+independent things, and conflating them wastes time:
+
+- **Transport** — is the socket actually forwarded and does it work at all?
+  Test with an explicit, manual `SSH_AUTH_SOCK`:
+  ```sh
+  SSH_AUTH_SOCK=/home/you/.local/state/mullion-ssh-agent/agent.sock ssh-add -l
+  ```
+  If this lists your key, the `ssh -R` tunnel and the host-side sshd config
+  are both correct — any remaining problem is entirely on the Mullion side.
+- **Injection** — is Mullion actually setting `SSH_AUTH_SOCK` for new
+  sessions? Open a **brand-new** session (not one that predates the config
+  change or service restart — see below) and run a bare `ssh-add -l`, with
+  no manual export. If the transport test above passed but this fails, check
+  that `MULLION_SSH_AUTH_SOCK` is actually in the running service's
+  environment, not just the `.env` file on disk.
+
+**`MULLION_SSH_AUTH_SOCK` needs a build that actually contains this
+feature.** The config key itself is accepted (and silently does nothing) on
+any Mullion build — `@fastify/env` validates the key exists in the schema,
+but an older binary has no code that reads it. This feature shipped in
+`v0.2.46`; if you're on an older release, upgrading is the fix, not
+re-checking your config.
+
+**A pre-existing session won't pick up a config change.** `SSH_AUTH_SOCK` is
+set once, at a session's own launch — a session that was already running
+before you set `MULLION_SSH_AUTH_SOCK` (or before you restarted the service
+after setting it) keeps whatever it originally inherited. This is by design
+(see the injection's own "set unconditionally, never gated on the socket
+being live" behavior above) — it means a running session doesn't need to be
+restarted just because the Mac's tunnel dropped and came back, but it also
+means a _config_ change needs a fresh session (or a full session
+reattach — reattaching alone does not re-run this) to take effect.
 
 ## Multi-host
 
