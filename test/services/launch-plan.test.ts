@@ -74,6 +74,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     controlSocketPath: "/tmp/sessions/mullion.sock",
     sessionsDir: "/tmp/sessions",
     reviewGateEnabled: false,
+    sshAuthSock: "",
     injectAgentGuide: true,
     injectProjectBriefing: true,
     skipPermissions: false,
@@ -115,6 +116,7 @@ describe("buildLaunchPlan — env scrub", () => {
     process.env.DATABASE_URL = "file:/should-not-leak.db";
     process.env.PORT = "9999";
     process.env.MULLION_AUTH_TOKEN = "super-secret";
+    process.env.MULLION_SSH_AUTH_SOCK = "/leaked/outer-config-value.sock";
     // The four re-injected keys (see the skip branch below) get their own
     // OUTER leaked value here too, distinct from what baseSession() passes
     // in — proves buildLaunchPlan's own injection wins over a leaked
@@ -151,6 +153,7 @@ describe("buildLaunchPlan — env scrub", () => {
     expect(plan.env.DATABASE_URL).toBeUndefined();
     expect(plan.env.PORT).toBeUndefined();
     expect(plan.env.MULLION_AUTH_TOKEN).toBeUndefined();
+    expect(plan.env.MULLION_SSH_AUTH_SOCK).toBeUndefined();
   });
 
   it("preserves ordinary env vars the scrub doesn't own", () => {
@@ -205,6 +208,45 @@ describe("buildLaunchPlan — the five MULLION_* injections", () => {
     const plan = buildLaunchPlan(baseSession({ id: "42" }));
 
     expect(plan.env.MULLION_SESSION_ID).toBe("adapter-override");
+  });
+});
+
+describe("buildLaunchPlan — SSH_AUTH_SOCK injection", () => {
+  it("injects SSH_AUTH_SOCK from session.sshAuthSock when set", () => {
+    const plan = buildLaunchPlan(baseSession({ sshAuthSock: "/tmp/ssh-agent.sock" }));
+    expect(plan.env.SSH_AUTH_SOCK).toBe("/tmp/ssh-agent.sock");
+  });
+
+  it("leaves an inherited SSH_AUTH_SOCK untouched when sshAuthSock is unset (feature off — no regression)", () => {
+    process.env.SSH_AUTH_SOCK = "/run/user/1000/gnupg/S.gpg-agent.ssh";
+
+    const plan = buildLaunchPlan(baseSession({ sshAuthSock: "" }));
+
+    expect(plan.env.SSH_AUTH_SOCK).toBe("/run/user/1000/gnupg/S.gpg-agent.ssh");
+  });
+
+  it("an injected sshAuthSock wins over an inherited SSH_AUTH_SOCK", () => {
+    process.env.SSH_AUTH_SOCK = "/run/user/1000/gnupg/S.gpg-agent.ssh";
+
+    const plan = buildLaunchPlan(baseSession({ sshAuthSock: "/tmp/ssh-agent.sock" }));
+
+    expect(plan.env.SSH_AUTH_SOCK).toBe("/tmp/ssh-agent.sock");
+  });
+
+  it("does not set SSH_AUTH_SOCK at all when unset and nothing was inherited", () => {
+    delete process.env.SSH_AUTH_SOCK;
+
+    const plan = buildLaunchPlan(baseSession({ sshAuthSock: "" }));
+
+    expect(plan.env.SSH_AUTH_SOCK).toBeUndefined();
+  });
+
+  it("never leaks the MULLION_SSH_AUTH_SOCK config key itself into the session env", () => {
+    process.env.MULLION_SSH_AUTH_SOCK = "/leaked/config-value.sock";
+
+    const plan = buildLaunchPlan(baseSession({ sshAuthSock: "/tmp/ssh-agent.sock" }));
+
+    expect(plan.env.MULLION_SSH_AUTH_SOCK).toBeUndefined();
   });
 });
 

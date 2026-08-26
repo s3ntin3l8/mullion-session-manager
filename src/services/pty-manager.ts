@@ -883,6 +883,10 @@ export class Session {
   // below. Determines whether the Claude Code adapter registers the
   // blocking PreToolUse review gate for this session's launch.
   private readonly reviewGateEnabled: boolean;
+  // Mirrors app.config.MULLION_SSH_AUTH_SOCK, passed down from PtyManager —
+  // see buildLaunchPlan's injection of this into LaunchPlanSession.sshAuthSock
+  // in bootstrapMaster() below.
+  private readonly sshAuthSock: string;
   // Issue #437c — the live sessions.injectAgentGuide setting's value AT
   // THIS SESSION'S CREATION (PtyManager.getOrCreate calls
   // getInjectAgentGuide() fresh per session, then passes the resolved
@@ -1230,6 +1234,7 @@ export class Session {
     controlSocketPath: string;
     sessionsDir: string;
     reviewGateEnabled?: boolean;
+    sshAuthSock?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
     skipPermissions?: boolean;
@@ -1253,6 +1258,7 @@ export class Session {
     this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
+    this.sshAuthSock = opts.sshAuthSock ?? "";
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
     this.skipPermissions = opts.skipPermissions ?? false;
@@ -1768,6 +1774,7 @@ export class Session {
       controlSocketPath: this.controlSocketPath,
       sessionsDir: this.sessionsDir,
       reviewGateEnabled: this.reviewGateEnabled,
+      sshAuthSock: this.sshAuthSock,
       injectAgentGuide: this.injectAgentGuide,
       injectProjectBriefing: this.injectProjectBriefing,
       skipPermissions: this.skipPermissions,
@@ -3344,6 +3351,12 @@ export class PtyManager {
   // `new PtyManager({ sessionsDir })` call sites (tests, mainly) keep
   // compiling unchanged.
   private readonly reviewGateEnabled: boolean;
+  // Mirrors app.config.MULLION_SSH_AUTH_SOCK (default "", see env.ts) —
+  // threaded into every Session this manager creates (getOrCreate below) so
+  // its bootstrapMaster() can pass it through to buildLaunchPlan. Same
+  // "boot-time app.config constant, optional in opts" posture as
+  // reviewGateEnabled above.
+  private readonly sshAuthSock: string;
   // Issue #437c — a live accessor, not a cached boolean: unlike
   // reviewGateEnabled above (a boot-time app.config constant),
   // sessions.injectAgentGuide is DB-backed and can be toggled at runtime via
@@ -3368,6 +3381,7 @@ export class PtyManager {
   constructor(opts: {
     sessionsDir: string;
     reviewGateEnabled?: boolean;
+    sshAuthSock?: string;
     controlSocketPath?: string;
     getInjectAgentGuide?: () => boolean;
     getInjectProjectBriefing?: () => boolean;
@@ -3397,6 +3411,7 @@ export class PtyManager {
       ? path.resolve(opts.controlSocketPath)
       : path.join(this.sessionsDir, "mullion.sock");
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
+    this.sshAuthSock = opts.sshAuthSock ?? "";
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
     this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
 
@@ -3444,6 +3459,7 @@ export class PtyManager {
         controlSocketPath: this.controlSocketPath,
         sessionsDir: this.sessionsDir,
         reviewGateEnabled: this.reviewGateEnabled,
+        sshAuthSock: this.sshAuthSock,
         // Called now, at this session's own creation — see getInjectAgentGuide's
         // own doc comment for why this must be a fresh call, not a value
         // cached at PtyManager-construction/boot time.

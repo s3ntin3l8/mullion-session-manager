@@ -125,6 +125,38 @@ describe("session-env", () => {
       expect(result.PATH).toBe("/usr/bin");
     });
 
+    it("strips MULLION_SSH_AUTH_SOCK so a nested Mullion re-scrubs it", () => {
+      // The config key that names the path launch-plan.ts injects as
+      // SSH_AUTH_SOCK — must be stripped so a nested Mullion (a `make dev`
+      // run from inside a bridge-enabled session) doesn't inherit the outer
+      // process's configured path as if it were its own.
+      const base: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin",
+        MULLION_SSH_AUTH_SOCK: "/data/sessions/ssh-agent.sock",
+      };
+
+      const result = buildSessionEnv(base);
+
+      expect(result).not.toHaveProperty("MULLION_SSH_AUTH_SOCK");
+      expect(result.PATH).toBe("/usr/bin");
+    });
+
+    it("does NOT strip SSH_AUTH_SOCK itself — it's overwritten (or left alone) by launch-plan.ts, not by the scrub", () => {
+      // Unlike MULLION_SSH_AUTH_SOCK above, the derived SSH_AUTH_SOCK is
+      // deliberately absent from SERVER_ENV_KEYS (see the "Deliberately NOT
+      // stripped" comment): a session whose feature is off should still get
+      // whatever agent it already had (e.g. a local gpg-agent) passed
+      // through untouched.
+      const base: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin",
+        SSH_AUTH_SOCK: "/run/user/1000/gnupg/S.gpg-agent.ssh",
+      };
+
+      const result = buildSessionEnv(base);
+
+      expect(result.SSH_AUTH_SOCK).toBe("/run/user/1000/gnupg/S.gpg-agent.ssh");
+    });
+
     it("strips leaked GIT_* vars from the server process (A7)", () => {
       // git-env.ts's gitEnv() protects every backend git subprocess from a
       // leaked GIT_DIR/GIT_INDEX_FILE (the real incident that motivated
