@@ -251,6 +251,17 @@ export const sessions = sqliteTable(
     // "documented hand-edit for a drizzle-kit/SQLite limitation" precedent
     // as `0008_lovely_xavin.sql`.
     parentSessionId: integer("parent_session_id"),
+    // JSON-encoded `Record<string, string>` (issue #822) — extra env vars
+    // injected into this session at spawn, on top of whatever a dock
+    // control or direct API caller set at creation. Persisted (not just
+    // passed through spawn opts) for the same reason MULLION_HOOK_TOKEN
+    // is (see pty-manager.ts's loadOrCreateHookToken): a session's dtach
+    // master can outlive the Mullion process, and a re-bootstrap on
+    // reattach (Session.spawnInternal) must rebuild the exact same launch
+    // plan, not a launch-time-only one that silently loses this the
+    // moment the server restarts. Nullable — most sessions set none.
+    // Same JSON-as-text convention as `workspaces.layout`/`settings.data`.
+    env: text("env"),
   },
   (table) => [
     foreignKey({

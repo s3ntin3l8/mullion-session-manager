@@ -138,6 +138,14 @@ export interface CreateSessionOptions {
    * still spawns as an ordinary fresh one, same as if this were never set. */
   resumeAgentSessionId?: string;
   projectId?: number;
+  /** Issue #822 — extra env vars for this session's launch, on top of the
+   * usual scrub + Mullion injections (see launch-plan.ts's buildLaunchPlan,
+   * which applies this BEFORE every Mullion-owned write so none of those
+   * can be overridden by it). Sourced from sessions.env (schema.ts) on both
+   * the initial spawn and every later reattach (routes/terminal.ts) — see
+   * that column's own doc comment for why it's persisted rather than
+   * spawn-time-only. */
+  env?: Record<string, string>;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the
@@ -918,6 +926,13 @@ export class Session {
   // own doc comment. Same "spawn-time snapshot, consumed once in
   // bootstrapMaster()" posture as initialPrompt/seedPrompt above.
   private readonly resumeAgentSessionId: string | undefined;
+  // Issue #822 — see CreateSessionOptions.env's own doc comment. Unlike
+  // initialPrompt/seedPrompt/resumeAgentSessionId above, this IS re-read on
+  // every bootstrapMaster() call for this instance, including a later
+  // spawnInternal()-triggered respawn (a dead dtach master, Session object
+  // otherwise unchanged) — it describes ongoing launch configuration, not a
+  // one-time consumable.
+  private readonly env: Record<string, string>;
   readonly projectId: number | null;
 
   private ptyProcess: IPty | null = null;
@@ -1243,6 +1258,7 @@ export class Session {
     seedPrompt?: string;
     resumeAgentSessionId?: string;
     projectId?: number;
+    env?: Record<string, string>;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -1266,6 +1282,7 @@ export class Session {
     this.initialPrompt = opts.initialPrompt;
     this.seedPrompt = opts.seedPrompt;
     this.resumeAgentSessionId = opts.resumeAgentSessionId;
+    this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
     // `this.id` above is already assigned — the host object's `sessionId`
@@ -1783,6 +1800,7 @@ export class Session {
       initialPrompt: this.initialPrompt,
       seedPrompt: this.seedPrompt,
       resumeAgentSessionId: this.resumeAgentSessionId,
+      env: this.env,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -3478,6 +3496,7 @@ export class PtyManager {
         seedPrompt: opts.seedPrompt,
         resumeAgentSessionId: opts.resumeAgentSessionId,
         projectId: opts.projectId,
+        env: opts.env,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

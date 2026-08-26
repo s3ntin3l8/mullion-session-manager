@@ -228,6 +228,7 @@ export class MullionClient {
     const body = { projectId, command: control.command, kind: "dock", name: control.title };
     if (control.cwd !== undefined) body.cwd = control.cwd;
     if (control.worktreeRefresh !== undefined) body.worktreeRefresh = control.worktreeRefresh;
+    if (control.env !== undefined) body.env = control.env;
     return this.controlRequest("sessions.create", body);
   }
 

@@ -14,6 +14,33 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
+import { isReservedSessionEnvKey } from "./session-env-keys.js";
+
+// Issue #822 — bounds shared between routes/sessions.ts's `env` schema
+// property, routes/internal-schemas.ts's duplicate for the agent-side
+// spawn schema, and services/dock-config.ts's own env validation, so "how
+// much env is too much" has one answer regardless of which write path a
+// caller used. Not a security boundary (a full-scope caller can already
+// achieve an arbitrary env var via `command` composition, e.g. `FOO=bar
+// claude`) — the real constraint is transport, not intent:
+// remote-host-client.ts's openAttach() has nowhere to put `env` but the WS
+// upgrade's query string (a GET has no body, and the `ws` package exposes
+// no custom-body-on-upgrade option), which shares Node's 16 KB
+// --max-http-header-size with the request line, the Bearer token, and the
+// three HMAC signature headers. A worst-case env at these bounds
+// JSON-stringifies to ~4.2 KB and, after URLSearchParams percent-encoding
+// (the dominant multiplier — `{`, `}`, `"`, `:`, `,` all escape to 3 bytes
+// each), lands the full request target at ~4.6 KB — comfortably clear of
+// the limit even alongside the other query params and auth headers. Do not
+// raise these without recomputing that encoded size (see the PR that added
+// this comment for the calculation) — the old 64×4096 bound encoded to
+// ~263 KB, well past --max-http-header-size, the moment a dock control
+// actually used a meaningful chunk of it. (Untested what Node/`ws` actually
+// do past the limit — a rejected upgrade or a hang, take your pick — the
+// point of this bound is staying clear of it, not characterizing the
+// failure.)
+export const MAX_SESSION_ENV_ENTRIES = 16;
+export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
 
 // Default terminal size for a session that hasn't had a browser attach yet
 // to report its real dimensions — the first WS attach immediately resizes
@@ -81,6 +108,16 @@ export interface CreateSessionBody {
   // explicitly (see createSessionRecord's validation below) — the socket op
   // is the narrow, session-scoped path to the same outcome, not the only one.
   parentSessionId?: number;
+  // Issue #822 — extra env vars for this session's launch, on top of
+  // whatever a dock control (project-config.ts's normalizeRawControl) or
+  // direct caller supplies. Persisted to sessions.env (schema.ts) so a
+  // re-bootstrap on reattach after a Mullion restart reproduces the same
+  // launch plan — see that column's own doc comment. Applied in
+  // launch-plan.ts's buildLaunchPlan BEFORE every Mullion-owned env write
+  // (shell integration, the MULLION_* vars, SSH_AUTH_SOCK, hook-adapter
+  // envAdditions), so none of those can be overridden by it — enforced by
+  // reserved-key rejection at the dock-config write path, not here.
+  env?: Record<string, string>;
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -248,7 +285,13 @@ export type CreateSessionResult =
   | { ok: false; reason: "parent-wrong-project" }
   | { ok: false; reason: "parent-is-child" }
   | { ok: false; reason: "cwd-outside-project" }
-  | { ok: false; reason: "child-cap-exceeded" };
+  | { ok: false; reason: "child-cap-exceeded" }
+  // Hermes review, this PR — validated here (not just dock-config.ts's write
+  // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
+  // is bound by the same reserved-key rules as a dock control. See
+  // session-env-keys.ts's own comment for why this is the required second
+  // enforcement point, not a redundant one.
+  | { ok: false; reason: "reserved-env-key"; detail: string };
 
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
 // POST /api/sessions/:id/promote (option 2), and POST /api/tasks/:id/claim
@@ -273,8 +316,22 @@ export async function createSessionRecord(
     initialPrompt,
     seedPrompt,
     resumeAgentSessionId,
+    env,
   } = params;
   let cwd = params.cwd;
+
+  // Hermes review, this PR (issue #822) — dock-config.ts's validateOneControl
+  // is not the only producer of a session's `env`; a direct full-scope
+  // `POST /api/sessions` call bypasses it entirely. Enforce the same
+  // reserved-key rule here so it's bound regardless of caller, matching the
+  // parentSessionId validation immediately below (also re-validated here for
+  // exactly the same "not just the socket op" reason).
+  if (env !== undefined) {
+    const reservedKey = Object.keys(env).find(isReservedSessionEnvKey);
+    if (reservedKey !== undefined) {
+      return { ok: false, reason: "reserved-env-key", detail: reservedKey };
+    }
+  }
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
@@ -399,6 +456,7 @@ export async function createSessionRecord(
         ...(nameLocked !== undefined ? { nameLocked } : {}),
         ...(skipPermissions !== undefined ? { skipPermissions } : {}),
         ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
+        ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
       })
       .returning()
       .all();
@@ -442,6 +500,7 @@ export async function createSessionRecord(
       seedPrompt,
       resumeAgentSessionId,
       projectId,
+      env,
     });
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):

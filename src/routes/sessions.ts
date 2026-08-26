@@ -20,6 +20,8 @@ import {
   createSessionRecord,
   killSession,
   resolveWorktreeCwd,
+  MAX_SESSION_ENV_ENTRIES,
+  MAX_SESSION_ENV_VALUE_LENGTH,
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
@@ -74,6 +76,11 @@ const createSessionSchema = {
       worktreeRefresh: { type: "boolean" },
       skipPermissions: { type: "boolean" },
       parentSessionId: { type: "integer" },
+      env: {
+        type: "object",
+        maxProperties: MAX_SESSION_ENV_ENTRIES,
+        additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
+      },
     },
   },
 };
@@ -390,6 +397,9 @@ export async function sessionsRoute(app: FastifyInstance) {
         }
         if (result.reason === "child-cap-exceeded") {
           return reply.tooManyRequests("this session has reached its live child-session cap");
+        }
+        if (result.reason === "reserved-env-key") {
+          return reply.badRequest(`env key "${result.detail}" is reserved and cannot be set`);
         }
         return reply.badGateway("Failed to spawn session on host");
       }

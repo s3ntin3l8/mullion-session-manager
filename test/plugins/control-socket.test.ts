@@ -1154,6 +1154,47 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      // Issue #822 — env joins the session-scope strip list for the same
+      // reason skipPermissions/kind are there: without it, a session-scoped
+      // agent spawning a child of its own session could hand that child
+      // arbitrary extra env, a capability session scope never intended to
+      // grant.
+      it("session scope: silently strips env — a child never gets extra env from a session-scoped spawn", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", env: { CUSTOM_VAR: "attacker-value" } },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ env: null });
+        socket.destroy();
+      });
+
+      it("full scope: honors an explicit env", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", parentSessionId: parentId, env: { CUSTOM_VAR: "hello" } },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ env: { CUSTOM_VAR: "hello" } });
+        socket.destroy();
+      });
+
       it("full scope: honors an explicit skipPermissions and kind", async () => {
         app = await buildApp();
         await app.ready();

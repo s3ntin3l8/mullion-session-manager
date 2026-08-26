@@ -67,7 +67,7 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 | `command`         | `string`                | yes      | Shell command to run (`npm run dev`, `tail -f log`, ...)                                                        |
 | `cwd`             | `string`                | no       | Working directory override (defaults to project root)                                                           |
 | `height`          | `number`                | no       | Initial terminal height in pixels for the monitor body                                                          |
-| `env`             | `Record<string,string>` | no       | Environment variables to set for the session                                                                    |
+| `env`             | `Record<string,string>` | no       | Extra environment variables for the session (see Validation below for reserved keys and storage caveats)        |
 | `worktreeRefresh` | `boolean`               | no       | Periodically `git reset --hard` a preview worktree to the branch's local tip to live-sync it (default: `false`) |
 
 ### Branch selection
@@ -132,7 +132,16 @@ separately in [`git-panel.md`](git-panel.md).
 
 - `id`, `title`, and `command` must be non-empty strings.
 - `height` must be a positive integer (pixel value for the monitor body).
-- `env` entries must be string-to-string.
+- `env` entries must be string-to-string, with non-empty, shell-identifier
+  keys. Keys starting with `MULLION_`, and `SSH_AUTH_SOCK`, are **reserved**
+  and rejected when saving — Mullion sets those itself for every session
+  (see [`configuration.md`](configuration.md)'s Per-session table and
+  [`ssh-agent.md`](ssh-agent.md)), and applies this env before them, so an
+  attempt to override one would silently do nothing even if it were allowed.
+- `.crs/dock.json` is a plain, git-tracked file — its `env` values are
+  **not encrypted at rest**. Don't put secrets in it; use it for ordinary
+  configuration (`NODE_ENV`, feature flags, ports), the same trust level as
+  any other value in a repo you're already committing.
 - A malformed file is silently treated as empty — the backend logs a
   warning but never throws.
 

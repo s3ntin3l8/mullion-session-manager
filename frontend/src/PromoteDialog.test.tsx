@@ -45,6 +45,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     nameLocked: false,
     command: "claude code",
     cwd: null,
+    env: null,
     kind: "terminal",
     status: "active",
     createdAt: "2026-01-01T00:00:00.000Z",

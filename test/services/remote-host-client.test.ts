@@ -829,6 +829,36 @@ describe("RemoteHostClient", () => {
     expect(wsOptions.agent).toBeDefined();
   });
 
+  it("openAttach's request target stays well under Node's 16 KB header limit at max-legal env (issue #822)", () => {
+    // openAttach() has nowhere to put `env` but the WS upgrade's query
+    // string — a GET has no body, and `ws` exposes no custom-body-on-upgrade
+    // option — so it shares Node's default --max-http-header-size (16 KB)
+    // with the request line, the Bearer token, and the three HMAC signature
+    // headers. This pins MAX_SESSION_ENV_ENTRIES/MAX_SESSION_ENV_VALUE_LENGTH
+    // (session-lifecycle.ts) as load-bearing: raising either without
+    // re-running this test is how the old 64x4096 bound (~263 KB encoded,
+    // well past --max-http-header-size) would have shipped a remote
+    // reattach whose WS upgrade request target can't fit the limit.
+    const worstCaseEnv: Record<string, string> = {};
+    for (let i = 0; i < 16; i++) {
+      worstCaseEnv[`VAR_${i}`] = "x".repeat(256);
+    }
+    client().openAttach({
+      id: "s1",
+      cwd: "/home/bjoern/projects/some-reasonably-long-project-path",
+      command: "claude --dangerously-skip-permissions",
+      cols: 80,
+      rows: 24,
+      projectId: 123,
+      env: worstCaseEnv,
+    });
+    const [url] = wsConstructorCalls[0] as [string, unknown];
+    const requestTarget = url.slice(url.indexOf("/internal/"));
+    // Leaves several KB of headroom for the Bearer token + HMAC headers,
+    // which are all short, fixed-shape strings (see signatureHeaders).
+    expect(requestTarget.length).toBeLessThan(8 * 1024);
+  });
+
   it("refuses to dial a baseUrl that has since become disallowed (issue #250)", async () => {
     // baseUrl is read from a DB row on every request, so the check that ran
     // when the host was registered isn't a check on what's being dialed now.

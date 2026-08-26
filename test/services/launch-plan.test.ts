@@ -75,6 +75,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     sessionsDir: "/tmp/sessions",
     reviewGateEnabled: false,
     sshAuthSock: "",
+    env: {},
     injectAgentGuide: true,
     injectProjectBriefing: true,
     skipPermissions: false,
@@ -247,6 +248,51 @@ describe("buildLaunchPlan — SSH_AUTH_SOCK injection", () => {
     const plan = buildLaunchPlan(baseSession({ sshAuthSock: "/tmp/ssh-agent.sock" }));
 
     expect(plan.env.MULLION_SSH_AUTH_SOCK).toBeUndefined();
+  });
+});
+
+describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
+  it("applies session.env into the launched env", () => {
+    const plan = buildLaunchPlan(baseSession({ env: { CUSTOM_VAR: "hello" } }));
+    expect(plan.env.CUSTOM_VAR).toBe("hello");
+  });
+
+  it("a MULLION_* injection always wins over a colliding key in session.env", () => {
+    const plan = buildLaunchPlan(
+      baseSession({
+        id: "42",
+        reviewGateEnabled: true,
+        env: { MULLION_SESSION_ID: "attacker-value", MULLION_REVIEW_GATE_ENABLED: "false" },
+      }),
+    );
+    expect(plan.env.MULLION_SESSION_ID).toBe("42");
+    expect(plan.env.MULLION_REVIEW_GATE_ENABLED).toBe("true");
+  });
+
+  it("an injected SSH_AUTH_SOCK always wins over a colliding key in session.env", () => {
+    const plan = buildLaunchPlan(
+      baseSession({ sshAuthSock: "/tmp/real-agent.sock", env: { SSH_AUTH_SOCK: "/evil.sock" } }),
+    );
+    expect(plan.env.SSH_AUTH_SOCK).toBe("/tmp/real-agent.sock");
+  });
+
+  it("session.env can still set SSH_AUTH_SOCK when sshAuthSock is unconfigured (defense lives at the dock-config write path, not here)", () => {
+    delete process.env.SSH_AUTH_SOCK;
+    const plan = buildLaunchPlan(
+      baseSession({ sshAuthSock: "", env: { SSH_AUTH_SOCK: "/x.sock" } }),
+    );
+    expect(plan.env.SSH_AUTH_SOCK).toBe("/x.sock");
+  });
+
+  it("an adapter's envAdditions still wins over session.env (Object.assign runs last)", () => {
+    mockApplyHookAdapters.mockImplementation((command: string) => ({
+      command,
+      envAdditions: { CUSTOM_VAR: "adapter-value" },
+      matched: true,
+      emits: [],
+    }));
+    const plan = buildLaunchPlan(baseSession({ env: { CUSTOM_VAR: "caller-value" } }));
+    expect(plan.env.CUSTOM_VAR).toBe("adapter-value");
   });
 });
 

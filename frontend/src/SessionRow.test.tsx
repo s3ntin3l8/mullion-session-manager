@@ -123,6 +123,7 @@ const SESSION: Session = {
   nameLocked: false,
   command: "claude code",
   cwd: null,
+  env: null,
   liveCwd: null,
   previewBranch: null,
   kind: "terminal",

@@ -194,6 +194,14 @@ export interface SessionTarget {
   // never re-spawns, so there's nothing to inject context into here).
   seedPrompt?: string;
   projectId?: number;
+  // Issue #822 — see CreateSessionBody.env's own doc comment
+  // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
+  // matter for openAttach(): a re-bootstrap on the agent side (its own
+  // attachSocketToSession -> getOrCreate, internal.ts's /internal/ws/attach)
+  // must reproduce the same env the original spawn used, and the agent has
+  // nowhere else to read it from — it's DB-less, so it never saw the
+  // primary's sessions.env column.
+  env?: Record<string, string>;
 }
 
 export type SpawnSessionOptions = SessionTarget;
@@ -1058,6 +1066,9 @@ export class RemoteHostClient {
     });
     if (opts.projectId !== undefined) {
       query.set("projectId", String(opts.projectId));
+    }
+    if (opts.env !== undefined) {
+      query.set("env", JSON.stringify(opts.env));
     }
     const requestTarget = `/internal/ws/attach?${query.toString()}`;
     return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {

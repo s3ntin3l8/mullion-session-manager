@@ -145,6 +145,7 @@ const BASE_SESSION: Session = {
   nameLocked: true,
   command: "claude code",
   cwd: null,
+  env: null,
   liveCwd: null,
   previewBranch: null,
   kind: "terminal",

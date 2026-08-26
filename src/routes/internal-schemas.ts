@@ -38,6 +38,19 @@ export const SESSION_ID_PARAMS_SCHEMA = {
   },
 } as const;
 
+// Duplicated from session-lifecycle.ts's own MAX_SESSION_ENV_ENTRIES/
+// MAX_SESSION_ENV_VALUE_LENGTH rather than imported — that module pulls in
+// the primary's DB schema, which this agent-side (DB-less) schema file has
+// no business importing just for two numeric bounds. Keep the two values
+// in sync by hand — see the comment on the source constants for why they're
+// sized the way they are (openAttach()'s WS-upgrade query string, not just
+// "a sane cap"). Exported so internal.ts's `/internal/ws/attach`
+// preValidation enforces the identical bound on the query-string `env` it
+// parses by hand (that route takes no JSON body, so it can't reuse this
+// schema object directly).
+export const MAX_SESSION_ENV_ENTRIES = 16;
+export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
+
 export interface SpawnSessionBody {
   id: string;
   cwd: string;
@@ -48,6 +61,9 @@ export interface SpawnSessionBody {
   initialPrompt?: string;
   seedPrompt?: string;
   projectId?: number;
+  // Issue #822 — see CreateSessionBody.env's own doc comment
+  // (session-lifecycle.ts).
+  env?: Record<string, string>;
 }
 
 export const spawnSessionSchema = {
@@ -74,6 +90,11 @@ export const spawnSessionSchema = {
       // time. No maxLength, same posture as initialPrompt above.
       seedPrompt: { type: "string" },
       projectId: { type: "integer" },
+      env: {
+        type: "object",
+        maxProperties: MAX_SESSION_ENV_ENTRIES,
+        additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
+      },
     },
   },
 };

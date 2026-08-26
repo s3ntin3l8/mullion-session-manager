@@ -151,6 +151,12 @@ environment by `src/services/launch-plan.ts`, one set per session, not a
 deploy-time default. See [`agent-hooks.md`](agent-hooks.md) and
 [`socket-api.md`](socket-api.md).
 
+A caller-supplied env (a dock control's `env`, see [`dock.md`](dock.md), or
+a direct `POST /api/sessions` body) is applied FIRST, before every row in
+the table below — so none of these can ever be overridden by it. Reserved
+keys (`MULLION_*`, `SSH_AUTH_SOCK`) are rejected when a dock config is
+saved, not silently dropped at launch time.
+
 | Variable                      | Description                                                                                                                                                                                |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `MULLION_HOOK_SOCKET`         | path to this session's hook socket, read by the hook forwarder/adapters                                                                                                                    |

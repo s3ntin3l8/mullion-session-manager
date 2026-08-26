@@ -36,6 +36,13 @@ export interface AttachSessionParams {
   command: string;
   cols: number;
   rows: number;
+  // Issue #822 — see sessions.env's own doc comment (schema.ts). Needed
+  // here, not just at spawn time: a re-bootstrap on reattach
+  // (Session.spawnInternal, pty-manager.ts) rebuilds the launch plan from
+  // whatever this function is handed, and getOrCreate() is a no-op on an
+  // already-live session, so this is genuinely only consulted on the
+  // respawn path — never touches an already-running session's env.
+  env?: Record<string, string>;
 }
 
 /**
@@ -51,13 +58,13 @@ export interface AttachSessionParams {
 export function attachSocketToSession(
   app: FastifyInstance,
   socket: SocketLike,
-  { id, cwd, command, cols, rows }: AttachSessionParams,
+  { id, cwd, command, cols, rows, env }: AttachSessionParams,
 ): void {
   // Captured before getOrCreate, which spawns-and-marks-alive any
   // not-yet-tracked or dead session — this is the only place that still
   // reflects whether we're reattaching to a client that was already running.
   const wasAlive = app.pty.get(id)?.isAlive ?? false;
-  const session = app.pty.getOrCreate({ id, cwd, command, cols, rows });
+  const session = app.pty.getOrCreate({ id, cwd, command, cols, rows, env });
 
   app.log.info(
     { sessionId: id, cwd, command, alreadyAlive: session.isAlive },
@@ -334,6 +341,10 @@ export function resolveAndAttach(
     command: row.command,
     cols,
     rows,
+    // Issue #822 — row.env is this function's only source for it (this
+    // function has no access to the original create-time opts), same
+    // "read straight off the row" posture as cwd/command above.
+    ...(row.env !== null ? { env: JSON.parse(row.env) as Record<string, string> } : {}),
   };
 
   if (project.hostId === LOCAL_HOST_ID) {

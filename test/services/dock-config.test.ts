@@ -51,7 +51,7 @@ describe("dock-config service", () => {
             command: "npm run dev",
             cwd: "packages/frontend",
             height: 300,
-            env: { NODE_ENV: "development" },
+            env: { CUSTOM_VAR: "development" },
             worktreeRefresh: true,
           },
         ],
@@ -62,7 +62,7 @@ describe("dock-config service", () => {
         command: "npm run dev",
         cwd: "packages/frontend",
         height: 300,
-        env: { NODE_ENV: "development" },
+        env: { CUSTOM_VAR: "development" },
         worktreeRefresh: true,
       });
     });
@@ -122,6 +122,39 @@ describe("dock-config service", () => {
           controls: [{ id: "x", title: "X", command: "echo x", env: "nope" }],
         }),
       ).toThrow(/env must be an object/);
+    });
+
+    // Issue #822 — a dock control's env is applied before every
+    // Mullion-owned env write, so it can never actually override one of
+    // these; reject at write time rather than silently doing nothing.
+    it.each([
+      ["a MULLION_-prefixed key", "MULLION_AUTH_TOKEN"],
+      ["SSH_AUTH_SOCK", "SSH_AUTH_SOCK"],
+      ["an empty key", ""],
+      ["a key with an invalid character", "FOO-BAR"],
+      ["a key starting with a digit", "1FOO"],
+      // Hermes review, this PR (issue #822) — SERVER_ENV_KEYS (session-env.ts)
+      // is reserved too, not just MULLION_*/SSH_AUTH_SOCK: these are exactly
+      // the vars buildSessionEnv() strips from the inherited process env, and
+      // an unvalidated env here would silently re-introduce them.
+      ["a SERVER_ENV_KEYS member (NODE_ENV)", "NODE_ENV"],
+      ["a SERVER_ENV_KEYS member (DATABASE_URL)", "DATABASE_URL"],
+    ])("rejects %s as a reserved/invalid env key", (_label, key) => {
+      expect(() =>
+        validateDockConfig({
+          controls: [{ id: "x", title: "X", command: "echo x", env: { [key]: "value" } }],
+        }),
+      ).toThrow(/reserved key/);
+    });
+
+    it("accepts an ordinary env key", () => {
+      expect(() =>
+        validateDockConfig({
+          controls: [
+            { id: "x", title: "X", command: "echo x", env: { CUSTOM_VAR: "development" } },
+          ],
+        }),
+      ).not.toThrow();
     });
 
     it("rejects a non-string cwd", () => {

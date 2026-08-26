@@ -117,6 +117,8 @@ import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js"
 import {
   SESSION_ID_PATTERN,
   SESSION_ID_PARAMS_SCHEMA,
+  MAX_SESSION_ENV_ENTRIES,
+  MAX_SESSION_ENV_VALUE_LENGTH,
   spawnSessionSchema,
   liveStatusSchema,
   livenessSchema,
@@ -1510,6 +1512,7 @@ export async function internalRoutes(app: FastifyInstance) {
         initialPrompt,
         seedPrompt,
         projectId,
+        env,
       } = request.body;
       app.pty.getOrCreate({
         id,
@@ -1521,6 +1524,7 @@ export async function internalRoutes(app: FastifyInstance) {
         initialPrompt,
         seedPrompt,
         projectId,
+        env,
       });
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's
@@ -1770,6 +1774,42 @@ export async function internalRoutes(app: FastifyInstance) {
         if (!SESSION_ID_PATTERN.test(query.id)) {
           return reply.badRequest("id must match ^[A-Za-z0-9_-]+$");
         }
+        // Issue #822 — the primary echoes the session's env back on every
+        // attach (see remote-host-client.ts's openAttach), since this agent
+        // is DB-less and has nowhere else to recover it from on a
+        // re-bootstrap (Session.spawnInternal, via this same
+        // attachSocketToSession -> getOrCreate call below). Malformed JSON
+        // here would otherwise reach getOrCreate as a raw string, not the
+        // object it expects — reject it before the upgrade completes,
+        // same posture as the id-pattern check just above.
+        if (query.env !== undefined) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(query.env);
+          } catch {
+            return reply.badRequest("env must be valid JSON");
+          }
+          if (
+            !parsed ||
+            typeof parsed !== "object" ||
+            Array.isArray(parsed) ||
+            Object.values(parsed).some((v) => typeof v !== "string")
+          ) {
+            return reply.badRequest("env must be a JSON object of strings");
+          }
+          // Same bounds as spawnSessionSchema's `env` property — this route
+          // takes env as a hand-parsed query string, not a JSON body, so
+          // ajv never sees it and these checks have to be repeated by hand.
+          const entries = Object.entries(parsed as Record<string, string>);
+          if (entries.length > MAX_SESSION_ENV_ENTRIES) {
+            return reply.badRequest(`env must have at most ${MAX_SESSION_ENV_ENTRIES} entries`);
+          }
+          if (entries.some(([, v]) => v.length > MAX_SESSION_ENV_VALUE_LENGTH)) {
+            return reply.badRequest(
+              `env values must be at most ${MAX_SESSION_ENV_VALUE_LENGTH} characters`,
+            );
+          }
+        }
       },
     },
     (socket, req) => {
@@ -1783,6 +1823,9 @@ export async function internalRoutes(app: FastifyInstance) {
         command: query.command as string,
         cols,
         rows,
+        ...(query.env !== undefined
+          ? { env: JSON.parse(query.env) as Record<string, string> }
+          : {}),
       });
     },
   );

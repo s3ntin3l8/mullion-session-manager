@@ -13,6 +13,7 @@ function makeSession(overrides: Partial<Session>): Session {
     nameLocked: false,
     command: "bash",
     cwd: null,
+    env: null,
     liveCwd: null,
     previewBranch: null,
     kind: "terminal",
