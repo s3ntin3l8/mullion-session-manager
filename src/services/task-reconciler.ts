@@ -1482,7 +1482,11 @@ async function attemptMerge(
               // Record the SHA regardless of whether this ends up
               // satisfying branch protection — that's precisely the case
               // this memoization exists to stop from retrying forever.
-              mergeRetryState.set(task.id, { ...retryState!, lastReassertedSha: pr.headSha });
+              mergeRetryState.set(task.id, {
+                lastAttemptedAt: retryState?.lastAttemptedAt ?? Date.now(),
+                attempts: retryState?.attempts ?? 1,
+                lastReassertedSha: pr.headSha,
+              });
               // Don't record an error — the next sweep tick re-reads
               // GitHub's fresh mergeable_state instead of retrying a merge
               // this tick already knows is still blocked on stale data.
