@@ -208,18 +208,21 @@ from, the connection's own pinned session. Full scope must instead pass
 `body.projectId` is never read from the caller in either scope — it's always
 derived server-side from the resolved parent session's own project, via a
 real `GET /api/sessions/:id`, never trusted from the request. The rest of
-`body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`)
-maps onto `POST /api/sessions`; `worktree`/`worktreeRefresh` are stripped
-even if present, since a child spawn's cwd-containment check assumes no
-worktree was requested. **`kind` and `skipPermissions` are additionally
-stripped for a SESSION-scoped caller** (independent review, PR #426): both
-are privilege-adjacent — `skipPermissions` disables permission prompts,
-and `kind:"dock"` hides the child from the normal per-project session
-list — and a session-scoped connection's hook token is inherited by every
-subprocess an agent spawns, so letting it set either would let an
+`body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`/
+`env`) maps onto `POST /api/sessions`; `worktree`/`worktreeRefresh` are
+stripped even if present, since a child spawn's cwd-containment check assumes
+no worktree was requested. **`kind`, `skipPermissions`, and `env` are
+additionally stripped for a SESSION-scoped caller** (`kind`/`skipPermissions`:
+independent review, PR #426; `env`: issue #822): all three are
+privilege-adjacent — `skipPermissions` disables permission prompts,
+`kind:"dock"` hides the child from the normal per-project session list, and
+`env` lets the caller inject arbitrary child-process environment — and a
+session-scoped connection's hook token is inherited by every subprocess an
+agent spawns, so letting it set any of the three would let an
 already-compromised or merely misbehaving subprocess grant itself a
-strictly more privileged, less visible session than its own. Full scope
-keeps both, matching `sessions.create`'s own behavior for that scope.
+strictly more privileged, less visible, or differently-configured session
+than its own. Full scope keeps all three, matching `sessions.create`'s own
+behavior for that scope.
 Server-side validation (not just this op's own scope check) additionally
 enforces: the parent must be in the target project (always true here,
 since the project IS derived from the parent), the parent must not itself

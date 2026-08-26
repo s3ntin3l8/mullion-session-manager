@@ -42,9 +42,14 @@ export const SESSION_ID_PARAMS_SCHEMA = {
 // MAX_SESSION_ENV_VALUE_LENGTH rather than imported — that module pulls in
 // the primary's DB schema, which this agent-side (DB-less) schema file has
 // no business importing just for two numeric bounds. Keep the two values
-// in sync by hand.
-const MAX_SESSION_ENV_ENTRIES = 64;
-const MAX_SESSION_ENV_VALUE_LENGTH = 4096;
+// in sync by hand — see the comment on the source constants for why they're
+// sized the way they are (openAttach()'s WS-upgrade query string, not just
+// "a sane cap"). Exported so internal.ts's `/internal/ws/attach`
+// preValidation enforces the identical bound on the query-string `env` it
+// parses by hand (that route takes no JSON body, so it can't reuse this
+// schema object directly).
+export const MAX_SESSION_ENV_ENTRIES = 16;
+export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
 
 export interface SpawnSessionBody {
   id: string;

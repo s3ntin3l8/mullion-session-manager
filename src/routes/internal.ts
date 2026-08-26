@@ -117,6 +117,8 @@ import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js"
 import {
   SESSION_ID_PATTERN,
   SESSION_ID_PARAMS_SCHEMA,
+  MAX_SESSION_ENV_ENTRIES,
+  MAX_SESSION_ENV_VALUE_LENGTH,
   spawnSessionSchema,
   liveStatusSchema,
   livenessSchema,
@@ -1794,6 +1796,18 @@ export async function internalRoutes(app: FastifyInstance) {
             Object.values(parsed).some((v) => typeof v !== "string")
           ) {
             return reply.badRequest("env must be a JSON object of strings");
+          }
+          // Same bounds as spawnSessionSchema's `env` property — this route
+          // takes env as a hand-parsed query string, not a JSON body, so
+          // ajv never sees it and these checks have to be repeated by hand.
+          const entries = Object.entries(parsed as Record<string, string>);
+          if (entries.length > MAX_SESSION_ENV_ENTRIES) {
+            return reply.badRequest(`env must have at most ${MAX_SESSION_ENV_ENTRIES} entries`);
+          }
+          if (entries.some(([, v]) => v.length > MAX_SESSION_ENV_VALUE_LENGTH)) {
+            return reply.badRequest(
+              `env values must be at most ${MAX_SESSION_ENV_VALUE_LENGTH} characters`,
+            );
           }
         }
       },

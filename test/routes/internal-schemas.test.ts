@@ -74,8 +74,8 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           projectId: { type: "integer" },
           env: {
             type: "object",
-            maxProperties: 64,
-            additionalProperties: { type: "string", maxLength: 4096 },
+            maxProperties: 16,
+            additionalProperties: { type: "string", maxLength: 256 },
           },
         },
       },
