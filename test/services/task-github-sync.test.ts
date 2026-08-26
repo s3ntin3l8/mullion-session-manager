@@ -5,6 +5,7 @@ import fs from "node:fs";
 
 const mockGetToken = vi.fn();
 const mockGetIntegration = vi.fn();
+const mockResolveReviewerToken = vi.fn();
 const mockResolveRepoRef = vi.fn();
 const mockAddLabels = vi.fn();
 const mockRemoveLabel = vi.fn();
@@ -18,6 +19,7 @@ const mockCreatePullRequestReview = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
+  resolveReviewerToken: mockResolveReviewerToken,
   getIntegration: mockGetIntegration,
 }));
 vi.mock("../../src/services/host-git.js", () => ({
@@ -1057,6 +1059,135 @@ describe("task-github-sync", () => {
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
       expect(row.githubSyncError).toBeNull();
+    });
+
+    // #737 — verdict -> gating event, and the reviewer identity's token.
+    describe("verdict -> gating event (#737)", () => {
+      it("posts APPROVE from the reviewer token for a clean verdict", async () => {
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nClean.",
+          verdict: "clean",
+        });
+
+        expect(mockResolveReviewerToken).toHaveBeenCalledWith(expect.anything(), repoRef);
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "reviewer_tok",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: "APPROVE" }),
+        );
+      });
+
+      it("posts REQUEST_CHANGES from the reviewer token for a changes-requested verdict", async () => {
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nIssues found.",
+          reviewSummary: "## Round 1\n\nIssues found.",
+          findings: [{ path: "a.go", line: 1, side: "RIGHT", severity: "major", body: "b" }],
+          verdict: "changes-requested",
+        });
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "reviewer_tok",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: "REQUEST_CHANGES" }),
+        );
+      });
+
+      it("never resolves a reviewer token, and posts COMMENT from the primary identity, for an inconclusive verdict", async () => {
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nInconclusive.",
+          verdict: "inconclusive",
+        });
+
+        expect(mockResolveReviewerToken).not.toHaveBeenCalled();
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "ghp_token",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: undefined }),
+        );
+      });
+
+      it("never resolves a reviewer token when no verdict is given at all (the notice-comment callers)", async () => {
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "A required CI check is failing...",
+        });
+
+        expect(mockResolveReviewerToken).not.toHaveBeenCalled();
+      });
+
+      it("downgrades to COMMENT from the primary identity when no reviewer App is configured", async () => {
+        mockResolveReviewerToken.mockResolvedValue(null);
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nClean.",
+          verdict: "clean",
+        });
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "ghp_token",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: undefined }),
+        );
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.githubSyncError).toBeNull();
+      });
+
+      it("downgrades a 422 on a gating attempt to COMMENT from the primary identity, still landing the findings", async () => {
+        const { GitHubApiError } = await import("../../src/services/github.js");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview
+          .mockRejectedValueOnce(new GitHubApiError("Validation Failed", 422))
+          .mockResolvedValueOnce({ id: 556, htmlUrl: "https://github.com/o/r/pull/9#review-556" });
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nOne finding.\n\n- **a.go:42** — x",
+          reviewSummary: "## Round 1\n\nOne finding.",
+          findings: [{ path: "a.go", line: 42, side: "RIGHT", severity: null, body: "x" }],
+          verdict: "clean",
+        });
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
+        // First attempt: the reviewer identity, gating event, anchors.
+        expect(mockCreatePullRequestReview).toHaveBeenNthCalledWith(
+          1,
+          "reviewer_tok",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: "APPROVE" }),
+        );
+        // Retry: back to the primary identity, no event (plain COMMENT), no anchors.
+        expect(mockCreatePullRequestReview).toHaveBeenNthCalledWith(
+          2,
+          "ghp_token",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          {
+            body: "## Round 1\n\nOne finding.\n\n- **a.go:42** — x",
+            commitId: "abc123",
+          },
+        );
+      });
     });
   });
 

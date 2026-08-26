@@ -801,16 +801,26 @@ side, severity, body}]}` — written to a temp file and moved into place as
   `createPullRequestReview` (`github-write.ts`) — each anchored finding
   becomes an inline comment on its own `path`/`line`, with the round header
   and summary as the review's own body. Falls back to a plain issue comment
-  only when the task has no PR yet. The review is always `event: "COMMENT"`
-  — never `APPROVE`/`REQUEST_CHANGES` — since the PR is authored by this
-  same GitHub App installation and GitHub rejects both from a PR's own
-  author; it carries no merge-gating state. (A second identity able to
-  actually approve/request-changes is tracked separately —
-  [#737](https://github.com/s3ntin3l8/mullion-session-manager/issues/737) —
-  a materially bigger, deliberately deferred piece of work.) Either way, the
-  rendered text is also appended to `tasks.reviewFindings` — durable across
-  the worktree's own eventual removal, and rendered in the task detail
-  drawer's Review card.
+  only when the task has no PR yet. **#737 — the verdict maps onto a gating
+  review event**: `clean` → `event: "APPROVE"`, `changes-requested` →
+  `event: "REQUEST_CHANGES"`, missing/inconclusive → `event: "COMMENT"`
+  (unchanged). A gating event is only ever posted from a second, separately
+  configured **reviewer App** identity (`resolveReviewerToken`,
+  `github-integration.ts`; see
+  [GitHub integration's Reviewer App section](github-integration.md#reviewer-app-opt-in-a-second-identity--737)
+  for how to configure one) — the primary identity that opened the PR
+  (`task-promote.ts`'s `openDraftPRForTask`) still can only ever post
+  `COMMENT`, since GitHub 422s both `APPROVE` and `REQUEST_CHANGES` from a
+  PR's own author. No reviewer App configured, not installed on this repo,
+  or a mint failure all quietly downgrade that round's review to `COMMENT`
+  from the primary identity — logged at `debug`, never a `githubSyncError`,
+  the expected steady state for a repo the reviewer App doesn't cover. A 422
+  on a gating attempt (the anchors rejected, or an unexpected rejection of
+  the gating event itself) retries once, dropped back to a plain `COMMENT`
+  from the primary identity, so the round's findings still land either way.
+  Either way, the rendered text is also appended to `tasks.reviewFindings` —
+  durable across the worktree's own eventual removal, and rendered in the
+  task detail drawer's Review card.
 - **Trigger an automatic `reviewing → in_progress` round.** If the verdict
   is `changes-requested`, this task hasn't already spent its round budget,
   and `taskMaster.enabled`: the task flips back to `in_progress` and the
@@ -1260,7 +1270,7 @@ task-reconciler.ts) lands the merge asynchronously, once GitHub allows it:
 | `clean`                          | Squash-merges (explicit commit title — see the caveat below) and deletes the remote branch                                        |
 | `behind`                         | Updates the branch, waits for the next tick (checks must re-run first)                                                            |
 | `unstable`                       | Backs off and retries — does **not** merge (a non-required check, e.g. this repo's own `test-e2e`, is failing/pending; see below) |
-| `blocked`                        | Backs off and retries — a required check is red or still pending                                                                  |
+| `blocked`                        | Backs off and retries — see the review-decision breakdown and re-assert behavior below                                            |
 | `dirty`                          | Spawns a worker to auto-rebase (bounded, opt-in — see "Auto-rebase" below); backs off and retries otherwise                       |
 | `unknown` (`mergeable === null`) | Backs off and retries — GitHub is still computing mergeability                                                                    |
 | merged/closed (out of band)      | Clears the merge flag — idempotent no-op                                                                                          |
@@ -1272,6 +1282,60 @@ task the same way an unbounded-wait bug would. A **"Merge now"/"Retry
 merge"** button in the task drawer (`POST /api/tasks/:id/merge`) re-arms the
 sweep immediately, for cases that need a human to actually go fix something
 first.
+
+**`blocked` isn't one state (`#737`).** GitHub collapses several distinct
+reasons a PR can't merge into this one `mergeable_state` value — a required
+CHECK red or still pending, or a required APPROVING REVIEW missing or
+dismissed. `attemptMerge` reads the PR's aggregate
+`reviewDecision` (`getPullRequestReviewDecision`, `github-write.ts`,
+GraphQL-only — REST has no equivalent) to tell them apart and records a
+`tasks.mergeError` that actually names the cause:
+
+| `reviewDecision`    | `mergeError`                                           |
+| ------------------- | ------------------------------------------------------ |
+| `CHANGES_REQUESTED` | "Changes were requested on the PR"                     |
+| `REVIEW_REQUIRED`   | "Waiting on a required approving review"               |
+| `APPROVED` / `null` | "Required checks are red or still pending" (unchanged) |
+
+`null` covers both "the read itself failed" (logged, falls back to the
+generic message) and "this repo has no review requirement configured at
+all" — the same generic message is correct either way, since a required
+CHECK is the only thing `blocked` could then mean.
+
+**Re-asserting a dismissed approval.** A task only ever reaches `attemptMerge`
+once it's `done` — a human clicked Approve, or auto-approve's own gate
+fired — so an `APPROVED` review going missing here can only mean something
+_dismissed_ it after the fact. The obvious cause is Mullion's own later
+pushes: `"behind"`'s `updatePullRequestBranch` above, or an auto-rebase
+worker's commits, both of which a repo with "Dismiss stale pull request
+approvals when new commits are pushed" enabled will dismiss automatically.
+When `reviewDecision` is anything other than `APPROVED`, the sweep resolves
+the reviewer identity's token (`resolveReviewerToken`) and posts a fresh
+`APPROVE` before falling back to recording an error — re-affirming a
+decision that was already made, never manufacturing one. This can't spin:
+a successful re-assert flips `reviewDecision` back to `APPROVED` immediately,
+closing the condition, and it only reopens on the next dismissing push — so
+the number of re-asserts is bounded by pushes to the head branch, not by how
+long the sweep has been retrying. No reviewer App configured (or the
+re-assert attempt itself failing) just falls through to recording the
+review-decision-aware message above, same as before this existed.
+
+**What this needs in branch protection to actually gate anything.** None of
+this does anything unless the repo's branch protection has "Require a pull
+request before merging" with at least **1** required approving review, and
+a [reviewer App configured](github-integration.md#reviewer-app-opt-in-a-second-identity--737).
+Turning that on has consequences worth knowing before you do it:
+
+- Every human-authored PR in that repo now needs an approval too — this
+  isn't scoped to Task Master's own PRs.
+- A task with **no review agent configured** will sit at `blocked` /
+  "Waiting on a required approving review" until a human approves it on
+  GitHub — Mullion deliberately does not rubber-stamp a review requirement
+  it has no verdict to back.
+- "Dismiss stale approvals on push" is supported, not worked around: expect
+  to see the reviewer App's review reappear after every rebase/branch-update
+  push on a task that required one. That's the re-assert behavior above
+  working as intended, not a bug.
 
 **Auto-rebase (`#758`).** `dirty` is different from the rest of that table: a
 real conflict with the base branch never resolves on its own. With
@@ -1448,10 +1512,15 @@ below (`#755`). Auto-approving records the transition with `via:
 "auto-approve"`, distinct from a human's `via: "approve"` in the task
 timeline and on `/ws/tasks`.
 
-This makes issue #737 (a second GitHub identity so the review agent's own PR
-review can gate merge) _less_ pressing but doesn't close it: the gate above
-is Mullion's own, enforced before a merge is ever requested — not a GitHub
-required-review.
+This gate is Mullion's own, enforced before a merge is ever requested — a
+GitHub required-review is a separate, independent gate. **#737 — now
+shipped**: when a reviewer App is configured, the same `clean` verdict
+that drives auto-approve here is what `postReviewFindingsComment`
+(`task-github-sync.ts`) maps onto an actual `event: "APPROVE"` on GitHub,
+so both gates can be satisfied by the same review round rather than needing
+a human to separately approve on GitHub too. See "Post as an actual GitHub
+PR review" and `blocked`'s review-decision breakdown above for the
+mechanism.
 
 **Red required CI returns the task to the worker (`#755`).** The CI lookup
 (step 4 above) is fetched _before_ steps 2/3, not after: a project with no
@@ -1678,6 +1747,12 @@ extensive design comments.
 
 ## Known limitations
 
+- **The reviewer App (`#737`) can't satisfy a CODEOWNERS-based rule.** A
+  GitHub App can't be listed in a `CODEOWNERS` file — only a repo's numeric
+  "require N approving reviews" branch protection rule can consume its
+  `APPROVE`. If a repo's required-review rule is CODEOWNERS-driven instead,
+  the reviewer App's approval satisfies nothing and the PR stays `blocked`
+  regardless of how clean the review agent's verdict is.
 - **Promotion, issue ingest, the boot-time orphan sweep, Retry, and
   review-findings/commit-title ingestion and seeding all now work for
   remote-hosted projects (`#484`, `#760`, `#778`).** The one remaining gap

@@ -50,7 +50,7 @@ import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import { resolveGitHubToken } from "./github-integration.js";
+import { resolveGitHubToken, resolveReviewerToken } from "./github-integration.js";
 import {
   getPullRequestByNumber,
   mergePullRequest,
@@ -58,6 +58,8 @@ import {
   deleteRemoteBranch,
   fetchPullRequestReviewThreads,
   detectReleaseWorkflow,
+  getPullRequestReviewDecision,
+  createPullRequestReview,
 } from "./github-write.js";
 import {
   computeCiStatus,
@@ -1362,8 +1364,90 @@ async function attemptMerge(
         return;
       }
       case "blocked": {
-        // A required check is red or still pending.
-        recordMergeError(app, task.id, "Required checks are red or still pending");
+        // #737 — `mergeable_state: "blocked"` collapses several distinct
+        // reasons GitHub won't merge into one state: a required CHECK red
+        // or pending, or a required APPROVING REVIEW missing/dismissed.
+        // Before this, every "blocked" PR got the same "Required checks
+        // are red or still pending" message even when the real cause was a
+        // missing review — actively misleading once a repo's branch
+        // protection also requires an approval. `reviewDecision` is
+        // GitHub's own aggregate verdict across all reviews on the PR
+        // (`null` when the repo has no review requirement configured at
+        // all, in which case a required CHECK is the only thing "blocked"
+        // could mean here).
+        const reviewDecision = await getPullRequestReviewDecision(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          task.prNumber,
+        ).catch((err) => {
+          app.log.warn(
+            { err, taskId: task.id, prNumber: task.prNumber },
+            "task reconcile: failed to read the PR's review decision — falling back to the generic 'blocked' message",
+          );
+          return null;
+        });
+
+        // #737 — re-assert an approval a later Mullion-initiated push may
+        // have dismissed. `attemptMerge` only ever runs for `status:
+        // "done"` tasks (processMergeRequests' own candidate query, above)
+        // — reaching "done" already means a human clicked Approve or
+        // auto-approve's own `lastReviewVerdict === "clean"` gate fired, so
+        // `task.status === "done"` is trivially true on every call here
+        // today. Kept as an explicit condition anyway (not just a comment)
+        // as a guard against a future refactor calling this function from
+        // a context where that's no longer guaranteed — re-asserting
+        // approval for a task nobody has actually approved would be
+        // exactly the "manufacturing an approval nobody made" mistake this
+        // mechanism must never make.
+        //
+        // Why this can't spin: `reviewDecision` reflects live GitHub
+        // review state, not the branch-protection rule itself — a
+        // successful re-assert flips it to `"APPROVED"` and the condition
+        // below closes immediately. It only reopens when something
+        // DISMISSES that approval, which is always a push (`"behind"`'s
+        // `updatePullRequestBranch` above, or an auto-rebase worker's
+        // commits) — so the number of re-asserts this can ever produce is
+        // bounded by the number of pushes to the head branch, not by how
+        // many sweep ticks pass while blocked.
+        if (reviewDecision && reviewDecision !== "APPROVED" && task.status === "done") {
+          const reviewerToken = await resolveReviewerToken(app, repoRef);
+          if (reviewerToken) {
+            try {
+              await createPullRequestReview(
+                reviewerToken,
+                repoRef.owner,
+                repoRef.repo,
+                task.prNumber,
+                {
+                  body:
+                    reviewDecision === "CHANGES_REQUESTED"
+                      ? "Re-affirming approval: this task was approved in Mullion, superseding the earlier changes-requested review."
+                      : "Re-affirming approval: this task's clean review was already approved in Mullion; re-asserting it after a required branch update.",
+                  commitId: pr.headSha,
+                  event: "APPROVE",
+                },
+              );
+              // Don't record an error — the next sweep tick re-reads
+              // GitHub's fresh mergeable_state instead of retrying a merge
+              // this tick already knows is still blocked on stale data.
+              return;
+            } catch (err) {
+              app.log.warn(
+                { err, taskId: task.id, prNumber: task.prNumber },
+                "task reconcile: failed to re-assert the reviewer App's approval",
+              );
+            }
+          }
+        }
+
+        const message =
+          reviewDecision === "CHANGES_REQUESTED"
+            ? "Changes were requested on the PR"
+            : reviewDecision === "REVIEW_REQUIRED"
+              ? "Waiting on a required approving review"
+              : "Required checks are red or still pending";
+        recordMergeError(app, task.id, message);
         return;
       }
       case "computing": {
@@ -1775,6 +1859,10 @@ async function attemptReturnRedCiToWorker(
       if (oldest !== undefined) ciCapCommentedRounds.delete(oldest);
     }
     ciCapCommentedRounds.set(task.id, task.autoReturnRounds);
+    // #737 — deliberately no `verdict` here: this is a notice about EXTERNAL
+    // state (a required CI check), not the review agent's own verdict on
+    // the diff, so it stays a plain COMMENT regardless of a reviewer App
+    // being configured.
     await postReviewFindingsComment(app, task, project, {
       body: `A required CI check is failing on this task's PR, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
@@ -1914,6 +2002,9 @@ async function attemptReturnPrCommentsToWorker(
       if (oldest !== undefined) prCommentCapCommentedRounds.delete(oldest);
     }
     prCommentCapCommentedRounds.set(task.id, task.autoReturnRounds);
+    // #737 — same reasoning as the red-CI notice above: this reports an
+    // external event (new PR review comments), not the review agent's own
+    // verdict on the diff, so it stays COMMENT-only.
     await postReviewFindingsComment(app, task, project, {
       body: `New review comments came in on this pull request, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
@@ -2590,12 +2681,17 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // autoReturnTask's own CAS runs, that second CAS simply fails and
         // autoReturnTask returns `{ ok: false }` — no round is spent, no
         // transition is recorded.
+        // #737 — one local, not two independent `parsed?.verdict ??
+        // "inconclusive"` expressions: this is both the durable column
+        // value AND the verdict `postReviewFindingsComment` maps onto a
+        // gating review event below, and they can't be allowed to drift.
+        const verdict = parsed?.verdict ?? "inconclusive";
         const updated = app.db
           .update(tasks)
           .set({
             reviewFindings: appendedFindings,
             reviewFindingsIngestedSessionId: task.reviewSessionId,
-            lastReviewVerdict: parsed?.verdict ?? "inconclusive",
+            lastReviewVerdict: verdict,
           })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
           .run();
@@ -2635,8 +2731,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                 body: commentBody + cappedNote,
                 reviewSummary: `${roundLabel}\n\n${parsed.summary}`,
                 findings: parsed.findings,
+                verdict,
               }
-            : { body: commentBody + cappedNote },
+            : { body: commentBody + cappedNote, verdict },
         );
 
         if (!shouldAutoReturn) continue;
