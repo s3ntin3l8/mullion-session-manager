@@ -104,6 +104,17 @@ export const githubApi = {
 
   clearGitHubApp: () => request<void>("/api/integrations/github/app", { method: "DELETE" }),
 
+  // #737 — the reviewer App: same write-only shape as setGitHubApp/
+  // clearGitHubApp above, a second identity's `/reviewer-app` route.
+  setReviewerApp: (appId: string, privateKey: string) =>
+    request<SetGitHubAppResult>("/api/integrations/github/reviewer-app", {
+      method: "PUT",
+      body: JSON.stringify({ appId, privateKey }),
+    }),
+
+  clearReviewerApp: () =>
+    request<void>("/api/integrations/github/reviewer-app", { method: "DELETE" }),
+
   startGitHubDeviceFlow: () =>
     request<DeviceFlowStatus>("/api/integrations/github/device/start", { method: "POST" }),
 

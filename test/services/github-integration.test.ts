@@ -29,14 +29,17 @@ import {
   disconnect,
   getIntegration,
   getGitHubAppStatus,
+  getConfiguredAppId,
   getToken,
   InvalidTokenError,
   setPat,
   setGitHubApp,
   clearGitHubApp,
   resolveGitHubToken,
+  resolveReviewerToken,
   verifyAppCredentials,
   GITHUB_PROVIDER,
+  GITHUB_REVIEWER_PROVIDER,
   clearGitHubAppStatusCacheForTests,
 } from "../../src/services/github-integration.js";
 
@@ -97,6 +100,10 @@ describe("github-integration service", () => {
     const app = await buildApp();
     disconnect(app);
     clearGitHubApp(app);
+    // #737 — a second, independent `integrations` row; leaking it between
+    // tests would let a reviewer-App configuration from one test silently
+    // survive into a later one that expects it unconfigured.
+    clearGitHubApp(app, GITHUB_REVIEWER_PROVIDER);
     await app.close();
   });
 
@@ -453,6 +460,148 @@ describe("github-integration service", () => {
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       expect(getToken(app)).toBe("ghp_shared");
+      await app.close();
+    });
+  });
+
+  // #737 — the reviewer App's own resolver. Deliberately NOT modeled after
+  // every resolveGitHubToken case above: the one behavior that actually
+  // needs its own coverage is "no PAT fallback, ever" — everything else
+  // (mint success/failure/not-installed/decrypt-failure) is the same
+  // getInstallationToken plumbing resolveGitHubToken already exercises.
+  // Hermes review, PR #826: added to back the symmetric same-appId guard in
+  // routes/integrations.ts, which reads both identities' ids via this
+  // cheap, local-only accessor rather than the network-calling
+  // getGitHubAppStatus.
+  describe("getConfiguredAppId (#737)", () => {
+    it("returns null when nothing is configured for that provider", async () => {
+      const app = await buildApp();
+      expect(getConfiguredAppId(app)).toBeNull();
+      expect(getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER)).toBeNull();
+      await app.close();
+    });
+
+    it("returns each provider's own appId independently, with no network call", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "111", FAKE_APP_PRIVATE_KEY);
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+
+      expect(getConfiguredAppId(app)).toBe("111");
+      expect(getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER)).toBe("222");
+      expect(fetchMock).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
+  describe("resolveReviewerToken (#737)", () => {
+    it("returns null (never the PAT) when no reviewer App is configured", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      const token = await resolveReviewerToken(app, { owner: "acme", repo: "widgets" });
+      expect(token).toBeNull();
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("mints with the 'review' scope from the reviewer row, independent of the primary App", async () => {
+      const app = await buildApp();
+      // A primary App is ALSO configured, with a different appId — proves
+      // resolveReviewerToken reads its own row, not the primary's.
+      setGitHubApp(app, "111", FAKE_APP_PRIVATE_KEY);
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_reviewer_token",
+        installationsChecked: null,
+      });
+
+      const token = await resolveReviewerToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBe("ghs_reviewer_token");
+      expect(mockGetInstallationToken).toHaveBeenCalledWith(
+        "222",
+        expect.any(String),
+        "acme",
+        "widgets",
+        "review",
+      );
+      await app.close();
+    });
+
+    it("returns null (never the PAT) when the reviewer App isn't installed on this owner", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockResolvedValue({ token: null, installationsChecked: 3 });
+
+      const token = await resolveReviewerToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBeNull();
+      await app.close();
+    });
+
+    it("returns null (never the PAT) when the mint throws", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockRejectedValue(new GitHubAppError("GitHub is down"));
+
+      const token = await resolveReviewerToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBeNull();
+      await app.close();
+    });
+
+    it("returns null (never the PAT) when the stored reviewer key can't be decrypted", async () => {
+      process.env.DB_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64url");
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      app.db
+        .update(integrations)
+        .set({ githubAppPrivateKeyEnc: "enc:not-valid-ciphertext" }) // pragma: allowlist secret
+        .where(eq(integrations.provider, GITHUB_REVIEWER_PROVIDER))
+        .run();
+
+      const token = await resolveReviewerToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBeNull();
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+      delete process.env.DB_ENCRYPTION_KEY;
+    });
+
+    it("rethrows an unexpected error rather than silently returning null", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockRejectedValue(
+        new TypeError("Cannot read properties of undefined"),
+      );
+
+      await expect(resolveReviewerToken(app, { owner: "acme", repo: "widgets" })).rejects.toThrow(
+        TypeError,
+      );
+      await app.close();
+    });
+
+    it("configuring/clearing the reviewer App does not disturb the primary App's row", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "111", FAKE_APP_PRIVATE_KEY);
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+
+      const primaryStatus = await getGitHubAppStatus(app);
+      expect(primaryStatus.appId).toBe("111");
+
+      clearGitHubApp(app, GITHUB_REVIEWER_PROVIDER);
+
+      const primaryAfter = await getGitHubAppStatus(app);
+      expect(primaryAfter.appId).toBe("111");
+      expect(primaryAfter.configured).toBe(true);
+      const reviewerAfter = await getGitHubAppStatus(app, GITHUB_REVIEWER_PROVIDER);
+      expect(reviewerAfter.configured).toBe(false);
       await app.close();
     });
   });

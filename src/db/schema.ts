@@ -761,10 +761,17 @@ export const settings = sqliteTable("settings", {
     .$defaultFn(() => new Date()),
 });
 
-// A single credential per external provider (today: just "github") — issue
-// #27. `provider` is the primary key rather than an autoincrement id since
-// there's exactly one account connected at a time (device flow yields one
-// user token; per-project tokens would need a different shape entirely).
+// A single credential per external provider (today: "github", the primary
+// PAT/OAuth/App identity, and — #737 — "github-reviewer", a second App-only
+// identity) — issue #27. `provider` is the primary key rather than an
+// autoincrement id since there's exactly one account connected per provider
+// at a time (device flow yields one user token; per-project tokens would
+// need a different shape entirely) — and, since #737, so a second identity
+// is just a second row under this same table, not a schema change. The
+// "github-reviewer" row only ever populates the App-only columns below
+// (`githubAppId`/`githubAppPrivateKeyEnc`/`githubAppKeyRotatedAt`) — it has
+// no PAT/OAuth token, login, scopes, or webhook config of its own; see
+// `GITHUB_REVIEWER_PROVIDER`, src/services/github-integration.ts.
 // `authTokenEnc` is encrypted at rest via EncryptionService (same convention
 // as `hosts.authTokenEnc`/`users.notes`) when DB_ENCRYPTION_KEY is set — see
 // src/services/github-integration.ts. `login`/`scopes` are cached from the
@@ -792,6 +799,12 @@ export const integrations = sqliteTable("integrations", {
   // there's no App-token path for it to begin with. `githubAppPrivateKeyEnc`
   // is a PEM, encrypted at rest the same way authTokenEnc/webhookSecretEnc
   // are.
+  //
+  // #737 — on the "github-reviewer" row, these same three columns hold a
+  // SEPARATE App's credentials, used only to submit gating PR reviews
+  // (`resolveReviewerToken`). That row has deliberately no PAT fallback —
+  // see `resolveReviewerToken`'s own doc comment for why falling back would
+  // defeat the entire mechanism.
   githubAppId: text("github_app_id"),
   githubAppPrivateKeyEnc: text("github_app_private_key_enc"),
   // #514 — stamped by setGitHubApp on every successful PUT (initial

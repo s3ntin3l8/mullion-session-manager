@@ -24,6 +24,15 @@ import { githubApiFetch } from "./github-fetch.js";
 // DB_ENCRYPTION_KEY is set.
 
 export const GITHUB_PROVIDER = "github";
+// #737 — a second `integrations` row, same table, keyed by this second
+// `provider` value. Reuses the App-only columns (`githubAppId`/
+// `githubAppPrivateKeyEnc`/`githubAppKeyRotatedAt`) with no migration:
+// `provider` is the primary key precisely so an additional identity is just
+// an additional row, not a schema change. Never has `authTokenEnc`/
+// `tokenType`/`login`/`scopes`/webhook fields populated — those are
+// single-account PAT/OAuth concepts `getIntegration`/`toSummary` own, and
+// stay hardcoded to `GITHUB_PROVIDER`.
+export const GITHUB_REVIEWER_PROVIDER = "github-reviewer";
 
 export class InvalidTokenError extends Error {
   constructor(message: string) {
@@ -76,12 +85,11 @@ function toSummary(
   };
 }
 
-function getRow(app: FastifyInstance): IntegrationRow | undefined {
-  const [row] = app.db
-    .select()
-    .from(integrations)
-    .where(eq(integrations.provider, GITHUB_PROVIDER))
-    .all();
+function getRow(
+  app: FastifyInstance,
+  provider: string = GITHUB_PROVIDER,
+): IntegrationRow | undefined {
+  const [row] = app.db.select().from(integrations).where(eq(integrations.provider, provider)).all();
   return row;
 }
 
@@ -97,10 +105,26 @@ export function getToken(app: FastifyInstance): string | null {
   return app.encryption.decryptString(row.authTokenEnc);
 }
 
+/**
+ * #737 — the numeric App id currently configured for `provider`, or `null`
+ * if none is. A cheap, local-only read (no decrypt, no network call) —
+ * deliberately narrower than `getGitHubAppStatus`, which does both, so the
+ * PUT routes' same-appId-as-the-other-identity check (`routes/
+ * integrations.ts`) doesn't pay for a live `listInstallations` round trip
+ * just to compare two ids.
+ */
+export function getConfiguredAppId(
+  app: FastifyInstance,
+  provider: string = GITHUB_PROVIDER,
+): string | null {
+  return getRow(app, provider)?.githubAppId ?? null;
+}
+
 function getGitHubAppCredentials(
   app: FastifyInstance,
+  provider: string = GITHUB_PROVIDER,
 ): { appId: string; privateKeyPem: string } | null {
-  const row = getRow(app);
+  const row = getRow(app, provider);
   if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) return null;
   return {
     appId: row.githubAppId,
@@ -182,8 +206,16 @@ export async function verifyAppCredentials(
 
 /** Persists a GitHub App's id + PEM private key, encrypted at rest the same
  * way as authTokenEnc/webhookSecretEnc. Independent of the shared PAT/OAuth
- * token — configuring an App neither requires nor disturbs it. */
-export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem: string): void {
+ * token — configuring an App neither requires nor disturbs it. `provider`
+ * defaults to the primary App's row (`GITHUB_PROVIDER`); #737's reviewer App
+ * is the same function called with `GITHUB_REVIEWER_PROVIDER` — a distinct
+ * row, not a distinct code path. */
+export function setGitHubApp(
+  app: FastifyInstance,
+  appId: string,
+  privateKeyPem: string,
+  provider: string = GITHUB_PROVIDER,
+): void {
   // #514 — read the OUTGOING appId before the upsert, same pattern
   // clearGitHubApp already uses below. Without this, changing the
   // configured App from A to B only ever evicted B's cache entries (via
@@ -196,7 +228,7 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
   const [existing] = app.db
     .select({ githubAppId: integrations.githubAppId })
     .from(integrations)
-    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .where(eq(integrations.provider, provider))
     .all();
   const outgoingAppId = existing?.githubAppId;
 
@@ -208,7 +240,7 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
   app.db
     .insert(integrations)
     .values({
-      provider: GITHUB_PROVIDER,
+      provider,
       githubAppId: appId,
       githubAppPrivateKeyEnc,
       githubAppKeyRotatedAt,
@@ -233,7 +265,7 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
   }
 }
 
-export function clearGitHubApp(app: FastifyInstance): void {
+export function clearGitHubApp(app: FastifyInstance, provider: string = GITHUB_PROVIDER): void {
   // Hermes review, PR #504: read the outgoing appId first so its cached
   // installation tokens can be evicted too — otherwise a still-valid
   // cache entry silently outlives the credentials that produced it (the
@@ -243,7 +275,7 @@ export function clearGitHubApp(app: FastifyInstance): void {
   const [row] = app.db
     .select({ githubAppId: integrations.githubAppId })
     .from(integrations)
-    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .where(eq(integrations.provider, provider))
     .all();
   if (row?.githubAppId) {
     clearInstallationTokenCacheForApp(row.githubAppId);
@@ -253,7 +285,7 @@ export function clearGitHubApp(app: FastifyInstance): void {
   app.db
     .update(integrations)
     .set({ githubAppId: null, githubAppPrivateKeyEnc: null, githubAppKeyRotatedAt: null })
-    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .where(eq(integrations.provider, provider))
     .run();
 }
 
@@ -320,8 +352,11 @@ export function clearGitHubAppStatusCacheForTests(): void {
   appStatusCache.clear();
 }
 
-export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAppStatus> {
-  const row = getRow(app);
+export async function getGitHubAppStatus(
+  app: FastifyInstance,
+  provider: string = GITHUB_PROVIDER,
+): Promise<GitHubAppStatus> {
+  const row = getRow(app, provider);
   if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) {
     return {
       configured: false,
@@ -483,6 +518,57 @@ export async function resolveGitHubToken(
     );
   }
   return getToken(app);
+}
+
+/**
+ * #737 — resolves an installation token for the *reviewer* App
+ * (`GITHUB_REVIEWER_PROVIDER`), scoped to `pull_requests: write` +
+ * `metadata: read` only (`REVIEW_PERMISSIONS`, github-app.ts). Deliberately
+ * **not** modeled on `resolveGitHubToken` beyond sharing its mint/decrypt
+ * error handling: there is no PAT fallback here. Falling back to the shared
+ * PAT/OAuth token would hand a gating review to the same identity that
+ * authored the PR (`task-promote.ts`'s `openDraftPRForTask`), which is
+ * exactly the 422-from-the-PR-author constraint this whole mechanism exists
+ * to route around (see `createPullRequestReview`'s doc comment,
+ * github-write.ts). `null` — not configured, not installed on this owner, a
+ * mint failure, or a decrypt failure — means "post a COMMENT-only review
+ * from the primary identity instead," the caller's job, not this
+ * function's.
+ */
+export async function resolveReviewerToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<string | null> {
+  try {
+    const appCreds = getGitHubAppCredentials(app, GITHUB_REVIEWER_PROVIDER);
+    if (!appCreds) return null;
+    const result = await getInstallationToken(
+      appCreds.appId,
+      appCreds.privateKeyPem,
+      repo.owner,
+      repo.repo,
+      "review",
+    );
+    if (result.token) return result.token;
+    app.log.debug(
+      { owner: repo.owner, repo: repo.repo, installationsChecked: result.installationsChecked },
+      "[github-integration] reviewer App has no installation covering this owner — reviews will post as COMMENT from the primary identity",
+    );
+    return null;
+  } catch (err) {
+    if (!(
+      err instanceof GitHubAppError ||
+      err instanceof DecryptionError ||
+      err instanceof GitHubApiError
+    )) {
+      throw err;
+    }
+    app.log.warn(
+      { err, owner: repo.owner, repo: repo.repo },
+      "[github-integration] reviewer App installation token mint failed — reviews will post as COMMENT from the primary identity",
+    );
+    return null;
+  }
 }
 
 interface GitHubUserValidation {
