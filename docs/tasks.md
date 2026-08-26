@@ -1309,10 +1309,19 @@ _dismissed_ it after the fact. The obvious cause is Mullion's own later
 pushes: `"behind"`'s `updatePullRequestBranch` above, or an auto-rebase
 worker's commits, both of which a repo with "Dismiss stale pull request
 approvals when new commits are pushed" enabled will dismiss automatically.
-When `reviewDecision` is anything other than `APPROVED`, the sweep resolves
-the reviewer identity's token (`resolveReviewerToken`) and posts a fresh
-`APPROVE` before falling back to recording an error — re-affirming a
-decision that was already made, never manufacturing one. This can't spin:
+When `reviewDecision` is specifically `REVIEW_REQUIRED` — no active review
+objects, but the required-approval count isn't met, exactly what a
+push-dismissed approval produces — the sweep resolves the reviewer
+identity's token (`resolveReviewerToken`) and posts a fresh `APPROVE`
+before falling back to recording an error. **Deliberately excludes
+`CHANGES_REQUESTED`** (Hermes review, PR #827): a `done` task only ever got
+there via the clean-gate or a human Approve, so a `CHANGES_REQUESTED`
+decision at that point can only be a review posted _after_ — a human on
+GitHub, or a later round — and re-asserting `APPROVE` over that would
+silently override an explicit rejection instead of re-affirming a decision
+that was already made. `CHANGES_REQUESTED` just gets the "Changes were
+requested on the PR" message above, same as `REVIEW_REQUIRED` with no
+reviewer App available. This can't spin:
 a successful re-assert flips `reviewDecision` back to `APPROVED` immediately,
 closing the condition, and it only reopens on the next dismissing push — so
 the number of re-asserts is bounded by pushes to the head branch, not by how

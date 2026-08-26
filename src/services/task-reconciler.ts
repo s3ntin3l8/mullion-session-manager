@@ -1389,28 +1389,42 @@ async function attemptMerge(
         });
 
         // #737 — re-assert an approval a later Mullion-initiated push may
-        // have dismissed. `attemptMerge` only ever runs for `status:
-        // "done"` tasks (processMergeRequests' own candidate query, above)
-        // — reaching "done" already means a human clicked Approve or
-        // auto-approve's own `lastReviewVerdict === "clean"` gate fired, so
-        // `task.status === "done"` is trivially true on every call here
-        // today. Kept as an explicit condition anyway (not just a comment)
-        // as a guard against a future refactor calling this function from
-        // a context where that's no longer guaranteed — re-asserting
-        // approval for a task nobody has actually approved would be
-        // exactly the "manufacturing an approval nobody made" mistake this
-        // mechanism must never make.
+        // have dismissed. Deliberately `"REVIEW_REQUIRED"` ONLY, not
+        // `"CHANGES_REQUESTED"` too (Hermes review, PR #827): a `done` task
+        // only ever got there via the bot's own clean-gate or a human
+        // clicking Approve, so a `CHANGES_REQUESTED` decision at THIS point
+        // can only be a review posted AFTER that — either a human on
+        // GitHub, or a later review-agent round the reviewer identity
+        // itself posted. Re-asserting APPROVE over that would silently
+        // override an explicit rejection, exactly the "manufacture an
+        // approval nobody made" failure mode this mechanism must never
+        // become, just with the rejection arriving after approval instead
+        // of before it. `REVIEW_REQUIRED` has no such ambiguity — it means
+        // "no active review objects, but the required-approval count isn't
+        // met," which is what a push-dismissed approval (and nothing else
+        // reachable from this arm) produces.
         //
-        // Why this can't spin: `reviewDecision` reflects live GitHub
-        // review state, not the branch-protection rule itself — a
-        // successful re-assert flips it to `"APPROVED"` and the condition
-        // below closes immediately. It only reopens when something
-        // DISMISSES that approval, which is always a push (`"behind"`'s
+        // `attemptMerge` only ever runs for `status: "done"` tasks
+        // (processMergeRequests' own candidate query, above) — reaching
+        // "done" already means a human clicked Approve or auto-approve's
+        // own `lastReviewVerdict === "clean"` gate fired, so `task.status
+        // === "done"` is trivially true on every call here today. Kept as
+        // an explicit condition anyway (not just a comment) as a guard
+        // against a future refactor calling this function from a context
+        // where that's no longer guaranteed.
+        //
+        // Why this can't spin: a successful re-assert flips
+        // `reviewDecision` to `"APPROVED"` and the condition below closes
+        // immediately. It only reopens when something DISMISSES that
+        // approval, which is always a push (`"behind"`'s
         // `updatePullRequestBranch` above, or an auto-rebase worker's
         // commits) — so the number of re-asserts this can ever produce is
         // bounded by the number of pushes to the head branch, not by how
-        // many sweep ticks pass while blocked.
-        if (reviewDecision && reviewDecision !== "APPROVED" && task.status === "done") {
+        // many sweep ticks pass while blocked. (A persistent failure to
+        // re-assert — e.g. a reviewer App that always 422s — still only
+        // retries at `processMergeRequests`' own per-task backoff cadence,
+        // same as every other `attemptMerge` call, not on every tick.)
+        if (reviewDecision === "REVIEW_REQUIRED" && task.status === "done") {
           const reviewerToken = await resolveReviewerToken(app, repoRef);
           if (reviewerToken) {
             try {
@@ -1420,10 +1434,7 @@ async function attemptMerge(
                 repoRef.repo,
                 task.prNumber,
                 {
-                  body:
-                    reviewDecision === "CHANGES_REQUESTED"
-                      ? "Re-affirming approval: this task was approved in Mullion, superseding the earlier changes-requested review."
-                      : "Re-affirming approval: this task's clean review was already approved in Mullion; re-asserting it after a required branch update.",
+                  body: "Re-affirming approval: this task's clean review was already approved in Mullion; re-asserting it after a required branch update.",
                   commitId: pr.headSha,
                   event: "APPROVE",
                 },

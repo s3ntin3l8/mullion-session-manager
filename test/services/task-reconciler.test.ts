@@ -2436,9 +2436,18 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
-      it("re-asserts with wording that supersedes an earlier changes-requested review, not a silent flip", async () => {
+      // Hermes review, PR #827: re-assert used to also fire on
+      // CHANGES_REQUESTED, which would silently override a review posted
+      // AFTER the task's own approval (a human on GitHub, or a later
+      // review-agent round) — exactly the "manufacture an approval nobody
+      // made" failure mode this mechanism must never become. Pins that a
+      // configured, working reviewer App does NOT change this outcome —
+      // the earlier "no reviewer App configured" case above already
+      // covered the message; this covers that the identity being available
+      // doesn't matter for CHANGES_REQUESTED specifically.
+      it("never re-asserts over CHANGES_REQUESTED even when a reviewer App is configured and working", async () => {
         const app = await buildApp();
-        await createDoneTaskWithPendingMerge(app);
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
         mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
         mockGetPullRequestReviewDecision.mockResolvedValue("CHANGES_REQUESTED");
         mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
@@ -2446,16 +2455,9 @@ describe("reconcileTasks", () => {
 
         await reconcileTasks(app);
 
-        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
-          "reviewer_tok",
-          "o",
-          "r",
-          9,
-          expect.objectContaining({
-            event: "APPROVE",
-            body: expect.stringMatching(/approved in Mullion/),
-          }),
-        );
+        expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Changes were requested on the PR");
 
         await app.close();
       });
