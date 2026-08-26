@@ -1188,6 +1188,54 @@ describe("task-github-sync", () => {
           },
         );
       });
+
+      // Independent review, PR #827: the retry above was gated on
+      // `anchored.length > 0`, which a `clean` verdict never satisfies (a
+      // clean review has no findings to anchor) — so a gating APPROVE that
+      // 422s for a reason OTHER than a bad anchor (a misconfigured reviewer
+      // App, say) used to skip the retry entirely and rethrow. For a task
+      // with a PR but no linked issue, that meant the round landed nowhere
+      // on GitHub at all — worse than the pre-#737 always-succeeds-as-
+      // COMMENT behavior this mechanism is supposed to preserve.
+      it("downgrades a 422 on a gating attempt with NO findings to anchor (a clean verdict) — the anchor-less case", async () => {
+        const { GitHubApiError } = await import("../../src/services/github.js");
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        mockCreatePullRequestReview
+          .mockRejectedValueOnce(new GitHubApiError("Validation Failed", 422))
+          .mockResolvedValueOnce({ id: 557, htmlUrl: "https://github.com/o/r/pull/9#review-557" });
+        const task = baseTask({ issueNumber: null, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nClean.",
+          verdict: "clean",
+        });
+
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
+        expect(mockCreatePullRequestReview).toHaveBeenNthCalledWith(
+          1,
+          "reviewer_tok",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: "APPROVE", comments: undefined }),
+        );
+        expect(mockCreatePullRequestReview).toHaveBeenNthCalledWith(
+          2,
+          "ghp_token",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          {
+            body: "## Round 1\n\nClean.",
+            commitId: "abc123",
+          },
+        );
+        // No linked issue to fall back to — the retry above is the ONLY
+        // thing standing between this and a silently-lost round.
+        expect(mockCreateComment).not.toHaveBeenCalled();
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.githubSyncError).toBeNull();
+      });
     });
   });
 

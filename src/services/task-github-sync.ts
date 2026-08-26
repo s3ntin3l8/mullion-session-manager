@@ -704,10 +704,24 @@ export async function postReviewFindingsComment(
         // not to be a distinct-enough identity after all, a GitHub
         // behavior change) must still land the round's findings, same as
         // it always has, rather than losing them entirely.
-        if (err instanceof GitHubApiError && err.statusCode === 422 && anchored.length > 0) {
+        //
+        // Independent review, PR #827: this retry must trigger on `event
+        // !== undefined` too, not just `anchored.length > 0` — a `clean`
+        // verdict normally has NO findings to anchor (`anchored` is empty),
+        // so a gating `APPROVE` that 422s on its own (not because of an
+        // anchor) used to skip this retry entirely and rethrow, which for a
+        // local-only task (a PR but no linked issue — postReviewFindingsComment's
+        // own reason for existing as a separate path) meant the round's
+        // findings landed nowhere on GitHub at all, worse than this
+        // mechanism's pre-#737 always-succeeds-as-COMMENT behavior.
+        if (
+          err instanceof GitHubApiError &&
+          err.statusCode === 422 &&
+          (anchored.length > 0 || event !== undefined)
+        ) {
           app.log.warn(
             { taskId: task.id, prNumber: task.prNumber, err },
-            "[task-github-sync] PR review rejected with inline anchors (422) — retrying with findings folded into the body",
+            "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
           );
           await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
             body: params.body,
