@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.49](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.48...v0.2.49) (2026-08-27)
+
+
+### Features
+
+* **tasks:** resolve Mullion's own review threads on a clean verdict ([#834](https://github.com/s3ntin3l8/mullion-session-manager/issues/834)) ([087a5dd](https://github.com/s3ntin3l8/mullion-session-manager/commit/087a5ddb53d6771e72a02d51df60b11493954025))
+
+
+### Bug Fixes
+
+* **tasks:** stop re-ingesting the reviewer App's own comments as PR feedback ([#833](https://github.com/s3ntin3l8/mullion-session-manager/issues/833)) ([04dc6f1](https://github.com/s3ntin3l8/mullion-session-manager/commit/04dc6f1f18cd3c3c7e0b001cc9420fa1d7875b8a))
+
 ## [0.2.48](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.47...v0.2.48) (2026-08-27)
 
 
