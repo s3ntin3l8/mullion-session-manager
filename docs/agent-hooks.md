@@ -561,13 +561,14 @@ instead), not an explicit denial:
   waiting) → the REST endpoint reports 409/`{ok: false}`, no decision is
   fabricated.
 - A second `review_gate: waiting` arriving for a session that already has
-  one pending is still denied **immediately, on that connection only** — the
-  first gate's pending state is left completely undisturbed. (Two gates for
-  one session can't share this minimal slice's single-pending-per-session
-  bookkeeping without a wire-protocol correlation id; queuing silently would
-  risk the human's decision reaching the wrong tool call. This one case is a
-  genuine denial, not a fall-through — an ambiguous concurrent request isn't
-  something to silently hand back to the agent either.)
+  one pending falls through **immediately, on that connection only** (Hermes
+  review, PR #839) — the first gate's pending state is left completely
+  undisturbed. (Two gates for one session can't share this minimal slice's
+  single-pending-per-session bookkeeping without a wire-protocol correlation
+  id, so this isn't the human's actual decision on the second, unrelated
+  tool call — treating it as a fall-through rather than a denial keeps it
+  consistent with every other "nobody decided this specific request"
+  outcome below.)
 - A server-side timeout (`hooks.ts`'s `GATE_TIMEOUT_MS`, 290s) falls through
   if nobody ever answers, comfortably under Claude Code's own 600s
   `PermissionRequest` hook timeout — Mullion controls the outcome rather than

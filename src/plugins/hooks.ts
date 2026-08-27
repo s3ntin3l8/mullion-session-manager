@@ -77,8 +77,10 @@ const MAX_LINE_BYTES = 64 * 1024;
 // would then only ever reach whichever connection registered *second*,
 // leaving the first wedged until its own hook-level timeout. Rather than
 // thread a correlation id through the wire protocol for a "minimal" slice, a
-// second concurrent waiting gate for an already-pending session is denied
-// immediately (see handleConnection) — safe-fails-closed, and the first
+// second concurrent waiting gate for an already-pending session resolves
+// immediately (see handleConnection) to "no_response" — falling through to
+// the agent's own native prompt for that specific tool call, same as any
+// other "nobody decided" outcome (Hermes review, PR #839) — and the first
 // gate's own pending state is left completely undisturbed.
 interface PendingGate {
   socket: net.Socket;
@@ -86,13 +88,19 @@ interface PendingGate {
 }
 
 // Must stay comfortably below every gating adapter's own hook-level
-// `timeout` (claude-code.ts's PermissionRequest entry sets 300s) — the whole point
-// of owning a server-side timeout here, rather than relying solely on the
-// forwarder's own internal one (see forwarder.mjs's GATE_TIMEOUT_MS), is
-// that Mullion controls the fail-closed decision and can update gateState
-// accordingly; if the agent's own hook timeout fired first instead, its
-// on-expiry behavior is per-agent and only confirmed for Claude Code (see
-// the plan's PR9 timeout note).
+// `timeout` (claude-code.ts's PermissionRequest entry sets 300s) — the whole
+// point of owning a server-side timeout here, rather than relying solely on
+// the forwarder's own internal one, is that Mullion controls the outcome and
+// can update gateState accordingly; if the agent's own hook timeout fired
+// first instead, its on-expiry behavior is per-agent and only confirmed for
+// Claude Code (see the plan's PR9 timeout note).
+//
+// Hermes review, PR #839 — this timeout resolves to "no_response" (issue
+// #264 rescope), NOT a fail-closed deny: nobody ever answering must fall
+// through to the agent's own native prompt, the same as if Mullion weren't
+// involved at all. In practice this server-side timer is mostly a backstop:
+// the forwarder's own internal one (forwarder.mjs's GATE_TIMEOUT_MS, 280s)
+// fires ~10s earlier and reaches the same "no_response" outcome first.
 export const GATE_TIMEOUT_MS = 290_000;
 
 // Issue #271, option 2 — the same "register an open connection, resolve it
@@ -349,21 +357,28 @@ function handleConnection(
           // above across that boundary for a mutable `let`.
           const sid: string = sessionId;
           if (pendingGates.has(sid)) {
-            // Denied immediately, on THIS connection only — deliberately does
-            // NOT reach app.pty.emitHookEvent below: the first gate is still
-            // the one truly pending, and routing this duplicate through
-            // emitHookEvent would overwrite SessionInfo.gateState/gatePrompt
-            // with this rejected prompt, even though pendingGates still
-            // points at the first connection's socket. See PendingGate's doc
-            // comment above for the full "why deny, not queue" reasoning.
+            // Resolved immediately, on THIS connection only, as no_response —
+            // NOT a denial (Hermes review, PR #839): a second concurrent tool
+            // call genuinely has nobody deciding FOR IT specifically (the
+            // human is answering the first, unrelated one), so it falls
+            // through to the agent's own native prompt for that one, same as
+            // every other "nobody answered" outcome — consistent with issue
+            // #264's fall-through philosophy rather than an ambiguity-driven
+            // exception to it. Deliberately does NOT reach
+            // app.pty.emitHookEvent below: the first gate is still the one
+            // truly pending, and routing this duplicate through emitHookEvent
+            // would overwrite SessionInfo.gateState/gatePrompt with this
+            // second prompt, even though pendingGates still points at the
+            // first connection's socket. See PendingGate's doc comment above
+            // for the full "why resolve immediately, not queue" reasoning.
             app.log.warn(
               { sessionId: sid },
-              "a review gate is already pending for this session, denying the newest one immediately",
+              "a review gate is already pending for this session, falling through the newest one immediately",
             );
             if (socket.writable) {
               socket.write(
                 `${JSON.stringify({
-                  decision: "denied",
+                  decision: "no_response",
                   reason: "another review is already pending for this session",
                 })}\n`,
               );

@@ -476,7 +476,7 @@ describe("hooksPlugin (issue #172)", () => {
       expect(app.resolveHookGate("1", "approved")).toBe(false);
     });
 
-    it("denies a second concurrent waiting gate for the same session immediately, without disturbing the first", async () => {
+    it("resolves a second concurrent waiting gate for the same session to no_response immediately, without disturbing the first (Hermes review, PR #839)", async () => {
       app = await buildApp();
       await app.ready();
       const { session, socket: first } = await openPendingGate(app, "1", "first command");
@@ -488,8 +488,11 @@ describe("hooksPlugin (issue #172)", () => {
         `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "second command" })}\n`,
       );
 
+      // Falls through to the agent's own native prompt for this SPECIFIC
+      // tool call, not an explicit denial — a human deciding the FIRST
+      // pending gate has nothing to do with this second, unrelated one.
       expect(JSON.parse(await secondReplyPromise)).toEqual({
-        decision: "denied",
+        decision: "no_response",
         reason: "another review is already pending for this session",
       });
       // The first gate is completely undisturbed.
