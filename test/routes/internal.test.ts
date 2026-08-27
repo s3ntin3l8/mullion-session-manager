@@ -244,6 +244,14 @@ function sendUntilEcho(ws: NodeWebSocket, message: string, timeoutMs = 4000): Pr
 
 describe("internal routes (agent role, issue #26)", () => {
   let projectsRoot: string;
+  // #819/#822 SSH-agent follow-up (Hermes review, PR #828) — the
+  // "sshAuthSock: null" assertion below assumes MULLION_SSH_AUTH_SOCK is
+  // unset in the ambient process env. That's true in CI, but not
+  // guaranteed everywhere this feature is actually deployed (e.g. a shell
+  // on mgmt with it exported) — save/restore rather than trust ambient
+  // absence, same posture as the MULLION_ROLE/TOKEN/PROJECTS_ROOTS vars
+  // just below.
+  let prevSshAuthSock: string | undefined;
 
   beforeAll(() => {
     projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-discover-root-"));
@@ -255,6 +263,8 @@ describe("internal routes (agent role, issue #26)", () => {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_AGENT_TOKEN = TOKEN;
     process.env.PROJECTS_ROOTS = projectsRoot;
+    prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
+    delete process.env.MULLION_SSH_AUTH_SOCK;
   });
 
   afterAll(() => {
@@ -262,6 +272,8 @@ describe("internal routes (agent role, issue #26)", () => {
     delete process.env.MULLION_ROLE;
     delete process.env.MULLION_AGENT_TOKEN;
     delete process.env.PROJECTS_ROOTS;
+    if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
+    else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
   });
 
   beforeEach(() => {

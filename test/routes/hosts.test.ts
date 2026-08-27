@@ -402,11 +402,21 @@ describe("hosts route (issue #26)", () => {
   // just the builder) the way Hermes review flagged for #822: a schema or
   // route-level omission wouldn't show up in a unit test of the builder alone.
   it("reports sshAuthSock as null on the local host by default (unconfigured)", async () => {
-    const app = await buildApp();
-    const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
-    await app.close();
+    // Hermes review, PR #828 — don't trust ambient absence of
+    // MULLION_SSH_AUTH_SOCK; a shell that actually has this feature
+    // configured (e.g. on mgmt) would otherwise make this assertion fail.
+    const prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
+    delete process.env.MULLION_SSH_AUTH_SOCK;
+    try {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
+      await app.close();
+    } finally {
+      if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
+      else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
+    }
   });
 
   it("reports sshAuthSock present/absent on the local host from MULLION_SSH_AUTH_SOCK", async () => {
