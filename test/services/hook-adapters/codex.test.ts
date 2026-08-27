@@ -74,6 +74,18 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(written.hooks.PostToolUse[1].matcher).toBe("Bash");
     expect(written.hooks.Stop[0].hooks[0].command).toContain("/abs/install/hooks/forwarder.mjs");
     expect(written.hooks.Stop[0].hooks[0].command).toContain("codex Stop");
+
+    // Issue: extend surfaced session statuses (Codex parity) — all four
+    // fire-and-forget, observational only, default 10s timeout.
+    expect(written.hooks.PreCompact).toHaveLength(1);
+    expect(written.hooks.PreCompact[0].hooks[0].timeout).toBe(10);
+    expect(written.hooks.PreCompact[0].hooks[0].command).toContain("codex PreCompact");
+    expect(written.hooks.PostCompact).toHaveLength(1);
+    expect(written.hooks.PostCompact[0].hooks[0].command).toContain("codex PostCompact");
+    expect(written.hooks.SubagentStart).toHaveLength(1);
+    expect(written.hooks.SubagentStart[0].hooks[0].command).toContain("codex SubagentStart");
+    expect(written.hooks.SubagentStop).toHaveLength(1);
+    expect(written.hooks.SubagentStop[0].hooks[0].command).toContain("codex SubagentStop");
   });
 
   it("preserves unrelated hook groups the user already configured", async () => {
@@ -122,6 +134,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(written.hooks.PermissionRequest).toHaveLength(1);
     expect(written.hooks.UserPromptSubmit).toHaveLength(1);
     expect(written.hooks.PostToolUse).toHaveLength(2);
+    expect(written.hooks.PreCompact).toHaveLength(1);
+    expect(written.hooks.PostCompact).toHaveLength(1);
+    expect(written.hooks.SubagentStart).toHaveLength(1);
+    expect(written.hooks.SubagentStop).toHaveLength(1);
   });
 
   it("bails without writing when the existing hooks.json is malformed JSON", async () => {
@@ -178,6 +194,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
             staleGroup("PostToolUse", "apply_patch"),
             staleGroup("PostToolUse", "Bash"),
           ],
+          PreCompact: [staleGroup("PreCompact")],
+          PostCompact: [staleGroup("PostCompact")],
+          SubagentStart: [staleGroup("SubagentStart")],
+          SubagentStop: [staleGroup("SubagentStop")],
         },
       }),
     );
@@ -197,6 +217,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
       ["PermissionRequest", 1],
       ["UserPromptSubmit", 1],
       ["PostToolUse", 2],
+      ["PreCompact", 1],
+      ["PostCompact", 1],
+      ["SubagentStart", 1],
+      ["SubagentStop", 1],
     ] as const) {
       expect(written.hooks[event]).toHaveLength(expectedLength);
     }
@@ -207,6 +231,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
       ["SessionEnd", "SessionEnd"],
       ["PermissionRequest", "PermissionRequest"],
       ["UserPromptSubmit", "UserPromptSubmit"],
+      ["PreCompact", "PreCompact"],
+      ["PostCompact", "PostCompact"],
+      ["SubagentStart", "SubagentStart"],
+      ["SubagentStop", "SubagentStop"],
     ] as const) {
       expect(written.hooks[event][0].hooks[0].command).toBe(currentForwarderCommand(kind));
     }

@@ -161,13 +161,16 @@ subagent** rather than the main agent. Claude Code's own hook payloads carry
 `agent_id`/`agent_type` on every hook fired during a `SubagentStart`/
 `SubagentStop`-bracketed tool call (verified empirically against a live
 subagent invocation, not just Claude Code's own docs); a main-agent-caused
-hook never carries them. The forwarder (`src/hooks/forwarder-core.mjs`)
+hook never carries them. Codex's own embedded hook I/O schemas confirm the
+same pair on `PostToolUse`/`SubagentStart`/`SubagentStop` (required on the
+latter two, optional — present only inside a subagent — on `PostToolUse`),
+so this applies to Codex too. The forwarder (`src/hooks/forwarder-core.mjs`)
 stamps these onto every attributable message from the payload's common
-fields in one place (`applyAgentEnvelope`, called from `mapClaudeCodeEvent`),
-rather than in each individual mapper. This is what lets Mullion attribute a
-file change or tool failure to the subagent that actually caused it, instead
-of just the parent session — see the subagent registry design in
-`docs/roadmap.md`'s Phase 5 section.
+fields in one place (`applyAgentEnvelope`, called from both
+`mapClaudeCodeEvent` and `mapCodexEvent`), rather than in each individual
+mapper. This is what lets Mullion attribute a file change or tool failure to
+the subagent that actually caused it, instead of just the parent session —
+see the subagent registry design in `docs/roadmap.md`'s Phase 5 section.
 
 ## Auto-injected agents
 
@@ -347,13 +350,18 @@ here — a previous revision of this doc listed only two of these six),
 `review_gate` — issue #264's blocking permission-approval channel, no
 matcher — every tool that can trigger a permission dialog, registered with a
 300s timeout rather than the fire-and-forget default), `UserPromptSubmit`
-(→ `turn_start`), and `PostToolUse` (matchers
+(→ `turn_start`), `PostToolUse` (matchers
 `apply_patch` → `file_change`, and `Bash` → `git_branch`/`cwd_changed` for
-worktree/branch detection) — Codex has no `Notification` event at all. See
+worktree/branch detection), and — confirmed live against installed
+codex-cli 0.149.0's own embedded hook I/O schemas, contradicting an earlier
+"hasn't been verified to have them" caveat — `PreCompact`/`PostCompact` (→
+`compact: {state, trigger}`, both carrying a required `trigger` unlike
+Claude Code's own PostCompact, which carries none) and `SubagentStart`/
+`SubagentStop` (→ `subagent: {state, agentType, agentId}`). No elicitation
+equivalent is registered — Codex's hook surface still hasn't been verified
+to have one. Codex has no `Notification` event at all. See
 `hook-adapters/codex.ts`'s `CODEX_EMITS` for the capability list this
-adapter reports; no compaction/subagent/elicitation equivalents are
-registered — Codex's hook surface hasn't been verified to have them (see
-`CODEX_EMITS`'s own doc comment). Unlike every other adapter, this is **not
+adapter reports. Unlike every other adapter, this is **not
 ephemeral** — two facts verified against the real installed Codex CLI during
 the original PR contradict what the plan before that assumed:
 
