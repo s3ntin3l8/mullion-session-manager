@@ -2853,12 +2853,16 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
  *    disabled is left in claimed/in_progress instead — still reachable by
  *    the budget force-fail below, and it transitions normally on the next
  *    tick once re-enabled.
- *  - flips "claimed" to "in_progress" once the session shows ANY signal
- *    beyond pure idle silence (derived.status !== "idle") — i.e. the agent
- *    has started doing something. A task whose very first observed signal
- *    is already "finished" skips straight there (task-state.ts's
- *    claimed -> reviewing edge) rather than forcing a synthetic
- *    intermediate write for a tick nothing was actually seen at.
+ *  - does NOT flip "claimed" to "in_progress" — that transition used to
+ *    live here (on the session showing any signal beyond pure idle
+ *    silence), but task-claim queueing (the rate-limit-storm fix) moved it
+ *    into dispatch's own reservation transaction, synchronous with the
+ *    claim itself. A "claimed" row therefore never has a session by the
+ *    time this loop's own query (an INNER JOIN on `sessions`) could
+ *    observe one — see this loop's own comment further down, at its
+ *    former call site, for the detail (also why task-state.ts's
+ *    `claimed -> reviewing` edge, while still legal for the type system,
+ *    is unreachable via this path today).
  *  - flips it to "failed" (and terminates the session) once
  *    MULLION_TASK_BUDGET_MINUTES has elapsed since claimedAt, regardless of
  *    what the session is doing — the budget is a hard backstop, not a
