@@ -235,8 +235,9 @@ a runtime override near the top of OpenCode's own documented
 config-precedence chain, set to `{"instructions": ["<path to this
 session's own copy of docs/agent-guide.md>"]}`. Verified empirically this
 PR (`opencode debug config`, no live session or model call needed, so no
-"unverified — would need a paid model turn" caveat here unlike Codex's
-`apply_patch` extractor or agy's `SessionStart`) that OpenCode's
+"unverified — would need a paid model turn" caveat here unlike agy's
+`SessionStart`, or Codex's `apply_patch` extractor before issue #846's live
+verification) that OpenCode's
 `instructions` array **concatenates** with whatever the user's own
 project/global `instructions` already contains, including when combined
 with `OPENCODE_CONFIG_DIR` above — never replaces them. Also verified this
@@ -406,12 +407,23 @@ stable `~/.codex` rather than a fresh-per-session directory, **a one-time
 session** — it just isn't automatic. Until granted, these hooks are
 silently skipped and Codex works exactly as it does today.
 
-Also unverified in this PR: the exact `apply_patch` patch-header format
-(`*** Update File: <path>` etc.) the file-change extractor parses — Codex's
-hook-trust gate means no CI or local run here could safely trigger a real
-hook firing without a live, paid model turn. The extractor is defensive
-(an unrecognized format yields no messages, never throws), and this is
-called out as a known gap for whoever verifies it against a live session.
+**Live-verified (issue #846):** the `apply_patch` patch-header format the
+file-change extractor parses was confirmed against two real hook firings
+(codex-cli 0.149.0, a throwaway `$CODEX_HOME` + `--dangerously-bypass-hook-trust`,
+never shipped). Two things settled: `tool_input.command` is a plain string —
+NOT the argv-array shape (`{"command":["apply_patch", "..."]}`) the model's
+own tool-call instructions (embedded in the binary) describe; that shape is
+how the model _invokes_ the tool, not what `PostToolUse` delivers to the
+hook. And a rename is `*** Update File: <old path>` immediately followed by
+`*** Move to: <new path>` — not a dedicated verb — which the extractor now
+handles by rewriting that entry's path to the rename target, rather than
+silently reporting a `modify` on the old path with the new one never
+surfacing at all (the pre-fix behavior). The path itself can be either
+relative or absolute depending on what the model already knows about its
+cwd when it writes the patch — `isPathGitIgnoredCached` (`git-ignore.ts`)
+already handled both before this fix; nothing needed to change there. The
+extractor stays defensive for anything it doesn't recognize (yields no
+messages, never throws).
 
 **SessionStart's reply** (issue #437a) uses the identical
 `hookSpecificOutput.additionalContext` shape Claude Code's does — verified

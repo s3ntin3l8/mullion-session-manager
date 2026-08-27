@@ -22,8 +22,10 @@ function isSafeAbsolutePath(p: string): boolean {
 
 /**
  * True if `filePath` (resolved against `root` first if relative — Claude
- * Code's hook payload is absolute, Codex's `apply_patch`-derived one is
- * relative, see forwarder-core.mjs) is git-ignored in the repo at `root`.
+ * Code's hook payload is always absolute; Codex's `apply_patch`-derived one
+ * can be EITHER relative or absolute, depending on what the model already
+ * knew about its cwd when it wrote the patch, confirmed live in issue #846
+ * — see forwarder-core.mjs) is git-ignored in the repo at `root`.
  * `root` is treated as untrusted the same way `filePath` is (both ultimately
  * derive from a session's live/spawn cwd and an agent-supplied path) — both
  * must pass the absolute-path + no-".."-segment guard before ever reaching

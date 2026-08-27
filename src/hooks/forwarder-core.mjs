@@ -763,7 +763,20 @@ export function mapClaudeCodeEvent(kind, payload) {
   return Array.isArray(mapped) ? [cwdMessage, ...mapped] : [cwdMessage, mapped];
 }
 
-const APPLY_PATCH_HEADER_RE = /^\*\*\* (Update|Add|Delete) File: (.+)$/gm;
+// Issue #846 — live-verified against a real `apply_patch` PostToolUse firing
+// (codex-cli 0.149.0, both a plain edit and a rename). Two things confirmed:
+// `tool_input.command` IS a plain string (the argv-array shape a strings-dump
+// of the binary's own model-facing tool instructions suggested was never
+// what actually reaches this hook), and a rename emits `*** Update File:
+// <old>` immediately followed by `*** Move to: <new>` — a second header line
+// this regex used to silently ignore, reporting a rename as a `modify` on
+// the OLD path with the new path never surfaced at all. The alternation's
+// third branch captures that line; mapCodexPostToolUse below rewrites the
+// most recently pushed entry's path when it's present, since Codex's own
+// apply_patch grammar (`update_hunk: "*** Update File: " filename LF
+// change_move? change?`) only ever emits "Move to" directly after the
+// "Update File" header for that same file, never detached from it.
+const APPLY_PATCH_HEADER_RE = /^\*\*\* (?:(Update|Add|Delete) File: (.+)|Move to: (.+))$/gm;
 const APPLY_PATCH_ACTION_BY_VERB = { Update: "modify", Add: "create", Delete: "delete" };
 
 export function mapCodexStop() {
@@ -839,11 +852,34 @@ export function mapCodexPostToolUse(payload) {
     return [];
   }
   const messages = [];
+  let lastEntry = null;
   for (const match of command.matchAll(APPLY_PATCH_HEADER_RE)) {
-    const [, verb, rawPath] = match;
+    const [, verb, rawPath, moveTarget] = match;
+    if (verb === undefined) {
+      // A "*** Move to: <path>" line — rewrite the path this same hunk's
+      // "Update File" header already pushed, rather than adding a second
+      // entry. `lastEntry` guard is defense-in-depth (see this const's own
+      // doc comment above for why Codex's grammar guarantees the ordering;
+      // still don't crash if a future format ever violates it) — and is only
+      // ever non-null here when the PRECEDING header was an Update (see
+      // below), never an Add/Delete, so a "Move to" that shouldn't exist per
+      // the grammar can't silently mis-rewrite an unrelated entry's path.
+      if (lastEntry && typeof moveTarget === "string") {
+        const path = moveTarget.trim();
+        if (path.length > 0) lastEntry.path = path;
+      }
+      continue;
+    }
     const path = rawPath.trim();
     if (path.length === 0) continue;
-    messages.push({ kind: "file_change", path, action: APPLY_PATCH_ACTION_BY_VERB[verb] });
+    const entry = { kind: "file_change", path, action: APPLY_PATCH_ACTION_BY_VERB[verb] };
+    messages.push(entry);
+    // Only an Update entry can legitimately be followed by "Move to" per
+    // Codex's grammar — resetting to null for Add/Delete (rather than
+    // leaving a stale reference to some EARLIER Update entry from a
+    // different file in a multi-file patch) is what makes the guard above
+    // a true no-op instead of a wrong-file rewrite (self-review, issue #846).
+    lastEntry = verb === "Update" ? entry : null;
   }
   return messages;
 }

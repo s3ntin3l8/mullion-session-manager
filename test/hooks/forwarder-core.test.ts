@@ -1609,7 +1609,105 @@ describe("mapCodexStop", () => {
   });
 });
 
-describe("mapCodexPostToolUse (issue #252, unverified against a live Codex hook)", () => {
+describe("mapCodexPostToolUse (issue #252, live-verified against a real apply_patch firing — issue #846)", () => {
+  it("matches the EXACT raw payload captured from a live codex-cli 0.149.0 apply_patch PostToolUse firing (issue #846)", () => {
+    // Captured verbatim (only the path was scratch-dir-specific) via a
+    // throwaway $CODEX_HOME + --dangerously-bypass-hook-trust, per this
+    // repo's established live-verification bar — never shipped, only used
+    // to settle this payload shape. Two things this settles that the old
+    // "unverified" version of this suite could only guess at:
+    // `tool_input.command` really is a plain string (not the argv-array
+    // shape `{"command":["apply_patch", "..."]}` the model's OWN tool-call
+    // instructions — embedded in the binary — describe; that shape is how
+    // the model INVOKES the tool, not what the hook receives), and
+    // `tool_name` really is the bare string `"apply_patch"` (so the
+    // adapter's `matcher: "apply_patch"` registration does fire).
+    expect(
+      mapCodexPostToolUse({
+        cwd: "/tmp/codex-verify-project",
+        hook_event_name: "PostToolUse",
+        model: "gpt-5.6-terra",
+        permission_mode: "default",
+        session_id: "01a04533-ce78-7181-a960-f078df6ad689",
+        tool_name: "apply_patch",
+        tool_input: {
+          command:
+            "*** Begin Patch\n*** Update File: /tmp/codex-verify-project/sample.txt\n@@\n-hello world\n+hello mullion\n*** End Patch",
+        },
+        tool_response: {},
+        tool_use_id: "call_0",
+        transcript_path: null,
+        turn_id: "turn_0",
+      }),
+    ).toEqual([
+      { kind: "file_change", path: "/tmp/codex-verify-project/sample.txt", action: "modify" },
+    ]);
+  });
+
+  it("rewrites the path to the rename target for a captured live rename payload (*** Update File: <old> followed by *** Move to: <new>, issue #846)", () => {
+    // Also captured live (second turn, same session) — confirms Codex's own
+    // apply_patch grammar's `change_move?` production: a rename patch is
+    // "*** Update File: <old>" immediately followed by "*** Move to: <new>",
+    // NOT a dedicated "*** Rename File" verb. Before this fix, the old
+    // regex only matched the first line, silently reporting every rename as
+    // a `modify` on the OLD path — the new path never surfaced at all.
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "apply_patch",
+        tool_input: {
+          command:
+            "*** Begin Patch\n*** Update File: sample.txt\n*** Move to: renamed.txt\n@@\n-hello mullion\n+hello mullion\n*** End Patch",
+        },
+      }),
+    ).toEqual([{ kind: "file_change", path: "renamed.txt", action: "modify" }]);
+  });
+
+  it("ignores a 'Move to' line with no preceding entry (defensive — Codex's own grammar guarantees this never happens, but don't crash if it did)", () => {
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "apply_patch",
+        tool_input: { command: "*** Begin Patch\n*** Move to: orphan.txt\n*** End Patch" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not let a 'Move to' line rewrite an Add/Delete entry — only the immediately preceding Update can be renamed (self-review, issue #846)", () => {
+    // A "Move to" can never legitimately follow an Add/Delete per Codex's
+    // grammar, but this is agent-controlled text being parsed, not a
+    // guarantee the parser gets to trust — confirm the entry stays
+    // untouched (Add's path/action unchanged) rather than being silently
+    // rewritten to the "Move to" target.
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "apply_patch",
+        tool_input: {
+          command:
+            "*** Begin Patch\n*** Add File: new.txt\n+hi\n*** Move to: hijacked.txt\n*** End Patch",
+        },
+      }),
+    ).toEqual([{ kind: "file_change", path: "new.txt", action: "create" }]);
+  });
+
+  it("rewrites only the correct file's entry in a multi-file patch (Add, then a renamed Update, then Delete) — the rename does not leak onto a DIFFERENT file's entry (self-review, issue #846)", () => {
+    const command = [
+      "*** Begin Patch",
+      "*** Add File: a.txt",
+      "+hi",
+      "*** Update File: b.txt",
+      "*** Move to: c.txt",
+      "@@",
+      "-old",
+      "+new",
+      "*** Delete File: d.txt",
+      "*** End Patch",
+    ].join("\n");
+    expect(mapCodexPostToolUse({ tool_name: "apply_patch", tool_input: { command } })).toEqual([
+      { kind: "file_change", path: "a.txt", action: "create" },
+      { kind: "file_change", path: "c.txt", action: "modify" },
+      { kind: "file_change", path: "d.txt", action: "delete" },
+    ]);
+  });
+
   it("extracts a single Update File as a modify", () => {
     expect(
       mapCodexPostToolUse({
@@ -1644,7 +1742,7 @@ describe("mapCodexPostToolUse (issue #252, unverified against a live Codex hook)
     expect(mapCodexPostToolUse({ tool_name: "shell", tool_input: { command: "ls" } })).toEqual([]);
   });
 
-  it("returns an empty array when tool_input.command has no recognizable header (defensive, unverified format)", () => {
+  it("returns an empty array when tool_input.command has no recognizable header (defensive — a malformed/unexpected patch shouldn't throw)", () => {
     expect(
       mapCodexPostToolUse({ tool_name: "apply_patch", tool_input: { command: "no headers here" } }),
     ).toEqual([]);
