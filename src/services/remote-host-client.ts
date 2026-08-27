@@ -240,10 +240,14 @@ export interface AgentConfig {
   // supposed to keep working the moment it reconnects, with no respawn —
   // see env.ts's own comment on MULLION_SSH_AUTH_SOCK. This field is
   // read-only diagnostics for Settings > Hosts, never used to gate the
-  // injection itself. Absent entirely (not `null`) on a build that predates
-  // this field — HostConfigModal.tsx renders that distinctly from `null`
+  // injection itself. Optional, same as SpawnResult.initialPromptApplied
+  // just above — resolveConfig() does a raw fetch-and-cast with no runtime
+  // validation, so a remote agent on a build that predates this field
+  // simply omits the key, and `undefined` (not `null`) is what actually
+  // arrives at runtime despite this being a locally-built object on this
+  // process. HostConfigModal.tsx renders that distinctly from `null`
   // ("unknown, agent predates this field" vs. "not configured").
-  sshAuthSock: { path: string; present: boolean } | null;
+  sshAuthSock?: { path: string; present: boolean } | null;
 }
 
 export class RemoteHostClient {

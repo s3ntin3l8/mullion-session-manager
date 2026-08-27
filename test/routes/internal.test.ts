@@ -369,6 +369,37 @@ describe("internal routes (agent role, issue #26)", () => {
     }
   });
 
+  // #819/#822 SSH-agent follow-up — pty-manager.ts's PtyManager resolves a
+  // relative MULLION_SSH_AUTH_SOCK once, at construction (its own comment:
+  // "a relative MULLION_SSH_AUTH_SOCK would resolve against a different ...
+  // directory instead of the single stable path this feature depends on").
+  // This diagnostic must report that same resolved path, not the raw
+  // relative string — otherwise it would show an operator a path that
+  // doesn't match what sessions actually receive, and existsSync would run
+  // against the wrong location (this process's cwd) rather than a
+  // guaranteed-stable one.
+  it("resolves a relative MULLION_SSH_AUTH_SOCK the same way PtyManager does, not the raw string", async () => {
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), "internal-ssh-sock-relative-"));
+    const sockPath = path.join(socketDir, "agent.sock");
+    fs.writeFileSync(sockPath, "");
+    const relativeSockPath = path.relative(process.cwd(), sockPath);
+
+    try {
+      process.env.MULLION_SSH_AUTH_SOCK = relativeSockPath;
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.json().sshAuthSock).toEqual({ path: sockPath, present: true });
+      await app.close();
+    } finally {
+      delete process.env.MULLION_SSH_AUTH_SOCK;
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
+  });
+
   // Issue #647 / roadmap 7.8 — the agent-side counterpart to
   // test/routes/updates.test.ts's own suite. Deliberately mirrors that
   // file's fixtures (VALID_ASSET_URL/VALID_CHECKSUM_URL, a per-test
