@@ -22,13 +22,17 @@ export { TASK_STATUSES, type TaskStatus };
  *                                       automatic relabel-resurrection —
  *                                       see upsertIssueTask, task-watcher.ts)
  *
- * `claimed -> reviewing` (skipping `in_progress`) is a real, reachable edge,
- * not a shortcut for convenience: the reconciler (task-reconciler.ts) polls
- * on an interval, and a task whose agent finishes its very first turn
- * between two poll ticks is observed going straight from "claimed" to
- * "finished" — there was no tick in between where it was ever seen
- * "in_progress". Modeling that as illegal would either drop the transition
- * or force a synthetic in_progress write nothing actually observed.
+ * `claimed -> reviewing` (skipping `in_progress`) was once a real, reachable
+ * edge for exactly this reason: a task whose agent finished its very first
+ * turn between two poll ticks was observed going straight from "claimed" to
+ * "finished," with no tick in between where it was ever seen "in_progress."
+ * Stale as of task-claim queueing (the rate-limit-storm fix): dispatch now
+ * flips "claimed" -> "in_progress" synchronously, inside its own reservation
+ * transaction, so a "claimed" row never holds a live session and this edge
+ * is unreachable via that path today (see task-reconciler.ts's own comment
+ * at its former call site for the detail). Kept legal here anyway — removing
+ * it is a behavior change to the type system's own guarantee, not a doc
+ * fix, and belongs in its own change if ever wanted.
  *
  * Deliberately NOT `reviewing -> failed` via session death: a `reviewing`
  * task's session exiting doesn't fail it — the turn is already over and the

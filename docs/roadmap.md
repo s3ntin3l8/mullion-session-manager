@@ -574,9 +574,12 @@ reason given above (Iceboxed throughout the phase, shipped separately afterward)
 Once the Task Master is operational, the remaining frontier is **team-scale orchestration**:
 
 - Multi-user task queues — multiple developers submitting and reviewing tasks
-- Task dependencies — a task blocks on another's completion
 - Scheduled/recurring tasks — e.g. "run dependency update every Monday"
 - Non-GitHub backends — GitLab, Bitbucket, Jira, Linear
+- **Done** — Task dependencies (`#667`) — a task blocks on another's
+  completion. Dependency-aware auto-claim skips a task until its blockers
+  close, driven by GitHub's own `issue_dependencies` webhook plus a poll
+  backstop; see `docs/tasks.md`'s dependency-aware claiming section.
 - **Done** — Automatic versioning after tasks land (`#744`). The manual half
   ships a GitHub panel Release section (detect release-please, trigger a run,
   merge the release PR once green); the automatic half — the per-project
