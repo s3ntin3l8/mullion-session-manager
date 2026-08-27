@@ -50,16 +50,15 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 See [`auth.md`](auth.md) for the full setup/security writeup.
 
-| Variable                      | Default   | Description                                                                                                                                                                                |
-| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MULLION_AUTH_TOKEN`          | _(empty)_ | shared token gating every `/api/*` route and every `/ws/*` upgrade (prefix-matched, so any future `/ws/*` route inherits it too); empty disables in-process auth entirely                  |
-| `MULLION_TRUST_GATEWAY`       | `false`   | required to boot with neither `MULLION_AUTH_TOKEN` nor `MULLION_OIDC_*` set — acknowledges a reverse-proxy gateway already gates access; adds no check of its own (boot refuses otherwise) |
-| `MULLION_SESSION_SECRET`      | _(empty)_ | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise)                                                                       |
-| `MULLION_OIDC_ISSUER`         | _(empty)_ | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together                                                                                                             |
-| `MULLION_OIDC_CLIENT_ID`      | _(empty)_ | OIDC client id                                                                                                                                                                             |
-| `MULLION_OIDC_CLIENT_SECRET`  | _(empty)_ | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                 |
-| `MULLION_OIDC_REDIRECT_URI`   | _(empty)_ | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                                    |
-| `MULLION_REVIEW_GATE_ENABLED` | `false`   | enables Claude Code's blocking `PreToolUse` review gate on Bash; off by default since an unattended session has nobody to approve/deny it — see [`agent-hooks.md`](agent-hooks.md)         |
+| Variable                     | Default   | Description                                                                                                                                                                                |
+| ---------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MULLION_AUTH_TOKEN`         | _(empty)_ | shared token gating every `/api/*` route and every `/ws/*` upgrade (prefix-matched, so any future `/ws/*` route inherits it too); empty disables in-process auth entirely                  |
+| `MULLION_TRUST_GATEWAY`      | `false`   | required to boot with neither `MULLION_AUTH_TOKEN` nor `MULLION_OIDC_*` set — acknowledges a reverse-proxy gateway already gates access; adds no check of its own (boot refuses otherwise) |
+| `MULLION_SESSION_SECRET`     | _(empty)_ | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise)                                                                       |
+| `MULLION_OIDC_ISSUER`        | _(empty)_ | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together                                                                                                             |
+| `MULLION_OIDC_CLIENT_ID`     | _(empty)_ | OIDC client id                                                                                                                                                                             |
+| `MULLION_OIDC_CLIENT_SECRET` | _(empty)_ | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                 |
+| `MULLION_OIDC_REDIRECT_URI`  | _(empty)_ | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                                    |
 
 ## Multi-host
 
@@ -157,11 +156,10 @@ the table below — so none of these can ever be overridden by it. Reserved
 keys (`MULLION_*`, `SSH_AUTH_SOCK`) are rejected when a dock config is
 saved, not silently dropped at launch time.
 
-| Variable                      | Description                                                                                                                                                                                |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MULLION_HOOK_SOCKET`         | path to this session's hook socket, read by the hook forwarder/adapters                                                                                                                    |
-| `MULLION_HOOK_TOKEN`          | per-session token authenticating that socket connection                                                                                                                                    |
-| `MULLION_SOCKET_PATH`         | path to the control socket, so the `mullion` CLI run from inside a session defaults its targeting to that session with no flags                                                            |
-| `MULLION_SESSION_ID`          | this session's own id, read by the `mullion` CLI and MCP client to scope calls to it                                                                                                       |
-| `MULLION_REVIEW_GATE_ENABLED` | mirrors the config value of the same name, read by the hook forwarder                                                                                                                      |
-| `SSH_AUTH_SOCK`               | set to `MULLION_SSH_AUTH_SOCK`'s configured path when that's non-empty; otherwise this session's inherited `SSH_AUTH_SOCK` (if any) is left untouched — see [`ssh-agent.md`](ssh-agent.md) |
+| Variable              | Description                                                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MULLION_HOOK_SOCKET` | path to this session's hook socket, read by the hook forwarder/adapters                                                                                                                    |
+| `MULLION_HOOK_TOKEN`  | per-session token authenticating that socket connection                                                                                                                                    |
+| `MULLION_SOCKET_PATH` | path to the control socket, so the `mullion` CLI run from inside a session defaults its targeting to that session with no flags                                                            |
+| `MULLION_SESSION_ID`  | this session's own id, read by the `mullion` CLI and MCP client to scope calls to it                                                                                                       |
+| `SSH_AUTH_SOCK`       | set to `MULLION_SSH_AUTH_SOCK`'s configured path when that's non-empty; otherwise this session's inherited `SSH_AUTH_SOCK` (if any) is left untouched — see [`ssh-agent.md`](ssh-agent.md) |

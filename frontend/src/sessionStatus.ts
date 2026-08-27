@@ -206,9 +206,10 @@ const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string[]> = {
   tool_failure: ["tool_failure"],
   awaiting_permission: ["permission_request"],
   awaiting_plan: ["plan_ready"],
-  // awaiting_review_gate is Mullion-driven (the blocking PreToolUse gate),
-  // not agent-hook-driven — no HookMessageKind maps to it, so it's always
-  // reachable regardless of the agent's emits.
+  // awaiting_review_gate is Mullion-driven (the blocking permission-approval
+  // channel, issue #264 — PermissionRequest for Claude Code/Codex), not
+  // agent-hook-driven in the sense this table checks — no HookMessageKind
+  // maps to it, so it's always reachable regardless of the agent's emits.
   awaiting_review_gate: [],
   awaiting_promote: ["promote_request"],
   awaiting_question: ["question"],

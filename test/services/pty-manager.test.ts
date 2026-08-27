@@ -2663,7 +2663,7 @@ describe("PtyManager", () => {
       expect(b.hookSocketPath).toBe(manager.hookSocketPath);
     });
 
-    it("injects MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN, MULLION_SOCKET_PATH/MULLION_SESSION_ID, and MULLION_REVIEW_GATE_ENABLED into the master bootstrap env", async () => {
+    it("injects MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN, MULLION_SOCKET_PATH, and MULLION_SESSION_ID into the master bootstrap env", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2683,7 +2683,6 @@ describe("PtyManager", () => {
             MULLION_HOOK_TOKEN: session.hookToken,
             MULLION_SOCKET_PATH: manager.controlSocketPath,
             MULLION_SESSION_ID: "1",
-            MULLION_REVIEW_GATE_ENABLED: "false",
           }),
           stdio: "ignore",
         }),
@@ -5843,16 +5842,15 @@ describe("PtyManager", () => {
       const mcpConfigPath = path.join(sessionsDir, "1.mcp.json");
       expect(fs.existsSync(mcpConfigPath)).toBe(true);
 
-      // reviewGateEnabled defaults to false (PtyManager constructed with no
-      // override above) — the blocking PreToolUse gate for Bash must not be
-      // written by default, or every Bash call from this session would stall
-      // on a human decision nobody unattended can give (see env.ts's
-      // MULLION_REVIEW_GATE_ENABLED doc comment). The ExitPlanMode matcher
-      // is always registered regardless of reviewGateEnabled.
+      // PreToolUse has exactly one entry (ExitPlanMode, observational) — the
+      // old Bash gate this used to also register behind a flag was replaced
+      // by PermissionRequest-based approval (issue #264), registered
+      // unconditionally with the long permission-approval timeout.
       const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
       expect(written.hooks.PreToolUse).toBeDefined();
       expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
       expect(written.hooks.PreToolUse[1]).toBeUndefined();
+      expect(written.hooks.PermissionRequest[0].hooks[0].timeout).toBe(300);
 
       // .findLast, not .find: this mock is shared (and never cleared)
       // across every test in this file, so earlier tests' own "systemd-run"
@@ -5866,37 +5864,6 @@ describe("PtyManager", () => {
       expect(args[args.length - 1]).toBe(
         `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}`,
       );
-    });
-
-    it("registers the blocking PreToolUse gate and injects MULLION_REVIEW_GATE_ENABLED=true only when PtyManager is constructed with reviewGateEnabled: true", async () => {
-      const gatedManager = new PtyManager({ sessionsDir, reviewGateEnabled: true });
-      const session = gatedManager.getOrCreate({
-        id: "1",
-        cwd: "/tmp",
-        command: "claude",
-        cols: 80,
-        rows: 24,
-      });
-      await waitForSpawn(session);
-
-      const settingsPath = path.join(sessionsDir, "1.hooks.json");
-      const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-      expect(written.hooks.PreToolUse).toBeDefined();
-      expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-      expect(written.hooks.PreToolUse[1].matcher).toBe("Bash");
-
-      const call = vi
-        .mocked(spawnChildProcess)
-        .mock.calls.findLast(([file]) => file === "systemd-run");
-      expect(call).toBeDefined();
-      const opts = call?.[2] as { env?: Record<string, string> };
-      expect(opts.env?.MULLION_REVIEW_GATE_ENABLED).toBe("true");
-
-      // This test's own manager, not the outer `manager` — the shared
-      // afterEach above only tears down the latter, so this one must clean
-      // up its own attention-evaluator interval/sessions itself (same
-      // reasoning as that afterEach's own comment).
-      gatedManager.killAll();
     });
 
     it("injects SSH_AUTH_SOCK from the spawned systemd-run env only when PtyManager is constructed with sshAuthSock set", async () => {
@@ -5918,7 +5885,7 @@ describe("PtyManager", () => {
       expect(opts.env?.SSH_AUTH_SOCK).toBe("/tmp/ssh-agent.sock");
 
       // Same "this test's own manager, clean up its own timers/sessions"
-      // reasoning as the reviewGateEnabled gatedManager test above.
+      // reasoning as this describe block's other own-manager tests.
       bridgedManager.killAll();
     });
 
@@ -5971,14 +5938,13 @@ describe("PtyManager", () => {
     });
 
     it("a MULLION_* injection wins over a colliding key in CreateSessionOptions.env", async () => {
-      const gatedManager = new PtyManager({ sessionsDir, reviewGateEnabled: true });
-      const session = gatedManager.getOrCreate({
+      const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
         command: "bash",
         cols: 80,
         rows: 24,
-        env: { MULLION_REVIEW_GATE_ENABLED: "attacker-value" },
+        env: { MULLION_SESSION_ID: "attacker-value" },
       });
       await waitForSpawn(session);
 
@@ -5986,9 +5952,7 @@ describe("PtyManager", () => {
         .mocked(spawnChildProcess)
         .mock.calls.findLast(([file]) => file === "systemd-run");
       const opts = call?.[2] as { env?: Record<string, string> };
-      expect(opts.env?.MULLION_REVIEW_GATE_ENABLED).toBe("true");
-
-      gatedManager.killAll();
+      expect(opts.env?.MULLION_SESSION_ID).toBe("1");
     });
 
     // Issue #822 — env is per-session config (CreateSessionOptions.env),
@@ -6375,7 +6339,7 @@ describe("PtyManager", () => {
       expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "2.opencode-config"));
 
       // This test's own manager, not the outer `manager` — same cleanup
-      // reasoning as the reviewGateEnabled gatedManager test above.
+      // reasoning as this describe block's other own-manager tests.
       ungatedManager.killAll();
     });
 

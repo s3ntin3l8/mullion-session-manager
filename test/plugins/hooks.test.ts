@@ -516,7 +516,7 @@ describe("hooksPlugin (issue #172)", () => {
       expect(session.toInfo().gateState).toBe("denied");
     });
 
-    it("resolves to denied on the server-side gate timeout (fail closed)", async () => {
+    it("resolves to no_response on the server-side gate timeout — falls through, not a denial (issue #264)", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         app = await buildApp();
@@ -540,9 +540,13 @@ describe("hooksPlugin (issue #172)", () => {
         await vi.advanceTimersByTimeAsync(GATE_TIMEOUT_MS);
 
         expect(JSON.parse(await replyPromise)).toEqual({
-          decision: "denied",
+          decision: "no_response",
           reason: "timed out waiting for a decision",
         });
+        // gateState has no third state of its own — "no_response" (nobody
+        // ever decided) is still surfaced to the UI as "denied", even
+        // though the WIRE reply the agent receives falls through instead
+        // (see hooks.ts's resolvePendingGate doc comment).
         expect(session.toInfo().gateState).toBe("denied");
         socket.destroy();
       } finally {

@@ -73,7 +73,6 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     hookSocketPath: "/tmp/sessions/hooks.sock",
     controlSocketPath: "/tmp/sessions/mullion.sock",
     sessionsDir: "/tmp/sessions",
-    reviewGateEnabled: false,
     sshAuthSock: "",
     env: {},
     injectAgentGuide: true,
@@ -189,16 +188,7 @@ describe("buildLaunchPlan — the five MULLION_* injections", () => {
     expect(plan.env.MULLION_SESSION_ID).toBe("777");
   });
 
-  it("injects MULLION_REVIEW_GATE_ENABLED as the STRING form of session.reviewGateEnabled", () => {
-    expect(
-      buildLaunchPlan(baseSession({ reviewGateEnabled: true })).env.MULLION_REVIEW_GATE_ENABLED,
-    ).toBe("true");
-    expect(
-      buildLaunchPlan(baseSession({ reviewGateEnabled: false })).env.MULLION_REVIEW_GATE_ENABLED,
-    ).toBe("false");
-  });
-
-  it("an adapter's envAdditions can override the five injections — current, deliberate ordering (Object.assign runs after)", () => {
+  it("an adapter's envAdditions can override the four injections — current, deliberate ordering (Object.assign runs after)", () => {
     mockApplyHookAdapters.mockImplementation((command: string) => ({
       command,
       envAdditions: { MULLION_SESSION_ID: "adapter-override" },
@@ -261,12 +251,10 @@ describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
     const plan = buildLaunchPlan(
       baseSession({
         id: "42",
-        reviewGateEnabled: true,
-        env: { MULLION_SESSION_ID: "attacker-value", MULLION_REVIEW_GATE_ENABLED: "false" },
+        env: { MULLION_SESSION_ID: "attacker-value" },
       }),
     );
     expect(plan.env.MULLION_SESSION_ID).toBe("42");
-    expect(plan.env.MULLION_REVIEW_GATE_ENABLED).toBe("true");
   });
 
   it("an injected SSH_AUTH_SOCK always wins over a colliding key in session.env", () => {
@@ -360,7 +348,6 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         hookSocketPath: "/tmp/sessions/hooks.sock",
         hookToken: "tok",
         controlSocketPath: "/tmp/sessions/mullion.sock",
-        reviewGateEnabled: true,
         injectAgentGuide: false,
         injectProjectBriefing: false,
         skipPermissions: true,
@@ -376,7 +363,6 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         hookToken: "tok",
         controlSocketPath: "/tmp/sessions/mullion.sock",
         forwarderPath: "/fake/forwarder.mjs",
-        reviewGateEnabled: true,
         injectAgentGuide: false,
         injectProjectBriefing: false,
         cwd: "/tmp/project",

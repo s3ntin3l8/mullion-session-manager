@@ -26,9 +26,10 @@ import { resolveMcpServerPath, shellQuote } from "./shared.js";
 //   `trustedWorkspaces` array — verified NOT suppressed by
 //   `--dangerously-skip-permissions`. See mergeAgyTrustedWorkspace below.
 //
-// `Stop`, `PreToolUse` (run_command gate — blocking only when
-// `MULLION_REVIEW_GATE_ENABLED=true`, see forwarder.mjs's gate filtering
-// at issue #264), and `PostToolUse` (file tools,
+// `Stop`, `PreToolUse` (run_command — observational worktree/branch
+// detection only; issue #264 removed the blocking review_gate this used to
+// also emit, since agy has no PermissionRequest-equivalent hook to answer a
+// permission prompt through), and `PostToolUse` (file tools,
 // best-effort — agy's documented PostToolUse payload doesn't include tool
 // info, so the forwarder only produces output when the undocumented
 // toolCall field happens to be present) are registered. `Stop` is enriched
@@ -120,10 +121,10 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
       // Issue: sidebar worktree detection — PreToolUse for run_command
       // carries toolCall.args.CommandLine and toolCall.args.Cwd, which the
       // forwarder checks for git worktree add detection and cwd tracking.
-      // The forwarder also emits a blocking review_gate for human approval,
-      // but only when MULLION_REVIEW_GATE_ENABLED=true (issue #264) —
-      // without it, review_gate messages are stripped and only observational
-      // messages (git_branch, cwd_changed) reach the socket.
+      // Purely observational (issue #264 removed the blocking review_gate
+      // this used to also emit) — never blocks the tool call, so this needs
+      // only enough time for an ordinary local socket round trip, not a
+      // human-decision budget.
       PreToolUse: [
         {
           matcher: "run_command",
@@ -131,13 +132,7 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
             {
               type: "command",
               command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy PreToolUse`,
-              // agy's PreToolUse gate needs time for a human decision,
-              // matching the same reasoning as Claude Code's
-              // GATE_HOOK_TIMEOUT_SECONDS. agy's own PreToolUse default
-              // timeout is 30s (per its docs); 300s gives Mullion's own
-              // server-side timeout (290s) room to decide before agy's
-              // own timeout fires.
-              timeout: 300,
+              timeout: 10,
             },
           ],
         },
@@ -349,11 +344,11 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
 // Stop, PreToolUse (run_command), PostToolUse (write_to_file/replace_file_content/
 // multi_replace_file_content), and SessionStart — each invoking the shared
 // forwarder with an agy-native event kind (see forwarder-core.mjs's
-// mapAgyEvent). Excludes `review_gate` deliberately — mapAgyEvent's PreToolUse
-// case always constructs one, but forwarder.mjs strips it before sending unless
-// MULLION_REVIEW_GATE_ENABLED is set (same runtime-flag-gated reasoning
-// CLAUDE_CODE_EMITS documents for its own review_gate exclusion).
-// PermissionRequest and compaction/subagent/elicitation events were checked
+// mapAgyEvent). No `review_gate`: unlike Claude Code/Codex, agy has no
+// PermissionRequest-equivalent hook to answer a permission prompt through
+// (issue #264 removed the review_gate its PreToolUse used to emit — see
+// mapAgyEvent's PreToolUse case). PermissionRequest and
+// compaction/subagent/elicitation events were checked
 // against the installed agy CLI's documented hook surface (the forwarder's own
 // per-agent dialect mapAgyEvent in forwarder-core.mjs) and do not exist as of
 // this writing — see mapAgyEvent's own switch for the authoritative list of

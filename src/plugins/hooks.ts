@@ -61,21 +61,23 @@ export type PromoteDecision =
 // instead of the write direction.
 const MAX_LINE_BYTES = 64 * 1024;
 
-// Minimal review gate (Phase 2, issue #178). A `review_gate {state:
-// "waiting"}` message keeps its connection open (see handleConnection below)
-// instead of the fire-and-forget notify-then-close every other hook kind
-// uses; this map tracks that open connection per session so a later
-// decision (POST /api/sessions/:id/review-gate, routed here via
-// app.resolveHookGate) knows which socket to write the reply to.
+// Permission approval (Phase 2, issue #178, rescoped by #264 from a
+// PreToolUse/Bash gate to a PermissionRequest-based one — see
+// forwarder-core.mjs's mapClaudeCodePermissionRequest for why). A
+// `review_gate {state: "waiting"}` message keeps its connection open (see
+// handleConnection below) instead of the fire-and-forget notify-then-close
+// every other hook kind uses; this map tracks that open connection per
+// session so a later decision (POST /api/sessions/:id/review-gate, routed
+// here via app.resolveHookGate) knows which socket to write the reply to.
 //
 // One gate at a time per session, by design: Claude Code (and any future
-// gating agent) can in principle fire two PreToolUse hooks concurrently for
-// the same session (parallel tool calls), which would otherwise silently
-// overwrite this map's entry — the human's decision would then only ever
-// reach whichever connection registered *second*, leaving the first
-// wedged until its own hook-level timeout. Rather than thread a
-// correlation id through the wire protocol for a "minimal" slice, a second
-// concurrent waiting gate for an already-pending session is denied
+// gating agent) can in principle fire two PermissionRequest hooks
+// concurrently for the same session (parallel tool calls), which would
+// otherwise silently overwrite this map's entry — the human's decision
+// would then only ever reach whichever connection registered *second*,
+// leaving the first wedged until its own hook-level timeout. Rather than
+// thread a correlation id through the wire protocol for a "minimal" slice, a
+// second concurrent waiting gate for an already-pending session is denied
 // immediately (see handleConnection) — safe-fails-closed, and the first
 // gate's own pending state is left completely undisturbed.
 interface PendingGate {
@@ -84,7 +86,7 @@ interface PendingGate {
 }
 
 // Must stay comfortably below every gating adapter's own hook-level
-// `timeout` (claude-code.ts's PreToolUse entry sets 300s) — the whole point
+// `timeout` (claude-code.ts's PermissionRequest entry sets 300s) — the whole point
 // of owning a server-side timeout here, rather than relying solely on the
 // forwarder's own internal one (see forwarder.mjs's GATE_TIMEOUT_MS), is
 // that Mullion controls the fail-closed decision and can update gateState
@@ -205,12 +207,22 @@ function resolvePendingPromote(
  * Returns false, touching nothing, if no gate is currently pending for this
  * session (already resolved, timed out, or the connection died — see the
  * `close` handler below) so the caller can report "nothing to resolve"
- * rather than silently no-op. */
+ * rather than silently no-op.
+ *
+ * `decision` accepts a third value, "no_response" (issue #264 rescope), used
+ * ONLY by the server-side timeout below — a real human decision from POST
+ * /api/sessions/:id/review-gate is always "approved"/"denied". "no_response"
+ * is written to the socket verbatim (the forwarder's formatGateDecision maps
+ * it to a bare `{}`, falling through to the agent's own native prompt rather
+ * than denying the tool call outright), but reported to
+ * app.pty.resolveGate/SessionInfo.gateState as "denied" — that field has no
+ * third state of its own, and "Mullion's own approval opportunity lapsed" is
+ * accurately, if a little bluntly, summarized as "denied" for the UI. */
 function resolvePendingGate(
   app: FastifyInstance,
   pendingGates: Map<string, PendingGate>,
   sessionId: string,
-  decision: { decision: "approved" | "denied"; reason?: string },
+  decision: { decision: "approved" | "denied" | "no_response"; reason?: string },
 ): boolean {
   const pending = pendingGates.get(sessionId);
   if (!pending) return false;
@@ -219,7 +231,11 @@ function resolvePendingGate(
   if (pending.socket.writable) {
     pending.socket.write(`${JSON.stringify(decision)}\n`);
   }
-  app.pty.resolveGate(sessionId, decision.decision, decision.reason);
+  app.pty.resolveGate(
+    sessionId,
+    decision.decision === "no_response" ? "denied" : decision.decision,
+    decision.reason,
+  );
   return true;
 }
 
@@ -355,9 +371,12 @@ function handleConnection(
             continue;
           }
           const timer = setTimeout(() => {
-            app.log.warn({ sessionId: sid }, "review gate timed out waiting for a decision");
+            app.log.warn(
+              { sessionId: sid },
+              "review gate timed out waiting for a decision — falling through to the agent's own prompt",
+            );
             resolvePendingGate(app, pendingGates, sid, {
-              decision: "denied",
+              decision: "no_response",
               reason: "timed out waiting for a decision",
             });
           }, GATE_TIMEOUT_MS);

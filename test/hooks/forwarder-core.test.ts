@@ -26,7 +26,6 @@ import {
   mapClaudeCodePostToolUseFailure,
   mapClaudeCodePreCompact,
   mapClaudeCodePostCompact,
-  mapClaudeCodePreToolUse,
   mapClaudeCodeExitPlanMode,
   mapClaudeCodeSessionEnd,
   mapClaudeCodeSessionStart,
@@ -200,41 +199,6 @@ describe("mapClaudeCodePostToolUse", () => {
   });
 });
 
-describe("mapClaudeCodePreToolUse (issue #178)", () => {
-  it("summarizes a Bash command in the prompt", () => {
-    expect(
-      mapClaudeCodePreToolUse({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/x" } }),
-    ).toEqual({ kind: "review_gate", state: "waiting", prompt: "Bash: rm -rf /tmp/x" });
-  });
-
-  it("falls back to file_path when there's no command field", () => {
-    expect(
-      mapClaudeCodePreToolUse({ tool_name: "Write", tool_input: { file_path: "/repo/a.ts" } }),
-    ).toEqual({ kind: "review_gate", state: "waiting", prompt: "Write: /repo/a.ts" });
-  });
-
-  it("falls back to just the tool name with no usable detail at all", () => {
-    expect(mapClaudeCodePreToolUse({ tool_name: "Bash", tool_input: {} })).toEqual({
-      kind: "review_gate",
-      state: "waiting",
-      prompt: "Bash",
-    });
-    expect(mapClaudeCodePreToolUse({})).toEqual({
-      kind: "review_gate",
-      state: "waiting",
-      prompt: "a tool",
-    });
-  });
-
-  it("truncates a long command rather than embedding it in full", () => {
-    const command = "x".repeat(500);
-    const result = mapClaudeCodePreToolUse({ tool_name: "Bash", tool_input: { command } });
-    expect(result.prompt.length).toBeLessThan(220);
-    expect(result.prompt.endsWith("…")).toBe(true);
-    expect(result.prompt.startsWith("Bash: xxx")).toBe(true);
-  });
-});
-
 describe("mapClaudeCodeEvent", () => {
   it("dispatches notification/stop/posttooluse/pretooluse/sessionstart to their mappers", () => {
     expect(mapClaudeCodeEvent("Notification", { message: "hi" })).toEqual({
@@ -249,32 +213,29 @@ describe("mapClaudeCodeEvent", () => {
       { kind: "file_change", path: "x", action: "modify" },
       { kind: "tool_done", tool: "Write" },
     ]);
+    // PreToolUse has no gate anymore (issue #264 rescope) — only ExitPlanMode
+    // is mapped, anything else (e.g. a hand-edited settings file matching
+    // Bash) is dropped rather than guessed at. See mapClaudeCodeEventCore's
+    // own PreToolUse case.
     expect(
-      mapClaudeCodeEvent("PreToolUse", {
-        tool_name: "Bash",
-        tool_input: { command: "ls" },
-      }),
-    ).toEqual({
-      kind: "review_gate",
-      state: "waiting",
-      prompt: "Bash: ls",
-    });
+      mapClaudeCodeEvent("PreToolUse", { tool_name: "Bash", tool_input: { command: "ls" } }),
+    ).toBeNull();
     expect(mapClaudeCodeEvent("SessionStart", { source: "startup" })).toEqual({
       kind: "session_start",
       source: "startup",
     });
   });
 
-  it("dispatches PermissionRequest to the permission_request mapper", () => {
+  it("dispatches PermissionRequest to review_gate — the permission-approval channel (issue #264), not a fire-and-forget notification", () => {
     expect(
       mapClaudeCodeEvent("PermissionRequest", {
         tool_name: "Bash",
         tool_input: { command: "npm install" },
       }),
     ).toEqual({
-      kind: "permission_request",
-      tool: "Bash",
-      summary: "Bash: npm install",
+      kind: "review_gate",
+      state: "waiting",
+      prompt: "Bash: npm install",
     });
   });
 
@@ -1217,28 +1178,33 @@ describe("mapClaudeCodeSessionStart (issue #271)", () => {
 });
 
 describe("mapClaudeCodePermissionRequest", () => {
-  it("extracts tool and summary from the permission request payload", () => {
+  // Issue #264 rescope — PermissionRequest now maps to review_gate (the
+  // blocking permission-approval channel), not a fire-and-forget
+  // permission_request notification, for every tool except AskUserQuestion
+  // (see below). `prompt` reuses the same summarizeToolCall formatting the
+  // old permission_request's `summary` field did.
+  it("extracts a review_gate prompt from the permission request payload", () => {
     expect(
       mapClaudeCodePermissionRequest({
         tool_name: "Bash",
         tool_input: { command: "rm -rf node_modules", description: "Clean up" },
       }),
-    ).toEqual({ kind: "permission_request", tool: "Bash", summary: "Bash: rm -rf node_modules" });
+    ).toEqual({ kind: "review_gate", state: "waiting", prompt: "Bash: rm -rf node_modules" });
   });
 
   it("falls back to just the tool name with no usable input detail", () => {
     expect(mapClaudeCodePermissionRequest({ tool_name: "Read", tool_input: {} })).toEqual({
-      kind: "permission_request",
-      tool: "Read",
-      summary: "Read",
+      kind: "review_gate",
+      state: "waiting",
+      prompt: "Read",
     });
   });
 
   it("falls back to 'a tool' when tool_name is absent", () => {
     expect(mapClaudeCodePermissionRequest({})).toEqual({
-      kind: "permission_request",
-      tool: "a tool",
-      summary: "a tool",
+      kind: "review_gate",
+      state: "waiting",
+      prompt: "a tool",
     });
   });
 
@@ -1246,12 +1212,18 @@ describe("mapClaudeCodePermissionRequest", () => {
   // suppressed HERE: this mapper is a stateless, per-invocation subprocess
   // with no view of `ctx.planState`, so it can't tell whether the PreToolUse
   // ExitPlanMode hook's own `plan_ready` already covered this dialog or
-  // never fired at all. It still maps to a plain permission_request, same
-  // as every other tool — the dedup against a redundant plan_ready lives in
-  // hook-handlers.ts's "permission_request"/"plan_ready" cases instead,
-  // where that state is actually visible (see test/services/pty-manager.test.ts's
-  // "ExitPlanMode dedup" describe block for that behavior).
-  it("maps ExitPlanMode like any other tool — dedup against plan_ready happens downstream, not here", () => {
+  // never fired at all. Self-review pass (issue #264 rescope) — ExitPlanMode
+  // is deliberately EXEMPTED from the review_gate every other tool now maps
+  // to: routing it through the new blocking gate would silently stall every
+  // plan-mode approval, since hook-handlers.ts's dedup against a redundant
+  // plan_ready only runs for the "permission_request" message kind (see that
+  // handler's own PR #675 comment), and there's no equivalent dedup in the
+  // "review_gate" handler. Plan approval already has its own resolution path
+  // (the human working directly at the Claude Code terminal) and was never
+  // meant to route through Mullion's remote-approval gate — see
+  // test/services/pty-manager.test.ts's "ExitPlanMode dedup" describe block
+  // for that downstream behavior.
+  it("maps ExitPlanMode to permission_request, not review_gate — dedup against plan_ready happens downstream, not here", () => {
     expect(
       mapClaudeCodePermissionRequest({
         tool_name: "ExitPlanMode",
@@ -1298,11 +1270,11 @@ describe("mapClaudeCodePermissionRequest", () => {
     });
   });
 
-  it("every other tool_name still maps to permission_request, unchanged", () => {
+  it("every other tool_name still maps to review_gate", () => {
     expect(mapClaudeCodePermissionRequest({ tool_name: "WebFetch", tool_input: {} })).toEqual({
-      kind: "permission_request",
-      tool: "WebFetch",
-      summary: "WebFetch",
+      kind: "review_gate",
+      state: "waiting",
+      prompt: "WebFetch",
     });
   });
 });
@@ -1832,7 +1804,10 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(mapAgyEvent("PostToolUse", {})).toBeNull();
   });
 
-  it("maps PreToolUse with run_command and git worktree add to git_branch + cwd_changed + review_gate", () => {
+  // Issue #264 rescope — agy has no PermissionRequest-equivalent hook, so
+  // its PreToolUse/run_command is purely observational now: worktree/branch
+  // detection only, never a review_gate.
+  it("maps PreToolUse with run_command and git worktree add to git_branch + cwd_changed", () => {
     const result = mapAgyEvent("PreToolUse", {
       toolCall: {
         name: "run_command",
@@ -1845,15 +1820,10 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(result).toEqual([
       { kind: "cwd_changed", cwd: "/workspace/project" },
       { kind: "git_branch", branch: "feat/wt-1", worktree: "/tmp/wt-1" },
-      {
-        kind: "review_gate",
-        state: "waiting",
-        prompt: "run_command: git worktree add -b feat/wt-1 /tmp/wt-1 main",
-      },
     ]);
   });
 
-  it("maps PreToolUse with a plain git checkout run_command to git_branch (no worktree) + cwd_changed + review_gate", () => {
+  it("maps PreToolUse with a plain git checkout run_command to git_branch (no worktree) + cwd_changed", () => {
     const result = mapAgyEvent("PreToolUse", {
       toolCall: {
         name: "run_command",
@@ -1866,15 +1836,10 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(result).toEqual([
       { kind: "cwd_changed", cwd: "/workspace/project" },
       { kind: "git_branch", branch: "feat/bar" },
-      {
-        kind: "review_gate",
-        state: "waiting",
-        prompt: "run_command: git checkout feat/bar",
-      },
     ]);
   });
 
-  it("maps PreToolUse with non-worktree run_command to cwd_changed + review_gate", () => {
+  it("maps PreToolUse with non-worktree run_command to just cwd_changed", () => {
     const result = mapAgyEvent("PreToolUse", {
       toolCall: {
         name: "run_command",
@@ -1884,10 +1849,7 @@ describe("mapAgyEvent (issue #253)", () => {
         },
       },
     });
-    expect(result).toEqual([
-      { kind: "cwd_changed", cwd: "/workspace/project/src" },
-      { kind: "review_gate", state: "waiting", prompt: "run_command: npm test" },
-    ]);
+    expect(result).toEqual([{ kind: "cwd_changed", cwd: "/workspace/project/src" }]);
   });
 
   it("returns null for PreToolUse when the tool is not run_command", () => {
@@ -2037,13 +1999,7 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
 
     for (const [event, payloads] of Object.entries(payloadsByEvent)) {
       for (const payload of payloads) {
-        // PreToolUse(run_command) always ALSO constructs a review_gate
-        // message at the mapper level — the runtime gate that actually
-        // decides whether it's sent lives one layer up, in forwarder.mjs's
-        // MULLION_REVIEW_GATE_ENABLED check, which this mapper-level test
-        // doesn't exercise. Excluded here for the same reason AGY_EMITS's
-        // own doc comment excludes review_gate from the declared list.
-        const kinds = kindsOf(mapAgyEvent(event, payload)).filter((k) => k !== "review_gate");
+        const kinds = kindsOf(mapAgyEvent(event, payload));
         for (const kind of kinds) {
           expect(agyAdapter.emits).toContain(kind);
         }
@@ -2082,23 +2038,21 @@ describe("buildForwarderMessage", () => {
   });
 });
 
-describe("formatClaudeCodeGateDecision (issue #178)", () => {
-  it("maps 'approved' to permissionDecision 'allow'", () => {
+describe("formatClaudeCodeGateDecision (issue #178, rescoped by #264)", () => {
+  it("maps 'approved' to a PermissionRequest decision object with behavior 'allow'", () => {
     expect(formatClaudeCodeGateDecision("approved")).toEqual({
       hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "allow",
-        permissionDecisionReason: "Approved via Mullion",
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
       },
     });
   });
 
-  it("maps 'denied' to permissionDecision 'deny'", () => {
+  it("maps 'denied' to behavior 'deny' with a default message", () => {
     expect(formatClaudeCodeGateDecision("denied")).toEqual({
       hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "Denied via Mullion",
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Denied via Mullion" },
       },
     });
   });
@@ -2106,34 +2060,41 @@ describe("formatClaudeCodeGateDecision (issue #178)", () => {
   it("prefers a given reason over the default text", () => {
     expect(formatClaudeCodeGateDecision("denied", "looks unsafe")).toEqual({
       hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "looks unsafe",
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "looks unsafe" },
       },
     });
   });
+
+  // Issue #264 — "no_response" (nobody ever decided: a server-side timeout,
+  // or the forwarder's own connection error/timeout) formats to a bare `{}`,
+  // confirmed live to make Claude Code fall through to its own native
+  // permission dialog rather than denying the tool call outright.
+  it("maps 'no_response' to a bare {} — fall through to the agent's own prompt, not a denial", () => {
+    expect(formatClaudeCodeGateDecision("no_response")).toEqual({});
+    expect(formatClaudeCodeGateDecision("no_response", "timed out waiting for a decision")).toEqual(
+      {},
+    );
+  });
 });
 
-describe("formatGateDecision (issue #178)", () => {
+describe("formatGateDecision (issue #178, rescoped by #264)", () => {
   it("dispatches to the claude-code dialect", () => {
     expect(formatGateDecision("claude-code", "approved")).toEqual(
       formatClaudeCodeGateDecision("approved"),
     );
   });
 
-  it("dispatches to the agy dialect", () => {
-    expect(formatGateDecision("agy", "approved")).toEqual({ decision: "allow" });
-    expect(formatGateDecision("agy", "denied", "unsafe")).toEqual({
-      decision: "deny",
-      reason: "unsafe",
-    });
-  });
-
-  it("falls back to a generic shape for any agent without a real gate dialect yet", () => {
+  // agy has no gate dialect at all (no PermissionRequest-equivalent hook to
+  // build one on) and Codex's dialect lands in a follow-up PR — both are
+  // genuinely unreachable today (see mapCodexPermissionRequest/mapAgyEvent),
+  // not just unimplemented, so this falls to the generic default.
+  it("falls back to a generic {} shape, with a diagnostic log, for any agent without a real gate dialect", () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      expect(formatGateDecision("codex", "approved")).toEqual({ decision: "approved" });
-      expect(formatGateDecision("some-future-agent", "denied")).toEqual({ decision: "denied" });
+      expect(formatGateDecision("codex", "approved")).toEqual({});
+      expect(formatGateDecision("agy", "denied")).toEqual({});
+      expect(formatGateDecision("some-future-agent", "denied")).toEqual({});
       expect(warn).toHaveBeenCalled();
     } finally {
       warn.mockRestore();

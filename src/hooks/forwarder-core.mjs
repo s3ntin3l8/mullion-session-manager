@@ -190,10 +190,6 @@ function summarizeToolCall(payload) {
   return `${toolName}: ${truncated}`;
 }
 
-export function mapClaudeCodePreToolUse(payload) {
-  return { kind: "review_gate", state: "waiting", prompt: summarizeToolCall(payload) };
-}
-
 export function mapClaudeCodeExitPlanMode(payload) {
   const input = payload?.tool_input;
   const plan = typeof input?.plan === "string" ? input.plan : "";
@@ -494,9 +490,42 @@ export function mapClaudeCodePermissionRequest(payload) {
     if (summary) result.summary = summary;
     return result;
   }
-  const tool = typeof toolName === "string" ? toolName : "a tool";
-  const summary = summarizeToolCall(payload);
-  return { kind: "permission_request", tool, summary };
+  // Independent review (self-review pass) — ExitPlanMode's PermissionRequest
+  // must NOT become a review_gate. Claude Code's own PreToolUse/ExitPlanMode
+  // hook already fires for the same dialog ~48ms earlier (see PR #675) and
+  // maps to `plan_ready`; hook-handlers.ts's "permission_request" case has a
+  // dedup specifically for this pair (`pr.tool === "ExitPlanMode" &&
+  // ctx.planState === "pending"` → drop it as redundant, not a second
+  // signal). That dedup only runs for `permission_request` — there is no
+  // equivalent in the "review_gate" handler. Routing ExitPlanMode through
+  // the new gate instead would silently turn every plan-mode approval into a
+  // blocking gate nobody asked to answer (bounded by the fall-through below,
+  // but still a real, unintended stall) while the sidebar keeps showing
+  // "Plan ready" as if nothing were blocked. Plan approval already has its
+  // own resolution path (the human working directly at the Claude Code
+  // terminal); it was never meant to route through Mullion's remote-approval
+  // gate at all, so this keeps ExitPlanMode on the old, unchanged
+  // fire-and-forget shape rather than teaching the review_gate handler a
+  // second, parallel dedup.
+  if (toolName === "ExitPlanMode") {
+    return {
+      kind: "permission_request",
+      tool: "ExitPlanMode",
+      summary: summarizeToolCall(payload),
+    };
+  }
+  // Issue #264 rescope — PermissionRequest fires deterministically, and only,
+  // when Claude Code is about to show an actual permission dialog (confirmed
+  // live against installed 2.1.220: skipped entirely for an allowlisted/
+  // auto-approved tool call). That makes it the right trigger for remote
+  // approval, unlike the old PreToolUse/Bash gate it replaces — a
+  // `review_gate` here is answerable (Approve/Deny from the notification
+  // bell), where the old `permission_request` this used to emit was
+  // observational-only. Emitting both would double-count the attention
+  // badge for the same event, so this replaces `permission_request` rather
+  // than accompanying it — see formatClaudeCodeGateDecision for the reply
+  // shape and its confirmed `{}` fall-through when nobody answers.
+  return { kind: "review_gate", state: "waiting", prompt: summarizeToolCall(payload) };
 }
 
 export function mapClaudeCodeStopFailure(payload) {
@@ -610,10 +639,15 @@ function mapClaudeCodeEventCore(kind, payload) {
     case "PostToolUse":
       return mapClaudeCodePostToolUse(payload);
     case "PreToolUse":
-      if (payload?.tool_name === "ExitPlanMode") {
-        return mapClaudeCodeExitPlanMode(payload);
-      }
-      return mapClaudeCodePreToolUse(payload);
+      // The only PreToolUse hook Claude Code still registers is the
+      // observational ExitPlanMode matcher — the blocking Bash gate this
+      // case used to also handle was replaced by the PermissionRequest-based
+      // approval below (issue #264 rescope: PreToolUse/Bash fired on EVERY
+      // Bash call, including already-allowlisted ones, which is why it
+      // defaulted off and was never usable as shipped). A PreToolUse firing
+      // for anything else would mean a hand-edited settings file or a future
+      // Claude Code change; drop it rather than guess.
+      return payload?.tool_name === "ExitPlanMode" ? mapClaudeCodeExitPlanMode(payload) : null;
     case "SessionStart":
       return mapClaudeCodeSessionStart(payload);
     case "CwdChanged":
@@ -947,29 +981,16 @@ export function mapAgyEvent(kind, payload) {
       }
       return messages;
     }
-    case "PreToolUse": {
-      const agyMessages = mapAgyPreToolUse(payload);
-      // If git branch/cwd messages exist, append a review_gate for the
-      // blocking gate flow. If no git/cwd messages, return just the gate.
-      const tc = payload?.toolCall;
-      const commandLine =
-        tc?.name === "run_command" && typeof tc?.args?.CommandLine === "string"
-          ? tc.args.CommandLine
-          : null;
-      if (!commandLine) return agyMessages;
-      const gateMsg = {
-        kind: "review_gate",
-        state: "waiting",
-        prompt: `run_command: ${
-          commandLine.length > 200 ? `${commandLine.slice(0, 200)}…` : commandLine
-        }`,
-      };
-      if (Array.isArray(agyMessages)) {
-        agyMessages.push(gateMsg);
-        return agyMessages;
-      }
-      return [gateMsg];
-    }
+    // agy has no PermissionRequest-equivalent hook (checked against its own
+    // bundled hooks.md and confirmed empirically — see docs/agent-hooks.md),
+    // so unlike Claude Code/Codex it has no way to answer a permission
+    // prompt remotely. Issue #264 rescope removed the review_gate this used
+    // to emit (agy's PreToolUse/run_command served dual observational+gate
+    // duty, blocking only when MULLION_REVIEW_GATE_ENABLED was true) — that
+    // flag and mechanism are gone. mapAgyPreToolUse's git_branch/cwd_changed
+    // worktree-detection output is unaffected; it never depended on gating.
+    case "PreToolUse":
+      return mapAgyPreToolUse(payload);
     case "PostToolUse": {
       const tc = payload?.toolCall;
       if (!tc || typeof tc.name !== "string") return null;
@@ -1009,20 +1030,27 @@ export function buildForwarderMessage(agent, kind, payload) {
   }
 }
 
-export function formatAgyGateDecision(decision, reason) {
-  return {
-    decision: decision === "approved" ? "allow" : "deny",
-    ...(reason ? { reason } : {}),
-  };
-}
-
+// Issue #264 rescope — `decision` is one of three values now, not two:
+// "approved"/"denied" for a real human decision (from POST
+// /api/sessions/:id/review-gate), and "no_response" when nobody ever
+// answered (hooks.ts's GATE_TIMEOUT_MS expiring, or this forwarder's own
+// runGate() timing out / hitting a socket error — see forwarder.mjs).
+// "no_response" formats to a bare `{}` — confirmed live (installed Claude
+// Code 2.1.220, a real interactive session) to fall through cleanly to
+// Claude Code's OWN native permission dialog, which is the whole point:
+// unlike the old PreToolUse/Bash gate (which failed closed — an unanswered
+// gate denied the tool call outright), an unanswered PermissionRequest here
+// degrades to exactly what would have happened with no Mullion involved at
+// all, not a worse outcome than not having this feature.
 export function formatClaudeCodeGateDecision(decision, reason) {
+  if (decision === "no_response") return {};
   return {
     hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: decision === "approved" ? "allow" : "deny",
-      permissionDecisionReason:
-        reason ?? (decision === "approved" ? "Approved via Mullion" : "Denied via Mullion"),
+      hookEventName: "PermissionRequest",
+      decision: {
+        behavior: decision === "approved" ? "allow" : "deny",
+        ...(decision === "denied" ? { message: reason ?? "Denied via Mullion" } : {}),
+      },
     },
   };
 }
@@ -1031,13 +1059,17 @@ export function formatGateDecision(agent, decision, reason) {
   switch (agent) {
     case "claude-code":
       return formatClaudeCodeGateDecision(decision, reason);
-    case "agy":
-      return formatAgyGateDecision(decision, reason);
+    // Codex gets its own dialect in a follow-up PR (issue #264) — its
+    // PermissionRequest hook isn't wired to emit review_gate yet (see
+    // mapCodexPermissionRequest above), so this stays unreachable for it
+    // until that lands. agy has no gate dialect at all — it never registers
+    // a PermissionRequest-equivalent hook (see mapAgyEvent's PreToolUse
+    // comment above).
     default:
       console.error(
         `forwarder: no gate dialect registered for agent "${agent}" — this should be unreachable`,
       );
-      return { decision: decision === "approved" ? "approved" : "denied" };
+      return {};
   }
 }
 

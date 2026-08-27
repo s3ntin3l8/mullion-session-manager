@@ -20,21 +20,24 @@
 //
 // Most hooks (Notification/Stop/PostToolUse) are pure fire-and-forget:
 // connect, write, exit — no reply is ever awaited (see forward() below).
-// The blocking review-gate path (PreToolUse, issue #178) is the one
+// The blocking permission-approval path (PermissionRequest, issue #264 —
+// originally a PreToolUse/Bash gate, issue #178, replaced because it fired
+// on EVERY Bash call including already-allowlisted ones) is the one
 // exception: when the mapped message is a `review_gate` in state "waiting",
 // this instead keeps the connection open and blocks for a single reply line
 // (runGate() below) — written back by hooks.ts once POST
-// /api/sessions/:id/review-gate delivers a real decision, or by hooks.ts's
-// own server-side timeout if nobody ever does — then prints the target
-// agent's own decision JSON to stdout (formatGateDecision, see
+// /api/sessions/:id/review-gate delivers a real human decision, or by
+// hooks.ts's own server-side timeout if nobody ever does — then prints the
+// target agent's own decision JSON to stdout (formatGateDecision, see
 // forwarder-core.mjs) instead of the unconditional `{}` main() otherwise
-// prints. Every path through the gate branch — a real reply, a timeout, a
-// dropped connection, or an unexpected internal error — resolves to SOME
-// decision object, defaulting to "denied": a gate that silently fails open
-// (printing `{}`, which Claude Code's PreToolUse contract doesn't recognize
-// as any decision at all) would be a safety control that lies, which is a
-// categorically worse failure mode than the fire-and-forget hooks above
-// simply losing an event.
+// prints. A real human decision ("approved"/"denied") formats to that
+// agent's real allow/deny shape; nobody ever answering ("no_response" —
+// this forwarder's own timeout/socket-error/close, or hooks.ts's own
+// GATE_TIMEOUT_MS expiring) formats to a bare `{}`, confirmed live to make
+// Claude Code (and Codex) fall through to their own native permission
+// dialog — the same thing that would have happened with no Mullion
+// involved at all, not a worse outcome for a feature that's supposed to be
+// strictly additive.
 
 import net from "node:net";
 import {
@@ -45,12 +48,12 @@ import {
   siblingsFor,
 } from "./forwarder-core.mjs";
 
-// Bounded below claude-code.ts's own PreToolUse hook `timeout`
-// (GATE_HOOK_TIMEOUT_SECONDS, 300s) so THIS process controls the fail-closed
-// decision and prints valid JSON before the agent's own hook-level timeout
-// fires and does something less predictable — mirrors hooks.ts's own
-// GATE_TIMEOUT_MS (290s) for the same reason, on the other end of the same
-// connection.
+// Bounded below claude-code.ts's own PermissionRequest hook `timeout`
+// (PERMISSION_REQUEST_TIMEOUT_SECONDS, 300s) so THIS process controls the
+// fall-through decision and prints valid JSON before the agent's own
+// hook-level timeout fires and does something less predictable — mirrors
+// hooks.ts's own GATE_TIMEOUT_MS (290s) for the same reason, on the other
+// end of the same connection.
 const GATE_TIMEOUT_MS = 280_000;
 
 // Issue #271 — a SessionStart round trip has no human in the loop (hooks.ts
@@ -102,12 +105,11 @@ async function main() {
         JSON.stringify(formatSessionStartOutput(process.argv[2], result.additionalContext)),
       );
     } else if (process.argv[2] === "agy" && process.argv[3] === "PreToolUse") {
-      // agy's PreToolUse hook always fires (the hook is always registered —
-      // gating happens at the forwarder level), and agy's hook runner
-      // interprets the stdout output as a decision. On the non-gate path
-      // (MULLION_REVIEW_GATE_ENABLED not "true"), the review_gate is
-      // stripped but we must still print a valid allow decision — an empty
-      // `{}` is ambiguous and agy may treat it as a denial (issue #264).
+      // agy's PreToolUse is purely observational now (issue #264 removed the
+      // review_gate it used to sometimes emit), but agy's own hook runner
+      // still interprets ANY PreToolUse stdout output as a decision — an
+      // empty `{}` is ambiguous and agy may treat it as a denial, so this
+      // must always print an explicit allow.
       console.log(JSON.stringify({ decision: "allow" }));
     } else {
       // Some agents (agy — issue #253) run hooks SYNCHRONOUSLY, blocking
@@ -147,22 +149,7 @@ async function forward() {
   // A dialect returns one message, several (a single apply_patch call can
   // touch multiple files — see forwarder-core.mjs's mapCodexPostToolUse),
   // or nothing at all.
-  const rawMessages = Array.isArray(result) ? result : result === null ? [] : [result];
-  if (rawMessages.length === 0) {
-    return null;
-  }
-
-  // Phase 2 (issue #264): when MULLION_REVIEW_GATE_ENABLED is not "true",
-  // strip review_gate messages but keep observational ones (git_branch,
-  // cwd_changed) so worktree detection and cwd tracking still work without
-  // blocking — mirrors the same default-off posture as Claude Code's
-  // hook-registration-level gate, but at the forwarder level rather than the
-  // hook-registration level since agy's PreToolUse serves dual
-  // observational+gate duty.
-  const messages =
-    (process.env.MULLION_REVIEW_GATE_ENABLED ?? "").toLowerCase() === "true"
-      ? rawMessages
-      : rawMessages.filter((m) => m.kind !== "review_gate");
+  const messages = Array.isArray(result) ? result : result === null ? [] : [result];
   if (messages.length === 0) {
     return null;
   }
@@ -188,14 +175,22 @@ async function forward() {
     // executor (e.g. net.createConnection on a malformed socketPath) would
     // otherwise propagate out of this function as a rejected promise,
     // skipping straight to main()'s `finally` with result still null — which
-    // would print the generic `{}` for what was actually a gate, i.e. fail
-    // OPEN. runGate() itself already never rejects; this catch is defense in
-    // depth so "this was a gate" can never lose its fail-closed guarantee
-    // for any reason.
+    // would print the generic `{}` main() ALSO prints for `no_response`
+    // below, so in practice this catch and the ordinary null-result path
+    // converge on the same output. It exists anyway so `result.type ===
+    // "gate"` stays true even on this internal-error path, keeping this
+    // branch's own contract ("once we know it's a gate, decide something")
+    // independent of that coincidence. runGate() itself already never
+    // rejects; if this forwarder's own machinery breaks before it can even
+    // ask, that's "nobody ever decided" — the same "no_response" outcome as
+    // a timeout or a dropped connection, resolving to a bare `{}` fall
+    // through to the agent's own native prompt (issue #264), never an
+    // explicit denial the actual permission decision had nothing to do
+    // with.
     try {
       return { type: "gate", decision: await runGate(socketPath, token, siblings, gateMessage) };
     } catch {
-      return { type: "gate", decision: { decision: "denied", reason: "forwarder error" } };
+      return { type: "gate", decision: { decision: "no_response", reason: "forwarder error" } };
     }
   }
 
@@ -261,10 +256,15 @@ function writeHandshakeAndMessages(socket, token, messages) {
 /** Sends the handshake + any `siblings` (in order, e.g. a piggybacked
  * cwd_changed — issue #462) + the one `review_gate` waiting message, then
  * blocks for a single reply line: `{decision, reason?}`, written back by
- * hooks.ts (see that file's resolvePendingGate). Bounded by GATE_TIMEOUT_MS,
- * and fails closed ("denied") on a timeout, a connection error, an early
- * close, or a reply that doesn't parse as valid JSON — never rejects, always
- * resolves to a decision object, so callers never need their own fallback. */
+ * hooks.ts (see that file's resolvePendingGate). Bounded by GATE_TIMEOUT_MS.
+ * Never rejects, always resolves to a decision object, so callers never need
+ * their own fallback. A real human decision only ever arrives as
+ * "approved"/"denied"; every other outcome here — a timeout, a connection
+ * error, an early close, or a reply that doesn't parse as valid JSON —
+ * resolves to "no_response" (issue #264 rescope), NOT "denied": nobody ever
+ * deciding must fall through to the agent's own native prompt
+ * (formatGateDecision's bare `{}`), not silently deny a tool call the agent
+ * would otherwise have simply asked its own user about. */
 function runGate(socketPath, token, siblings, gateMessage) {
   return new Promise((resolve) => {
     const socket = net.createConnection(socketPath);
@@ -277,7 +277,7 @@ function runGate(socketPath, token, siblings, gateMessage) {
       resolve(decision);
     };
     const timer = setTimeout(
-      () => finish({ decision: "denied", reason: "timed out waiting for a decision" }),
+      () => finish({ decision: "no_response", reason: "timed out waiting for a decision" }),
       GATE_TIMEOUT_MS,
     );
 
@@ -291,14 +291,14 @@ function runGate(socketPath, token, siblings, gateMessage) {
       try {
         reply = JSON.parse(line);
       } catch {
-        finish({ decision: "denied", reason: "malformed decision" });
+        finish({ decision: "no_response", reason: "malformed decision" });
         return;
       }
       // Hermes review, PR #466 — a reply lacking `decision` entirely (e.g.
       // hooks.ts's `{error}` reply to a line that failed its own
-      // validation) already fails closed via the ternary below, but that
+      // validation) already falls through via the ternary below, but that
       // degradation was previously silent — indistinguishable, from the
-      // forwarder's own logs, from a real "denied" decision. siblingsFor's
+      // forwarder's own logs, from a genuine "nobody answered". siblingsFor's
       // stderr log covers the case where WE chose to drop a known
       // reply-eliciting kind; this covers the case where a reply arrives
       // that we didn't expect at all (e.g. from an unvalidated sibling,
@@ -306,14 +306,19 @@ function runGate(socketPath, token, siblings, gateMessage) {
       // sufficient), so a future regression here is diagnosable too. When
       // the reply is hooks.ts's own `{error}` shape rather than an
       // arbitrary malformed line, carry that error into `reason` so the
-      // resulting auto-deny is self-documenting to whoever reads the
-      // decision (not just whoever happens to see forwarder stderr).
+      // resulting fall-through is self-documenting to whoever reads it (not
+      // just whoever happens to see forwarder stderr).
       if (typeof reply?.decision !== "string") {
         console.error(
-          `forwarder: gate reply had no "decision" field (${JSON.stringify(reply)}) — treating as denied`,
+          `forwarder: gate reply had no "decision" field (${JSON.stringify(reply)}) — falling through`,
         );
       }
-      const decision = reply?.decision === "approved" ? "approved" : "denied";
+      const decision =
+        reply?.decision === "approved"
+          ? "approved"
+          : reply?.decision === "denied"
+            ? "denied"
+            : "no_response";
       const reason =
         typeof reply?.reason === "string"
           ? reply.reason
@@ -322,8 +327,8 @@ function runGate(socketPath, token, siblings, gateMessage) {
             : undefined;
       finish({ decision, reason });
     });
-    socket.on("error", () => finish({ decision: "denied", reason: "connection error" }));
-    socket.on("close", () => finish({ decision: "denied", reason: "connection closed" }));
+    socket.on("error", () => finish({ decision: "no_response", reason: "connection error" }));
+    socket.on("close", () => finish({ decision: "no_response", reason: "connection closed" }));
     socket.once("connect", () => {
       writeHandshakeAndMessages(socket, token, [...siblings, gateMessage]);
     });

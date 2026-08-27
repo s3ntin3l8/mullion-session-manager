@@ -27,7 +27,6 @@ describe("applyHookAdapters (issue #174)", () => {
       hookToken: "tok",
       controlSocketPath: path.join(dir, "mullion.sock"),
       forwarderPath: "/abs/forwarder.mjs",
-      reviewGateEnabled: false,
       injectAgentGuide: false,
       ...overrides,
     };
@@ -53,6 +52,7 @@ describe("applyHookAdapters (issue #174)", () => {
       "session_start",
       "cwd_changed",
       "permission_request",
+      "review_gate",
       "tool_done",
       "stop_failure",
       "tool_failure",
@@ -82,24 +82,13 @@ describe("applyHookAdapters (issue #174)", () => {
     });
   });
 
-  it("does not register the blocking PreToolUse gate by default (MULLION_REVIEW_GATE_ENABLED=false)", () => {
+  it("registers exactly one PreToolUse entry (ExitPlanMode, observational) and PermissionRequest with the long permission-approval timeout, unconditionally (issue #264)", () => {
     const c = ctx();
     applyHookAdapters("claude", c);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
-    // ExitPlanMode is always registered regardless of reviewGateEnabled
-    expect(written.hooks.PreToolUse).toBeDefined();
+    expect(written.hooks.PreToolUse).toHaveLength(1);
     expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-    // No Bash gate without reviewGateEnabled
-    expect(written.hooks.PreToolUse[1]).toBeUndefined();
-  });
-
-  it("registers both ExitPlanMode and Bash PreToolUse entries when reviewGateEnabled is true", () => {
-    const c = ctx({ reviewGateEnabled: true });
-    applyHookAdapters("claude", c);
-    const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
-    expect(written.hooks.PreToolUse).toHaveLength(2);
-    expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-    expect(written.hooks.PreToolUse[1].matcher).toBe("Bash");
+    expect(written.hooks.PermissionRequest[0].hooks[0].timeout).toBe(300);
   });
 
   it("writes the settings file with 0600 permissions", () => {

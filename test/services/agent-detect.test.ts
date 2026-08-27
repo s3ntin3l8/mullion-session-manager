@@ -121,7 +121,9 @@ describe("detectAgents", () => {
     const results = await detectAgents();
     const byId = Object.fromEntries(results.map((r) => [r.id, r]));
 
-    expect(byId["agent:claude"].emits).toContain("permission_request");
+    // permission_request is no longer reachable for claude-code (issue #264
+    // rescope: PermissionRequest now always maps to review_gate instead).
+    expect(byId["agent:claude"].emits).toContain("review_gate");
     expect(byId["agent:claude"].emits).toContain("turn_start");
     expect(byId["agent:codex"].emits).toContain("turn_start");
     expect(byId["agent:opencode"].emits).toContain("permission_request");

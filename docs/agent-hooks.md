@@ -187,19 +187,19 @@ a flag to the wrong part of it), Mullion:
    (never `~/.claude` or the repo) registering hooks — each one invokes a
    small shared forwarder script (`src/hooks/forwarder.mjs`) that maps the
    hook's own JSON to the wire protocol above and writes it to
-   `$MULLION_HOOK_SOCKET`. `PreToolUse` on `Bash` (the blocking review gate,
-   see below) is added to the same file only when
-   `MULLION_REVIEW_GATE_ENABLED=true`; every other hook below is always
-   registered.
+   `$MULLION_HOOK_SOCKET`. Every hook below is always registered
+   unconditionally — there is no longer a flag gating any of them (see the
+   review-gate section below for why the one that used to be conditional,
+   `PreToolUse` on `Bash`, was removed rather than kept opt-in).
 2. Appends `--settings <that file>` to the command actually spawned.
 
-As of this writing (issue: extend surfaced session statuses — rewritten
-here since the previous revision listed only three of these), the
-unconditional set is: `Notification`, `Stop`, `SessionStart`, `CwdChanged`,
-`PostToolUse` (matchers `Write|Edit|MultiEdit|NotebookEdit` and `Bash`),
-`PermissionRequest`, `StopFailure`, `PostToolUseFailure`, `SessionEnd`,
-`PreToolUse` on `ExitPlanMode` (observational — maps to `plan_ready`, not the
-blocking gate below), `UserPromptSubmit`, `PreCompact`/`PostCompact`,
+As of this writing (issue #264 rescope — rewritten here since the previous
+revision described a conditionally-registered `PreToolUse`/`Bash` gate that
+no longer exists), the full set is: `Notification`, `Stop`, `SessionStart`,
+`CwdChanged`, `PostToolUse` (matchers `Write|Edit|MultiEdit|NotebookEdit` and
+`Bash`), `PermissionRequest`, `StopFailure`, `PostToolUseFailure`,
+`SessionEnd`, `PreToolUse` on `ExitPlanMode` (observational — maps to
+`plan_ready`), `UserPromptSubmit`, `PreCompact`/`PostCompact`,
 `SubagentStart`/`SubagentStop`, `PermissionDenied`, and
 `Elicitation`/`ElicitationResult`. See `hook-adapters/claude-code.ts`'s
 `buildClaudeHookSettings` for the authoritative, always-current list, and
@@ -207,18 +207,10 @@ its exported `CLAUDE_CODE_EMITS` for exactly which wire-protocol `kind`s this
 adapter can produce (also surfaced to the frontend via `GET /api/agents`, so
 the UI never offers a status legend entry an agent can't reach).
 
-All of the above are fire-and-forget observational hooks (never block the
-tool call). `PreToolUse` on `Bash` is the one **blocking** hook — the review gate
-(see below) — and defaults **off** (`MULLION_REVIEW_GATE_ENABLED=false`): an
-unattended/autonomous session has nobody to click Approve/Deny, so
-registering it unconditionally stalls every single Bash call until the
-server-side timeout (`hooks.ts`'s `GATE_TIMEOUT_MS`) fails it closed
-(denied) — the opposite of the point of an autonomous-agent dashboard. When
-enabled, it's deliberately gated to `matcher: "Bash"` only, not every tool
-call — Bash's blast radius (arbitrary shell execution) is the one case
-judged worth a human-in-the-loop pause; file edits stay fire-and-forget via
-the existing `PostToolUse` hook. Making the gated tool set configurable
-beyond Bash is a natural follow-up, not built here.
+`PermissionRequest` is the one **blocking** hook — see "The review gate"
+below for why it replaced the old `PreToolUse`/`Bash` gate, and why that
+means it's safe to register unconditionally rather than behind a flag.
+Every other hook above is fire-and-forget (never blocks the tool call).
 
 **OpenCode** has no shell-command hooks at all — only a JS/TS plugin API,
 auto-discovered from a `plugins/` directory it scans (never referenced by
@@ -444,13 +436,11 @@ No documented hook-trust gate exists for agy (unlike Codex) — a managed,
 idempotent merge into the real `~/.gemini/config/hooks.json` (keyed by a
 Mullion-owned hook name, `mullion-hook-forwarder`, never disturbing any
 other hook the user configured) auto-fires with no interactive step
-required. The hook always fires for every `run_command`, but the
-blocking `review_gate` — unlike git_branch/cwd_changed observational
-messages — is **stripped at the forwarder level** when
-`MULLION_REVIEW_GATE_ENABLED` is not `"true"` (issue #264): same
-default-off posture as Claude Code's hook-registration-level gate, but
-handled at the forwarder rather than hook-registration level because
-agy's PreToolUse serves dual observational+gate duty.
+required. The hook always fires for every `run_command`, purely
+observationally (git_branch/cwd_changed detection) — it never produced
+`review_gate` before issue #264 removed that path entirely, since agy has
+no `PermissionRequest`-equivalent hook to build a gate dialect on, unlike
+Claude Code and (eventually) Codex.
 
 **Correction to an earlier revision of this doc:** `PostToolUse` was
 originally left unwired for agy because its documented payload example
@@ -522,60 +512,79 @@ and would show such a skill as toggleable-to-enabled when it isn't. Left as a
 follow-up rather than widening the frontmatter parser for one more field
 here.
 
-## The review gate (issue #178)
+## The review gate (issue #178, rescoped by #264)
 
-**Off by default** (`MULLION_REVIEW_GATE_ENABLED=false`, see `.env.example`
-and `src/plugins/env.ts`) — set it to `true` only when a human is actually
-present and watching for the pending-review indicator; an unattended session
-has nobody to answer it, so leaving it enabled stalls every Bash call until
-the timeout below denies it.
+**Originally a `PreToolUse`/`Bash` gate, replaced entirely.** The first
+version of this feature registered a blocking `PreToolUse` hook matched to
+`Bash`, off by default (`MULLION_REVIEW_GATE_ENABLED=false`) because it fired
+on _every_ Bash call — including ones already auto-approved by the agent's
+own allowlist — stalling each one until a human answered or the timeout
+denied it. That flag has been removed; the mechanism it gated no longer
+exists.
 
-A minimal human-in-the-loop control on top of the same socket: an agent's
-`PreToolUse`-equivalent hook sends `review_gate {state: "waiting", prompt}`
-and — unlike every other hook message — **keeps its connection open**
-instead of fire-and-forget, blocking until a real decision arrives. A human
-clicks Approve or (optionally with a reason) Deny in the notification bell
-panel (`NotificationBell.tsx`), which calls
+**Now built on `PermissionRequest` instead**, confirmed live (Claude Code
+2.1.220, a real interactive session) to fire deterministically, and _only_,
+when the agent is about to show an actual permission dialog — never for an
+allowlisted/auto-approved call. That makes it safe to register
+unconditionally: an unanswered request now falls through to the agent's own
+native prompt (see below), not a denial, so an unattended session degrades to
+exactly the behavior it would have with no Mullion involved at all, rather
+than stalling every tool call.
+
+The wire mechanics are unchanged from the original design: an agent's
+`PermissionRequest`-equivalent hook sends `review_gate {state: "waiting",
+prompt}` and — unlike every other hook message — **keeps its connection
+open** instead of fire-and-forget, blocking until a real decision arrives. A
+human clicks Approve or (optionally with a reason) Deny in the notification
+bell panel (`NotificationBell.tsx`), which calls
 `POST /api/sessions/:id/review-gate {decision, reason?}`; the backend
 (`src/plugins/hooks.ts`) writes `{"decision": "approved" | "denied",
 "reason"?}` back on that still-open connection, the forwarder relays it in
 the agent's own decision dialect (`formatGateDecision` in
 `forwarder-core.mjs`) on stdout, and exits.
 
-**Claude Code's `PreToolUse` (Bash only)** and **agy's `PreToolUse`
-(run_command only, default off — see `MULLION_REVIEW_GATE_ENABLED`)** both
-have gate dialects wired up today. Codex and OpenCode still don't — see issue
-#264 for why.
+**Claude Code's `PermissionRequest` has a gate dialect wired up today.**
+Codex's registers the same hook but doesn't emit `review_gate` yet — still
+tracked in issue #264. agy has no `PermissionRequest`-equivalent hook at all,
+so it can't participate; OpenCode's own equivalent (`permission.ask`) is
+confirmed not to fire against the installed CLI at all (a real upstream bug,
+not a Mullion gap — see that issue for the tracking link).
 
-**Fail-closed, always.** Every error path resolves to a denial, never a
-silent allow:
+**Fall-through, not fail-closed, when nobody answers.** This is the load-bearing
+difference from the old gate: a real human decision is always "approved" or
+"denied", but every OTHER outcome — no reply within the timeout, a dropped
+connection, a malformed reply — now degrades to a bare `{}` reply
+(confirmed live to make Claude Code show its own native permission dialog
+instead), not an explicit denial:
 
 - No pending gate for a session (already resolved, or nothing was ever
   waiting) → the REST endpoint reports 409/`{ok: false}`, no decision is
   fabricated.
 - A second `review_gate: waiting` arriving for a session that already has
-  one pending is denied **immediately, on that connection only** — the
+  one pending is still denied **immediately, on that connection only** — the
   first gate's pending state is left completely undisturbed. (Two gates for
   one session can't share this minimal slice's single-pending-per-session
   bookkeeping without a wire-protocol correlation id; queuing silently would
-  risk the human's decision reaching the wrong tool call.)
-- A server-side timeout (`hooks.ts`'s `GATE_TIMEOUT_MS`, 290s) auto-denies
-  if nobody ever answers, comfortably under Claude Code's own 300s
-  `PreToolUse` hook timeout (itself confirmed to fail closed on expiry) —
-  Mullion controls the denial and its reason, rather than leaving it to the
-  agent's own less-informative timeout behavior.
+  risk the human's decision reaching the wrong tool call. This one case is a
+  genuine denial, not a fall-through — an ambiguous concurrent request isn't
+  something to silently hand back to the agent either.)
+- A server-side timeout (`hooks.ts`'s `GATE_TIMEOUT_MS`, 290s) falls through
+  if nobody ever answers, comfortably under Claude Code's own 600s
+  `PermissionRequest` hook timeout — Mullion controls the outcome rather than
+  leaving it to the agent's own, less predictable expiry behavior.
 - The forwarder has its own, shorter internal timeout too (280s) and treats
-  a dropped connection or a malformed reply the same way: deny.
-- If the socket itself is unavailable when a `PreToolUse` hook fires at all
-  (hooks disabled, or the agent invoked outside a Mullion session), the
-  forwarder never enters the gate branch in the first place — that's the
-  ordinary "hooks disabled" no-op, not a gate to fail closed on.
+  a dropped connection or a malformed reply the same way: fall through.
+- If the socket itself is unavailable when a `PermissionRequest` hook fires
+  at all (hooks disabled, or the agent invoked outside a Mullion session),
+  the forwarder never enters the gate branch in the first place — that's
+  the ordinary "hooks disabled" no-op, not a gate to resolve at all.
 
 **Persistence note:** gate state (`SessionInfo.gateState`/`gatePrompt`) is
 in-memory only, same as every other live PtyManager field — resets to
 `"idle"` across a restart. Persisting an open gate across a restart is an
-explicit, tracked gap (ahead of Phase 4's own persistence work), not built
-in this minimal slice.
+explicit, tracked gap (ahead of Phase 4's own persistence work), and matters
+more now than it did for the old opt-in gate, since this one is on by
+default.
 
 ### Removing managed hooks
 

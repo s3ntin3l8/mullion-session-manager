@@ -74,7 +74,7 @@ describe("buildClaudeHookSettings", () => {
     ]);
   });
 
-  it("PreToolUse has one entry (ExitPlanMode) by default, not Bash (the review gate)", () => {
+  it("PreToolUse has exactly one entry, ExitPlanMode — the Bash gate it used to also register was replaced by PermissionRequest-based approval (issue #264)", () => {
     expect(settings.hooks.PreToolUse).toHaveLength(1);
     expect(settings.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
   });
@@ -103,49 +103,20 @@ describe("buildClaudeHookSettings", () => {
     );
   });
 
-  it("omits the Bash review gate when includeReviewGate is explicitly false", () => {
-    const explicitlyOffSettings = buildClaudeHookSettings(
-      "/abs/path/forwarder.mjs",
-      "/abs/path/node",
-      false,
-    );
-    expect(explicitlyOffSettings.hooks.PreToolUse).toHaveLength(1);
-    expect(explicitlyOffSettings.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-  });
-
-  describe("with includeReviewGate: true", () => {
-    const gatedSettings = buildClaudeHookSettings(
-      "/abs/path/forwarder.mjs",
-      "/abs/path/node",
-      true,
-    );
-
-    it("PreToolUse gets a second entry (the Bash review gate)", () => {
-      expect(gatedSettings.hooks.PreToolUse).toHaveLength(2);
-      expect(gatedSettings.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-      expect(gatedSettings.hooks.PreToolUse[1].matcher).toBe("Bash");
-    });
-
-    it("the Bash review gate has a 300s timeout, unlike the 10s fire-and-forget hooks", () => {
-      expect(gatedSettings.hooks.PreToolUse[1].hooks[0].timeout).toBe(300);
-      expect(gatedSettings.hooks.Notification[0].hooks[0].timeout).toBe(10);
-      const command = gatedSettings.hooks.PreToolUse[1].hooks[0].command;
-      expect(command).toContain("claude-code PreToolUse");
-    });
-
-    it("the ExitPlanMode entry still has the default 10s timeout (observational, not a gate)", () => {
-      expect(gatedSettings.hooks.PreToolUse[0].hooks[0].timeout).toBe(10);
-    });
-  });
-
   it("SessionEnd has a 2s timeout (just above Claude Code's 1.5s default)", () => {
     expect(settings.hooks.SessionEnd[0].hooks[0].timeout).toBe(2);
   });
 
-  it("PermissionRequest, StopFailure, PostToolUseFailure all have the default 10s timeout", () => {
-    expect(settings.hooks.PermissionRequest[0].hooks[0].timeout).toBe(10);
+  it("StopFailure and PostToolUseFailure have the default 10s fire-and-forget timeout", () => {
     expect(settings.hooks.StopFailure[0].hooks[0].timeout).toBe(10);
     expect(settings.hooks.PostToolUseFailure[0].hooks[0].timeout).toBe(10);
+  });
+
+  it("PermissionRequest is registered unconditionally with the long 300s permission-approval timeout, not the 10s fire-and-forget default (issue #264)", () => {
+    expect(settings.hooks.PermissionRequest).toHaveLength(1);
+    expect(settings.hooks.PermissionRequest[0].hooks[0].timeout).toBe(300);
+    const command = settings.hooks.PermissionRequest[0].hooks[0].command;
+    expect(command).toContain("claude-code PermissionRequest");
   });
 });
 
@@ -157,7 +128,6 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     hookToken: "token123",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
   };
 
@@ -180,19 +150,12 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     });
   });
 
-  it("includes ExitPlanMode PreToolUse even when reviewGateEnabled is false", () => {
+  it("includes exactly one PreToolUse entry, ExitPlanMode, and registers PermissionRequest unconditionally (issue #264)", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
-    expect(parsed.hooks.PreToolUse).toBeDefined();
+    expect(parsed.hooks.PreToolUse).toHaveLength(1);
     expect(parsed.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-  });
-
-  it("includes both ExitPlanMode and Bash PreToolUse entries when reviewGateEnabled is true", () => {
-    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, reviewGateEnabled: true });
-    const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
-    expect(parsed.hooks.PreToolUse).toHaveLength(2);
-    expect(parsed.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
-    expect(parsed.hooks.PreToolUse[1].matcher).toBe("Bash");
+    expect(parsed.hooks.PermissionRequest[0].hooks[0].timeout).toBe(300);
   });
 
   it("appends --settings <path> and --mcp-config <path> to the command via commandTransform", () => {

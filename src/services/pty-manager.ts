@@ -886,11 +886,6 @@ export class Session {
   // re-derived, since PtyManager already resolved it once at its own
   // construction.
   private readonly sessionsDir: string;
-  // Mirrors app.config.MULLION_REVIEW_GATE_ENABLED (default false), passed
-  // down from PtyManager — see applyHookAdapters' ctx in bootstrapMaster()
-  // below. Determines whether the Claude Code adapter registers the
-  // blocking PreToolUse review gate for this session's launch.
-  private readonly reviewGateEnabled: boolean;
   // Mirrors app.config.MULLION_SSH_AUTH_SOCK, passed down from PtyManager —
   // bootstrapMaster() below puts this into the LaunchPlanSession.sshAuthSock
   // field it hands to buildLaunchPlan(), which reads it back out and injects
@@ -1249,7 +1244,6 @@ export class Session {
     hookSocketPath: string;
     controlSocketPath: string;
     sessionsDir: string;
-    reviewGateEnabled?: boolean;
     sshAuthSock?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
@@ -1274,7 +1268,6 @@ export class Session {
     this.hookSocketPath = opts.hookSocketPath;
     this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
-    this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.sshAuthSock = opts.sshAuthSock ?? "";
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
@@ -1792,7 +1785,6 @@ export class Session {
       hookSocketPath: this.hookSocketPath,
       controlSocketPath: this.controlSocketPath,
       sessionsDir: this.sessionsDir,
-      reviewGateEnabled: this.reviewGateEnabled,
       sshAuthSock: this.sshAuthSock,
       injectAgentGuide: this.injectAgentGuide,
       injectProjectBriefing: this.injectProjectBriefing,
@@ -3364,21 +3356,14 @@ export class PtyManager {
   // rather than as a per-Session timer: one interval regardless of session
   // count, mirroring the reconciler's own single-timer-for-N-sessions shape.
   private readonly attentionEvalTimer: ReturnType<typeof setInterval>;
-  // Mirrors app.config.MULLION_REVIEW_GATE_ENABLED (default false, see
-  // env.ts) — threaded into every Session this manager creates (getOrCreate
-  // below) so its bootstrapMaster() can pass it through to
-  // applyHookAdapters. Optional in opts, defaulting false, so existing
-  // `new PtyManager({ sessionsDir })` call sites (tests, mainly) keep
-  // compiling unchanged.
-  private readonly reviewGateEnabled: boolean;
   // Mirrors app.config.MULLION_SSH_AUTH_SOCK (default "", see env.ts) —
   // threaded into every Session this manager creates (getOrCreate below) so
-  // its bootstrapMaster() can pass it through to buildLaunchPlan. Same
-  // "boot-time app.config constant, optional in opts" posture as
-  // reviewGateEnabled above.
+  // its bootstrapMaster() can pass it through to buildLaunchPlan. Optional
+  // in opts, defaulting "", so existing `new PtyManager({ sessionsDir })`
+  // call sites (tests, mainly) keep compiling unchanged.
   private readonly sshAuthSock: string;
   // Issue #437c — a live accessor, not a cached boolean: unlike
-  // reviewGateEnabled above (a boot-time app.config constant),
+  // sshAuthSock above (a boot-time app.config constant),
   // sessions.injectAgentGuide is DB-backed and can be toggled at runtime via
   // Settings -> Sessions with no restart. PtyManager has no DB access of its
   // own (deliberately — see this constructor's opts), so pty.ts hands it a
@@ -3400,7 +3385,6 @@ export class PtyManager {
 
   constructor(opts: {
     sessionsDir: string;
-    reviewGateEnabled?: boolean;
     sshAuthSock?: string;
     controlSocketPath?: string;
     getInjectAgentGuide?: () => boolean;
@@ -3430,7 +3414,6 @@ export class PtyManager {
     this.controlSocketPath = opts.controlSocketPath
       ? path.resolve(opts.controlSocketPath)
       : path.join(this.sessionsDir, "mullion.sock");
-    this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     // Resolved here, once, for the same reason as controlSocketPath just
     // above: dtach (and every session shell) runs with cwd set to the
     // *session's* project directory, not this process's cwd, so a relative
@@ -3484,7 +3467,6 @@ export class PtyManager {
         hookSocketPath: this.hookSocketPath,
         controlSocketPath: this.controlSocketPath,
         sessionsDir: this.sessionsDir,
-        reviewGateEnabled: this.reviewGateEnabled,
         sshAuthSock: this.sshAuthSock,
         // Called now, at this session's own creation — see getInjectAgentGuide's
         // own doc comment for why this must be a fresh call, not a value
