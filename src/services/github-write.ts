@@ -813,6 +813,9 @@ export interface PrReviewThreadComment {
 }
 
 export interface PrReviewThread {
+  /** GraphQL node id — the argument `resolveReviewThread` below needs. Not
+   * a REST comment id and not interchangeable with one. */
+  id: string;
   isResolved: boolean;
   comments: PrReviewThreadComment[];
 }
@@ -820,9 +823,12 @@ export interface PrReviewThread {
 export interface PrReviewThreadsResult {
   /** The login of whichever identity `token` authenticates as — an App's
    * `<slug>[bot]` for an installation token, a human login for a PAT
-   * fallback. Callers use this to filter out the caller's own comments
-   * (Mullion's own review posts as this same identity) without needing to
-   * know or hardcode which auth mode is in play. */
+   * fallback. NOT the same as "Mullion's own comments": since #737/#827 a
+   * gating review round posts from a SECOND, distinct identity (the
+   * reviewer App), which this token's own login does not cover. Callers
+   * filtering out Mullion's own posts must check against
+   * `resolveMullionReviewLogins` (github-integration.ts), not this field
+   * alone. */
   viewerLogin: string | null;
   threads: PrReviewThread[];
   /** True when either page's `first` bound didn't cover every thread/comment
@@ -857,6 +863,7 @@ export async function fetchPullRequestReviewThreads(
         reviewThreads: {
           totalCount: number;
           nodes: Array<{
+            id: string;
             isResolved: boolean;
             comments: {
               totalCount: number;
@@ -881,6 +888,7 @@ export async function fetchPullRequestReviewThreads(
           reviewThreads(first: $threadsFirst) {
             totalCount
             nodes {
+              id
               isResolved
               comments(first: $commentsFirst) {
                 totalCount
@@ -917,6 +925,7 @@ export async function fetchPullRequestReviewThreads(
   return {
     viewerLogin: data.viewer?.login ?? null,
     threads: reviewThreads.nodes.map((t) => ({
+      id: t.id,
       isResolved: t.isResolved,
       comments: t.comments.nodes.map((c) => ({
         author: c.author?.login ?? null,
@@ -928,6 +937,51 @@ export async function fetchPullRequestReviewThreads(
     })),
     truncated,
   };
+}
+
+/**
+ * D1 — marks a review thread resolved, closing the gap that left every
+ * anchored review finding permanently blocking merge on any repo with
+ * `required_conversation_resolution` enabled (this repo's own `main`
+ * included): nothing in this codebase called GitHub's thread-resolution
+ * mutation before this. Modeled on `markPullRequestReadyForReview` above —
+ * same minimal-GraphQL-mutation shape, same "no PR node id needed, just the
+ * thread's own" scoping.
+ *
+ * Callers MUST bound which threads they resolve — see
+ * `resolveMullionOwnThreadsIfClean` (task-reconciler.ts) for the actual
+ * policy. This function itself does no authorization check of its own; it
+ * resolves whatever thread id it's given, same posture as every other
+ * write in this file (the caller decides what's safe to call it with, this
+ * just executes the call).
+ */
+export async function resolveReviewThread(token: string, threadId: string): Promise<void> {
+  await githubGraphQL<{ resolveReviewThread: { thread: { id: string } } }>(
+    token,
+    `mutation($id: ID!) {
+      resolveReviewThread(input: { threadId: $id }) {
+        thread { id }
+      }
+    }`,
+    { id: threadId },
+  );
+}
+
+/**
+ * The login `token` authenticates as — an App installation token resolves
+ * to `<slug>[bot]`, a PAT/OAuth token to the human account it belongs to.
+ * Used to build the set of logins Mullion's own review posts can appear
+ * under (`resolveMullionReviewLogins`, github-integration.ts) when a caller
+ * already has a token in hand and just needs its identity, without the
+ * cost of a full `fetchPullRequestReviewThreads` call.
+ */
+export async function fetchViewerLogin(token: string): Promise<string | null> {
+  const data = await githubGraphQL<{ viewer: { login: string } | null }>(
+    token,
+    `query { viewer { login } }`,
+    {},
+  );
+  return data.viewer?.login ?? null;
 }
 
 /**

@@ -114,6 +114,7 @@ const {
   mockResolveRepoRef,
   mockResolveGitHubToken,
   mockResolveReviewerToken,
+  mockResolveMullionReviewLogins,
   mockGetPullRequestByNumber,
   mockMergePullRequest,
   mockUpdatePullRequestBranch,
@@ -126,6 +127,7 @@ const {
   mockResumeTaskWorktree,
   mockRemoveWorktree,
   mockFetchPullRequestReviewThreads,
+  mockResolveReviewThread,
   mockFindReleasePullRequest,
   mockGetDefaultBranch,
   mockInvalidateReleaseCache,
@@ -142,6 +144,15 @@ const {
   // #737) never attempts the re-assert path. Only the dedicated #737
   // tests override this.
   mockResolveReviewerToken: vi.fn(),
+  // D0 fix — no pass-through default (the real implementation's own
+  // internal call to resolveReviewerToken bypasses this file's mock
+  // entirely, since it's an intra-module reference — see
+  // resolveMullionReviewLogins's own dedicated tests in
+  // github-integration.test.ts for that). Every pre-existing test in this
+  // file gets a beforeEach default that reproduces the OLD single-identity
+  // filter exactly (just wraps `viewerLogin` in a Set); only the dedicated
+  // D0 test below overrides it to include a second, reviewer-App identity.
+  mockResolveMullionReviewLogins: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
   mockMergePullRequest: vi.fn(),
   mockUpdatePullRequestBranch: vi.fn(),
@@ -179,6 +190,13 @@ const {
   // of which know about #757 — sees no new PR comments, ever. Only the
   // dedicated describe block below overrides it.
   mockFetchPullRequestReviewThreads: vi.fn(),
+  // D1 — no pass-through default, same reasoning as
+  // mockFetchPullRequestReviewThreads above: the real implementation is a
+  // live GraphQL mutation. Reset to a no-op resolved default every
+  // beforeEach so no pre-existing test (none of which know about D1)
+  // notices it being called at all; only the dedicated D1/D3 tests assert
+  // on it.
+  mockResolveReviewThread: vi.fn(),
 }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -219,6 +237,7 @@ vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
     ...actual,
     resolveGitHubToken: mockResolveGitHubToken,
     resolveReviewerToken: mockResolveReviewerToken,
+    resolveMullionReviewLogins: mockResolveMullionReviewLogins,
   };
 });
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
@@ -232,6 +251,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     createPullRequestReview: mockCreatePullRequestReview,
     getPullRequestReviewDecision: mockGetPullRequestReviewDecision,
     fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
+    resolveReviewThread: mockResolveReviewThread,
     findReleasePullRequest: mockFindReleasePullRequest,
     invalidateReleaseCache: mockInvalidateReleaseCache,
     detectReleaseWorkflow: mockDetectReleaseWorkflow,
@@ -450,6 +470,19 @@ describe("reconcileTasks", () => {
     // review requirement configured, no reviewer App configured.
     mockGetPullRequestReviewDecision.mockReset().mockResolvedValue(null);
     mockResolveReviewerToken.mockReset().mockResolvedValue(null);
+    // D0 fix — default reproduces the pre-fix single-identity filter (just
+    // the caller's own viewerLogin) so every pre-existing PR-comment test
+    // keeps its original behavior; only the dedicated D0 test overrides
+    // this to add a second, reviewer-App identity to the set.
+    mockResolveMullionReviewLogins
+      .mockReset()
+      .mockImplementation(async (_app, _repo, primaryViewerLogin: string | null) =>
+        primaryViewerLogin !== null ? new Set([primaryViewerLogin]) : new Set(),
+      );
+    // D1 — safe no-op default; only the dedicated D1/D3 tests configure a
+    // real thread to assert `resolveReviewThread` was (or wasn't) called
+    // with a specific id.
+    mockResolveReviewThread.mockReset().mockResolvedValue(undefined);
     // #758 — fail-closed defaults (no pre-existing test's task has
     // mergeRequestedAt + a "dirty" mergeableState + autoApprove on, so
     // these are never reached outside the dedicated describe block below).
@@ -2406,6 +2439,261 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // D1/D3 — a live dry run (2026-08-27) confirmed this exact deadlock:
+      // a "blocked" PR with no required-approval rule (`reviewDecision:
+      // null`) and green CI was still misdiagnosed as "Required checks are
+      // red or still pending" when the real, sole cause was an unresolved
+      // review conversation. These derive the cause from OBSERVED threads
+      // (branch protection's own `required_conversation_resolution` flag
+      // isn't readable without the `administration` scope this App
+      // deliberately doesn't have — same gap `fetchRequiredStatusContexts`
+      // already documents for `required_status_checks`).
+      describe("blocked -> unresolved review conversations (D1/D3)", () => {
+        it("reports the unresolved-conversation count instead of the generic message", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [
+              {
+                id: "thread-human",
+                isResolved: false,
+                comments: [
+                  {
+                    author: "octocat",
+                    createdAt: "2026-08-20T10:00:00Z",
+                    path: "src/foo.ts",
+                    line: 1,
+                    body: "Just a suggestion.",
+                  },
+                ],
+              },
+              // Already resolved — must not count toward the total.
+              {
+                id: "thread-resolved",
+                isResolved: true,
+                comments: [
+                  {
+                    author: "octocat",
+                    createdAt: "2026-08-19T10:00:00Z",
+                    path: "src/bar.ts",
+                    line: 1,
+                    body: "Already handled.",
+                  },
+                ],
+              },
+            ],
+            truncated: false,
+          });
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Blocked on 1 unresolved review conversation");
+          // The unresolved thread is a human's — never a candidate to auto-resolve.
+          expect(mockResolveReviewThread).not.toHaveBeenCalled();
+
+          await app.close();
+        });
+
+        it("self-heals by resolving Mullion's own stale thread when its last ingested verdict was clean", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          // Simulates round 2 already coming back clean, but the
+          // verdict-time resolve attempt (processReviewingTasks) itself
+          // failing (fetch error, truncation, mint failure) — the merge
+          // sweep is the backstop that retries it.
+          app.db
+            .update(tasks)
+            .set({ lastReviewVerdict: "clean" })
+            .where(eq(tasks.id, taskId))
+            .run();
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [
+              {
+                id: "thread-own",
+                isResolved: false,
+                comments: [
+                  {
+                    author: "mullion-reviewer[bot]",
+                    createdAt: "2026-08-20T10:00:00Z",
+                    path: "src/foo.ts",
+                    line: 1,
+                    body: "Fix this.",
+                  },
+                ],
+              },
+            ],
+            truncated: false,
+          });
+          mockResolveMullionReviewLogins.mockResolvedValue(
+            new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+          );
+
+          await reconcileTasks(app);
+
+          expect(mockResolveReviewThread).toHaveBeenCalledExactlyOnceWith("tok", "thread-own");
+          // Independent review, round 3 — the diagnostic message below must
+          // reuse the self-heal's own fetch rather than paying for a
+          // second GraphQL round trip in the same tick.
+          expect(mockFetchPullRequestReviewThreads).toHaveBeenCalledOnce();
+
+          await app.close();
+        });
+
+        // Independent review, round 2 — the defect this test guards against:
+        // `POST .../approve` and the closed-issue sync path both promote
+        // "reviewing" straight to "done" on `canTransition` alone, never
+        // consulting `lastReviewVerdict`. A human (or a closed issue) can
+        // therefore reach "done" with a standing "changes-requested"
+        // verdict still on the row. Self-healing in that case would
+        // silently resolve Mullion's own unaddressed finding with zero
+        // corroboration it was ever fixed — exactly the failure mode the
+        // "clean verdict" gate exists to prevent.
+        it("does NOT self-heal when the task's last ingested verdict was changes-requested", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          app.db
+            .update(tasks)
+            .set({ lastReviewVerdict: "changes-requested" })
+            .where(eq(tasks.id, taskId))
+            .run();
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [
+              {
+                id: "thread-own",
+                isResolved: false,
+                comments: [
+                  {
+                    author: "mullion-reviewer[bot]",
+                    createdAt: "2026-08-20T10:00:00Z",
+                    path: "src/foo.ts",
+                    line: 1,
+                    body: "Fix this.",
+                  },
+                ],
+              },
+            ],
+            truncated: false,
+          });
+          mockResolveMullionReviewLogins.mockResolvedValue(
+            new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+          );
+
+          await reconcileTasks(app);
+
+          expect(mockResolveReviewThread).not.toHaveBeenCalled();
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Blocked on 1 unresolved review conversation");
+
+          await app.close();
+        });
+
+        // Independent review, round 3 — a repo requiring BOTH an approval
+        // AND conversation resolution can be "blocked" with the approval
+        // requirement already satisfied (reviewDecision: "APPROVED") while
+        // a stale conversation is the sole remaining cause. Treating
+        // "APPROVED" as already-explained (the old behavior) would leave
+        // exactly this combination on the generic, misleading message
+        // forever.
+        it("reports the unresolved-conversation cause even when reviewDecision is APPROVED", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockGetPullRequestReviewDecision.mockResolvedValue("APPROVED");
+          mockResolveReviewerToken.mockResolvedValue(null);
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [
+              {
+                id: "thread-human",
+                isResolved: false,
+                comments: [
+                  {
+                    author: "octocat",
+                    createdAt: "2026-08-20T10:00:00Z",
+                    path: "src/foo.ts",
+                    line: 1,
+                    body: "Please also fix this.",
+                  },
+                ],
+              },
+            ],
+            truncated: false,
+          });
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Blocked on 1 unresolved review conversation");
+
+          await app.close();
+        });
+
+        it("keeps the generic message when there are no unresolved threads at all", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [],
+            truncated: false,
+          });
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Required checks are red or still pending");
+          // Independent review, round 2 — with zero unresolved threads,
+          // resolveMullionOwnThreadsIfClean's own cheap pre-filter must
+          // skip the reviewer-identity lookup entirely, not just skip
+          // resolving anything after paying for it.
+          expect(mockResolveMullionReviewLogins).not.toHaveBeenCalled();
+
+          await app.close();
+        });
+
+        it("fails closed (keeps the generic message) rather than trusting a truncated thread enumeration", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [],
+            truncated: true,
+          });
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe(
+            "Blocked on the PR, but its review threads couldn't be fully enumerated",
+          );
+          expect(mockResolveReviewThread).not.toHaveBeenCalled();
+
+          await app.close();
+        });
+
+        it("keeps the generic message when the thread fetch itself fails", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockRejectedValue(new Error("GitHub is down"));
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Required checks are red or still pending");
+
+          await app.close();
+        });
+      });
+
       // Re-assert: `attemptMerge` only ever runs for `status: "done"` tasks
       // (this suite's own createDoneTaskWithPendingMerge), so every case
       // below already satisfies that half of the gate implicitly.
@@ -3638,6 +3926,84 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // D0 — a live dry run (2026-08-27) confirmed this exact gap: a
+      // gating review round's own findings post from the REVIEWER App
+      // (#737/#827), a distinct login from `viewerLogin` above (which is
+      // the caller's own, primary-token identity). Before this fix, the
+      // filter above missed comments authored by that second identity
+      // entirely — Mullion re-ingested its own still-unresolved round-1
+      // finding as if a human had posted it, burning an auto-return round
+      // on the same tick a clean follow-up verdict landed.
+      it("also filters out comments authored by the reviewer App's own login, not just the primary identity", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(
+              false,
+              "mullion-reviewer[bot]",
+              "My own gating finding.",
+              "2026-08-20T10:00:00Z",
+            ),
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+        expect(row.lastPrReviewCommentAt).toBeNull();
+
+        await app.close();
+      });
+
+      // Round 2, self-review: the test above only proves the two-identity
+      // set doesn't UNDER-filter (misses the reviewer App). This proves the
+      // companion direction — a two-member `mullionLogins` set must not
+      // OVER-filter a genuine human comment sitting alongside a bot one on
+      // the same PR, which a mis-scoped `mullionLogins.has()` check could
+      // plausibly do without any test catching it.
+      it("still returns the task for a genuine human comment even when the reviewer App's own comment is also present", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(
+              false,
+              "mullion-reviewer[bot]",
+              "My own gating finding.",
+              "2026-08-20T10:00:00Z",
+            ),
+            thread(false, "octocat", "Please also fix this.", "2026-08-20T10:05:00Z"),
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+        expect(row.lastPrReviewCommentAt).toEqual(new Date("2026-08-20T10:05:00Z"));
+
+        await app.close();
+      });
+
       it("returns the task even with no review agent configured (gate 2 would otherwise never pass)", async () => {
         const app = await buildApp();
         const { taskId } = await createPrCommentCandidate(app, {
@@ -4376,6 +4742,176 @@ describe("reconcileTasks", () => {
       expect(row.sessionId).toBe(workerSessionId);
 
       await app.close();
+    });
+
+    // D1 — a live dry run (2026-08-27) confirmed this exact deadlock: a
+    // "clean" verdict ingests fine, but Mullion's own anchored finding from
+    // an earlier round left a GitHub review thread unresolved, and nothing
+    // in the codebase ever resolved it — `attemptMerge` then read
+    // `mergeable_state: "blocked"` forever, even with green CI. This is the
+    // fix's corroboration bound: a "clean" verdict resolves Mullion's own
+    // remaining unresolved threads, but never a human's.
+    describe("resolves Mullion's own review threads on a clean verdict (D1)", () => {
+      beforeEach(() => {
+        mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+        mockResolveGitHubToken.mockResolvedValue("tok");
+      });
+
+      afterEach(() => {
+        mockResolveRepoRef.mockImplementation(
+          actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+        );
+        mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+      });
+
+      it("resolves a thread authored by Mullion's own reviewer identity, never a human's", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+        writeFindings(app, taskId, 0, JSON.stringify({ verdict: "clean", summary: "All good." }));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            {
+              id: "thread-own",
+              isResolved: false,
+              comments: [
+                {
+                  author: "mullion-reviewer[bot]",
+                  createdAt: "2026-08-20T10:00:00Z",
+                  path: "src/foo.ts",
+                  line: 1,
+                  body: "Fix this.",
+                },
+              ],
+            },
+            {
+              id: "thread-human",
+              isResolved: false,
+              comments: [
+                {
+                  author: "octocat",
+                  createdAt: "2026-08-20T10:00:00Z",
+                  path: "src/foo.ts",
+                  line: 2,
+                  body: "Also fix this.",
+                },
+              ],
+            },
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        expect(mockResolveReviewThread).toHaveBeenCalledExactlyOnceWith("tok", "thread-own");
+        expect(mockResolveReviewThread).not.toHaveBeenCalledWith("tok", "thread-human");
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("clean");
+
+        await app.close();
+      });
+
+      it("does not attempt to resolve anything on a changes-requested verdict", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db
+          .update(tasks)
+          .set({ prNumber: 9, agentCommand: "codex" })
+          .where(eq(tasks.id, taskId))
+          .run();
+        writeFindings(
+          app,
+          taskId,
+          0,
+          JSON.stringify({
+            verdict: "changes-requested",
+            summary: "Needs work.",
+            findings: [{ path: "src/foo.ts", line: 1, severity: "blocker", body: "Fix this." }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        expect(mockFetchPullRequestReviewThreads).not.toHaveBeenCalled();
+        expect(mockResolveReviewThread).not.toHaveBeenCalled();
+
+        await app.close();
+      });
+
+      it("does not attempt to resolve anything on an inconclusive verdict (a crashed reviewer confirms nothing)", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+        // No writeFindings call at all — the grace window elapsing with no
+        // file is what produces "inconclusive" (see the dedicated test
+        // above this describe block).
+        const { sessions } = await import("../../src/db/schema.js");
+        await app.db
+          .update(sessions)
+          .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+          .where(eq(sessions.id, reviewSessionId));
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(mockFetchPullRequestReviewThreads).not.toHaveBeenCalled();
+        expect(mockResolveReviewThread).not.toHaveBeenCalled();
+
+        await app.close();
+      });
+
+      // Independent review, round 3 — ownership must be judged across
+      // EVERY comment in a thread, not just the first. A thread that
+      // started as Mullion's own finding but later got a human reply
+      // pushing back inside it must stay unresolved: auto-resolving on
+      // comments[0] alone would dismiss that human objection right along
+      // with the original finding.
+      it("does not resolve a thread Mullion started if a human later replied inside it", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+        writeFindings(app, taskId, 0, JSON.stringify({ verdict: "clean", summary: "All good." }));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            {
+              id: "thread-contested",
+              isResolved: false,
+              comments: [
+                {
+                  author: "mullion-reviewer[bot]",
+                  createdAt: "2026-08-20T10:00:00Z",
+                  path: "src/foo.ts",
+                  line: 1,
+                  body: "Fix this.",
+                },
+                {
+                  author: "octocat",
+                  createdAt: "2026-08-20T10:05:00Z",
+                  path: "src/foo.ts",
+                  line: 1,
+                  body: "Disagree, this is intentional.",
+                },
+              ],
+            },
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        expect(mockResolveReviewThread).not.toHaveBeenCalled();
+
+        await app.close();
+      });
     });
 
     it("records an inconclusive entry once the grace window elapses with still no findings file", async () => {
