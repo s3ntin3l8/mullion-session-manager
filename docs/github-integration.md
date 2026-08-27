@@ -324,6 +324,15 @@ Configuring one:
    clears it. Settings → Integrations → GitHub shows a second "Reviewer App"
    card, identical in shape to the App card above (App id, installation
    count, key fingerprint, rotation date) and rotated the same way.
+4. Optional: give it a distinct avatar so its reviews are visually
+   distinguishable from the primary App's in a PR's timeline. `docs/assets/
+github-reviewer-app-logo.png` is a variant of Mullion's own tile-grid mark —
+   same geometry, recolored to indigo with a diagonal accent pair (standing
+   for the two verdicts this identity can cast) — ready to upload as-is
+   under the new App's Display information → Logo. Its artwork is padded to
+   survive GitHub's circular crop; set the App's background color to
+   `#eef1ef` to match. The SVG source is alongside it if you need to
+   re-export at a different size.
 
 **Not wired up to a review yet.** As of this write-up, configuring a
 reviewer App provisions the credential and its resolver
