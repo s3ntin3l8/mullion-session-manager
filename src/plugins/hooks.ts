@@ -218,12 +218,17 @@ function resolvePendingPromote(
  * rather than silently no-op.
  *
  * `decision` accepts a third value, "no_response" (issue #264 rescope), used
- * ONLY by the server-side timeout below and the duplicate-concurrent-gate
- * path — a real human decision from POST /api/sessions/:id/review-gate is
- * always "approved"/"denied". "no_response" is written to the socket
- * verbatim (the forwarder's formatGateDecision maps it to a bare `{}`,
- * falling through to the agent's own native prompt rather than denying the
- * tool call outright), and reported to app.pty.resolveGate/
+ * by the server-side timeout below and by hooksPlugin's graceful-shutdown
+ * onClose handler — a real human decision from POST
+ * /api/sessions/:id/review-gate is always "approved"/"denied". (The
+ * duplicate-concurrent-gate branch above this function ALSO falls through to
+ * "no_response" on the wire, for the same reason, but writes it straight to
+ * that connection's socket without ever calling this function — the first
+ * gate is still the one truly pending, so its own gateState/timeline record
+ * is untouched; see that branch's own comment.) "no_response" is written to
+ * the socket verbatim here (the forwarder's formatGateDecision maps it to a
+ * bare `{}`, falling through to the agent's own native prompt rather than
+ * denying the tool call outright), and reported to app.pty.resolveGate/
  * SessionInfo.gateState as "lapsed" (issue #840/#844) — a distinct fourth
  * state from "denied", since nobody actually decided anything; the agent
  * fell through to its own prompt instead. */
