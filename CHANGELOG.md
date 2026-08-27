@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.50...v0.3.0) (2026-08-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **hooks:** replace Bash review gate with PermissionRequest-based approval ([#839](https://github.com/s3ntin3l8/mullion-session-manager/issues/839))
+
+### Features
+
+* **hooks:** compaction and subagent events for Codex ([c6a0f56](https://github.com/s3ntin3l8/mullion-session-manager/commit/c6a0f56c81b09e8ab1bc73a91df66eb68fabf113))
+* **hooks:** permission approval for Codex via PermissionRequest ([2a14184](https://github.com/s3ntin3l8/mullion-session-manager/commit/2a141849829177a93ec8fb600171ced6018a3980))
+* **hooks:** replace Bash review gate with PermissionRequest-based approval ([#839](https://github.com/s3ntin3l8/mullion-session-manager/issues/839)) ([4d933f4](https://github.com/s3ntin3l8/mullion-session-manager/commit/4d933f44cbb338915e49a1ff15bf056bfdecc52d))
+
 ## [0.2.50](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.49...v0.2.50) (2026-08-27)
 
 
