@@ -14,6 +14,7 @@ import type { InstallationTokenScope } from "./github-app.js";
 import { DecryptionError } from "./encryption.js";
 import { GitHubApiError } from "./github.js";
 import { githubApiFetch } from "./github-fetch.js";
+import { fetchViewerLogin } from "./github-write.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -569,6 +570,39 @@ export async function resolveReviewerToken(
     );
     return null;
   }
+}
+
+/**
+ * The set of GitHub logins Mullion's own review-related posts on a PR can
+ * appear under, for callers that need to exclude "our own comments" from
+ * something that otherwise looks like new human feedback
+ * (`attemptReturnPrCommentsToWorker`, task-reconciler.ts). Fresh review
+ * after #737/#827: a single `viewerLogin` (whichever identity minted the
+ * caller's OWN token) is not enough — a gating review round posts from a
+ * SECOND, distinct identity (the reviewer App), which the caller's own
+ * primary/write token never resolves to. `primaryViewerLogin` is accepted
+ * rather than re-derived so callers that already have it (e.g. from a
+ * `fetchPullRequestReviewThreads` call in the same pass) don't pay for a
+ * redundant GraphQL round trip just to learn their own identity again.
+ *
+ * Best-effort on the reviewer half: a mint failure or an unconfigured
+ * reviewer App (both already logged by `resolveReviewerToken`) just means
+ * the returned set has one member instead of two, not an error — a caller
+ * with no reviewer App configured has nothing else to exclude anyway.
+ */
+export async function resolveMullionReviewLogins(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+  primaryViewerLogin: string | null,
+): Promise<Set<string>> {
+  const logins = new Set<string>();
+  if (primaryViewerLogin !== null) logins.add(primaryViewerLogin);
+  const reviewerToken = await resolveReviewerToken(app, repo);
+  if (reviewerToken !== null) {
+    const reviewerLogin = await fetchViewerLogin(reviewerToken).catch(() => null);
+    if (reviewerLogin !== null) logins.add(reviewerLogin);
+  }
+  return logins;
 }
 
 interface GitHubUserValidation {
