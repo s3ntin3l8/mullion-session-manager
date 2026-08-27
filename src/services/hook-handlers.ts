@@ -84,7 +84,12 @@ export interface SessionHookContext {
   fileChangeQueue: Promise<void>;
   readonly gitIgnoreDirCache: Map<string, boolean>;
 
-  gateState: "idle" | "waiting" | "approved" | "denied";
+  // "lapsed" (issue #264/#840/#844) is never assigned FROM this file's own
+  // "review_gate" handler (a forwarder never sends it — see
+  // Session.resolveGate's doc comment), but the accessor pair backing this
+  // field on the Session side is the same private field Session.resolveGate
+  // writes "lapsed" to, so the type here has to admit it too.
+  gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed";
   gatePrompt: string | null;
   gateAt: number | null;
 

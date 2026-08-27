@@ -7067,6 +7067,77 @@ describe("Session state file persistence (issue #323)", () => {
     expect(session.toInfo().permissionState).toBe("pending");
   });
 
+  // Issue #844 — a "waiting" gate restored from disk is known-stale: the
+  // `pendingGates` socket/timer it depended on lived only in the PREVIOUS
+  // process's memory and cannot have survived. spawn()'s reattach path must
+  // resolve it to "lapsed" rather than leaving an answerable-looking
+  // "waiting" gate that a `POST /api/sessions/:id/review-gate` click would
+  // always 409 against.
+  it("resolves a restored 'waiting' gate to 'lapsed' on reattach, not a live-looking zombie (issue #844)", async () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "waiting",
+        gatePrompt: "rm -rf /tmp/scratch",
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+    // The dtach master surviving a restart is what makes this a genuine
+    // reattach rather than a fresh session — see the "reports
+    // stateRestored=false..." tests below for the file this mirrors.
+    fs.writeFileSync(socketPath("1"), "");
+
+    const session = makeSession("1");
+    // readStateFile() (mid-constructor) restores the raw value as-is —
+    // spawn()'s reattach path is what's responsible for correcting it.
+    expect(session.toInfo().gateState).toBe("waiting");
+
+    // Mirrors PtyManager.getOrCreate()'s own ordering — onEvent is
+    // subscribed BEFORE spawn() is called, which is exactly the ordering
+    // constraint that makes emitting from spawn()'s savedState block (post-
+    // construction) work, unlike readStateFile() (mid-constructor, before
+    // any subscriber could exist).
+    const seen: unknown[] = [];
+    session.onEvent((event) => seen.push(event));
+
+    await session.spawn();
+
+    expect(session.toInfo().gateState).toBe("lapsed");
+    expect(session.toInfo().gatePrompt).toBeNull();
+    // resolveGate() is the only path that both emits a `review_gate` event
+    // (so the timeline shows a resolution, not an orphaned "waiting" row)
+    // and clears the "reviewGate" attention kind — a bare field assignment
+    // would have silently skipped both.
+    const gateEvents = session.getEvents().filter((e) => e.kind === "review_gate");
+    expect(gateEvents).toHaveLength(1);
+    expect(gateEvents[0]?.payload).toMatchObject({ state: "lapsed" });
+    expect(
+      seen.some(
+        (e) =>
+          typeof e === "object" &&
+          e !== null &&
+          (e as { kind?: string }).kind === "review_gate" &&
+          (e as { payload?: { state?: string } }).payload?.state === "lapsed",
+      ),
+    ).toBe(true);
+  });
+
   it("handles a corrupt state file gracefully by using defaults", () => {
     fs.writeFileSync(stateFilePath("1"), "not valid json");
 

@@ -454,6 +454,27 @@ describe("review gate Approve/Deny (issue #178)", () => {
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
 
+  // Issue #840/#844 — "lapsed" (nobody ever answered: a timeout, a dropped
+  // connection, or a restart while a gate was pending) must render the same
+  // as "denied"/"approved" here — no live-looking Approve/Deny for a gate
+  // nothing is listening on. This is the case that used to zombie: before
+  // issue #844, a restart persisted "waiting" instead, and this exact row
+  // would have rendered Approve/Deny that always 409'd silently. (The
+  // resolution event's own "No answer — agent decided at its own prompt"
+  // label — eventDescriptions.ts's describeEvent — is covered by
+  // eventDescriptions.test.ts instead: notifyKind() deliberately excludes a
+  // resolved review_gate from this panel's feed at all, same as "approved"/
+  // "denied" above, so it never has a row here to assert text against.)
+  it("does not show Approve/Deny for a lapsed gate", async () => {
+    sessions = [makeSession({ gateState: "lapsed" })];
+    events = { 1: [makeGateEvent()] };
+    await openPanel();
+
+    expect(screen.getByText(/Waiting for review/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
+  });
+
   it("Approve calls api.resolveReviewGate with the session id and 'approved', without opening the session", async () => {
     sessions = [makeSession({ gateState: "waiting", gatePrompt: "x" })];
     events = { 1: [makeGateEvent()] };

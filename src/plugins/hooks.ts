@@ -218,14 +218,20 @@ function resolvePendingPromote(
  * rather than silently no-op.
  *
  * `decision` accepts a third value, "no_response" (issue #264 rescope), used
- * ONLY by the server-side timeout below — a real human decision from POST
- * /api/sessions/:id/review-gate is always "approved"/"denied". "no_response"
- * is written to the socket verbatim (the forwarder's formatGateDecision maps
- * it to a bare `{}`, falling through to the agent's own native prompt rather
- * than denying the tool call outright), but reported to
- * app.pty.resolveGate/SessionInfo.gateState as "denied" — that field has no
- * third state of its own, and "Mullion's own approval opportunity lapsed" is
- * accurately, if a little bluntly, summarized as "denied" for the UI. */
+ * by the server-side timeout below and by hooksPlugin's graceful-shutdown
+ * onClose handler — a real human decision from POST
+ * /api/sessions/:id/review-gate is always "approved"/"denied". (The
+ * duplicate-concurrent-gate branch above this function ALSO falls through to
+ * "no_response" on the wire, for the same reason, but writes it straight to
+ * that connection's socket without ever calling this function — the first
+ * gate is still the one truly pending, so its own gateState/timeline record
+ * is untouched; see that branch's own comment.) "no_response" is written to
+ * the socket verbatim here (the forwarder's formatGateDecision maps it to a
+ * bare `{}`, falling through to the agent's own native prompt rather than
+ * denying the tool call outright), and reported to app.pty.resolveGate/
+ * SessionInfo.gateState as "lapsed" (issue #840/#844) — a distinct fourth
+ * state from "denied", since nobody actually decided anything; the agent
+ * fell through to its own prompt instead. */
 function resolvePendingGate(
   app: FastifyInstance,
   pendingGates: Map<string, PendingGate>,
@@ -241,7 +247,7 @@ function resolvePendingGate(
   }
   app.pty.resolveGate(
     sessionId,
-    decision.decision === "no_response" ? "denied" : decision.decision,
+    decision.decision === "no_response" ? "lapsed" : decision.decision,
     decision.reason,
   );
   return true;
@@ -685,6 +691,25 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // (app.close()) — never per-request, never on any attacker-reachable
   // trigger a rate limiter could meaningfully throttle.
   app.addHook("onClose", async () => {
+    // Issue #844 — resolve every gate still pending to "lapsed" BEFORE
+    // destroying its socket, not after. This is a graceful stop, not a
+    // forwarder failure: the wire reply is "no_response" (same as the
+    // timeout/duplicate-gate paths above), so the agent falls through to its
+    // own native prompt exactly as it would on a live timeout — but without
+    // this, `socket.destroy()` below would instead trip the `close` handler,
+    // which fail-closes to "denied" (correct for a genuine dropped
+    // connection, wrong here: Mullion closed the socket on purpose). Getting
+    // this right matters more than it looks — a "denied" persisted here is
+    // what a restored session would boot back up showing, misrepresenting a
+    // graceful restart as a real human denial. Snapshot the ids first:
+    // resolvePendingGate() deletes from `pendingGates` as it resolves each
+    // one, so iterating the live map while mutating it would skip entries.
+    for (const sessionId of [...pendingGates.keys()]) {
+      resolvePendingGate(app, pendingGates, sessionId, {
+        decision: "no_response",
+        reason: "Mullion is shutting down",
+      });
+    }
     for (const socket of openSockets) socket.destroy();
     openSockets.clear();
     await new Promise<void>((resolve) => {
@@ -692,7 +717,9 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
     });
     // Any gate/promote still pending at shutdown would otherwise leak its
     // timer past process lifetime (harmless once the process exits, but
-    // real inside a single long-lived test run — see hooks.test.ts).
+    // real inside a single long-lived test run — see hooks.test.ts). Gates
+    // are already resolved and removed by the loop above; this remains for
+    // promotes (untouched by issue #844) and as a defensive no-op for gates.
     for (const pending of pendingGates.values()) clearTimeout(pending.timer);
     pendingGates.clear();
     for (const pending of pendingPromotes.values()) clearTimeout(pending.timer);

@@ -352,11 +352,13 @@ export interface Session {
   attention: boolean;
   attentionAt: number | null;
   lastTitle: string | null;
-  // Minimal review gate (Phase 2, issue #178) — mirrors
-  // src/services/pty-manager.ts's SessionInfo.gateState/gatePrompt 1:1. Live
-  // in-memory state, same fallback-to-defaults posture as every other live
-  // field above.
-  gateState: "idle" | "waiting" | "approved" | "denied";
+  // Minimal review gate (Phase 2, issue #178; rescoped in issue #264) —
+  // mirrors src/services/pty-manager.ts's SessionInfo.gateState/gatePrompt
+  // 1:1, including "lapsed" (issue #840/#844): nobody ever answered — a
+  // timeout, a dropped connection, a duplicate concurrent gate, or a
+  // restart while one was pending — and the agent fell through to its own
+  // native prompt rather than being denied. Distinct from a human "denied".
+  gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed";
   gatePrompt: string | null;
   // Hook signal states (issue #259) — live in-memory fields mirroring
   // PtyManager's per-session hook state, same fallback-to-defaults posture.
