@@ -848,7 +848,53 @@ export function mapCodexPostToolUse(payload) {
   return messages;
 }
 
-export function mapCodexEvent(kind, payload) {
+// Issue: extend surfaced session statuses (Codex parity) — confirmed live
+// against installed codex-cli 0.149.0's own embedded hook I/O schemas that
+// both PreCompact and PostCompact carry a required `trigger` (manual|auto)
+// field, unlike Claude Code's own PostCompact (which carries none, hence
+// mapClaudeCodePostCompact takes no payload at all) — each per-agent mapper
+// reflects what that agent's real payload contains, not a shared shape.
+export function mapCodexPreCompact(payload) {
+  const trigger =
+    payload?.trigger === "manual" || payload?.trigger === "auto" ? payload.trigger : undefined;
+  return trigger
+    ? { kind: "compact", state: "started", trigger }
+    : { kind: "compact", state: "started" };
+}
+
+export function mapCodexPostCompact(payload) {
+  const trigger =
+    payload?.trigger === "manual" || payload?.trigger === "auto" ? payload.trigger : undefined;
+  return trigger
+    ? { kind: "compact", state: "finished", trigger }
+    : { kind: "compact", state: "finished" };
+}
+
+// Confirmed live (codex-cli 0.149.0's subagent-start.command.input schema):
+// `agent_id`/`agent_type` are both REQUIRED on SubagentStart, unlike Claude
+// Code's own optional pair — read defensively anyway (a schema is a contract
+// with the CLI author, not a runtime guarantee the forwarder should trust
+// blindly), same posture as every other mapper in this file.
+export function mapCodexSubagentStart(payload) {
+  const agentType = typeof payload?.agent_type === "string" ? payload.agent_type : undefined;
+  return agentType
+    ? { kind: "subagent", state: "started", agentType }
+    : { kind: "subagent", state: "started" };
+}
+
+// Confirmed live (codex-cli 0.149.0's subagent-stop.command.input schema):
+// `agent_id`/`agent_type`/`last_assistant_message` (nullable) are all
+// present — no `background_tasks` field the way Claude Code's SubagentStop
+// carries (issue #428), so that field is simply never populated for Codex.
+export function mapCodexSubagentStop(payload) {
+  const result = { kind: "subagent", state: "finished" };
+  if (typeof payload?.last_assistant_message === "string") {
+    result.summary = payload.last_assistant_message;
+  }
+  return result;
+}
+
+function mapCodexEventCore(kind, payload) {
   switch (kind) {
     case "Stop":
       return mapCodexStop();
@@ -862,9 +908,27 @@ export function mapCodexEvent(kind, payload) {
       return mapCodexUserPromptSubmit();
     case "PostToolUse":
       return mapCodexPostToolUse(payload);
+    case "PreCompact":
+      return mapCodexPreCompact(payload);
+    case "PostCompact":
+      return mapCodexPostCompact(payload);
+    case "SubagentStart":
+      return mapCodexSubagentStart(payload);
+    case "SubagentStop":
+      return mapCodexSubagentStop(payload);
     default:
       return null;
   }
+}
+
+// Issue: extend surfaced session statuses (Codex parity) — Codex's own
+// PostToolUse/SubagentStart/SubagentStop payloads carry `agent_id`/
+// `agent_type` too (confirmed live against the installed CLI's embedded
+// schemas — see mergeCodexHooks' own registration comment in codex.ts), so
+// the same agent-attribution envelope Claude Code's mapper applies
+// (applyAgentEnvelope, Phase 5 Track A) now applies here too.
+export function mapCodexEvent(kind, payload) {
+  return applyAgentEnvelope(payload, mapCodexEventCore(kind, payload));
 }
 
 export function mapAgyPreToolUse(payload) {

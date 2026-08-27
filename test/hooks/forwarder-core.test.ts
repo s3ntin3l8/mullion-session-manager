@@ -36,6 +36,10 @@ import {
   mapClaudeCodeUserPromptSubmit,
   mapCodexEvent,
   mapCodexPostToolUse,
+  mapCodexPreCompact,
+  mapCodexPostCompact,
+  mapCodexSubagentStart,
+  mapCodexSubagentStop,
   mapCodexStop,
   mapCodexUserPromptSubmit,
   parseHookStdin,
@@ -1753,6 +1757,104 @@ describe("mapCodexUserPromptSubmit (issue: extend surfaced session statuses)", (
   });
 });
 
+describe("mapCodexPreCompact / mapCodexPostCompact (issue: extend surfaced session statuses)", () => {
+  it("extracts trigger when present", () => {
+    expect(mapCodexPreCompact({ trigger: "manual" })).toEqual({
+      kind: "compact",
+      state: "started",
+      trigger: "manual",
+    });
+    expect(mapCodexPostCompact({ trigger: "auto" })).toEqual({
+      kind: "compact",
+      state: "finished",
+      trigger: "auto",
+    });
+  });
+
+  it("omits trigger when absent or invalid", () => {
+    expect(mapCodexPreCompact({})).toEqual({ kind: "compact", state: "started" });
+    expect(mapCodexPostCompact({ trigger: "bogus" })).toEqual({
+      kind: "compact",
+      state: "finished",
+    });
+  });
+});
+
+describe("mapCodexSubagentStart / mapCodexSubagentStop (issue: extend surfaced session statuses)", () => {
+  it("extracts agentType on start when present", () => {
+    expect(mapCodexSubagentStart({ agent_type: "review" })).toEqual({
+      kind: "subagent",
+      state: "started",
+      agentType: "review",
+    });
+  });
+
+  it("omits agentType on start when absent", () => {
+    expect(mapCodexSubagentStart({})).toEqual({ kind: "subagent", state: "started" });
+  });
+
+  it("extracts summary from last_assistant_message on stop when present", () => {
+    expect(mapCodexSubagentStop({ last_assistant_message: "Done." })).toEqual({
+      kind: "subagent",
+      state: "finished",
+      summary: "Done.",
+    });
+  });
+
+  it("omits summary on stop when last_assistant_message is absent or null", () => {
+    expect(mapCodexSubagentStop({})).toEqual({ kind: "subagent", state: "finished" });
+    expect(mapCodexSubagentStop({ last_assistant_message: null })).toEqual({
+      kind: "subagent",
+      state: "finished",
+    });
+  });
+});
+
+describe("mapCodexEvent — agent-attribution envelope (Phase 5, Track A)", () => {
+  it("stamps agentId/agentType onto subagent messages from SubagentStart/SubagentStop, confirmed live to carry those fields (issue: extend surfaced session statuses)", () => {
+    expect(mapCodexEvent("SubagentStart", { agent_id: "sub-1", agent_type: "review" })).toEqual({
+      kind: "subagent",
+      state: "started",
+      agentType: "review",
+      agentId: "sub-1",
+    });
+    expect(mapCodexEvent("SubagentStop", { agent_id: "sub-1", agent_type: "review" })).toEqual({
+      kind: "subagent",
+      state: "finished",
+      agentId: "sub-1",
+      agentType: "review",
+    });
+  });
+
+  it("stamps agentId/agentType onto a file_change from apply_patch when the payload carries them (a subagent-caused edit)", () => {
+    expect(
+      mapCodexEvent("PostToolUse", {
+        tool_name: "apply_patch",
+        tool_input: { command: "*** Update File: a.ts" },
+        agent_id: "sub-1",
+        agent_type: "review",
+      }),
+    ).toEqual([
+      {
+        kind: "file_change",
+        path: "a.ts",
+        action: "modify",
+        agentId: "sub-1",
+        agentType: "review",
+      },
+    ]);
+  });
+
+  it("dispatches PreCompact/PostCompact to the compact mapper", () => {
+    expect(mapCodexEvent("PreCompact", { trigger: "auto" })).toEqual({
+      kind: "compact",
+      state: "started",
+      trigger: "auto",
+    });
+    expect(mapCodexEvent("PostCompact", {})).toEqual({ kind: "compact", state: "finished" });
+  });
+});
+
 describe("mapAgyEvent (issue #253)", () => {
   // fullyIdle is verified live against the installed agy binary (agy
   // 1.1.15) — a real Stop payload on this host carried `"fullyIdle": true`
@@ -1950,7 +2052,7 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
   it("codex: every registered hook event's mapped kind(s) are declared in emits", () => {
     // Hand-listed rather than derived from mergeCodexHooks — that function
     // performs real file I/O (reads/writes ~/.codex/hooks.json), which a
-    // pure mapper-parity test shouldn't need to touch. Matches the six
+    // pure mapper-parity test shouldn't need to touch. Matches the ten
     // events codex.ts's mergeCodexHooks registers.
     const payloadsByEvent = {
       Stop: [{}],
@@ -1966,6 +2068,10 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
           cwd: "/repo",
         },
       ],
+      PreCompact: [{ trigger: "manual" }],
+      PostCompact: [{ trigger: "auto" }],
+      SubagentStart: [{ agent_id: "sub-1", agent_type: "review" }],
+      SubagentStop: [{ agent_id: "sub-1", agent_type: "review", last_assistant_message: "Done." }],
     };
 
     for (const [event, payloads] of Object.entries(payloadsByEvent)) {

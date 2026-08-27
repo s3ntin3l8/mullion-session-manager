@@ -56,7 +56,8 @@ import { shellQuote } from "./shared.js";
 // themselves.
 //
 // `Stop`, `SessionStart`, `SessionEnd`, `PermissionRequest`, `UserPromptSubmit`,
-// and `PostToolUse` (apply_patch + Bash matchers) are registered.
+// `PostToolUse` (apply_patch + Bash matchers), `PreCompact`, `PostCompact`,
+// `SubagentStart`, and `SubagentStop` are registered.
 //
 // PermissionRequest is ALSO the blocking permission-approval channel (issue
 // #264, same rescope as Claude Code's — see hook-adapters/claude-code.ts's
@@ -69,6 +70,17 @@ import { shellQuote } from "./shared.js";
 // byte-identical to Claude Code's — allow/deny/no-reply-at-all (falls
 // through to Codex's own native prompt) all verified. See
 // forwarder-core.mjs's mapCodexPermissionRequest/formatGateDecision.
+//
+// PreCompact/PostCompact/SubagentStart/SubagentStop (issue: extend surfaced
+// session statuses) were added once codex-cli 0.149.0's own embedded hook
+// I/O schemas confirmed real equivalents to Claude Code's — a previous
+// revision of this file left them unregistered, unverified whether Codex's
+// hook surface even had them. SubagentStart/SubagentStop payloads carry
+// `agent_id`/`agent_type` (required for Start, required for Stop too), and
+// PostToolUse's own schema carries the same pair optionally — confirming
+// Codex's hook payloads support the same agent-attribution envelope Claude
+// Code's do (Phase 5, Track A — see forwarder-core.mjs's applyAgentEnvelope,
+// now applied to mapCodexEvent's output too).
 
 const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
 
@@ -278,6 +290,30 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
     // Codex hook firing (tracked as part of issue #264).
     hookGroup(execPath, fwd, "PostToolUse", "Bash"),
   ];
+  // Issue: extend surfaced session statuses (Codex parity) — confirmed live
+  // against installed codex-cli 0.149.0's own embedded hook I/O schemas
+  // (`pre-compact.command.input`/`post-compact.command.input`/
+  // `subagent-start.command.input`/`subagent-stop.command.input`) that Codex
+  // has real equivalents of Claude Code's PreCompact/PostCompact/
+  // SubagentStart/SubagentStop, contradicting CODEX_EMITS's previous "hasn't
+  // been verified to have them" caveat. All four are fire-and-forget,
+  // observational only.
+  hooks.PreCompact = [
+    ...(hooks.PreCompact ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "PreCompact")),
+    hookGroup(execPath, fwd, "PreCompact"),
+  ];
+  hooks.PostCompact = [
+    ...(hooks.PostCompact ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "PostCompact")),
+    hookGroup(execPath, fwd, "PostCompact"),
+  ];
+  hooks.SubagentStart = [
+    ...(hooks.SubagentStart ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SubagentStart")),
+    hookGroup(execPath, fwd, "SubagentStart"),
+  ];
+  hooks.SubagentStop = [
+    ...(hooks.SubagentStop ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SubagentStop")),
+    hookGroup(execPath, fwd, "SubagentStop"),
+  ];
 
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(hooksPath, `${JSON.stringify({ ...existing, hooks }, null, 2)}\n`);
@@ -297,12 +333,12 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
 }
 
 // Issue: extend surfaced session statuses — the hook-protocol `kind`s the
-// six events mergeCodexHooks registers above can ever produce (see
-// forwarder-core.mjs's mapCodexEvent for the mapping). No compaction/
-// subagent/elicitation events are registered — Codex's hook surface hasn't
-// been verified to have equivalents (see the plan doc's "verify, don't
-// assert" note for this adapter), so this list stays deliberately smaller
-// than Claude Code's rather than guessing.
+// ten events mergeCodexHooks registers above can ever produce (see
+// forwarder-core.mjs's mapCodexEvent for the mapping). PreCompact/
+// PostCompact/SubagentStart/SubagentStop were added once codex-cli 0.149.0's
+// own embedded hook I/O schemas confirmed real equivalents exist — see the
+// registration comment above. No elicitation equivalent is registered —
+// Codex's hook surface still hasn't been verified to have one.
 //
 // `review_gate`, not `permission_request` (issue #264 rescope): Codex's
 // PermissionRequest now always maps to review_gate — unlike Claude Code,
@@ -318,6 +354,8 @@ const CODEX_EMITS = [
   "file_change",
   "git_branch",
   "cwd_changed",
+  "compact",
+  "subagent",
 ] as const;
 
 export const codexAdapter: HookAgentAdapter = {
