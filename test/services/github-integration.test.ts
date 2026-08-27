@@ -624,13 +624,17 @@ describe("github-integration service", () => {
       await app.close();
     });
 
-    it("includes the reviewer App's own login when one is configured and installed", async () => {
+    it("includes the reviewer App's own login, stripped of its [bot] suffix to match author.login, when one is configured and installed", async () => {
       const app = await buildApp();
       setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
       mockGetInstallationToken.mockResolvedValue({
         token: "ghs_reviewer_token",
         installationsChecked: null,
       });
+      // GitHub's raw `viewer.login` carries the `[bot]` suffix; the same
+      // App's authored comments/reviews report `author.login` without it
+      // (confirmed live, 2026-08-27) — fetchViewerLogin strips it so this
+      // set is comparable against `c.author` elsewhere.
       fetchMock.mockResolvedValue(
         jsonResponse(200, { data: { viewer: { login: "mullion-reviewer[bot]" } } }),
       );
@@ -641,7 +645,7 @@ describe("github-integration service", () => {
         "mullion-bot[bot]",
       );
 
-      expect(logins).toEqual(new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]));
+      expect(logins).toEqual(new Set(["mullion-bot[bot]", "mullion-reviewer"]));
       await app.close();
     });
 
