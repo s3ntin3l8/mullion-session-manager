@@ -254,7 +254,10 @@ Mullion's own config, since a dangling socket is the expected state whenever
 the tunnel is down (by design, so a session doesn't need respawning when it
 comes back). An older agent build (pre-dating this diagnostic) reports this
 field as absent rather than `false`; that reads as "unknown," not as a
-missing socket.
+missing socket. The reported path is resolved (`path.resolve`), host-locally,
+the same way the injection itself resolves it — if you configured a relative
+path, what's shown here is the absolute path it resolved to on that host,
+not the raw string from `.env`.
 
 ## Multi-host
 
