@@ -813,6 +813,9 @@ export interface PrReviewThreadComment {
 }
 
 export interface PrReviewThread {
+  /** GraphQL node id — the argument `resolveReviewThread` below needs. Not
+   * a REST comment id and not interchangeable with one. */
+  id: string;
   isResolved: boolean;
   comments: PrReviewThreadComment[];
 }
@@ -860,6 +863,7 @@ export async function fetchPullRequestReviewThreads(
         reviewThreads: {
           totalCount: number;
           nodes: Array<{
+            id: string;
             isResolved: boolean;
             comments: {
               totalCount: number;
@@ -884,6 +888,7 @@ export async function fetchPullRequestReviewThreads(
           reviewThreads(first: $threadsFirst) {
             totalCount
             nodes {
+              id
               isResolved
               comments(first: $commentsFirst) {
                 totalCount
@@ -920,6 +925,7 @@ export async function fetchPullRequestReviewThreads(
   return {
     viewerLogin: data.viewer?.login ?? null,
     threads: reviewThreads.nodes.map((t) => ({
+      id: t.id,
       isResolved: t.isResolved,
       comments: t.comments.nodes.map((c) => ({
         author: c.author?.login ?? null,
@@ -931,6 +937,34 @@ export async function fetchPullRequestReviewThreads(
     })),
     truncated,
   };
+}
+
+/**
+ * D1 — marks a review thread resolved, closing the gap that left every
+ * anchored review finding permanently blocking merge on any repo with
+ * `required_conversation_resolution` enabled (this repo's own `main`
+ * included): nothing in this codebase called GitHub's thread-resolution
+ * mutation before this. Modeled on `markPullRequestReadyForReview` above —
+ * same minimal-GraphQL-mutation shape, same "no PR node id needed, just the
+ * thread's own" scoping.
+ *
+ * Callers MUST bound which threads they resolve — see
+ * `resolveMullionOwnThreadsIfClean` (task-reconciler.ts) for the actual
+ * policy. This function itself does no authorization check of its own; it
+ * resolves whatever thread id it's given, same posture as every other
+ * write in this file (the caller decides what's safe to call it with, this
+ * just executes the call).
+ */
+export async function resolveReviewThread(token: string, threadId: string): Promise<void> {
+  await githubGraphQL<{ resolveReviewThread: { thread: { id: string } } }>(
+    token,
+    `mutation($id: ID!) {
+      resolveReviewThread(input: { threadId: $id }) {
+        thread { id }
+      }
+    }`,
+    { id: threadId },
+  );
 }
 
 /**

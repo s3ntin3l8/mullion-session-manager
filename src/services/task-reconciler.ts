@@ -64,6 +64,7 @@ import {
   detectReleaseWorkflow,
   getPullRequestReviewDecision,
   createPullRequestReview,
+  resolveReviewThread,
 } from "./github-write.js";
 import {
   computeCiStatus,
@@ -1504,12 +1505,90 @@ async function attemptMerge(
           }
         }
 
-        const message =
+        // D3 — `reviewDecision` (a repo-wide required-approval verdict) has
+        // no opinion on conversation resolution, a SEPARATE, per-thread
+        // branch-protection rule (this repo's own `main` has both enabled).
+        // Before this, a `blocked` PR with no required-approval rule but an
+        // unresolved thread got the same generic "Required checks" message
+        // even with CI green — actively wrong, and exactly what made D1's
+        // deadlock invisible in the logs. Checked whenever `reviewDecision`
+        // ISN'T already a more specific, correct explanation on its own —
+        // that's `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, but NOT `APPROVED`:
+        // independent review, round 3 — a repo requiring both an approval
+        // AND conversation resolution can be `blocked` with the approval
+        // requirement already satisfied (`reviewDecision: "APPROVED"`)
+        // while a stale conversation is the sole remaining cause; treating
+        // `APPROVED` as "already explained" would leave exactly that
+        // combination on the old generic message forever.
+        //
+        // Reading branch protection's own `required_conversation_resolution`
+        // flag directly isn't an option here — that endpoint needs the
+        // `administration` scope, which neither WRITE_PERMISSIONS nor
+        // READ_PERMISSIONS grants (github.ts's own fetchRequiredStatusContexts
+        // documents the identical gap for required_status_checks) — so this
+        // derives the cause from OBSERVED unresolved threads instead, which
+        // is more precise anyway: it answers "is THIS PR actually blocked on
+        // a conversation," not "does the branch require one."
+        let message =
           reviewDecision === "CHANGES_REQUESTED"
             ? "Changes were requested on the PR"
             : reviewDecision === "REVIEW_REQUIRED"
               ? "Waiting on a required approving review"
               : "Required checks are red or still pending";
+        if (reviewDecision === null || reviewDecision === "APPROVED") {
+          // Self-heals the D1 deadlock — but ONLY when this row's own last
+          // ingested verdict is "clean". Independent review, round 2: an
+          // earlier version of this call fired unconditionally on the
+          // (false) assumption that a `done` task's verdict can never be
+          // "changes-requested." It can: `POST .../approve`
+          // (task-approve.ts) and the closed-issue sync path
+          // (syncClosedIssueToLocal, task-github-sync.ts) both flip
+          // "reviewing" straight to "done" on `canTransition` alone, never
+          // consulting `lastReviewVerdict` — a human (or a closed issue)
+          // can promote a task whose last review genuinely requested
+          // changes. Resolving Mullion's own threads in THAT case would
+          // satisfy `required_conversation_resolution` with zero
+          // corroboration a finding was ever addressed, defeating the
+          // entire point of the gate. Checking the column here is what
+          // keeps this call as safe as its sibling in
+          // processReviewingTasks, which reads the SAME column at the
+          // point of ingestion rather than re-deriving a "must be clean by
+          // now" assumption.
+          //
+          // Reuses the self-heal's own fetch for the diagnostic below
+          // (independent review, round 3) rather than fetching twice in
+          // the same tick — `null` means either self-heal didn't run
+          // (verdict isn't "clean") or it hit its own early-return
+          // (fetch failure/truncation), either way falling through to a
+          // fresh fetch just for the count.
+          const selfHealResult =
+            task.lastReviewVerdict === "clean"
+              ? await resolveMullionOwnThreadsIfClean(app, task, project)
+              : null;
+          try {
+            const threadsResult =
+              selfHealResult ??
+              (await fetchPullRequestReviewThreads(
+                token,
+                repoRef.owner,
+                repoRef.repo,
+                task.prNumber,
+              ));
+            if (threadsResult.truncated) {
+              message = "Blocked on the PR, but its review threads couldn't be fully enumerated";
+            } else {
+              const unresolvedCount = threadsResult.threads.filter((t) => !t.isResolved).length;
+              if (unresolvedCount > 0) {
+                message = `Blocked on ${unresolvedCount} unresolved review conversation${unresolvedCount === 1 ? "" : "s"}`;
+              }
+            }
+          } catch (err) {
+            app.log.warn(
+              { err, taskId: task.id, prNumber: task.prNumber },
+              "task reconcile: failed to check for unresolved review conversations — falling back to the generic 'blocked' message",
+            );
+          }
+        }
         recordMergeError(app, task.id, message);
         return;
       }
@@ -2537,6 +2616,120 @@ async function unlinkFindingsFileIfPresent(
   }
 }
 
+/**
+ * D1 — on any repo with `required_conversation_resolution` enabled (this
+ * repo's own `main` included), an anchored review finding blocks merge
+ * FOREVER once its thread is created: nothing before this called GitHub's
+ * thread-resolution mutation at all (`docs/tasks.md`'s own known-limitations
+ * section documented the resulting false-positive "blocked" read, but never
+ * closed it). Confirmed live in a dry run (2026-08-27): a real anchored
+ * finding, fixed and re-reviewed clean, still left `mergeStateStatus:
+ * BLOCKED` with green CI — resolving the stale thread by hand was the only
+ * way to unstick it.
+ *
+ * Deliberately NOT "the worker resolves its own threads" in the literal
+ * sense — a worker has no route to a GitHub GraphQL thread node id (the
+ * REST review-post response this codebase uses to post findings doesn't
+ * return one), and handing it a write-scoped GitHub token just to look one
+ * up would be a real capability grant for no real safety gain. Instead,
+ * Mullion resolves — but ONLY once its own NEXT independent review round
+ * confirms the diff is no longer a "changes-requested" one, i.e. exactly
+ * the same corroboration a human reviewer clicking Resolve would be acting
+ * on. This function runs from processReviewingTasks at the moment a
+ * "clean" verdict is durably ingested — never fires off an
+ * "inconclusive"/crashed-reviewer verdict, which is not corroborating
+ * evidence of anything.
+ *
+ * Bounded to `mullionLogins` (`resolveMullionReviewLogins`, same set D0's
+ * fix uses) — a human's own review thread is NEVER a candidate here,
+ * regardless of verdict. Independent review, round 3: ownership is judged
+ * across EVERY comment in the thread, not just the first — a thread that
+ * started as Mullion's own finding but later got a human reply pushing
+ * back inside it (disagreeing the finding is real, adding context) must
+ * stay unresolved too. Auto-resolving on `comments[0]` alone would dismiss
+ * that objection right along with the original finding, which is exactly
+ * the "don't paper over a human's input" bound this function exists to
+ * hold. This is the one bound that actually matters: it's what keeps
+ * `required_conversation_resolution` a real gate against a worker (or
+ * Mullion itself) papering over a human's finding, while still closing the
+ * self-inflicted deadlock this function exists to fix.
+ *
+ * Best-effort, matching every other GitHub write in this file's own
+ * posture: a fetch/mint/resolve failure is logged and skipped, never
+ * thrown — the verdict this call follows is already durably recorded by
+ * the time this runs, so a failure here costs nothing but a stale thread
+ * surviving to the next tick's `attemptMerge`, not a lost transition. Fails
+ * closed on `truncated: true` (an incomplete thread enumeration must not
+ * be read as "no threads to resolve").
+ *
+ * Returns the fetched thread result on success (even when nothing ended up
+ * resolved) so `attemptMerge`'s own "blocked" diagnostic — the OTHER
+ * consumer of this exact same fetch — can reuse it instead of paying for a
+ * second GraphQL round trip in the same sweep tick; `null` on any early
+ * return (no PR, no token, fetch failure, truncation), signaling "I
+ * couldn't get you a usable result, fetch your own."
+ */
+async function resolveMullionOwnThreadsIfClean(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<Awaited<ReturnType<typeof fetchPullRequestReviewThreads>> | null> {
+  if (task.prNumber === null) return null;
+
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return null;
+  const token = await resolveGitHubToken(app, repoRef, "write");
+  if (!token) return null;
+
+  let result: Awaited<ReturnType<typeof fetchPullRequestReviewThreads>>;
+  try {
+    result = await fetchPullRequestReviewThreads(token, repoRef.owner, repoRef.repo, task.prNumber);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id },
+      "task reconcile: review-thread fetch failed while checking for Mullion's own threads to resolve",
+    );
+    return null;
+  }
+  if (result.truncated) {
+    app.log.warn(
+      { taskId: task.id, prNumber: task.prNumber },
+      "task reconcile: review threads/comments exceeded the fetch page size — skipping auto-resolve this tick rather than resolving an incomplete set",
+    );
+    return null;
+  }
+
+  // Independent review, round 2: cheap pre-filter before the reviewer
+  // identity lookup below, same reasoning as attemptReturnPrCommentsToWorker's
+  // own ordering (D0) — resolveMullionReviewLogins is a live, uncached
+  // GraphQL round trip, and this function is called from a merge-retry
+  // backoff loop, not a one-shot verdict ingestion, so paying for it on
+  // every tick even when nothing is unresolved would reproduce the exact
+  // pattern D0 fixed elsewhere in this file.
+  if (!result.threads.some((t) => !t.isResolved)) return result;
+
+  const mullionLogins = await resolveMullionReviewLogins(app, repoRef, result.viewerLogin);
+  const ownUnresolved = result.threads.filter(
+    (t) =>
+      !t.isResolved &&
+      t.comments.length > 0 &&
+      t.comments.every((c) => mullionLogins.has(c.author ?? "")),
+  );
+  if (ownUnresolved.length === 0) return result;
+
+  for (const thread of ownUnresolved) {
+    try {
+      await resolveReviewThread(token, thread.id);
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id, threadId: thread.id },
+        "task reconcile: failed to resolve one of Mullion's own review threads",
+      );
+    }
+  }
+  return result;
+}
+
 async function processReviewingTasks(app: FastifyInstance): Promise<void> {
   const allRows = app.db
     .select({ task: tasks, session: sessions, project: projects })
@@ -2826,6 +3019,16 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
               }
             : { body: commentBody + cappedNote, verdict },
         );
+
+        // D1 — a "clean" verdict is corroborating evidence any of Mullion's
+        // own earlier anchored findings on this PR were actually addressed;
+        // resolve them now so a repo requiring conversation resolution
+        // doesn't deadlock on a self-inflicted stale thread. Never fires on
+        // "changes-requested" (there's nothing to corroborate yet) or
+        // "inconclusive" (a crashed/silent reviewer confirms nothing).
+        if (verdict === "clean") {
+          await resolveMullionOwnThreadsIfClean(app, task, project);
+        }
 
         if (!shouldAutoReturn) continue;
 
