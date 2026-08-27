@@ -2044,6 +2044,20 @@ async function attemptReturnPrCommentsToWorker(
     );
   }
 
+  const cursor = task.lastPrReviewCommentAt;
+  // Unresolved + cursor-filtered only, author identity NOT yet checked —
+  // deliberately ordered before resolveMullionReviewLogins below (round 2,
+  // self-review): that call is a live, uncached GraphQL round trip (the
+  // reviewer App's login never changes, but nothing here caches it), and
+  // the ordinary case — nothing new since last tick — should never pay for
+  // it. Only a task with an actual candidate comment reaches that call.
+  const candidateComments = result.threads
+    .filter((t) => !t.isResolved)
+    .flatMap((t) => t.comments)
+    .filter((c) => c.author !== null)
+    .filter((c) => cursor === null || new Date(c.createdAt).getTime() > cursor.getTime());
+  if (candidateComments.length === 0) return false;
+
   // Fresh review: a gating review round (#737/#827) posts its findings from
   // the REVIEWER App, a distinct identity from the primary token above —
   // `result.viewerLogin` alone no longer covers "Mullion's own comments."
@@ -2052,16 +2066,13 @@ async function attemptReturnPrCommentsToWorker(
   // clean follow-up verdict lands, burning an auto-return round on nothing.
   const mullionLogins = await resolveMullionReviewLogins(app, repoRef, result.viewerLogin);
 
-  const cursor = task.lastPrReviewCommentAt;
-  const newComments = result.threads
-    .filter((t) => !t.isResolved)
-    .flatMap((t) => t.comments)
-    // Excludes Mullion's own review posts (primary identity or reviewer
-    // App — see resolveMullionReviewLogins) and any comment whose author is
-    // null (a deleted/ghost account — nothing to filter against, but also
-    // nothing a re-seeded worker can usefully be told "from whom").
-    .filter((c) => c.author !== null && !mullionLogins.has(c.author))
-    .filter((c) => cursor === null || new Date(c.createdAt).getTime() > cursor.getTime());
+  // Excludes Mullion's own review posts (primary identity or reviewer App —
+  // see resolveMullionReviewLogins). `c.author` is non-null by construction
+  // of `candidateComments` above (TypeScript can't see that through the
+  // closure, hence the redundant-looking check).
+  const newComments = candidateComments.filter(
+    (c) => c.author !== null && !mullionLogins.has(c.author),
+  );
   if (newComments.length === 0) return false;
 
   const resolvedTaskMaster = resolveTaskMasterConfig(app);

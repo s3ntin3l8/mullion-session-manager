@@ -588,7 +588,13 @@ export async function resolveReviewerToken(
  * Best-effort on the reviewer half: a mint failure or an unconfigured
  * reviewer App (both already logged by `resolveReviewerToken`) just means
  * the returned set has one member instead of two, not an error — a caller
- * with no reviewer App configured has nothing else to exclude anyway.
+ * with no reviewer App configured has nothing else to exclude anyway. The
+ * ONE failure mode that isn't already logged elsewhere is `fetchViewerLogin`
+ * itself throwing (token minted fine, the GraphQL call failed) — logged
+ * here explicitly (round 2, self-review): silently degrading to a
+ * one-member set on THAT path would reproduce the exact bug this function
+ * exists to fix (the reviewer App's own comments read as "new human
+ * feedback" again) with no diagnostic trail explaining why.
  */
 export async function resolveMullionReviewLogins(
   app: FastifyInstance,
@@ -599,8 +605,15 @@ export async function resolveMullionReviewLogins(
   if (primaryViewerLogin !== null) logins.add(primaryViewerLogin);
   const reviewerToken = await resolveReviewerToken(app, repo);
   if (reviewerToken !== null) {
-    const reviewerLogin = await fetchViewerLogin(reviewerToken).catch(() => null);
-    if (reviewerLogin !== null) logins.add(reviewerLogin);
+    try {
+      const reviewerLogin = await fetchViewerLogin(reviewerToken);
+      if (reviewerLogin !== null) logins.add(reviewerLogin);
+    } catch (err) {
+      app.log.warn(
+        { err, owner: repo.owner, repo: repo.repo },
+        "[github-integration] reviewer App identity lookup failed — its own comments won't be excluded as Mullion's own this pass",
+      );
+    }
   }
   return logins;
 }

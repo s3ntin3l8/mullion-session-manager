@@ -3697,6 +3697,45 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // Round 2, self-review: the test above only proves the two-identity
+      // set doesn't UNDER-filter (misses the reviewer App). This proves the
+      // companion direction — a two-member `mullionLogins` set must not
+      // OVER-filter a genuine human comment sitting alongside a bot one on
+      // the same PR, which a mis-scoped `mullionLogins.has()` check could
+      // plausibly do without any test catching it.
+      it("still returns the task for a genuine human comment even when the reviewer App's own comment is also present", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(
+              false,
+              "mullion-reviewer[bot]",
+              "My own gating finding.",
+              "2026-08-20T10:00:00Z",
+            ),
+            thread(false, "octocat", "Please also fix this.", "2026-08-20T10:05:00Z"),
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+        expect(row.lastPrReviewCommentAt).toEqual(new Date("2026-08-20T10:05:00Z"));
+
+        await app.close();
+      });
+
       it("returns the task even with no review agent configured (gate 2 would otherwise never pass)", async () => {
         const app = await buildApp();
         const { taskId } = await createPrCommentCandidate(app, {
