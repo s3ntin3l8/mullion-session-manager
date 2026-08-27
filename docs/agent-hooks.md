@@ -317,14 +317,26 @@ project's `.opencode/` happens at all — fully ephemeral, same posture as
 Claude Code's `--settings` file, and
 strictly less persistent than the originally-planned managed-install
 fallback (superseded once `OPENCODE_CONFIG_DIR` was confirmed to work this
-way). The plugin forwards eight non-blocking event-bus types (rewritten
-here — a previous revision of this doc said only two, `session.idle` and
-`file.edited`): those two, plus `permission.updated` (→
-`permission_request`), `permission.replied` (→ `notification_resolved`),
-`session.error` (→ `tool_failure`, skipping the user's own `Ctrl-C`),
-`tui.toast.show` (→ `notification`, warning/error variants only),
-`session.status` (→ `progress` or `notification`, including a `retry`
-backoff), and `vcs.branch.updated` (→ `git_branch`). It also exposes its own
+way). The plugin forwards seventeen non-blocking event-bus types (rewritten
+here — a previous revision of this doc said only eight, several under stale
+v1 event names): `session.idle` (→ `progress: done`, plus `agent_session`
+carrying opencode's own internal session id for a later promote's history
+transfer), `file.edited` (→ `file_change`), `permission.asked` (→
+`permission_request` — opencode 1.18.7 renamed this from v1's
+`permission.updated`), `permission.replied` (→ `permission_resolved`, not
+`notification_resolved` as an earlier revision of this doc had it —
+`notification_resolved` only clears a confirmed `hookNotification`, not
+`permissionState`, so answering an opencode permission used to clear
+nothing), `session.error` (→ `tool_failure`, skipping the user's own
+`Ctrl-C`), `tui.toast.show` (→ `notification`, warning/error variants only),
+`question.asked` (→ `question`, started), `question.replied`/
+`question.rejected` (→ `question`, finished), `todo.updated` (→ `todo`),
+`session.diff` (→ `session_diff`), `worktree.failed`/`mcp.browser.open.failed`
+(→ `notification`, error variants), `session.status` (→ `progress` or
+`notification`, including a `retry` backoff), `vcs.branch.updated`/
+`worktree.ready` (→ `git_branch`), and `session.compacting`/
+`session.subagent` (→ `compact`/`subagent`, started or finished). It also
+exposes its own
 `promote_to_worktree` tool (→ `promote_request`, the same blocking flow
 issue #271 gives Claude Code via the `mullion` MCP server). See
 `opencode-plugin.js`'s `mapOpenCodeEvent` for the authoritative mapping and
