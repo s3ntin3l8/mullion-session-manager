@@ -25,7 +25,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
-import { getIntegration, resolveGitHubToken } from "./github-integration.js";
+import { getIntegration, resolveGitHubToken, resolveReviewerToken } from "./github-integration.js";
 import { resolveRepoRef } from "./host-git.js";
 import {
   addLabels,
@@ -571,11 +571,20 @@ export async function isIssueStillTrackable(
  * remote-hosted task, or one whose draft-PR-open attempt hasn't succeeded
  * yet).
  *
- * `event: "COMMENT"` only — see `createPullRequestReview`'s own doc comment
- * for why: the PR is authored by this same GitHub App installation, and
- * GitHub 422s both APPROVE and REQUEST_CHANGES from a PR's own author. This
- * review has no merge-gating state; it exists for visibility in the Reviews
- * timeline with real inline comments, not prose citing `file:42`.
+ * `event` defaults to `"COMMENT"`. When `verdict` is given, maps onto a
+ * gating event instead — `clean` → `APPROVE`, `changes-requested` →
+ * `REQUEST_CHANGES` — and, ONLY for that call, resolves a token from the
+ * reviewer identity (`resolveReviewerToken`, #737) rather than the primary
+ * one: the primary identity authored the PR
+ * (`task-promote.ts`'s `openDraftPRForTask`), and GitHub 422s both `APPROVE`
+ * and `REQUEST_CHANGES` from a PR's own author — see
+ * `createPullRequestReview`'s own doc comment. No reviewer App configured,
+ * not installed on this owner, or a mint failure all quietly downgrade to
+ * `COMMENT` posted from the primary identity instead — logged at `debug`,
+ * never a `githubSyncError`, the same "expected steady state" posture
+ * `resolveGitHubToken` already has for the primary App not covering a repo.
+ * `getPullRequestByNumber` and the issue-comment fallback always use the
+ * primary token; only the review-posting call itself ever swaps identity.
  *
  * A PR review needs two GitHub calls (`getPullRequestByNumber` for the head
  * SHA, then `createPullRequestReview`) where a plain comment needed one, on
@@ -600,6 +609,12 @@ export async function postReviewFindingsComment(
      * and as the PR review's own body when there's nothing to anchor (no
      * `findings`) or GitHub rejects the anchored attempt (see below). */
     body: string;
+    /** #737 — the review agent's verdict for this round, when there is one.
+     * Absent (the red-CI notice, the PR-comment-ingest notice —
+     * `task-reconciler.ts`) means this post isn't a verdict on the diff at
+     * all, so it always stays `COMMENT`, same as an explicit
+     * `"inconclusive"`. */
+    verdict?: "clean" | "changes-requested" | "inconclusive";
   } & (
     | {
         /** Round header + summary only, no bullets — the PR review's body
@@ -626,6 +641,16 @@ export async function postReviewFindingsComment(
   const token = await resolveGitHubToken(app, repoRef);
   if (!token) return;
 
+  // #737 — verdict -> gating event. `undefined` (no verdict, or explicitly
+  // "inconclusive") stays `COMMENT`, posted from the primary identity like
+  // every review before this feature existed.
+  const gatingEvent =
+    params.verdict === "clean"
+      ? "APPROVE"
+      : params.verdict === "changes-requested"
+        ? "REQUEST_CHANGES"
+        : undefined;
+
   if (task.prNumber !== null) {
     try {
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
@@ -642,14 +667,30 @@ export async function postReviewFindingsComment(
               body: `${severityPrefix(f.severity)}${f.body}`,
             }))
           : [];
+      // #737 — only resolved when a gating event is actually wanted: a
+      // plain COMMENT round has no reason to mint a reviewer-App token it
+      // won't use. `null` (not configured / not installed on this owner /
+      // mint failure) downgrades to COMMENT from the primary identity —
+      // resolveReviewerToken's own doc comment covers why this can never
+      // fall back to the PAT the way resolveGitHubToken does.
+      const reviewerToken = gatingEvent ? await resolveReviewerToken(app, repoRef) : null;
+      if (gatingEvent && !reviewerToken) {
+        app.log.debug(
+          { taskId: task.id, prNumber: task.prNumber, verdict: params.verdict },
+          "[task-github-sync] no reviewer App available for this repo — posting a COMMENT-only review from the primary identity instead",
+        );
+      }
+      const reviewToken = reviewerToken ?? token;
+      const event = reviewerToken ? gatingEvent : undefined;
       try {
-        await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
+        await createPullRequestReview(reviewToken, repoRef.owner, repoRef.repo, task.prNumber, {
           body:
             params.findings !== undefined && anchored.length > 0
               ? params.reviewSummary
               : params.body,
           commitId: pr.headSha,
           comments: anchored.length > 0 ? anchored : undefined,
+          event,
         });
       } catch (err) {
         // GitHub rejects the WHOLE review if even one comment's line isn't
@@ -657,11 +698,30 @@ export async function postReviewFindingsComment(
         // reliably name the offender — retrying per-comment would mean up
         // to N extra round-trips to find it. Deliberately coarse for v1:
         // drop every anchor and fall back to `params.body`, which already
-        // has the findings folded in as plain bullets.
-        if (err instanceof GitHubApiError && err.statusCode === 422 && anchored.length > 0) {
+        // has the findings folded in as plain bullets. #737: also drops
+        // back to a plain COMMENT from the primary identity — an
+        // unexpected 422 on a gating attempt (the reviewer App turning out
+        // not to be a distinct-enough identity after all, a GitHub
+        // behavior change) must still land the round's findings, same as
+        // it always has, rather than losing them entirely.
+        //
+        // Independent review, PR #827: this retry must trigger on `event
+        // !== undefined` too, not just `anchored.length > 0` — a `clean`
+        // verdict normally has NO findings to anchor (`anchored` is empty),
+        // so a gating `APPROVE` that 422s on its own (not because of an
+        // anchor) used to skip this retry entirely and rethrow, which for a
+        // local-only task (a PR but no linked issue — postReviewFindingsComment's
+        // own reason for existing as a separate path) meant the round's
+        // findings landed nowhere on GitHub at all, worse than this
+        // mechanism's pre-#737 always-succeeds-as-COMMENT behavior.
+        if (
+          err instanceof GitHubApiError &&
+          err.statusCode === 422 &&
+          (anchored.length > 0 || event !== undefined)
+        ) {
           app.log.warn(
             { taskId: task.id, prNumber: task.prNumber, err },
-            "[task-github-sync] PR review rejected with inline anchors (422) — retrying with findings folded into the body",
+            "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
           );
           await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
             body: params.body,

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.47](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.46...v0.2.47) (2026-08-26)
+
+
+### Features
+
+* **github:** add a second reviewer App credential (issue [#737](https://github.com/s3ntin3l8/mullion-session-manager/issues/737), part 1/2) ([#826](https://github.com/s3ntin3l8/mullion-session-manager/issues/826)) ([0da7e9e](https://github.com/s3ntin3l8/mullion-session-manager/commit/0da7e9ef9b85d14fd09c53ad4af1e91d2e1df4be))
+* **tasks:** gate merge on the review agent's verdict via a reviewer App ([#737](https://github.com/s3ntin3l8/mullion-session-manager/issues/737)) ([#827](https://github.com/s3ntin3l8/mullion-session-manager/issues/827)) ([6f2e404](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f2e4041d8210fdfcb7ce3ea97c3a5a12a48ac2d))
+
+
+### Bug Fixes
+
+* apply DockControl.env at session launch (issue [#822](https://github.com/s3ntin3l8/mullion-session-manager/issues/822)) ([#824](https://github.com/s3ntin3l8/mullion-session-manager/issues/824)) ([82530e8](https://github.com/s3ntin3l8/mullion-session-manager/commit/82530e860b33ede68d999d19d81198dcb721f907))
+
 ## [0.2.46](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.45...v0.2.46) (2026-08-26)
 
 

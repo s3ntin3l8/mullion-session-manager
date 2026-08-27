@@ -573,14 +573,19 @@ export interface ReviewCommentParams {
  * Master's review a place in the Reviews timeline with real inline anchored
  * comments, not prose citing `file:42` in a conversation comment.
  *
- * `event` is deliberately NOT a parameter: only `"COMMENT"` is ever valid
- * here. The PR this posts to was opened by this same GitHub App installation
- * (`task-promote.ts`'s `openDraftPRForTask`), and GitHub rejects both
- * `APPROVE` and `REQUEST_CHANGES` from a PR's own author with a 422 — so
- * this posts a comment-only review with no merge-gating state. Actually
- * gating merge on this review needs a second identity (a separate App or
- * PAT) — a materially bigger, deliberately deferred piece of work; see
- * https://github.com/s3ntin3l8/mullion-session-manager/issues/737.
+ * `event` defaults to `"COMMENT"` — the only value valid for the identity
+ * that authored the PR. The PR this posts to is normally opened by this same
+ * GitHub App installation (`task-promote.ts`'s `openDraftPRForTask`), and
+ * GitHub rejects both `APPROVE` and `REQUEST_CHANGES` from a PR's own author
+ * with a 422. A gating event is only ever valid with a token from a
+ * genuinely different identity — `resolveReviewerToken`
+ * (`github-integration.ts`, #737) — never with the primary token this
+ * function is normally called with. Passing a gating event with the wrong
+ * token is exactly the bug this default guards against; it isn't caught
+ * here (this function has no way to know which identity `token`
+ * authenticates as), so get it from the right caller
+ * (`task-github-sync.ts`'s `postReviewFindingsComment`), not by threading a
+ * gating event through some other call site.
  *
  * `commitId` should be the PR's current head SHA (`getPullRequestByNumber`'s
  * `headSha`) — GitHub anchors `comments[].line` against that specific
@@ -591,7 +596,12 @@ export async function createPullRequestReview(
   owner: string,
   repo: string,
   pullNumber: number,
-  params: { body: string; commitId: string; comments?: ReviewCommentParams[] },
+  params: {
+    body: string;
+    commitId: string;
+    comments?: ReviewCommentParams[];
+    event?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  },
 ): Promise<{ id: number; htmlUrl: string }> {
   const result = await githubRequest<{ id: number; html_url: string }>(
     token,
@@ -602,7 +612,7 @@ export async function createPullRequestReview(
     {
       body: params.body,
       commit_id: params.commitId,
-      event: "COMMENT",
+      event: params.event ?? "COMMENT",
       // Hermes review, PR #738: an empty `comments` array (not `undefined`)
       // survives JSON.stringify and GitHub 422s a review whose `comments`
       // key is present but empty — this caller's own contract guards it
@@ -623,6 +633,46 @@ export async function createPullRequestReview(
     },
   );
   return { id: result.id, htmlUrl: result.html_url };
+}
+
+/**
+ * #737 — GitHub's own aggregate verdict for a PR's reviews, GraphQL-only
+ * (REST has no equivalent field). Used by `attemptMerge`'s `"blocked"` arm
+ * (`task-reconciler.ts`) to tell a merge blocked on a missing/stale required
+ * approval apart from one blocked on a red required status check — both
+ * otherwise collapse into the same `mergeable_state: "blocked"` — and, from
+ * the same call site, to decide whether the reviewer identity needs to
+ * re-assert an approval a later push (an auto-rebase, a "branch is behind"
+ * update) may have dismissed. `null` covers a repo with no review
+ * requirement configured at all, where GitHub reports no decision rather
+ * than `"REVIEW_REQUIRED"`.
+ */
+export async function getPullRequestReviewDecision(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<"APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null> {
+  const data = await githubGraphQL<{
+    repository: { pullRequest: { reviewDecision: string | null } | null } | null;
+  }>(
+    token,
+    `query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) { reviewDecision }
+      }
+    }`,
+    { owner, repo, number },
+  );
+  const decision = data.repository?.pullRequest?.reviewDecision ?? null;
+  if (
+    decision === "APPROVED" ||
+    decision === "CHANGES_REQUESTED" ||
+    decision === "REVIEW_REQUIRED"
+  ) {
+    return decision;
+  }
+  return null;
 }
 
 /**
