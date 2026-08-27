@@ -821,14 +821,14 @@ export interface PrReviewThread {
 }
 
 export interface PrReviewThreadsResult {
-  /** The login of whichever identity `token` authenticates as — an App's
-   * `<slug>[bot]` for an installation token, a human login for a PAT
-   * fallback. NOT the same as "Mullion's own comments": since #737/#827 a
-   * gating review round posts from a SECOND, distinct identity (the
-   * reviewer App), which this token's own login does not cover. Callers
-   * filtering out Mullion's own posts must check against
-   * `resolveMullionReviewLogins` (github-integration.ts), not this field
-   * alone. */
+  /** The login of whichever identity `token` authenticates as, normalized
+   * (see `stripBotSuffix`) to match `author.login` on that same account's
+   * own posted content — a human login for a PAT fallback. NOT the same as
+   * "Mullion's own comments": since #737/#827 a gating review round posts
+   * from a SECOND, distinct identity (the reviewer App), which this token's
+   * own login does not cover. Callers filtering out Mullion's own posts must
+   * check against `resolveMullionReviewLogins` (github-integration.ts), not
+   * this field alone. */
   viewerLogin: string | null;
   threads: PrReviewThread[];
   /** True when either page's `first` bound didn't cover every thread/comment
@@ -840,6 +840,24 @@ export interface PrReviewThreadsResult {
 
 const REVIEW_THREADS_PAGE_SIZE = 100;
 const REVIEW_THREAD_COMMENTS_PAGE_SIZE = 50;
+
+/**
+ * GitHub's `viewer { login }` field appends a `[bot]` suffix for a GitHub
+ * App installation token's synthetic viewer identity, but the SAME account's
+ * `author { login }` on content it actually posts (a review, a comment) does
+ * not carry that suffix — confirmed live, 2026-08-27: an installed reviewer
+ * App's `viewer.login` read `"mullion-reviewer[bot]"` while that exact App's
+ * own posted review's `author.login` on the same PR read `"mullion-reviewer"`.
+ * Every comparison in this file (and `resolveMullionReviewLogins`,
+ * github-integration.ts) between a viewer-derived login and an
+ * author-derived login needs this normalization, or the two never match
+ * despite being the same account — which is exactly what let a reviewer
+ * App's own unresolved review threads get re-ingested as human feedback and
+ * never auto-resolved (D0/D1, #833/#834) even after those fixes landed.
+ */
+function stripBotSuffix(login: string): string {
+  return login.endsWith("[bot]") ? login.slice(0, -"[bot]".length) : login;
+}
 
 /**
  * #757 — resolved-vs-unresolved review thread state, REST has no equivalent
@@ -916,14 +934,18 @@ export async function fetchPullRequestReviewThreads(
 
   const reviewThreads = data.repository?.pullRequest?.reviewThreads;
   if (!reviewThreads)
-    return { viewerLogin: data.viewer?.login ?? null, threads: [], truncated: false };
+    return {
+      viewerLogin: data.viewer?.login ? stripBotSuffix(data.viewer.login) : null,
+      threads: [],
+      truncated: false,
+    };
 
   const truncated =
     reviewThreads.totalCount > reviewThreads.nodes.length ||
     reviewThreads.nodes.some((t) => t.comments.totalCount > t.comments.nodes.length);
 
   return {
-    viewerLogin: data.viewer?.login ?? null,
+    viewerLogin: data.viewer?.login ? stripBotSuffix(data.viewer.login) : null,
     threads: reviewThreads.nodes.map((t) => ({
       id: t.id,
       isResolved: t.isResolved,
@@ -968,12 +990,15 @@ export async function resolveReviewThread(token: string, threadId: string): Prom
 }
 
 /**
- * The login `token` authenticates as — an App installation token resolves
- * to `<slug>[bot]`, a PAT/OAuth token to the human account it belongs to.
- * Used to build the set of logins Mullion's own review posts can appear
- * under (`resolveMullionReviewLogins`, github-integration.ts) when a caller
- * already has a token in hand and just needs its identity, without the
- * cost of a full `fetchPullRequestReviewThreads` call.
+ * The login `token` authenticates as, normalized to match `author.login` on
+ * that same account's own posted content (see `stripBotSuffix` above) — a
+ * PAT/OAuth token resolves to the human account it belongs to; a GitHub App
+ * installation token's raw `viewer.login` carries a `[bot]` suffix its
+ * authored comments/reviews don't. Used to build the set of logins Mullion's
+ * own review posts can appear under (`resolveMullionReviewLogins`,
+ * github-integration.ts) when a caller already has a token in hand and just
+ * needs its identity, without the cost of a full
+ * `fetchPullRequestReviewThreads` call.
  */
 export async function fetchViewerLogin(token: string): Promise<string | null> {
   const data = await githubGraphQL<{ viewer: { login: string } | null }>(
@@ -981,7 +1006,7 @@ export async function fetchViewerLogin(token: string): Promise<string | null> {
     `query { viewer { login } }`,
     {},
   );
-  return data.viewer?.login ?? null;
+  return data.viewer?.login ? stripBotSuffix(data.viewer.login) : null;
 }
 
 /**

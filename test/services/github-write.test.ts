@@ -18,6 +18,7 @@ import {
   createPullRequestReview,
   getPullRequestReviewDecision,
   fetchPullRequestReviewThreads,
+  fetchViewerLogin,
   GitHubWriteScopeError,
   listWorkflows,
   findReleasePleaseWorkflow,
@@ -603,7 +604,7 @@ describe("github-write service", () => {
     });
   });
 
-  it("fetchPullRequestReviewThreads posts a GraphQL query with owner/repo/number and returns viewerLogin plus threads", async () => {
+  it("fetchPullRequestReviewThreads posts a GraphQL query with owner/repo/number and returns viewerLogin (stripped of its [bot] suffix) plus threads", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, {
         data: {
@@ -651,7 +652,7 @@ describe("github-write service", () => {
       commentsFirst: 50,
     });
     expect(result).toEqual({
-      viewerLogin: "mullion-bot[bot]",
+      viewerLogin: "mullion-bot",
       truncated: false,
       threads: [
         {
@@ -675,7 +676,7 @@ describe("github-write service", () => {
       jsonResponse(200, { data: { viewer: { login: "mullion-bot[bot]" }, repository: null } }),
     );
     const result = await fetchPullRequestReviewThreads("tok", "owner", "repo", 9);
-    expect(result).toEqual({ viewerLogin: "mullion-bot[bot]", threads: [], truncated: false });
+    expect(result).toEqual({ viewerLogin: "mullion-bot", threads: [], truncated: false });
   });
 
   it("fetchPullRequestReviewThreads sets truncated when a page's totalCount exceeds what was fetched", async () => {
@@ -708,6 +709,27 @@ describe("github-write service", () => {
     await expect(fetchPullRequestReviewThreads("tok", "owner", "repo", 9)).rejects.toBeInstanceOf(
       GitHubWriteScopeError,
     );
+  });
+
+  describe("fetchViewerLogin", () => {
+    it("strips a GitHub App installation token's [bot] suffix so the result matches author.login elsewhere", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { data: { viewer: { login: "mullion-reviewer[bot]" } } }),
+      );
+      await expect(fetchViewerLogin("tok")).resolves.toBe("mullion-reviewer");
+    });
+
+    it("leaves a PAT/OAuth human login untouched", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { data: { viewer: { login: "octocat" } } }),
+      );
+      await expect(fetchViewerLogin("tok")).resolves.toBe("octocat");
+    });
+
+    it("returns null when GitHub reports no viewer", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: { viewer: null } }));
+      await expect(fetchViewerLogin("tok")).resolves.toBeNull();
+    });
   });
 
   it("findPullRequestByHead GETs /pulls?head=... and returns the first match's number/htmlUrl", async () => {
