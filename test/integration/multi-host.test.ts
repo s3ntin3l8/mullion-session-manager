@@ -330,6 +330,11 @@ describe("multi-host proxy (issue #26)", () => {
     expect(res.json()).toMatchObject({
       role: "agent",
       projectsRoots: [os.tmpdir()],
+      // #819/#822 SSH-agent follow-up — neither fixture sets
+      // MULLION_SSH_AUTH_SOCK, so both a real proxied agent and the local
+      // primary must report the same "not configured" null, not an
+      // agent-only default that would silently diverge from local's.
+      sshAuthSock: null,
     });
     expect(typeof res.json().version).toBe("string");
   });
@@ -340,7 +345,7 @@ describe("multi-host proxy (issue #26)", () => {
       url: "/api/hosts/local/config",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ role: "primary" });
+    expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
   });
 
   // Issue #522 — these five routes always 500'd on the agent (no app.db

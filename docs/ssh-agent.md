@@ -245,12 +245,26 @@ restarted just because the Mac's tunnel dropped and came back, but it also
 means a _config_ change needs a fresh session (or a full session
 reattach — reattaching alone does not re-run this) to take effect.
 
+**A session has `SSH_AUTH_SOCK` set but `ssh-add -l` fails.** Settings ->
+Hosts -> that host's config panel reports the configured
+`MULLION_SSH_AUTH_SOCK` path and whether the socket currently exists on
+disk. `present: false` almost always means no `ssh -R` tunnel is currently
+up for that host — check the laptop-side tunnel for that specific host, not
+Mullion's own config, since a dangling socket is the expected state whenever
+the tunnel is down (by design, so a session doesn't need respawning when it
+comes back). An older agent build (pre-dating this diagnostic) reports this
+field as absent rather than `false`; that reads as "unknown," not as a
+missing socket.
+
 ## Multi-host
 
 Since this is host-level config, it composes with Mullion's multi-host
 feature with no extra code: each host (primary or agent) that needs SSH
 access sets its own `MULLION_SSH_AUTH_SOCK`, and you point one `ssh -R` at
-each such host independently. Nothing is proxied through the primary.
+each such host independently. Nothing is proxied through the primary — the
+path is always resolved host-locally, by whichever host's `PtyManager`
+actually spawns the session. A tunnel to one host says nothing about any
+other host's socket state; check each host's own Settings panel separately.
 
 ## Security notes
 

@@ -405,6 +405,7 @@ function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | nu
  * forcing them to stay in sync if a field is ever added.
  */
 export function buildAgentConfig(app: FastifyInstance): AgentConfig {
+  const sshAuthSockPath = app.config.MULLION_SSH_AUTH_SOCK;
   return {
     role: app.config.MULLION_ROLE,
     version: appVersion,
@@ -412,6 +413,14 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     sessionsDir: app.config.SESSIONS_DIR,
     crsConfigDir: app.config.CRS_CONFIG_DIR,
     browserEnabled: app.config.BROWSER_ENABLED,
+    // existsSync, not fs.stat — this stays synchronous so neither of this
+    // function's two callers (this route, and hosts.ts's `local` branch)
+    // needs to change shape. A dangling socket is expected, not an error
+    // (see AgentConfig's own comment); this is read-only visibility only.
+    sshAuthSock:
+      sshAuthSockPath === ""
+        ? null
+        : { path: sshAuthSockPath, present: existsSync(sshAuthSockPath) },
   };
 }
 

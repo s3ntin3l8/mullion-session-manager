@@ -397,6 +397,34 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  // #819/#822 SSH-agent follow-up — the `local` branch calls buildAgentConfig()
+  // directly rather than proxying, so this exercises the actual route (not
+  // just the builder) the way Hermes review flagged for #822: a schema or
+  // route-level omission wouldn't show up in a unit test of the builder alone.
+  it("reports sshAuthSock as null on the local host by default (unconfigured)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
+    await app.close();
+  });
+
+  it("reports sshAuthSock present/absent on the local host from MULLION_SSH_AUTH_SOCK", async () => {
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), "hosts-local-ssh-sock-"));
+    const sockPath = path.join(socketDir, "agent.sock");
+    fs.writeFileSync(sockPath, "");
+    try {
+      process.env.MULLION_SSH_AUTH_SOCK = sockPath;
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
+      expect(res.json().sshAuthSock).toEqual({ path: sockPath, present: true });
+      await app.close();
+    } finally {
+      delete process.env.MULLION_SSH_AUTH_SOCK;
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
+  });
+
   it("503s getting config for an unreachable remote host", async () => {
     const app = await buildApp();
     const created = await app.inject({

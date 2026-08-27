@@ -274,6 +274,7 @@ describe("RemoteHostClient", () => {
       sessionsDir: "/x/sessions",
       crsConfigDir: "/x/.config/crs",
       browserEnabled: false,
+      sshAuthSock: null,
     };
     fetchMock.mockResolvedValue(jsonResponse(200, config));
     await expect(client().resolveConfig()).resolves.toEqual(config);

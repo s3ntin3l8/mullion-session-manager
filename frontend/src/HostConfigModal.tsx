@@ -97,6 +97,18 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
                   {config.browserEnabled ? "enabled" : "disabled"}
                 </span>
               </div>
+              <div className="create-modal-field">
+                <span className="create-modal-field-label">SSH agent socket</span>
+                <span className="settings-readonly-value">
+                  {config.sshAuthSock === undefined
+                    ? "unknown (agent predates this field)"
+                    : config.sshAuthSock === null
+                      ? "not configured"
+                      : `${config.sshAuthSock.path} (${
+                          config.sshAuthSock.present ? "present" : "not present — no tunnel up?"
+                        })`}
+                </span>
+              </div>
             </>
           )}
         </div>

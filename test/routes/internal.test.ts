@@ -326,10 +326,47 @@ describe("internal routes (agent role, issue #26)", () => {
       sessionsDir: app.config.SESSIONS_DIR,
       crsConfigDir: app.config.CRS_CONFIG_DIR,
       browserEnabled: app.config.BROWSER_ENABLED,
+      sshAuthSock: null,
     });
     expect(typeof body.version).toBe("string");
     expect(body).not.toHaveProperty("idleTimeout");
     await app.close();
+  });
+
+  // #819/#822 SSH-agent follow-up — the dangling-socket case is the
+  // expected steady state whenever the far end (an `ssh -R` tunnel) is
+  // offline, not an error, so this must surface as `present: false`
+  // rather than throwing or omitting the field.
+  it("reports sshAuthSock present/absent from a live existsSync check, not just the configured path", async () => {
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), "internal-ssh-sock-"));
+    const presentSockPath = path.join(socketDir, "agent.sock");
+    fs.writeFileSync(presentSockPath, "");
+    const absentSockPath = path.join(socketDir, "does-not-exist.sock");
+
+    try {
+      process.env.MULLION_SSH_AUTH_SOCK = presentSockPath;
+      const presentApp = await buildApp();
+      const presentRes = await presentApp.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(presentRes.json().sshAuthSock).toEqual({ path: presentSockPath, present: true });
+      await presentApp.close();
+
+      process.env.MULLION_SSH_AUTH_SOCK = absentSockPath;
+      const absentApp = await buildApp();
+      const absentRes = await absentApp.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(absentRes.json().sshAuthSock).toEqual({ path: absentSockPath, present: false });
+      await absentApp.close();
+    } finally {
+      delete process.env.MULLION_SSH_AUTH_SOCK;
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
   });
 
   // Issue #647 / roadmap 7.8 — the agent-side counterpart to

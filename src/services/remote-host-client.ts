@@ -233,6 +233,17 @@ export interface AgentConfig {
   sessionsDir: string;
   crsConfigDir: string;
   browserEnabled: boolean;
+  // #819/#822 SSH-agent follow-up — null when MULLION_SSH_AUTH_SOCK is
+  // unset, otherwise the configured path plus a live existsSync check.
+  // `present: false` is expected and NOT an error: a session spawned while
+  // the far end (e.g. an `ssh -R` tunnel from a laptop) is offline is
+  // supposed to keep working the moment it reconnects, with no respawn —
+  // see env.ts's own comment on MULLION_SSH_AUTH_SOCK. This field is
+  // read-only diagnostics for Settings > Hosts, never used to gate the
+  // injection itself. Absent entirely (not `null`) on a build that predates
+  // this field — HostConfigModal.tsx renders that distinctly from `null`
+  // ("unknown, agent predates this field" vs. "not configured").
+  sshAuthSock: { path: string; present: boolean } | null;
 }
 
 export class RemoteHostClient {

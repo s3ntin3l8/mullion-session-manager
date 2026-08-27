@@ -161,6 +161,12 @@ export interface HostConfig {
   sessionsDir: string;
   crsConfigDir: string;
   browserEnabled: boolean;
+  // #819/#822 SSH-agent follow-up. Optional (not just nullable): absent
+  // entirely means the responding host predates this field, which
+  // HostConfigModal.tsx renders as "unknown" rather than "not configured"
+  // (null) or "socket missing" ({ present: false }) — those are three
+  // distinct states, not one.
+  sshAuthSock?: { path: string; present: boolean } | null;
 }
 
 // Mirrors GET /api/hosts/:id/update's response (src/routes/hosts.ts) —
