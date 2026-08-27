@@ -644,6 +644,103 @@ handling). Either way, the UI never shows a live-looking Approve/Deny for a
 gate nothing is listening on, and the timeline records "no answer" distinctly
 from an actual human "denied".
 
+### Does remote answering generalize beyond permissions? (issue #845)
+
+Three other hook-protocol kinds share the review gate's exact shape — "the
+agent is blocked waiting on a human" — and were investigated for the same
+remote-answer treatment: `question` (Claude Code's `AskUserQuestion`, arriving
+as a `PermissionRequest`), `plan_ready` (`ExitPlanMode`, deliberately exempted
+from `review_gate` above), and `elicitation` (an MCP server asking the human
+a question). Live-verified against installed Claude Code 2.1.220 (a
+throwaway per-project `.claude/settings.json`, real interactive sessions via
+`script -qec`, same verification bar as everything else in this file).
+**None of the three generalizes as cleanly as the review gate did** — the
+review gate's own success turns out to rest on a property specific to
+ordinary tool calls (Bash, Edit, Write) that doesn't hold for these three.
+
+**`question` — the hook fires, but its decision doesn't control the
+answer.** `PermissionRequest{tool_name: "AskUserQuestion"}` really does carry
+`tool_input.questions[0]` with `question`/`header`/`options[].{label,
+description}`/`multiSelect` (confirmed live — today's mapper's defensive
+`?.` read was correct to be defensive, but the field is real). But
+`{"decision":{"behavior":"allow"}}` — the SAME reply that fully resolves a
+Bash/Edit permission dialog — does **not** answer the question. It only
+permits the `AskUserQuestion` tool call to proceed, which means "render
+Claude Code's own interactive picker" (`❯ 1. Red  2. Blue  3. Green` —
+arrow keys + Enter). The picker is a separate, keyboard-driven state machine
+downstream of the permission decision, not controlled by it — confirmed live
+by sending `allow` and watching the pty sit at the picker, unresolved,
+waiting for real keystrokes. There is no reply field that injects a chosen
+option; the review gate's `updatedInput`/similar was never confirmed to
+exist for Claude Code, and this makes the question moot regardless — the
+picker doesn't consult the permission decision at all once past the initial
+allow.
+
+**A practical, but unofficial and fragile, workaround exists: `deny` +
+`message`.** Denying the `AskUserQuestion` call with
+`message: "The user has already chosen: Blue. Do not ask again, proceed
+treating the answer as Blue."` reliably (live-verified) made the model treat
+"Blue" as the answer and print it back, without the interactive picker ever
+rendering — the denial reason surfaces to the model as a tool error
+("`Denied by PermissionRequest hook`" + the message text), and the model
+reads and acts on it like any other tool-call failure message. This is NOT a
+documented contract — it works because Claude Code surfaces denial reasons
+to the model as ordinary text and the model follows instructions in that
+text, the same mechanism any Bash-denial message already relies on to steer
+the agent, repurposed here. It has no structural validation (nothing confirms
+"Blue" was actually one of the three offered options — a typo or a
+hallucinated option string would pass through this path exactly the same
+way a real one does), and a future Claude Code version could change how (or
+whether) denial reasons reach the model without warning, silently breaking
+it. Building product-facing "answer this question from the bell" on it would
+mean accepting that fragility, not a documented API.
+
+**`plan_ready` — same structural gap, same workaround, with one more
+layer.** `PreToolUse`/`ExitPlanMode` and `PermissionRequest{ExitPlanMode}`
+both fire on the same dialog (already known, see the ExitPlanMode exemption
+above). Live-verified: `allow`ing either does **not** skip Claude Code's own
+"Would you like to proceed? 1. Yes 2. Yes, and use auto mode 3. No, keep
+planning" prompt — identical failure mode to `question`. The same `deny` +
+`message` workaround (`"The user has already approved this plan... proceed
+immediately to implementing step 1"`) DOES skip that prompt and moves the
+model straight into execution — but the individual file edits that follow
+then hit their own, ordinary `PermissionRequest`-gated confirmations
+(`Write`/`Edit`), which is exactly what the review gate above already
+handles today. So the practically buildable shape isn't "answer plan_ready
+directly" — it's "deny `ExitPlanMode` with an approval message, then let the
+existing review gate handle whatever it does next" — genuinely buildable,
+but built on the same undocumented, model-following-instructions mechanism
+as `question`'s workaround, with the same fragility caveat. The fidelity
+gap the original plan already flagged (yes / yes-and-auto-accept / keep
+planning collapsed to a bell-side approve/deny) is real regardless of which
+path is used.
+
+**`elicitation` — no blocking hook at all, confirmed by code, not by a live
+firing.** `Elicitation`/`ElicitationResult` are registered with the default
+`hookEntry()` in `claude-code.ts` — the same short, fire-and-forget timeout
+as `progress`/`file_change`/every other observational kind, not
+`PermissionRequest`'s long override. `mapClaudeCodeElicitation` always
+returns `{kind: "elicitation", ...}`, never `review_gate`, and
+`forwarder.mjs`'s dispatcher only routes a message through the blocking
+`runGate()` when its mapped kind is exactly `"review_gate"`. So there is
+structurally nothing to answer here — `elicitation` never blocks Claude Code
+at the hook layer, whatever answering mechanism MCP's own elicitation
+protocol might offer a client is a separate integration surface entirely,
+outside this hook channel and outside this issue's scope.
+
+**Conclusion: nothing new to build from this investigation.** Unlike
+`#847`'s "blocked upstream, revisit later" verdict, this isn't a bug to wait
+out — it's a real design boundary. The review gate works because a
+Bash/Edit/Write permission decision genuinely IS the whole answer ("run it or
+don't"); `question`/`plan_ready` don't have that property, because the
+"answer" is a choice made by a downstream interactive UI the permission
+layer doesn't control. The `deny` + `message` technique is real and works
+today, but it's a prompt-engineering trick riding on the model reading
+denial text, not a protocol contract — worth knowing about, not worth
+shipping a bell-side "answer this question" button on top of without
+accepting that it could silently stop working on any future Claude Code
+release.
+
 ### Removing managed hooks
 
 - **Codex** — open `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) and
