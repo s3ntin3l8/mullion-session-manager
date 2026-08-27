@@ -855,8 +855,9 @@ const REVIEW_THREAD_COMMENTS_PAGE_SIZE = 50;
  * App's own unresolved review threads get re-ingested as human feedback and
  * never auto-resolved (D0/D1, #833/#834) even after those fixes landed.
  */
+const BOT_SUFFIX = "[bot]";
 function stripBotSuffix(login: string): string {
-  return login.endsWith("[bot]") ? login.slice(0, -"[bot]".length) : login;
+  return login.endsWith(BOT_SUFFIX) ? login.slice(0, -BOT_SUFFIX.length) : login;
 }
 
 /**
