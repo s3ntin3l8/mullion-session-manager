@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.48](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.47...v0.2.48) (2026-08-27)
+
+
+### Features
+
+* **hosts:** surface SSH agent socket presence in host config ([#828](https://github.com/s3ntin3l8/mullion-session-manager/issues/828)) ([0ff60d0](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ff60d0825348f849f3ac50f837721f87d388911))
+
 ## [0.2.47](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.46...v0.2.47) (2026-08-26)
 
 
