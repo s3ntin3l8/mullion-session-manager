@@ -282,6 +282,127 @@ GitHub's current documentation before relying on it as a guaranteed
 immediate revocation, rather than trusting this paragraph's characterization
 of it.
 
+### Reviewer App (opt-in, a second identity — #737)
+
+The GitHub App above and the review-agent PR review [Task Master](tasks.md)
+posts (`createPullRequestReview`, `src/services/github-write.ts`) share the
+same identity: the App that opens the draft PR is the same App that reviews
+it. GitHub rejects both `APPROVE` and `REQUEST_CHANGES` from a PR's own
+author with a 422, so that review is always `event: "COMMENT"` — it can
+never gate merge, no matter how a repo's branch protection is configured.
+
+A **second, separately-registered GitHub App** — used for nothing except
+submitting that review — fixes this: as a distinct identity, its review can
+be `APPROVE`/`REQUEST_CHANGES`, which a required-approving-reviews branch
+protection rule can count. Entirely optional and independent of the primary
+App above — configuring one, the other, both, or neither are all valid
+states. With no reviewer App configured, every review keeps posting as
+`COMMENT` exactly as it does today.
+
+**The permission grant is load-bearing, not just least-privilege hygiene.**
+Confirmed empirically against a real repo (a throwaway public repo with a
+`required_pull_request_reviews` rule, `required_approving_review_count: 1`):
+a second App's `APPROVE` only counts toward that numeric rule if the App
+also holds **Contents: Read & write**. An otherwise-identical App scoped to
+just `Pull requests: Read & write` + `Metadata: Read-only` posts a real,
+visible `APPROVED` review, but GitHub's own `reviewDecision` for the PR
+stays `REVIEW_REQUIRED` and `mergeable_state` stays `blocked` — the review
+simply isn't counted. Isolated against a `github-actions[bot]`-style default
+token was not part of this test; what was directly compared, on the same
+PR, was the same mechanism (an App's installation-token review) with two
+different permission grants. Granting `Contents: Read & write` and nothing
+else changed flipped the same PR to `reviewDecision: APPROVED` /
+`mergeable_state: clean`. The likely reason: GitHub derives a reviewing
+App's effective repository permission level (used to decide whether its
+review counts as a _collaborator_ approval) from the App's overall granted
+permissions, not from the narrower per-call token scope Mullion actually
+requests when minting (`REVIEW_PERMISSIONS` in `github-app.ts` still only
+asks for `pull_requests: write` + `metadata: read` — that stays as-is; the
+fix is only in what the App is registered with on GitHub, not in what
+Mullion requests at mint time).
+
+Configuring one:
+
+1. Register a **second GitHub App** at
+   [github.com/settings/apps](https://github.com/settings/apps) — genuinely
+   a different App from the one above, not the same App reused. Grant
+   **Pull requests: Read & write**, **Metadata: Read-only**, and
+   **Contents: Read & write**. That last one is not optional — see above;
+   without it, every review this identity posts is real but silently
+   uncounted. It still gets no Issues grant: this identity only ever calls
+   `createPullRequestReview`.
+2. Generate a private key for it and install it on the same
+   repositories/orgs as the primary App.
+3. `PUT /api/integrations/github/reviewer-app` with the same
+   `{ "appId": "...", "privateKey": "..." }` shape and the same live-verify-
+   before-persist behavior as `PUT /api/integrations/github/app` above —
+   see that section for the full verified/unreachable/rejected response
+   contract, which this route shares byte-for-byte. **One additional
+   check**: a `400` if `appId` matches the primary App's currently-configured
+   id — configuring the same App as its own reviewer would silently
+   reintroduce the exact 422 this mechanism exists to route around, so it's
+   caught at config time instead of surfacing later as a mysterious
+   COMMENT-only review. `DELETE /api/integrations/github/reviewer-app`
+   clears it. Settings → Integrations → GitHub shows a second "Reviewer App"
+   card, identical in shape to the App card above (App id, installation
+   count, key fingerprint, rotation date) and rotated the same way.
+4. Optional: give it a distinct avatar so its reviews are visually
+   distinguishable from the primary App's in a PR's timeline.
+   `docs/assets/github-reviewer-app-logo.png` is a variant of Mullion's own
+   tile-grid mark — same geometry, recolored to indigo with a diagonal
+   accent pair (standing for the two verdicts this identity can cast) —
+   ready to upload as-is under the new App's Display information → Logo.
+   Its artwork fills the canvas edge-to-edge, matching `icon-512.png`'s own
+   geometry — GitHub's circular crop will clip each tile's outer corner
+   slightly, the same tradeoff the app's own icon already accepts
+   elsewhere. Set the App's background color to `#eef1ef` to match the
+   thin transparent margin. The SVG source is alongside it if you need to
+   re-export at a different size.
+
+**Wired up and live.** Once a reviewer App is configured, the review agent's
+own verdict maps straight onto a gating event on `createPullRequestReview`
+(`src/services/github-write.ts`), posted from the reviewer identity via
+`resolveReviewerToken` (`src/services/github-integration.ts`):
+
+- review agent verdict `clean` → `event: "APPROVE"`
+- review agent verdict `changes-requested` → `event: "REQUEST_CHANGES"`
+- verdict missing/inconclusive → `event: "COMMENT"` (unchanged — same as
+  with no reviewer App configured at all)
+
+This posts while the PR is still in Task Master's draft state — confirmed
+(same real-repo test as above) that a draft-era review survives
+`markPullRequestReadyForReview`'s flip to ready, and that GitHub gates on
+the _latest_ review per reviewer: a reviewer App's fresh `APPROVE` supersedes
+its own earlier `REQUEST_CHANGES` on the same PR without needing dismissal
+or an admin grant. `attemptMerge`'s `"blocked"` handling
+(`src/services/task-reconciler.ts`) uses this — when a later Mullion-pushed
+update (an auto-rebase, a "branch is behind" update) dismisses an
+already-counted approval (also confirmed directly: the dismissed review
+object flips to GitHub's own `DISMISSED` state), it re-asserts a fresh
+`APPROVE` from the reviewer identity rather than leaving the task stranded,
+bounded by pushes to the head branch via `lastReassertedSha` — never a spin.
+
+**No PAT fallback, ever** — unlike `resolveGitHubToken`, `resolveReviewerToken`
+never falls back to the shared PAT/OAuth token. Falling back would hand a
+gating review to the primary identity, reintroducing the 422-from-the-
+PR's-own-author problem this whole mechanism exists to avoid. Not
+configured, not installed on this particular owner, or a mint failure all
+mean the same thing: that round's review quietly downgrades to `COMMENT`
+from the primary identity, logged at `debug`, never surfaced as a
+`githubSyncError` — the same "this is the expected steady state for a repo
+the reviewer App isn't covering" posture `resolveGitHubToken` already has
+for the primary App.
+
+A reviewer App is **not** a substitute for a CODEOWNERS entry — a GitHub App
+can't be a CODEOWNER. It can only satisfy a branch protection rule's numeric
+"required approving reviews" count, and only when granted `Contents: Read &
+write` per above. See [`tasks.md`](tasks.md#merge-on-approve) for what this
+means for merge behavior once branch protection actually requires an
+approval, and what an operator needs to turn on for any of this to matter:
+with no `required_pull_request_reviews` rule on the target branch, a
+reviewer App's `APPROVE` still posts but satisfies nothing, and a task never
+reaches `mergeable_state: "blocked"` for review reasons in the first place.
+
 ## Webhook delivery
 
 Once connected, the backend polls GitHub for repo status. Enabling webhooks
@@ -445,6 +566,8 @@ performs its own HMAC verification and does not require app-level auth.
 | `/api/integrations/github/device/status`   | GET    | Poll device-flow progress; 404 if none in progress                                                                                                                                                                                                                |
 | `/api/integrations/github/app`             | PUT    | Configure (or rotate) a GitHub App's `appId`/`privateKey`. Verifies against `GET /app` first; 400 on a rejected/mismatched credential, otherwise `200 { verified, appSlug?, keyFingerprint, warning? }`. Rate-limited 10/min — see Rotating the private key above |
 | `/api/integrations/github/app`             | DELETE | Clear the configured GitHub App                                                                                                                                                                                                                                   |
+| `/api/integrations/github/reviewer-app`    | PUT    | Configure (or rotate) the reviewer App (#737) — same shape/verification as the App route above, plus a 400 if `appId` matches the primary App's. Rate-limited 10/min                                                                                              |
+| `/api/integrations/github/reviewer-app`    | DELETE | Clear the configured reviewer App                                                                                                                                                                                                                                 |
 | `/api/integrations/github/webhooks/status` | GET    | Whether webhooks are enabled and the configured base URL                                                                                                                                                                                                          |
 | `/api/integrations/github/webhooks`        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                                                                                                                                                     |
 | `/api/integrations/github/webhooks`        | DELETE | Disable webhooks: tears down registered hooks                                                                                                                                                                                                                     |

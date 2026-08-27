@@ -29,6 +29,13 @@ const DISCONNECTED_GITHUB: GitHubIntegration = {
     keyFingerprint: null,
     keyRotatedAt: null,
   },
+  reviewerApp: {
+    configured: false,
+    appId: null,
+    installationCount: null,
+    keyFingerprint: null,
+    keyRotatedAt: null,
+  },
 };
 
 const PROJECT_A: Project = {

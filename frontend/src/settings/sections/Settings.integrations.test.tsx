@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import type { GitHubIntegration } from "../../api/index.js";
@@ -9,6 +9,16 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 // Mirrors Settings.hosts.test.tsx's fake-in-memory-backend pattern — a fake
 // server over global fetch, not a mocked store, so the real request()
 // wiring is what's under test (issue #27).
+
+// #737 — shared by both `githubApp` and `reviewerApp`: same shape, same
+// "not configured" default.
+const NOT_CONFIGURED_APP = {
+  configured: false as const,
+  appId: null,
+  installationCount: null,
+  keyFingerprint: null,
+  keyRotatedAt: null,
+};
 
 const DISCONNECTED: GitHubIntegration = {
   connected: false,
@@ -20,13 +30,8 @@ const DISCONNECTED: GitHubIntegration = {
   webhookEnabled: false,
   webhookBaseUrl: "",
   webhookRegisteredCount: 0,
-  githubApp: {
-    configured: false,
-    appId: null,
-    installationCount: null,
-    keyFingerprint: null,
-    keyRotatedAt: null,
-  },
+  githubApp: { ...NOT_CONFIGURED_APP },
+  reviewerApp: { ...NOT_CONFIGURED_APP },
 };
 
 describe("Settings -> Integrations", () => {
@@ -60,13 +65,8 @@ describe("Settings -> Integrations", () => {
           webhookEnabled: false,
           webhookBaseUrl: "",
           webhookRegisteredCount: 0,
-          githubApp: {
-            configured: false,
-            appId: null,
-            installationCount: null,
-            keyFingerprint: null,
-            keyRotatedAt: null,
-          },
+          githubApp: { ...NOT_CONFIGURED_APP },
+          reviewerApp: { ...NOT_CONFIGURED_APP },
         };
         return Promise.resolve(jsonResponse(200, integration));
       }
@@ -112,16 +112,37 @@ describe("Settings -> Integrations", () => {
         );
       }
       if (url === "/api/integrations/github/app" && method === "DELETE") {
+        integration = { ...integration, githubApp: { ...NOT_CONFIGURED_APP } };
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      // #737 — same shape as the primary App handlers above, second route.
+      if (url === "/api/integrations/github/reviewer-app" && method === "PUT") {
+        const { appId } = JSON.parse(String(init?.body)) as { appId: string; privateKey: string };
+        if (integration.githubApp.configured && appId === integration.githubApp.appId) {
+          return Promise.resolve(
+            jsonResponse(400, {
+              message:
+                "This is the same App id as the primary GitHub App — the reviewer must be a separate App, or GitHub will reject its review as coming from the PR's own author.",
+            }),
+          );
+        }
+        const keyFingerprint = `fingerprint-for-${appId}`;
         integration = {
           ...integration,
-          githubApp: {
-            configured: false,
-            appId: null,
-            installationCount: null,
-            keyFingerprint: null,
-            keyRotatedAt: null,
+          reviewerApp: {
+            configured: true,
+            appId,
+            installationCount: 1,
+            keyFingerprint,
+            keyRotatedAt: "2026-01-01T00:00:00.000Z",
           },
         };
+        return Promise.resolve(
+          jsonResponse(200, { verified: true, appSlug: "test-reviewer-app", keyFingerprint }),
+        );
+      }
+      if (url === "/api/integrations/github/reviewer-app" && method === "DELETE") {
+        integration = { ...integration, reviewerApp: { ...NOT_CONFIGURED_APP } };
         return Promise.resolve(new Response(null, { status: 204 }));
       }
 
@@ -176,13 +197,8 @@ describe("Settings -> Integrations", () => {
       webhookEnabled: false,
       webhookBaseUrl: "",
       webhookRegisteredCount: 0,
-      githubApp: {
-        configured: false,
-        appId: null,
-        installationCount: null,
-        keyFingerprint: null,
-        keyRotatedAt: null,
-      },
+      githubApp: { ...NOT_CONFIGURED_APP },
+      reviewerApp: { ...NOT_CONFIGURED_APP },
     };
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="integrations" />);
@@ -222,33 +238,42 @@ describe("Settings -> Integrations", () => {
     unmount();
   });
 
-  // #489 remaining scope
+  // #489 remaining scope. #737 added a second, identically-shaped section
+  // (the reviewer App) below the primary one — every query here is scoped
+  // with `within(section())` so "Not configured"/"Configure"/the "123456"
+  // placeholder, which now exist twice on the page, resolve to the right
+  // instance.
+  const section = () => screen.getByTestId("github-app-section");
+
   describe("GitHub App", () => {
     it("shows 'Not configured' and configures a new App", async () => {
       const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
-      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+      expect(await within(section()).findByText("Not configured")).toBeInTheDocument();
 
-      await user.type(screen.getByPlaceholderText("123456"), "987654");
-      await user.type(screen.getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), "fake-pem-contents"); // pragma: allowlist secret
-      await user.click(screen.getByRole("button", { name: "Configure" }));
+      await user.type(within(section()).getByPlaceholderText("123456"), "987654");
+      await user.type(
+        within(section()).getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), // pragma: allowlist secret
+        "fake-pem-contents", // pragma: allowlist secret
+      );
+      await user.click(within(section()).getByRole("button", { name: "Configure" }));
 
-      expect(await screen.findByText("App #987654")).toBeInTheDocument();
-      expect(screen.getByText(/Installed on 2 accounts/)).toBeInTheDocument();
+      expect(await within(section()).findByText("App #987654")).toBeInTheDocument();
+      expect(within(section()).getByText(/Installed on 2 accounts/)).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/integrations/github/app",
         expect.objectContaining({ method: "PUT" }),
       );
       // #514 — the PUT response's verification result is rendered.
-      expect(await screen.findByText(/Verified — test-app/)).toBeInTheDocument();
+      expect(await within(section()).findByText(/Verified — test-app/)).toBeInTheDocument();
     });
 
     it("is independent of the PAT/OAuth connection — visible while disconnected", async () => {
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
       expect(await screen.findByText("Not connected")).toBeInTheDocument();
       expect(screen.getByText("GitHub App")).toBeInTheDocument();
-      expect(screen.getByText("Not configured")).toBeInTheDocument();
+      expect(within(section()).getByText("Not configured")).toBeInTheDocument();
     });
 
     it("clears an already-configured App", async () => {
@@ -265,10 +290,10 @@ describe("Settings -> Integrations", () => {
       const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
-      expect(await screen.findByText("App #111")).toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: "Clear" }));
+      expect(await within(section()).findByText("App #111")).toBeInTheDocument();
+      await user.click(within(section()).getByRole("button", { name: "Clear" }));
 
-      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+      expect(await within(section()).findByText("Not configured")).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/integrations/github/app",
         expect.objectContaining({ method: "DELETE" }),
@@ -288,8 +313,8 @@ describe("Settings -> Integrations", () => {
       };
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
-      expect(await screen.findByText("App #222")).toBeInTheDocument();
-      expect(screen.getByText("Installation count unavailable")).toBeInTheDocument();
+      expect(await within(section()).findByText("App #222")).toBeInTheDocument();
+      expect(within(section()).getByText("Installation count unavailable")).toBeInTheDocument();
     });
 
     // #514 — the panel used to unmount its whole form once configured,
@@ -309,24 +334,27 @@ describe("Settings -> Integrations", () => {
       const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
-      expect(await screen.findByText("App #111")).toBeInTheDocument();
+      expect(await within(section()).findByText("App #111")).toBeInTheDocument();
       // The form is unreachable until "Rotate key" is clicked.
-      expect(screen.queryByPlaceholderText("123456")).not.toBeInTheDocument();
+      expect(within(section()).queryByPlaceholderText("123456")).not.toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Rotate key" }));
+      await user.click(within(section()).getByRole("button", { name: "Rotate key" }));
       // App id is prefilled from the currently-configured App.
-      expect(screen.getByPlaceholderText("123456")).toHaveValue("111");
+      expect(within(section()).getByPlaceholderText("123456")).toHaveValue("111");
 
-      await user.type(screen.getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), "new-fake-pem"); // pragma: allowlist secret
-      await user.click(screen.getByRole("button", { name: "Rotate" }));
+      await user.type(
+        within(section()).getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), // pragma: allowlist secret
+        "new-fake-pem", // pragma: allowlist secret
+      );
+      await user.click(within(section()).getByRole("button", { name: "Rotate" }));
 
-      expect(await screen.findByText(/Verified — test-app/)).toBeInTheDocument();
+      expect(await within(section()).findByText(/Verified — test-app/)).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/integrations/github/app",
         expect.objectContaining({ method: "PUT" }),
       );
       // The form collapses again after a successful rotation.
-      expect(screen.queryByPlaceholderText("123456")).not.toBeInTheDocument();
+      expect(within(section()).queryByPlaceholderText("123456")).not.toBeInTheDocument();
     });
 
     it("cancels a rotation without calling the API", async () => {
@@ -343,13 +371,13 @@ describe("Settings -> Integrations", () => {
       const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
-      await screen.findByText("App #111");
-      await user.click(screen.getByRole("button", { name: "Rotate key" }));
-      expect(screen.getByPlaceholderText("123456")).toBeInTheDocument();
+      await within(section()).findByText("App #111");
+      await user.click(within(section()).getByRole("button", { name: "Rotate key" }));
+      expect(within(section()).getByPlaceholderText("123456")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await user.click(within(section()).getByRole("button", { name: "Cancel" }));
 
-      expect(screen.queryByPlaceholderText("123456")).not.toBeInTheDocument();
+      expect(within(section()).queryByPlaceholderText("123456")).not.toBeInTheDocument();
       expect(fetchMock).not.toHaveBeenCalledWith(
         "/api/integrations/github/app",
         expect.objectContaining({ method: "PUT" }),
@@ -373,17 +401,112 @@ describe("Settings -> Integrations", () => {
       const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
-      await screen.findByText("App #111");
-      await user.click(screen.getByRole("button", { name: "Rotate key" }));
-      expect(screen.getByPlaceholderText("123456")).toHaveValue("111");
+      await within(section()).findByText("App #111");
+      await user.click(within(section()).getByRole("button", { name: "Rotate key" }));
+      expect(within(section()).getByPlaceholderText("123456")).toHaveValue("111");
 
-      await user.click(screen.getByRole("button", { name: "Clear" }));
+      await user.click(within(section()).getByRole("button", { name: "Clear" }));
 
-      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+      expect(await within(section()).findByText("Not configured")).toBeInTheDocument();
       // Not left open in "Rotate" mode with the stale appId — the only
       // form now reachable is the plain "Configure" one, empty.
-      expect(screen.queryByRole("button", { name: "Rotate" })).not.toBeInTheDocument();
-      expect(screen.getByPlaceholderText("123456")).toHaveValue("");
+      expect(within(section()).queryByRole("button", { name: "Rotate" })).not.toBeInTheDocument();
+      expect(within(section()).getByPlaceholderText("123456")).toHaveValue("");
+    });
+  });
+
+  // #737 — the reviewer App: a second, independently-configured identity.
+  // Only the cases that differ from the primary App's own coverage above
+  // (same component, same behaviour) — plus the same-appId-as-primary
+  // rejection, which is unique to this section.
+  describe("Reviewer App", () => {
+    const reviewerSection = () => screen.getByTestId("github-reviewer-app-section");
+
+    it("is independently configurable while the primary App stays unconfigured", async () => {
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      expect(await within(reviewerSection()).findByText("Not configured")).toBeInTheDocument();
+
+      await user.type(within(reviewerSection()).getByPlaceholderText("123456"), "555555");
+      await user.type(
+        within(reviewerSection()).getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), // pragma: allowlist secret
+        "fake-reviewer-pem", // pragma: allowlist secret
+      );
+      await user.click(within(reviewerSection()).getByRole("button", { name: "Configure" }));
+
+      expect(await within(reviewerSection()).findByText("App #555555")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/integrations/github/reviewer-app",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      // The primary App section is untouched by configuring the reviewer.
+      expect(within(section()).getByText("Not configured")).toBeInTheDocument();
+    });
+
+    it("clears an already-configured reviewer App independently of the primary App", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "fingerprint-111",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        reviewerApp: {
+          configured: true,
+          appId: "222",
+          installationCount: 1,
+          keyFingerprint: "fingerprint-222",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      expect(await within(reviewerSection()).findByText("App #222")).toBeInTheDocument();
+      await user.click(within(reviewerSection()).getByRole("button", { name: "Clear" }));
+
+      expect(await within(reviewerSection()).findByText("Not configured")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/integrations/github/reviewer-app",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      // Clearing the reviewer must not touch the primary App.
+      expect(within(section()).getByText("App #111")).toBeInTheDocument();
+    });
+
+    // The backend 400s a reviewer App id equal to the primary's — this
+    // covers the frontend's plain-error-surfacing path for it, not the
+    // validation itself (that's the route's job; see
+    // test/routes/integrations.test.ts).
+    it("surfaces the backend's rejection of reusing the primary App's id", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "fingerprint-111",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      await within(section()).findByText("App #111");
+      await user.type(within(reviewerSection()).getByPlaceholderText("123456"), "111");
+      await user.type(
+        within(reviewerSection()).getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), // pragma: allowlist secret
+        "fake-reviewer-pem", // pragma: allowlist secret
+      );
+      await user.click(within(reviewerSection()).getByRole("button", { name: "Configure" }));
+
+      expect(
+        await within(reviewerSection()).findByText(/same App id as the primary/),
+      ).toBeInTheDocument();
+      expect(within(reviewerSection()).getByText("Not configured")).toBeInTheDocument();
     });
   });
 });

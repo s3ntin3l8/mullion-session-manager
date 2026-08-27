@@ -50,7 +50,7 @@ import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import { resolveGitHubToken } from "./github-integration.js";
+import { resolveGitHubToken, resolveReviewerToken } from "./github-integration.js";
 import {
   getPullRequestByNumber,
   mergePullRequest,
@@ -58,6 +58,8 @@ import {
   deleteRemoteBranch,
   fetchPullRequestReviewThreads,
   detectReleaseWorkflow,
+  getPullRequestReviewDecision,
+  createPullRequestReview,
 } from "./github-write.js";
 import {
   computeCiStatus,
@@ -964,7 +966,26 @@ const MERGE_RETRY_TTL_MS = 60 * 1000;
 const MERGE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
 const MAX_MERGE_RETRIES_PER_SWEEP = 20;
 const MAX_MERGE_RETRY_ENTRIES = 500;
-const mergeRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+const mergeRetryState = new Map<
+  number,
+  {
+    lastAttemptedAt: number;
+    attempts: number;
+    // #737 (Hermes review, PR #827) — the head SHA a re-assert APPROVE was
+    // last posted for. Without this, a re-assert whose APPROVE succeeds at
+    // the GitHub API level but doesn't actually satisfy the branch
+    // protection rule (the reviewer App isn't an eligible approver — the
+    // CODEOWNERS limitation this feature already documents) never flips
+    // `reviewDecision` to `APPROVED`, so the "can't spin" argument's
+    // premise fails: every backoff tick would re-post an identical APPROVE
+    // on the same commit forever, spam bounded by ticks, not pushes. Only
+    // cleared by `clearMergeState`/`resetMergeBackoff`, same lifecycle as
+    // the rest of this entry — a human's explicit "Merge now"/"Retry
+    // merge" click (which calls `resetMergeBackoff`) deliberately gets a
+    // fresh re-assert attempt even on an unchanged head.
+    lastReassertedSha?: string;
+  }
+>();
 
 function mergeRetryBackoffMs(attempts: number): number {
   return Math.min(MERGE_RETRY_TTL_MS * 2 ** (attempts - 1), MERGE_RETRY_MAX_TTL_MS);
@@ -1362,8 +1383,130 @@ async function attemptMerge(
         return;
       }
       case "blocked": {
-        // A required check is red or still pending.
-        recordMergeError(app, task.id, "Required checks are red or still pending");
+        // #737 — `mergeable_state: "blocked"` collapses several distinct
+        // reasons GitHub won't merge into one state: a required CHECK red
+        // or pending, or a required APPROVING REVIEW missing/dismissed.
+        // Before this, every "blocked" PR got the same "Required checks
+        // are red or still pending" message even when the real cause was a
+        // missing review — actively misleading once a repo's branch
+        // protection also requires an approval. `reviewDecision` is
+        // GitHub's own aggregate verdict across all reviews on the PR
+        // (`null` when the repo has no review requirement configured at
+        // all, in which case a required CHECK is the only thing "blocked"
+        // could mean here).
+        const reviewDecision = await getPullRequestReviewDecision(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          task.prNumber,
+        ).catch((err) => {
+          app.log.warn(
+            { err, taskId: task.id, prNumber: task.prNumber },
+            "task reconcile: failed to read the PR's review decision — falling back to the generic 'blocked' message",
+          );
+          return null;
+        });
+
+        // #737 — re-assert an approval a later Mullion-initiated push may
+        // have dismissed. Deliberately `"REVIEW_REQUIRED"` ONLY, not
+        // `"CHANGES_REQUESTED"` too (Hermes review, PR #827): a `done` task
+        // only ever got there via the bot's own clean-gate or a human
+        // clicking Approve, so a `CHANGES_REQUESTED` decision at THIS point
+        // can only be a review posted AFTER that — either a human on
+        // GitHub, or a later review-agent round the reviewer identity
+        // itself posted. Re-asserting APPROVE over that would silently
+        // override an explicit rejection, exactly the "manufacture an
+        // approval nobody made" failure mode this mechanism must never
+        // become, just with the rejection arriving after approval instead
+        // of before it. `REVIEW_REQUIRED` has no such ambiguity — it means
+        // "no active review objects, but the required-approval count isn't
+        // met," which is what a push-dismissed approval (and nothing else
+        // reachable from this arm) produces.
+        //
+        // `attemptMerge` only ever runs for `status: "done"` tasks
+        // (processMergeRequests' own candidate query, above) — reaching
+        // "done" already means a human clicked Approve or auto-approve's
+        // own `lastReviewVerdict === "clean"` gate fired, so `task.status
+        // === "done"` is trivially true on every call here today. Kept as
+        // an explicit condition anyway (not just a comment) as a guard
+        // against a future refactor calling this function from a context
+        // where that's no longer guaranteed.
+        //
+        // Why this usually can't spin: a successful re-assert flips
+        // `reviewDecision` to `"APPROVED"` and the condition below closes
+        // immediately. It only reopens when something DISMISSES that
+        // approval, which is always a push (`"behind"`'s
+        // `updatePullRequestBranch` above, or an auto-rebase worker's
+        // commits) — so the number of re-asserts this can ever produce is
+        // bounded by the number of pushes to the head branch, not by how
+        // many sweep ticks pass while blocked, PROVIDED the re-assert
+        // actually counts. Hermes review, PR #827 (round 2): that proviso
+        // can fail — the reviewer App's `APPROVE` can succeed at the GitHub
+        // API level without satisfying the branch protection rule at all
+        // (the App isn't an eligible approver — the CODEOWNERS limitation
+        // this feature already documents), in which case `reviewDecision`
+        // NEVER flips to `"APPROVED"` and the argument above breaks: every
+        // backoff tick would re-post an identical `APPROVE` on the same
+        // commit forever, spam bounded by ticks, not pushes. Guarded here
+        // by memoizing the head SHA a re-assert was last attempted for
+        // (`mergeRetryState`, shared with the rest of this task's merge
+        // backoff — same lifecycle, cleared by `clearMergeState`/
+        // `resetMergeBackoff`) and only trying again once `pr.headSha`
+        // actually changes — restoring "bounded by pushes" as a guarantee
+        // rather than an assumption, regardless of whether any given
+        // re-assert counts. (A persistent failure to re-assert — e.g. a
+        // reviewer App that always 422s — still only retries at
+        // `processMergeRequests`' own per-task backoff cadence, same as
+        // every other `attemptMerge` call, not on every tick — that part
+        // of the throttling was never the issue.)
+        const retryState = mergeRetryState.get(task.id);
+        if (
+          reviewDecision === "REVIEW_REQUIRED" &&
+          task.status === "done" &&
+          retryState?.lastReassertedSha !== pr.headSha
+        ) {
+          const reviewerToken = await resolveReviewerToken(app, repoRef);
+          if (reviewerToken) {
+            try {
+              await createPullRequestReview(
+                reviewerToken,
+                repoRef.owner,
+                repoRef.repo,
+                task.prNumber,
+                {
+                  body: "Re-affirming approval: this task's clean review was already approved in Mullion; re-asserting it after a required branch update.",
+                  commitId: pr.headSha,
+                  event: "APPROVE",
+                },
+              );
+              // Record the SHA regardless of whether this ends up
+              // satisfying branch protection — that's precisely the case
+              // this memoization exists to stop from retrying forever.
+              mergeRetryState.set(task.id, {
+                lastAttemptedAt: retryState?.lastAttemptedAt ?? Date.now(),
+                attempts: retryState?.attempts ?? 1,
+                lastReassertedSha: pr.headSha,
+              });
+              // Don't record an error — the next sweep tick re-reads
+              // GitHub's fresh mergeable_state instead of retrying a merge
+              // this tick already knows is still blocked on stale data.
+              return;
+            } catch (err) {
+              app.log.warn(
+                { err, taskId: task.id, prNumber: task.prNumber },
+                "task reconcile: failed to re-assert the reviewer App's approval",
+              );
+            }
+          }
+        }
+
+        const message =
+          reviewDecision === "CHANGES_REQUESTED"
+            ? "Changes were requested on the PR"
+            : reviewDecision === "REVIEW_REQUIRED"
+              ? "Waiting on a required approving review"
+              : "Required checks are red or still pending";
+        recordMergeError(app, task.id, message);
         return;
       }
       case "computing": {
@@ -1428,7 +1571,18 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
       const oldest = mergeRetryState.keys().next().value;
       if (oldest !== undefined) mergeRetryState.delete(oldest);
     }
-    mergeRetryState.set(task.id, { lastAttemptedAt: now, attempts: (state?.attempts ?? 0) + 1 });
+    // Hermes review, PR #827 (round 3): MUST spread `state` here — this
+    // write ran unconditionally, without preserving `lastReassertedSha`,
+    // immediately before every `attemptMerge` call. That silently wiped the
+    // re-assert memoization on the very next tick regardless of what
+    // `attemptMerge` itself had just recorded, making the round-2 fix a
+    // complete no-op: the exact "re-post an identical APPROVE every tick
+    // forever" spin it was written to prevent.
+    mergeRetryState.set(task.id, {
+      ...state,
+      lastAttemptedAt: now,
+      attempts: (state?.attempts ?? 0) + 1,
+    });
 
     await attemptMerge(app, task, project);
   }
@@ -1775,6 +1929,10 @@ async function attemptReturnRedCiToWorker(
       if (oldest !== undefined) ciCapCommentedRounds.delete(oldest);
     }
     ciCapCommentedRounds.set(task.id, task.autoReturnRounds);
+    // #737 — deliberately no `verdict` here: this is a notice about EXTERNAL
+    // state (a required CI check), not the review agent's own verdict on
+    // the diff, so it stays a plain COMMENT regardless of a reviewer App
+    // being configured.
     await postReviewFindingsComment(app, task, project, {
       body: `A required CI check is failing on this task's PR, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
@@ -1914,6 +2072,9 @@ async function attemptReturnPrCommentsToWorker(
       if (oldest !== undefined) prCommentCapCommentedRounds.delete(oldest);
     }
     prCommentCapCommentedRounds.set(task.id, task.autoReturnRounds);
+    // #737 — same reasoning as the red-CI notice above: this reports an
+    // external event (new PR review comments), not the review agent's own
+    // verdict on the diff, so it stays COMMENT-only.
     await postReviewFindingsComment(app, task, project, {
       body: `New review comments came in on this pull request, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
@@ -2590,12 +2751,17 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // autoReturnTask's own CAS runs, that second CAS simply fails and
         // autoReturnTask returns `{ ok: false }` — no round is spent, no
         // transition is recorded.
+        // #737 — one local, not two independent `parsed?.verdict ??
+        // "inconclusive"` expressions: this is both the durable column
+        // value AND the verdict `postReviewFindingsComment` maps onto a
+        // gating review event below, and they can't be allowed to drift.
+        const verdict = parsed?.verdict ?? "inconclusive";
         const updated = app.db
           .update(tasks)
           .set({
             reviewFindings: appendedFindings,
             reviewFindingsIngestedSessionId: task.reviewSessionId,
-            lastReviewVerdict: parsed?.verdict ?? "inconclusive",
+            lastReviewVerdict: verdict,
           })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
           .run();
@@ -2635,8 +2801,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                 body: commentBody + cappedNote,
                 reviewSummary: `${roundLabel}\n\n${parsed.summary}`,
                 findings: parsed.findings,
+                verdict,
               }
-            : { body: commentBody + cappedNote },
+            : { body: commentBody + cappedNote, verdict },
         );
 
         if (!shouldAutoReturn) continue;

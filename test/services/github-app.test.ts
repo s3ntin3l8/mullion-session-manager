@@ -267,6 +267,25 @@ describe("github-app (#489)", () => {
         metadata: "read",
       });
     });
+
+    // #737 — the reviewer App's permission set: only `pull_requests: write`
+    // + `metadata: read`, deliberately excluding `issues`/`contents` — this
+    // identity only ever submits PR reviews.
+    it("requests the review permission set for scope: 'review'", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets", "review");
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body as string);
+      expect(body.permissions).toEqual({
+        pull_requests: "write",
+        metadata: "read",
+      });
+    });
   });
 
   describe("getInstallationToken", () => {
@@ -375,6 +394,30 @@ describe("github-app (#489)", () => {
       // Both scopes' repeat calls hit their own cache — only 2 real mints.
       expect(write2.token).toBe("ghs_1");
       expect(read2.token).toBe("ghs_2");
+      expect(mintCount).toBe(2);
+    });
+
+    // #737 — same independence for the fourth flavor: a "review" call for
+    // this (appId, owner, repo) must not share a cache slot with (or ever
+    // be served instead of) "write".
+    it("caches 'review' independently of 'write' for the same owner/repo", async () => {
+      let mintCount = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintCount++;
+        return Promise.resolve(
+          jsonResponse(200, { token: `ghs_${mintCount}`, expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const write = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      const review = await getInstallationToken("123", privateKey, "acme", "widgets", "review");
+
+      expect(write.token).toBe("ghs_1");
+      expect(review.token).toBe("ghs_2");
       expect(mintCount).toBe(2);
     });
 
