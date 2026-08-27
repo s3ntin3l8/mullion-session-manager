@@ -184,8 +184,18 @@ describe("multi-host proxy (issue #26)", () => {
   let hostId: string;
   let projectId: number;
 
+  // #819/#822 SSH-agent follow-up (Hermes review, PR #828) — the
+  // "sshAuthSock: null" assertions below assume MULLION_SSH_AUTH_SOCK is
+  // unset in the ambient process env; buildAndListen() only snapshots/
+  // restores the keys its own `env` argument sets, so this var (not passed
+  // to either call) would otherwise leak in from whatever the actual
+  // process env happens to be — save/restore explicitly instead.
+  let prevSshAuthSock: string | undefined;
+
   beforeAll(async () => {
     fs.rmSync(primaryDb, { force: true });
+    prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
+    delete process.env.MULLION_SSH_AUTH_SOCK;
 
     agent = await buildAndListen({
       MULLION_ROLE: "agent",
@@ -217,6 +227,8 @@ describe("multi-host proxy (issue #26)", () => {
     await primary.app.close();
     await agent.app.close();
     fs.rmSync(primaryDb, { force: true });
+    if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
+    else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
   });
 
   it("discovers, spawns, lists as alive, attaches, and streams bytes through the proxy", async () => {
@@ -330,6 +342,11 @@ describe("multi-host proxy (issue #26)", () => {
     expect(res.json()).toMatchObject({
       role: "agent",
       projectsRoots: [os.tmpdir()],
+      // #819/#822 SSH-agent follow-up — neither fixture sets
+      // MULLION_SSH_AUTH_SOCK, so both a real proxied agent and the local
+      // primary must report the same "not configured" null, not an
+      // agent-only default that would silently diverge from local's.
+      sshAuthSock: null,
     });
     expect(typeof res.json().version).toBe("string");
   });
@@ -340,7 +357,7 @@ describe("multi-host proxy (issue #26)", () => {
       url: "/api/hosts/local/config",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ role: "primary" });
+    expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
   });
 
   // Issue #522 — these five routes always 500'd on the agent (no app.db

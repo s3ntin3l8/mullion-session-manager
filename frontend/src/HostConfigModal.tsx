@@ -11,6 +11,16 @@ interface HostConfigModalProps {
   onClose: () => void;
 }
 
+// Hermes review, PR #828 — pulled out of the render body since it's three
+// genuinely distinct states (see HostConfig.sshAuthSock's own comment),
+// not two nested booleans; a helper reads better than the nested ternary
+// as-inline, and leaves room for a fourth state later.
+function renderSshAuthSock(sshAuthSock: HostConfig["sshAuthSock"]): string {
+  if (sshAuthSock === undefined) return "unknown (agent predates this field)";
+  if (sshAuthSock === null) return "not configured";
+  return `${sshAuthSock.path} (${sshAuthSock.present ? "present" : "not present — no tunnel up?"})`;
+}
+
 // Issue #247 / roadmap 7.4 — read-only view of GET /api/hosts/:id/config.
 // Same create-modal-* shell as CreateHostModal (Settings -> Hosts), but
 // fetches on open rather than collecting input; works identically for
@@ -95,6 +105,12 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
                 <span className="create-modal-field-label">Browser automation</span>
                 <span className="settings-readonly-value">
                   {config.browserEnabled ? "enabled" : "disabled"}
+                </span>
+              </div>
+              <div className="create-modal-field">
+                <span className="create-modal-field-label">SSH agent socket</span>
+                <span className="settings-readonly-value">
+                  {renderSshAuthSock(config.sshAuthSock)}
                 </span>
               </div>
             </>

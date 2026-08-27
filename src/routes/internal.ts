@@ -405,6 +405,14 @@ function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | nu
  * forcing them to stay in sync if a field is ever added.
  */
 export function buildAgentConfig(app: FastifyInstance): AgentConfig {
+  const rawSshAuthSock = app.config.MULLION_SSH_AUTH_SOCK;
+  // Resolved the same way PtyManager's own constructor resolves this same
+  // config value (pty-manager.ts) — a relative MULLION_SSH_AUTH_SOCK must
+  // not be reported (or existsSync'd) as-is, since PtyManager resolves it
+  // once, up front, precisely so it doesn't get re-resolved against some
+  // other cwd later. Reporting the raw string here would show an operator
+  // a path that doesn't match what sessions actually receive.
+  const sshAuthSockPath = rawSshAuthSock === "" ? "" : path.resolve(rawSshAuthSock);
   return {
     role: app.config.MULLION_ROLE,
     version: appVersion,
@@ -412,6 +420,14 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     sessionsDir: app.config.SESSIONS_DIR,
     crsConfigDir: app.config.CRS_CONFIG_DIR,
     browserEnabled: app.config.BROWSER_ENABLED,
+    // existsSync, not fs.stat — this stays synchronous so neither of this
+    // function's two callers (this route, and hosts.ts's `local` branch)
+    // needs to change shape. A dangling socket is expected, not an error
+    // (see AgentConfig's own comment); this is read-only visibility only.
+    sshAuthSock:
+      sshAuthSockPath === ""
+        ? null
+        : { path: sshAuthSockPath, present: existsSync(sshAuthSockPath) },
   };
 }
 

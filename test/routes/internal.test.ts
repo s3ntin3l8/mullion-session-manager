@@ -244,6 +244,14 @@ function sendUntilEcho(ws: NodeWebSocket, message: string, timeoutMs = 4000): Pr
 
 describe("internal routes (agent role, issue #26)", () => {
   let projectsRoot: string;
+  // #819/#822 SSH-agent follow-up (Hermes review, PR #828) — the
+  // "sshAuthSock: null" assertion below assumes MULLION_SSH_AUTH_SOCK is
+  // unset in the ambient process env. That's true in CI, but not
+  // guaranteed everywhere this feature is actually deployed (e.g. a shell
+  // on mgmt with it exported) — save/restore rather than trust ambient
+  // absence, same posture as the MULLION_ROLE/TOKEN/PROJECTS_ROOTS vars
+  // just below.
+  let prevSshAuthSock: string | undefined;
 
   beforeAll(() => {
     projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-discover-root-"));
@@ -255,6 +263,8 @@ describe("internal routes (agent role, issue #26)", () => {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_AGENT_TOKEN = TOKEN;
     process.env.PROJECTS_ROOTS = projectsRoot;
+    prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
+    delete process.env.MULLION_SSH_AUTH_SOCK;
   });
 
   afterAll(() => {
@@ -262,6 +272,8 @@ describe("internal routes (agent role, issue #26)", () => {
     delete process.env.MULLION_ROLE;
     delete process.env.MULLION_AGENT_TOKEN;
     delete process.env.PROJECTS_ROOTS;
+    if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
+    else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
   });
 
   beforeEach(() => {
@@ -326,10 +338,78 @@ describe("internal routes (agent role, issue #26)", () => {
       sessionsDir: app.config.SESSIONS_DIR,
       crsConfigDir: app.config.CRS_CONFIG_DIR,
       browserEnabled: app.config.BROWSER_ENABLED,
+      sshAuthSock: null,
     });
     expect(typeof body.version).toBe("string");
     expect(body).not.toHaveProperty("idleTimeout");
     await app.close();
+  });
+
+  // #819/#822 SSH-agent follow-up — the dangling-socket case is the
+  // expected steady state whenever the far end (an `ssh -R` tunnel) is
+  // offline, not an error, so this must surface as `present: false`
+  // rather than throwing or omitting the field.
+  it("reports sshAuthSock present/absent from a live existsSync check, not just the configured path", async () => {
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), "internal-ssh-sock-"));
+    const presentSockPath = path.join(socketDir, "agent.sock");
+    fs.writeFileSync(presentSockPath, "");
+    const absentSockPath = path.join(socketDir, "does-not-exist.sock");
+
+    try {
+      process.env.MULLION_SSH_AUTH_SOCK = presentSockPath;
+      const presentApp = await buildApp();
+      const presentRes = await presentApp.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(presentRes.json().sshAuthSock).toEqual({ path: presentSockPath, present: true });
+      await presentApp.close();
+
+      process.env.MULLION_SSH_AUTH_SOCK = absentSockPath;
+      const absentApp = await buildApp();
+      const absentRes = await absentApp.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(absentRes.json().sshAuthSock).toEqual({ path: absentSockPath, present: false });
+      await absentApp.close();
+    } finally {
+      delete process.env.MULLION_SSH_AUTH_SOCK;
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
+  });
+
+  // #819/#822 SSH-agent follow-up — pty-manager.ts's PtyManager resolves a
+  // relative MULLION_SSH_AUTH_SOCK once, at construction (its own comment:
+  // "a relative MULLION_SSH_AUTH_SOCK would resolve against a different ...
+  // directory instead of the single stable path this feature depends on").
+  // This diagnostic must report that same resolved path, not the raw
+  // relative string — otherwise it would show an operator a path that
+  // doesn't match what sessions actually receive, and existsSync would run
+  // against the wrong location (this process's cwd) rather than a
+  // guaranteed-stable one.
+  it("resolves a relative MULLION_SSH_AUTH_SOCK the same way PtyManager does, not the raw string", async () => {
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), "internal-ssh-sock-relative-"));
+    const sockPath = path.join(socketDir, "agent.sock");
+    fs.writeFileSync(sockPath, "");
+    const relativeSockPath = path.relative(process.cwd(), sockPath);
+
+    try {
+      process.env.MULLION_SSH_AUTH_SOCK = relativeSockPath;
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.json().sshAuthSock).toEqual({ path: sockPath, present: true });
+      await app.close();
+    } finally {
+      delete process.env.MULLION_SSH_AUTH_SOCK;
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
   });
 
   // Issue #647 / roadmap 7.8 — the agent-side counterpart to
