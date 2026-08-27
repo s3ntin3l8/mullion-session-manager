@@ -684,10 +684,14 @@ function GateActions({ sessionId }: { sessionId: number }) {
     setSubmitting(true);
     try {
       await api.resolveReviewGate(sessionId, "approved");
-    } catch {
+    } catch (err) {
       // Best-effort: a failed request (network hiccup, or the gate already
-      // resolved/timed out elsewhere) just leaves the row as-is — the next
-      // store refresh reflects whatever the real gateState actually is.
+      // resolved/timed out elsewhere — most commonly, since issue #844, a
+      // stale "waiting" row surviving a backend restart, whose 409 this
+      // console.debug is what makes visible at all, since the row itself
+      // just silently stays put) just leaves the row as-is — the next store
+      // refresh reflects whatever the real gateState actually is.
+      console.debug("[NotificationBell] resolveReviewGate(approved) failed", err);
     } finally {
       setSubmitting(false);
     }
@@ -698,8 +702,9 @@ function GateActions({ sessionId }: { sessionId: number }) {
     setSubmitting(true);
     try {
       await api.resolveReviewGate(sessionId, "denied", reason.trim() || undefined);
-    } catch {
+    } catch (err) {
       // See approve()'s catch above.
+      console.debug("[NotificationBell] resolveReviewGate(denied) failed", err);
     } finally {
       setSubmitting(false);
       setDenying(false);

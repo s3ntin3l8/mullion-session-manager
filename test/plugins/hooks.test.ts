@@ -498,6 +498,12 @@ describe("hooksPlugin (issue #172)", () => {
       // The first gate is completely undisturbed.
       expect(session.toInfo().gateState).toBe("waiting");
       expect(session.toInfo().gatePrompt).toBe("first command");
+      // The duplicate itself never reaches emitHookEvent (Hermes review, PR
+      // #839), so it leaves no gateState/timeline trace of its own at all —
+      // there's nothing to assert "lapsed" against for the SECOND gate
+      // specifically here; it's covered instead by the standalone
+      // second-gate assertions below via app.resolveHookGate("1", "approved")
+      // resolving only the first.
 
       expect(app.resolveHookGate("1", "approved")).toBe(true);
       expect(session.toInfo().gateState).toBe("approved");
@@ -546,15 +552,42 @@ describe("hooksPlugin (issue #172)", () => {
           decision: "no_response",
           reason: "timed out waiting for a decision",
         });
-        // gateState has no third state of its own — "no_response" (nobody
-        // ever decided) is still surfaced to the UI as "denied", even
-        // though the WIRE reply the agent receives falls through instead
-        // (see hooks.ts's resolvePendingGate doc comment).
-        expect(session.toInfo().gateState).toBe("denied");
+        // "no_response" (nobody ever decided) now has its own gateState
+        // ("lapsed", issue #840/#844) distinct from a human "denied" — the
+        // WIRE reply the agent receives falls through, and this end's
+        // record of the outcome matches that instead of misreporting it as
+        // an explicit denial.
+        expect(session.toInfo().gateState).toBe("lapsed");
         socket.destroy();
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("resolves a still-pending gate to lapsed (not denied) at graceful shutdown, before its socket is destroyed (issue #844)", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { session, socket } = await openPendingGate(app, "1", "some command");
+
+      const replyPromise = waitForLine(socket);
+      await app.close();
+      app = null;
+
+      // The forwarder's own runGate() treats this reply exactly like a live
+      // timeout — falls through to the agent's own native prompt, not a
+      // denial — so the agent-visible outcome is identical whether Mullion
+      // is shutting down or just timed out.
+      expect(JSON.parse(await replyPromise)).toEqual({
+        decision: "no_response",
+        reason: "Mullion is shutting down",
+      });
+      // The session's own persisted record of the outcome — what a restored
+      // session boots back up showing — must say "lapsed", not "denied":
+      // this was Mullion closing the socket on purpose, not a forwarder
+      // failure, and denying here would misrepresent a graceful restart as
+      // a real human decision.
+      expect(session.toInfo().gateState).toBe("lapsed");
+      socket.destroy();
     });
   });
 

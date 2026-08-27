@@ -265,6 +265,13 @@ export function describeEvent(
       }
       if (event.payload.state === "approved") return { text: "Review approved", attention: false };
       if (event.payload.state === "denied") return { text: "Review denied", attention: false };
+      // Issue #840/#844 — distinct from "denied": nobody ever answered (a
+      // timeout, a dropped connection, a duplicate concurrent gate, or a
+      // restart while this was pending), so the agent fell through to its
+      // own native prompt rather than being denied. Don't collapse this back
+      // into "Review denied" — that reads as a decision that was never made.
+      if (event.payload.state === "lapsed")
+        return { text: "No answer — agent decided at its own prompt", attention: false };
       return null;
     }
     case "permission_request": {

@@ -433,6 +433,18 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       const event = makeEvent({ kind: "review_gate", payload: { state: "denied", prompt: "x" } });
       expect(describeEvent(event)).toEqual({ text: "Review denied", attention: false });
     });
+
+    // Issue #840/#844 — distinct label from "denied": nobody ever answered
+    // (a timeout, a dropped connection, a duplicate concurrent gate, or a
+    // restart while the gate was pending), so the agent fell through to its
+    // own native prompt rather than being denied by a human.
+    it("describes state lapsed as resolved, not attention-worthy, and not mislabeled as denied", () => {
+      const event = makeEvent({ kind: "review_gate", payload: { state: "lapsed", prompt: "x" } });
+      expect(describeEvent(event)).toEqual({
+        text: "No answer — agent decided at its own prompt",
+        attention: false,
+      });
+    });
   });
 
   describe("describeEvent — dev_server_detected (issue #404)", () => {
@@ -493,12 +505,18 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       expect(notifyKind(event)).toBe("attention");
     });
 
-    it("does not count review_gate approved/denied as notification-worthy", () => {
+    it("does not count review_gate approved/denied/lapsed as notification-worthy", () => {
       expect(
         notifyKind(makeEvent({ kind: "review_gate", payload: { state: "approved", prompt: "x" } })),
       ).toBeNull();
       expect(
         notifyKind(makeEvent({ kind: "review_gate", payload: { state: "denied", prompt: "x" } })),
+      ).toBeNull();
+      // Issue #840/#844 — a resolved-to-lapsed gate is history, same as an
+      // approved/denied one; the bell panel only cares about a still-open
+      // "waiting" decision.
+      expect(
+        notifyKind(makeEvent({ kind: "review_gate", payload: { state: "lapsed", prompt: "x" } })),
       ).toBeNull();
     });
 
