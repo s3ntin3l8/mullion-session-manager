@@ -2497,9 +2497,18 @@ describe("reconcileTasks", () => {
           await app.close();
         });
 
-        it("self-heals by resolving Mullion's own stale thread, even without a fresh clean verdict", async () => {
+        it("self-heals by resolving Mullion's own stale thread when its last ingested verdict was clean", async () => {
           const app = await buildApp();
-          await createDoneTaskWithPendingMerge(app);
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          // Simulates round 2 already coming back clean, but the
+          // verdict-time resolve attempt (processReviewingTasks) itself
+          // failing (fetch error, truncation, mint failure) — the merge
+          // sweep is the backstop that retries it.
+          app.db
+            .update(tasks)
+            .set({ lastReviewVerdict: "clean" })
+            .where(eq(tasks.id, taskId))
+            .run();
           mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
           mockFetchPullRequestReviewThreads.mockResolvedValue({
             viewerLogin: "mullion-bot[bot]",
@@ -2531,6 +2540,56 @@ describe("reconcileTasks", () => {
           await app.close();
         });
 
+        // Independent review, round 2 — the defect this test guards against:
+        // `POST .../approve` and the closed-issue sync path both promote
+        // "reviewing" straight to "done" on `canTransition` alone, never
+        // consulting `lastReviewVerdict`. A human (or a closed issue) can
+        // therefore reach "done" with a standing "changes-requested"
+        // verdict still on the row. Self-healing in that case would
+        // silently resolve Mullion's own unaddressed finding with zero
+        // corroboration it was ever fixed — exactly the failure mode the
+        // "clean verdict" gate exists to prevent.
+        it("does NOT self-heal when the task's last ingested verdict was changes-requested", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          app.db
+            .update(tasks)
+            .set({ lastReviewVerdict: "changes-requested" })
+            .where(eq(tasks.id, taskId))
+            .run();
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [
+              {
+                id: "thread-own",
+                isResolved: false,
+                comments: [
+                  {
+                    author: "mullion-reviewer[bot]",
+                    createdAt: "2026-08-20T10:00:00Z",
+                    path: "src/foo.ts",
+                    line: 1,
+                    body: "Fix this.",
+                  },
+                ],
+              },
+            ],
+            truncated: false,
+          });
+          mockResolveMullionReviewLogins.mockResolvedValue(
+            new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+          );
+
+          await reconcileTasks(app);
+
+          expect(mockResolveReviewThread).not.toHaveBeenCalled();
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Blocked on 1 unresolved review conversation");
+
+          await app.close();
+        });
+
         it("keeps the generic message when there are no unresolved threads at all", async () => {
           const app = await buildApp();
           const { taskId } = await createDoneTaskWithPendingMerge(app);
@@ -2545,6 +2604,11 @@ describe("reconcileTasks", () => {
 
           const row = await getTask(app, taskId);
           expect(row.mergeError).toBe("Required checks are red or still pending");
+          // Independent review, round 2 — with zero unresolved threads,
+          // resolveMullionOwnThreadsIfClean's own cheap pre-filter must
+          // skip the reviewer-identity lookup entirely, not just skip
+          // resolving anything after paying for it.
+          expect(mockResolveMullionReviewLogins).not.toHaveBeenCalled();
 
           await app.close();
         });

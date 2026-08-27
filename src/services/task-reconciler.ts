@@ -1530,14 +1530,27 @@ async function attemptMerge(
               ? "Waiting on a required approving review"
               : "Required checks are red or still pending";
         if (reviewDecision === null) {
-          // Self-heals the D1 deadlock: a `done` task's last ingested
-          // verdict is never "changes-requested" by construction (either a
-          // human approved it, or auto-approve's own gate required
-          // "clean") — so resolving Mullion's own remaining threads
-          // unconditionally here is exactly as safe as D1's own
-          // verdict-gated call, just reached from a different trigger (a
-          // stuck merge sweep instead of a fresh verdict).
-          await resolveMullionOwnThreadsIfClean(app, task, project);
+          // Self-heals the D1 deadlock — but ONLY when this row's own last
+          // ingested verdict is "clean". Independent review, round 2: an
+          // earlier version of this call fired unconditionally on the
+          // (false) assumption that a `done` task's verdict can never be
+          // "changes-requested." It can: `POST .../approve`
+          // (task-approve.ts) and the closed-issue sync path
+          // (syncClosedIssueToLocal, task-github-sync.ts) both flip
+          // "reviewing" straight to "done" on `canTransition` alone, never
+          // consulting `lastReviewVerdict` — a human (or a closed issue)
+          // can promote a task whose last review genuinely requested
+          // changes. Resolving Mullion's own threads in THAT case would
+          // satisfy `required_conversation_resolution` with zero
+          // corroboration a finding was ever addressed, defeating the
+          // entire point of the gate. Checking the column here is what
+          // keeps this call as safe as its sibling in
+          // processReviewingTasks, which reads the SAME column at the
+          // point of ingestion rather than re-deriving a "must be clean by
+          // now" assumption.
+          if (task.lastReviewVerdict === "clean") {
+            await resolveMullionOwnThreadsIfClean(app, task, project);
+          }
           try {
             const threadsResult = await fetchPullRequestReviewThreads(
               token,
@@ -2655,6 +2668,15 @@ async function resolveMullionOwnThreadsIfClean(
     );
     return;
   }
+
+  // Independent review, round 2: cheap pre-filter before the reviewer
+  // identity lookup below, same reasoning as attemptReturnPrCommentsToWorker's
+  // own ordering (D0) — resolveMullionReviewLogins is a live, uncached
+  // GraphQL round trip, and this function is called from a merge-retry
+  // backoff loop, not a one-shot verdict ingestion, so paying for it on
+  // every tick even when nothing is unresolved would reproduce the exact
+  // pattern D0 fixed elsewhere in this file.
+  if (!result.threads.some((t) => !t.isResolved)) return;
 
   const mullionLogins = await resolveMullionReviewLogins(app, repoRef, result.viewerLogin);
   const ownUnresolved = result.threads.filter(
