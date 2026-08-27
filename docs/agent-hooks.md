@@ -332,8 +332,9 @@ nothing), `session.error` (→ `tool_failure`, skipping the user's own
 `question.asked` (→ `question`, started), `question.replied`/
 `question.rejected` (→ `question`, finished), `todo.updated` (→ `todo`),
 `session.diff` (→ `session_diff`), `worktree.failed`/`mcp.browser.open.failed`
-(→ `notification`, error variants), `session.status` (→ `progress` or
-`notification`, including a `retry` backoff), `vcs.branch.updated`/
+(→ `notification`, error variants), `session.status` (→ `progress`, or
+`turn_start` + `progress` on a `busy` status, including a `retry` backoff —
+never `notification`, unlike an earlier revision of this doc), `vcs.branch.updated`/
 `worktree.ready` (→ `git_branch`), and `session.compacting`/
 `session.subagent` (→ `compact`/`subagent`, started or finished). It also
 exposes its own
