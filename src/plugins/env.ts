@@ -384,25 +384,10 @@ export const schema = {
       type: "string",
       default: "",
     },
-    // Whether the Claude Code hook adapter registers the blocking
-    // `PreToolUse` review gate on Bash (issue #178) — see
-    // src/services/hook-adapters/claude-code.ts's buildClaudeHookSettings.
-    // Default OFF: an autonomous/unattended session has nobody to click
-    // Approve/Deny, so gating every Bash call by default stalls it on every
-    // shell command until the server-side timeout fails it closed
-    // (hooks.ts's GATE_TIMEOUT_MS) — the opposite of this app's "autonomous
-    // dashboard" value prop. Same "real feature, off by default" posture as
-    // the roadmap's MULLION_TASK_MASTER_ENABLED. The non-blocking
-    // Notification/Stop/PostToolUse hooks are unaffected by this flag and
-    // stay on unconditionally.
-    MULLION_REVIEW_GATE_ENABLED: {
-      type: "boolean",
-      default: false,
-    },
     // Gates autonomous Task Master behavior — the background watcher's
     // GitHub ingest + auto-claim, and the claim/approve endpoints. Default
-    // OFF, same "real feature, off by default" posture as
-    // MULLION_REVIEW_GATE_ENABLED above. Does NOT gate reject (the escape
+    // OFF, same "real feature, off by default" posture the roadmap
+    // documents throughout. Does NOT gate reject (the escape
     // hatch for a task already in review — Hermes review, PR #480, fourth
     // pass), an already-claimed task's own budget enforcement/status sync,
     // or the local task board (6.9/#233) — GET/POST/PATCH/DELETE /api/tasks
@@ -469,7 +454,7 @@ export const schema = {
     // passes skipPermissions through to the agent's own flag. Default OFF:
     // an unattended agent bypassing every permission prompt is a deliberate
     // opt-in, not the safe default — same posture as
-    // MULLION_TASK_MASTER_ENABLED/MULLION_REVIEW_GATE_ENABLED above.
+    // MULLION_TASK_MASTER_ENABLED above.
     // Distinct from settings.launchers.skipPermissionsAgents, which only
     // drives the frontend's manual-launch CommandPalette and never reaches
     // task-claim.ts's spawns. Overridable at runtime via
@@ -519,7 +504,7 @@ export const schema = {
     // Browser feature: BrowserManager refuses to launch Chromium (every
     // method throws) and the browser WS/REST routes (#180/#183) return a
     // clear 4xx when this is false. Default OFF, same "real feature, off by
-    // default" posture as MULLION_REVIEW_GATE_ENABLED/MULLION_TASK_MASTER_ENABLED
+    // default" posture as MULLION_TASK_MASTER_ENABLED
     // above — Playwright's Chromium download is a meaningful host footprint
     // (see deploy/install.sh) that shouldn't happen just because the
     // `playwright` package is now a runtime dependency.
@@ -744,7 +729,6 @@ declare module "fastify" {
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
       MULLION_SERVICE_UNIT: string;
-      MULLION_REVIEW_GATE_ENABLED: boolean;
       MULLION_TASK_MASTER_ENABLED: boolean;
       MULLION_TASK_LABEL: string;
       MULLION_TASK_POLL_INTERVAL: number;

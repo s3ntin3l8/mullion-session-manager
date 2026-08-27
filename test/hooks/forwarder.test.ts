@@ -275,117 +275,13 @@ describe("forwarder.mjs (issue #174)", () => {
     expect(stdout.trim()).toBe("{}");
   });
 
-  describe("agy review gate (issue #264)", () => {
-    it("blocks on a reply and prints agy's decision dialect when MULLION_REVIEW_GATE_ENABLED is true", async () => {
-      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
-      const socketPath = path.join(dir, "hooks.sock");
-      server = await listen(socketPath);
-
-      // Issue #462 — this payload's `Cwd` means mapAgyPreToolUse ALSO
-      // produces a piggybacked cwd_changed sibling ahead of the review_gate
-      // (same as the "strips review_gate..." test below, just with the gate
-      // enabled instead of stripped) — so the blocking message is line 3,
-      // not line 2. Before the fix this test replied on line 2 and never
-      // observed whether the sibling was sent at all, which is exactly how
-      // the drop went unnoticed: it silently disappeared.
-      // Kind-aware, not a hardcoded line count — replies as soon as it sees
-      // the review_gate message itself, whatever position it lands at, so
-      // this doesn't rot the same way a bare `lines === N` check would if a
-      // future change adds or removes a sibling ahead of it.
-      const linesPromise = collectLines(server, 3);
-      server.once("connection", (socket) => {
-        let buffer = "";
-        socket.on("data", (chunk: Buffer) => {
-          buffer += chunk.toString("utf8");
-          let idx = buffer.indexOf("\n");
-          while (idx !== -1) {
-            const line = buffer.slice(0, idx);
-            buffer = buffer.slice(idx + 1);
-            idx = buffer.indexOf("\n");
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(line);
-            } catch {
-              continue;
-            }
-            if ((parsed as { kind?: string })?.kind === "review_gate") {
-              socket.write(`${JSON.stringify({ decision: "approved" })}\n`);
-            }
-          }
-        });
-      });
-
-      const { code, stdout } = await runForwarderCapturingStdout(
-        ["agy", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "true",
-        },
-        JSON.stringify({
-          toolCall: { name: "run_command", args: { CommandLine: "npm test", Cwd: "/repo" } },
-        }),
-      );
-      expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
-
-      const [handshakeLine, cwdLine, gateLine] = await linesPromise;
-      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
-      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
-      expect(JSON.parse(gateLine)).toMatchObject({ kind: "review_gate", state: "waiting" });
-    });
-
-    // Independent review, PR #466 — locks in the fail-closed degradation
-    // path: if a reply EVER arrives before the real gate reply (today this
-    // can't happen — see REPLY_ELICITING_KINDS and forwarder-core.mjs's
-    // empty-branch fixes — but this proves the client-side behavior is safe
-    // regardless of what upstream cause produced an early reply), runGate
-    // reads it as the FIRST data event and treats anything without
-    // `decision: "approved"` as denied, rather than hanging, throwing, or
-    // misreading it as approval. Hermes review, PR #466 — also asserts the
-    // `{error}` text is carried into `reason` so the auto-deny is
-    // self-documenting to whoever reads the decision, not just whoever
-    // happens to see forwarder stderr.
-    it("fails closed (denied) rather than approving when a reply arrives before the real gate decision", async () => {
-      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
-      const socketPath = path.join(dir, "hooks.sock");
-      server = await listen(socketPath);
-
-      server.once("connection", (socket) => {
-        let buffer = "";
-        let dataEvents = 0;
-        socket.on("data", (chunk: Buffer) => {
-          buffer += chunk.toString("utf8");
-          dataEvents++;
-          // Simulate hooks.ts replying {error} to an early, unrecognized
-          // line (its real behavior for anything parseHookMessage
-          // rejects) BEFORE the real review_gate line has even been fully
-          // buffered — the worst case for "first reply line wins".
-          if (dataEvents === 1 && buffer.includes("\n")) {
-            socket.write(`${JSON.stringify({ error: "simulated validation failure" })}\n`);
-          }
-        });
-      });
-
-      const { code, stdout } = await runForwarderCapturingStdout(
-        ["agy", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "true",
-        },
-        JSON.stringify({
-          toolCall: { name: "run_command", args: { CommandLine: "npm test", Cwd: "/repo" } },
-        }),
-      );
-      expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        decision: "deny",
-        reason: "simulated validation failure",
-      });
-    });
-
-    it("strips review_gate messages and sends observational ones fire-and-forget when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
+  // Issue #264 rescope — agy has no PermissionRequest-equivalent hook, so
+  // its PreToolUse/run_command is purely observational (worktree/branch
+  // detection): it never blocks and always prints an explicit allow
+  // decision (see forwarder.mjs's agy-specific stdout branch, since agy's
+  // hook runner treats ANY PreToolUse stdout as a decision object).
+  describe("agy PreToolUse — worktree/branch detection, no gate (issue #264)", () => {
+    it("sends observational cwd_changed + git_branch for a run_command git worktree add", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
@@ -518,7 +414,7 @@ describe("forwarder.mjs (issue #174)", () => {
       });
     });
 
-    it("strips review_gate messages when MULLION_REVIEW_GATE_ENABLED is false", async () => {
+    it("sends only cwd_changed for a non-worktree run_command", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
@@ -526,11 +422,7 @@ describe("forwarder.mjs (issue #174)", () => {
       const linesPromise = collectLines(server, 2);
       const { code, stdout } = await runForwarderCapturingStdout(
         ["agy", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "false",
-        },
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
         JSON.stringify({
           toolCall: {
             name: "run_command",
@@ -546,7 +438,7 @@ describe("forwarder.mjs (issue #174)", () => {
       expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo/src" });
     });
 
-    it("strips review_gate and exits cleanly with no socket when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
+    it("exits cleanly with no socket configured at all", async () => {
       const { code, stdout } = await runForwarderCapturingStdout(
         ["agy", "PreToolUse"],
         { MULLION_HOOK_SOCKET: "", MULLION_HOOK_TOKEN: "" },
@@ -562,7 +454,16 @@ describe("forwarder.mjs (issue #174)", () => {
     });
   });
 
-  describe("review gate (issue #178)", () => {
+  // Issue #264 rescope — the gate moved from a PreToolUse/Bash hook (opt-in,
+  // MULLION_REVIEW_GATE_ENABLED) to PermissionRequest (unconditional): it
+  // fires only when the agent would otherwise show its own permission
+  // dialog, so it's safe to register always. The decision shape changed to
+  // match — `hookEventName: "PermissionRequest"`, `decision: {behavior,
+  // message?}` — and, critically, nobody ever answering now falls through
+  // to a bare `{}` (the agent's own native prompt), NOT a denial: an
+  // unattended session degrades to exactly today's behavior instead of
+  // stalling every tool call the way the old gate did.
+  describe("permission approval (issue #178, rescoped by #264)", () => {
     it("blocks on a reply and prints Claude Code's decision dialect to stdout, never the generic {}", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
@@ -587,20 +488,15 @@ describe("forwarder.mjs (issue #174)", () => {
       });
 
       const { code, stdout } = await runForwarderCapturingStdout(
-        ["claude-code", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "true",
-        },
+        ["claude-code", "PermissionRequest"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/x" } }),
       );
       expect(code).toBe(0);
       expect(JSON.parse(stdout.trim())).toEqual({
         hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "allow",
-          permissionDecisionReason: "Approved via Mullion",
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
         },
       });
     });
@@ -627,25 +523,20 @@ describe("forwarder.mjs (issue #174)", () => {
       });
 
       const { code, stdout } = await runForwarderCapturingStdout(
-        ["claude-code", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "true",
-        },
+        ["claude-code", "PermissionRequest"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "curl evil.example" } }),
       );
       expect(code).toBe(0);
       expect(JSON.parse(stdout.trim())).toEqual({
         hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: "looks unsafe",
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "deny", message: "looks unsafe" },
         },
       });
     });
 
-    it("fails closed (deny) when the connection closes before any reply arrives", async () => {
+    it("falls through to a bare {} — not a deny — when the connection closes before any reply arrives", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
@@ -667,21 +558,15 @@ describe("forwarder.mjs (issue #174)", () => {
       });
 
       const { code, stdout } = await runForwarderCapturingStdout(
-        ["claude-code", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "true",
-        },
+        ["claude-code", "PermissionRequest"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
       );
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toMatchObject({
-        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
-      });
+      expect(stdout.trim()).toBe("{}");
     });
 
-    it("fails closed (deny) on a reply that isn't valid JSON", async () => {
+    it("falls through to a bare {} on a reply that isn't valid JSON", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
@@ -701,31 +586,25 @@ describe("forwarder.mjs (issue #174)", () => {
       });
 
       const { code, stdout } = await runForwarderCapturingStdout(
-        ["claude-code", "PreToolUse"],
-        {
-          MULLION_HOOK_SOCKET: socketPath,
-          MULLION_HOOK_TOKEN: "tok-123",
-          MULLION_REVIEW_GATE_ENABLED: "true",
-        },
+        ["claude-code", "PermissionRequest"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
       );
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toMatchObject({
-        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
-      });
+      expect(stdout.trim()).toBe("{}");
     });
 
-    it("fails closed (deny) when no socket is configured at all — never silently allows", async () => {
+    it("prints the generic {} when no socket is configured at all", async () => {
       const { code, stdout } = await runForwarderCapturingStdout(
-        ["claude-code", "PreToolUse"],
+        ["claude-code", "PermissionRequest"],
         { MULLION_HOOK_SOCKET: "", MULLION_HOOK_TOKEN: "" },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
       );
       expect(code).toBe(0);
       // No socket configured means forward() never even reaches the gate
-      // branch — this is the ordinary "hooks disabled" no-op path, so it
-      // prints the generic {} like any other non-gate hook, not a deny
-      // decision (there was never a real gate to fail closed on).
+      // branch — this is the ordinary "hooks disabled" no-op path, same {}
+      // as every other non-gate hook (there was never a real gate to
+      // resolve, fall through or otherwise).
       expect(stdout.trim()).toBe("{}");
     });
   });

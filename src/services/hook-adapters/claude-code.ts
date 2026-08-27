@@ -36,35 +36,40 @@ export function resolveClaudePluginCacheDir(): string {
   return process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR || path.join(resolveClaudeConfigDir(), "plugins");
 }
 
-// Claude Code adapter (issue #174, gate hook added in issue #178). Registers
-// three hooks unconditionally: Notification, Stop, PostToolUse (mapped by the
+// Claude Code adapter (issue #174, gate hook added in issue #178, rescoped by
+// issue #264). Registers Notification/Stop/PostToolUse (mapped by the
 // forwarder to hook-protocol `notification`/`progress:done`/`file_change`
-// messages — see src/hooks/forwarder.mjs) — plus a fourth, PreToolUse (the
-// blocking review gate), ONLY when `ctx.reviewGateEnabled` is true (mirrors
-// app.config.MULLION_REVIEW_GATE_ENABLED, default OFF — see env.ts).
+// messages — see src/hooks/forwarder.mjs) plus PermissionRequest, ALL
+// unconditionally.
 //
-// The gate defaults off because an unattended/autonomous session has nobody
-// to click Approve/Deny: registering PreToolUse unconditionally stalls every
-// single Bash call for up to GATE_HOOK_TIMEOUT_SECONDS before hooks.ts's
-// server-side timeout fails it closed (denied) — the opposite of the
-// "autonomous dashboard" value prop this app exists for. (An earlier version
-// of this adapter did register it unconditionally — see git history around
-// issue #178 — which is exactly the hazard this flag exists to avoid.)
+// PermissionRequest is now also the blocking permission-approval channel
+// (issue #264), not just an observational notification — see
+// forwarder-core.mjs's mapClaudeCodePermissionRequest. This replaced an
+// earlier PreToolUse/Bash gate (issue #178) that defaulted off and stayed
+// off in every real deployment: PreToolUse/Bash fires on EVERY Bash call,
+// including ones already auto-approved by the user's own allowlist, so
+// registering it unconditionally stalled every single Bash call for up to
+// hooks.ts's own GATE_TIMEOUT_MS (290s) before its server-side timeout
+// failed it closed (denied) — the opposite of the "autonomous dashboard"
+// value prop this app exists for.
 //
-// When enabled, PreToolUse is gated to `matcher: "Bash"` ONLY — deliberately
-// narrower than "every tool call": Bash is the one tool whose blast radius
-// (arbitrary shell execution) makes a human-in-the-loop pause worth pausing
-// for; file edits stay fire-and-forget via the existing PostToolUse
-// observational hook. Making the gated tool set configurable is a natural
-// follow-up, not built here.
+// PermissionRequest doesn't have that problem: confirmed live against
+// installed Claude Code 2.1.220 (real interactive session) that it fires
+// deterministically, and ONLY, when Claude Code is about to show an actual
+// permission dialog — never for an allowlisted/auto-approved tool call. That
+// makes it safe to register unconditionally with a long timeout: an
+// unanswered request now falls through to Claude Code's own native prompt
+// (confirmed live — a bare `{}` reply, see formatClaudeCodeGateDecision in
+// forwarder-core.mjs), not a denial, so an unattended session degrades to
+// exactly today's behavior rather than stalling. No `matcher` is needed
+// either — PermissionRequest already only fires for the tool call that
+// actually needs a decision, whatever tool that is (not narrowed to Bash the
+// way the old gate was).
 //
-// Verified against Claude Code's own documented hooks JSON contract
-// (PreToolUse's `hookSpecificOutput.permissionDecision` shape — see
-// forwarder-core.mjs's mapClaudeCodePreToolUse/formatClaudeCodeGateDecision)
-// — NOT verified against a live PreToolUse hook actually firing end-to-end
-// in this PR (same "no live agent turn available in this sandbox" gap as
-// PR6/PR7's own dialects); the forwarder-side round-trip is covered by
-// forwarder.test.ts's fake-socket-server gating tests instead.
+// Verified against Claude Code's own documented hooks JSON contract AND a
+// live firing this session (both `allow` and `deny` decisions, plus the
+// bare-`{}` fall-through) — see forwarder-core.mjs's
+// mapClaudeCodePermissionRequest/formatClaudeCodeGateDecision.
 //
 // Verified this session (see the plan's Context section): Claude Code has no
 // env-var hook-config mechanism, so `--settings <file>` is the only way to
@@ -87,16 +92,15 @@ const CLAUDE_COMMAND_RE = /^(?:\S*\/)?claude(?:\s|$)/;
 // to the wrong part of the chain instead of to `claude` itself.
 const SHELL_METACHARACTERS_RE = /[;&|<>]/;
 
-// Issue #178 — a blocking gate needs long enough for an actual human to
-// notice the amber review indicator and click Approve/Deny, not just enough
-// to stop a wedged process (see the fire-and-forget hooks' timeout: 10
-// below). Claude Code's own default PreToolUse hook timeout is confirmed
-// (see the plan's PR9 timeout note) to be 600s and to fail CLOSED (block,
-// not silently allow) on expiry — 300s here stays comfortably under that so
-// Mullion's own server-side timeout (hooks.ts's GATE_TIMEOUT_MS) controls
-// the fail-closed decision instead of leaving it to Claude Code's own,
-// less-informative expiry behavior.
-const GATE_HOOK_TIMEOUT_SECONDS = 300;
+// Issue #264 — a blocking permission decision needs long enough for an
+// actual human to notice the amber review indicator and click
+// Approve/Deny, not just enough to stop a wedged process (see the
+// fire-and-forget hooks' timeout: 10 below). Claude Code's own default
+// PermissionRequest hook timeout is confirmed live (installed 2.1.220) to be
+// 600s; 300s here stays comfortably under that so Mullion's own server-side
+// timeout (hooks.ts's GATE_TIMEOUT_MS, 290s) controls the fall-through
+// instead of leaving it to Claude Code's own expiry behavior.
+const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 const SESSION_END_HOOK_TIMEOUT_SECONDS = 2;
 
 function hookEntry(
@@ -111,10 +115,11 @@ function hookEntry(
         type: "command" as const,
         command: `${JSON.stringify(execPath)} ${JSON.stringify(forwarderPath)} claude-code ${kind}`,
         // Generous but bounded: these are fire-and-forget notifications, not
-        // gates, so nothing downstream is waiting on this — the timeout only
-        // exists to stop a wedged forwarder process from lingering forever.
-        // (PreToolUse's own call site below overrides this with the much
-        // longer GATE_HOOK_TIMEOUT_SECONDS.)
+        // a blocking decision, so nothing downstream is waiting on this —
+        // the timeout only exists to stop a wedged forwarder process from
+        // lingering forever. (PermissionRequest's own call site below
+        // overrides this with the much longer
+        // PERMISSION_REQUEST_TIMEOUT_SECONDS.)
         timeout: timeoutSeconds,
       },
     ],
@@ -122,19 +127,17 @@ function hookEntry(
 }
 
 /** Exported for tests. Builds the Claude Code `--settings` JSON contents —
- * pure, no I/O — see the file header for why the blocking PreToolUse (Bash)
- * gate is absent by default. The new observational hooks (PermissionRequest,
- * StopFailure, PostToolUseFailure, SessionEnd, ExitPlanMode PreToolUse) are
- * always registered — they are fire-and-forget, never block, and carry no
- * per-call spawn overhead beyond a short-lived forwarder process. */
+ * pure, no I/O — see the file header for why PermissionRequest (the
+ * permission-approval channel, issue #264) is registered unconditionally
+ * rather than behind a flag the way the PreToolUse/Bash gate it replaced
+ * was. Every hook here is registered regardless of any runtime flag; only
+ * their timeouts differ (fire-and-forget hooks get a short one, purely to
+ * stop a wedged forwarder process from lingering — PermissionRequest gets
+ * PERMISSION_REQUEST_TIMEOUT_SECONDS instead, long enough for a human
+ * decision). */
 export function buildClaudeHookSettings(
   forwarderPath: string,
   execPath: string = process.execPath,
-  // Default false, mirroring HookAdapterContext.reviewGateEnabled's own
-  // default-off posture (see env.ts's MULLION_REVIEW_GATE_ENABLED) — the
-  // blocking PreToolUse gate is opt-in, never registered unless a caller
-  // explicitly asks for it.
-  includeReviewGate: boolean = false,
 ) {
   return {
     hooks: {
@@ -206,8 +209,15 @@ export function buildClaudeHookSettings(
       ],
       // PermissionRequest fires deterministically when Claude shows a
       // permission dialog — a definitive "needs user input" signal for the
-      // attention state machine. Fire-and-forget: never blocks the tool call.
-      PermissionRequest: [hookEntry(execPath, forwarderPath, "PermissionRequest")],
+      // attention state machine, AND (issue #264) the blocking
+      // permission-approval channel: the forwarder keeps this connection
+      // open and waits for a human decision (or falls through to Claude
+      // Code's own dialog if nobody answers in time — see
+      // forwarder-core.mjs's mapClaudeCodePermissionRequest). Needs the long
+      // timeout, not the fire-and-forget default.
+      PermissionRequest: [
+        hookEntry(execPath, forwarderPath, "PermissionRequest", PERMISSION_REQUEST_TIMEOUT_SECONDS),
+      ],
       // StopFailure fires on API errors (rate_limit, max_output_tokens, etc.)
       // — gives visibility into abnormal turn endings. Fire-and-forget.
       StopFailure: [hookEntry(execPath, forwarderPath, "StopFailure")],
@@ -220,25 +230,19 @@ export function buildClaudeHookSettings(
         hookEntry(execPath, forwarderPath, "SessionEnd", SESSION_END_HOOK_TIMEOUT_SECONDS),
       ],
       // PreToolUse ExitPlanMode is purely observational (never blocks): the
-      // forwarder maps it to `plan_ready` (not `review_gate`), so it uses
-      // the fire-and-forget socket path — Claude Code proceeds normally
-      // while Mullion observes the plan content.
+      // forwarder maps it to `plan_ready`, so it uses the fire-and-forget
+      // socket path — Claude Code proceeds normally while Mullion observes
+      // the plan content. This is the only PreToolUse matcher registered —
+      // the blocking Bash gate that used to live here (issue #178) was
+      // replaced by PermissionRequest-based approval above (issue #264):
+      // PreToolUse/Bash fired on every Bash call, including allowlisted
+      // ones, which is why it needed a default-off flag and PermissionRequest
+      // doesn't.
       PreToolUse: [
         {
           matcher: "ExitPlanMode",
           ...hookEntry(execPath, forwarderPath, "PreToolUse"),
         },
-        // The blocking Bash review gate below — omitted entirely unless
-        // includeReviewGate is true; see this file's header comment for
-        // why it defaults off.
-        ...(includeReviewGate
-          ? [
-              {
-                matcher: "Bash",
-                ...hookEntry(execPath, forwarderPath, "PreToolUse", GATE_HOOK_TIMEOUT_SECONDS),
-              },
-            ]
-          : []),
       ],
       // Issue: extend surfaced session statuses — UserPromptSubmit is the one
       // deterministic "a new turn just started" signal (fires once per human
@@ -280,11 +284,19 @@ export function buildClaudeHookSettings(
 // (forwarder-core.test.ts) asserts every registered event's mapping output
 // stays inside this set.
 //
-// Excludes `review_gate` deliberately: it's registered only when
-// `includeReviewGate` is true (see this file's header comment), a
-// launch-time flag `emits` — a static, per-adapter capability list — has no
-// way to reflect. Listed here anyway would over-promise a status most
-// launches never actually register.
+// Keeps `permission_request` (issue #264 rescope didn't remove it, just
+// narrowed it): PermissionRequest now maps to `review_gate` for every tool
+// EXCEPT ExitPlanMode, which stays on the old fire-and-forget
+// `permission_request` shape — see mapClaudeCodePermissionRequest's own
+// ExitPlanMode branch for why (hook-handlers.ts's plan_ready/permission_request
+// dedup, PR #675, only runs for that message kind; routing it through
+// review_gate instead would silently block every plan-mode approval on a
+// gate nobody asked to answer). Includes `review_gate` for the first time as
+// of that same rescope: unlike the old PreToolUse/Bash gate (only ever
+// registered behind a launch-time flag this static list couldn't reflect —
+// see the removed `includeReviewGate` param), PermissionRequest's non-
+// ExitPlanMode path is unconditional, so `review_gate` really is always
+// reachable now, not just possibly so.
 //
 // Includes `promote_request` even though it does NOT come from hooks.json
 // at all — it's sent by the `promote_to_worktree` MCP tool this adapter's
@@ -301,6 +313,7 @@ export const CLAUDE_CODE_EMITS = [
   "session_start",
   "cwd_changed",
   "permission_request",
+  "review_gate",
   "tool_done",
   "stop_failure",
   "tool_failure",
@@ -358,11 +371,7 @@ export function buildClaudeMcpConfig(
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const settingsPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.hooks.json`);
-  const settings = buildClaudeHookSettings(
-    ctx.forwarderPath,
-    process.execPath,
-    ctx.reviewGateEnabled,
-  );
+  const settings = buildClaudeHookSettings(ctx.forwarderPath, process.execPath);
   const mcpConfigPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.mcp.json`);
   const mcpConfig = buildClaudeMcpConfig(
     resolveMcpServerPath(),

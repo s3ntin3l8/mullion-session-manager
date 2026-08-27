@@ -36,7 +36,6 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
     hookToken: "tok",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
   };
 
@@ -66,7 +65,6 @@ describe("mergeAgyHooks (issue #253)", () => {
     hookToken: "tok",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
   });
 
@@ -97,11 +95,12 @@ describe("mergeAgyHooks (issue #253)", () => {
     ]);
     expect(written[MULLION_HOOK_NAME].Stop[0].command).toContain("agy Stop");
 
-    // PreToolUse group for run_command (worktree detection + review gate)
+    // PreToolUse group for run_command (worktree detection only, since issue
+    // #264 removed the review_gate this used to also emit)
     expect(written[MULLION_HOOK_NAME].PreToolUse).toHaveLength(1);
     expect(written[MULLION_HOOK_NAME].PreToolUse[0].matcher).toBe("run_command");
     expect(written[MULLION_HOOK_NAME].PreToolUse[0].hooks[0].command).toContain("agy PreToolUse");
-    expect(written[MULLION_HOOK_NAME].PreToolUse[0].hooks[0].timeout).toBe(300);
+    expect(written[MULLION_HOOK_NAME].PreToolUse[0].hooks[0].timeout).toBe(10);
 
     // PostToolUse group for file-change tools (best-effort)
     expect(written[MULLION_HOOK_NAME].PostToolUse).toHaveLength(1);
@@ -328,7 +327,6 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
     hookToken: "tok",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
   });
 
@@ -461,7 +459,6 @@ describe("mergeAgyHooks SessionStart (issue #321)", () => {
     hookToken: "tok",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
   });
 

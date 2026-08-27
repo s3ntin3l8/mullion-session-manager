@@ -91,7 +91,6 @@ export interface LaunchPlanSession {
   readonly hookSocketPath: string;
   readonly controlSocketPath: string;
   readonly sessionsDir: string;
-  readonly reviewGateEnabled: boolean;
   /** MULLION_SSH_AUTH_SOCK (src/plugins/env.ts) — the path injected as this
    * session's SSH_AUTH_SOCK, or "" (the default) to leave whatever value the
    * session already inherited untouched. See buildLaunchPlan's injection of
@@ -199,11 +198,6 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // other existing purpose to collide with (session-env.ts).
   sessionEnv.MULLION_SOCKET_PATH = session.controlSocketPath;
   sessionEnv.MULLION_SESSION_ID = session.id;
-  // Phase 2 (issue #264): pass the review-gate toggle through the session
-  // env so the forwarder (spawned as an agent hook subprocess) can read it
-  // and conditionally skip the blocking review_gate for agents whose hook
-  // is always registered (agy) rather than gated at registration time.
-  sessionEnv.MULLION_REVIEW_GATE_ENABLED = String(session.reviewGateEnabled);
   // MULLION_SSH_AUTH_SOCK — lets a session reach an SSH agent that lives
   // outside this host (e.g. one forwarded in via `ssh -R`, see
   // docs/ssh-agent.md) without a private key ever touching this host. Set
@@ -273,7 +267,6 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     hookToken: session.hookToken,
     controlSocketPath: session.controlSocketPath,
     forwarderPath: resolveForwarderPath(),
-    reviewGateEnabled: session.reviewGateEnabled,
     injectAgentGuide: session.injectAgentGuide,
     injectProjectBriefing: session.injectProjectBriefing,
     cwd: session.cwd,

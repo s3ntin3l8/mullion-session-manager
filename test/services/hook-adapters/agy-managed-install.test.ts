@@ -40,7 +40,6 @@ function baseCtx(overrides: Partial<Parameters<typeof agyAdapter.prepareLaunch>[
     hookToken: "tok",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
     ...overrides,
   };

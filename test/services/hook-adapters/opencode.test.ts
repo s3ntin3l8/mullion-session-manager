@@ -46,7 +46,6 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
     hookToken: "token123",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
-    reviewGateEnabled: false,
     injectAgentGuide: false,
     injectProjectBriefing: false,
   };
@@ -91,7 +90,6 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
     hookToken: string;
     controlSocketPath: string;
     forwarderPath: string;
-    reviewGateEnabled: boolean;
     injectProjectBriefing: boolean;
   };
 
@@ -104,7 +102,6 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
       hookToken: "token123",
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       forwarderPath: "/abs/path/forwarder.mjs",
-      reviewGateEnabled: false,
       // Off by default in this describe block — it's about the
       // injectAgentGuide gate specifically; the briefing gate has its own
       // describe block below.
@@ -169,7 +166,6 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     hookToken: string;
     controlSocketPath: string;
     forwarderPath: string;
-    reviewGateEnabled: boolean;
     injectAgentGuide: boolean;
   };
 
@@ -182,7 +178,6 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
       hookToken: "token123",
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       forwarderPath: "/abs/path/forwarder.mjs",
-      reviewGateEnabled: false,
       injectAgentGuide: false,
     };
   });
@@ -238,7 +233,6 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     hookToken: string;
     controlSocketPath: string;
     forwarderPath: string;
-    reviewGateEnabled: boolean;
     injectAgentGuide: boolean;
     injectProjectBriefing: boolean;
   };
@@ -252,7 +246,6 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
       hookToken: "token123",
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       forwarderPath: "/abs/path/forwarder.mjs",
-      reviewGateEnabled: false,
       injectAgentGuide: false,
       injectProjectBriefing: false,
     };
