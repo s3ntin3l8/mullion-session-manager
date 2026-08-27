@@ -375,9 +375,11 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // Issue: sidebar worktree display's Part B — a git-ignored path (most
       // commonly something under this repo's own `.claude/`, per that
       // issue's motivating case) shouldn't surface as a Row 4 chip.
-      // `message.path` isn't normalized by the forwarder (Claude Code sends
-      // an absolute path, Codex's apply_patch-derived one is relative —
-      // see forwarder-core.mjs) — isPathGitIgnoredCached resolves it
+      // `message.path` isn't normalized by the forwarder (Claude Code always
+      // sends an absolute path; Codex's apply_patch-derived one can be
+      // EITHER relative or absolute, depending on what the model already
+      // knew about its cwd when it wrote the patch — confirmed live, issue
+      // #846 — see forwarder-core.mjs) — isPathGitIgnoredCached resolves it
       // against `root` itself. `root` prefers the live cwd (a worktree the
       // shell has since `cd`'d into) over the static spawn cwd, same
       // precedence as everywhere else liveCwd overrides cwd.
