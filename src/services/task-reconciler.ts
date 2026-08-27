@@ -1511,9 +1511,15 @@ async function attemptMerge(
         // Before this, a `blocked` PR with no required-approval rule but an
         // unresolved thread got the same generic "Required checks" message
         // even with CI green — actively wrong, and exactly what made D1's
-        // deadlock invisible in the logs. Only checked in the `null`
-        // branch: CHANGES_REQUESTED/REVIEW_REQUIRED are already a correct,
-        // more specific explanation of "blocked" and take priority.
+        // deadlock invisible in the logs. Checked whenever `reviewDecision`
+        // ISN'T already a more specific, correct explanation on its own —
+        // that's `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, but NOT `APPROVED`:
+        // independent review, round 3 — a repo requiring both an approval
+        // AND conversation resolution can be `blocked` with the approval
+        // requirement already satisfied (`reviewDecision: "APPROVED"`)
+        // while a stale conversation is the sole remaining cause; treating
+        // `APPROVED` as "already explained" would leave exactly that
+        // combination on the old generic message forever.
         //
         // Reading branch protection's own `required_conversation_resolution`
         // flag directly isn't an option here — that endpoint needs the
@@ -1529,7 +1535,7 @@ async function attemptMerge(
             : reviewDecision === "REVIEW_REQUIRED"
               ? "Waiting on a required approving review"
               : "Required checks are red or still pending";
-        if (reviewDecision === null) {
+        if (reviewDecision === null || reviewDecision === "APPROVED") {
           // Self-heals the D1 deadlock — but ONLY when this row's own last
           // ingested verdict is "clean". Independent review, round 2: an
           // earlier version of this call fired unconditionally on the
@@ -1548,16 +1554,26 @@ async function attemptMerge(
           // processReviewingTasks, which reads the SAME column at the
           // point of ingestion rather than re-deriving a "must be clean by
           // now" assumption.
-          if (task.lastReviewVerdict === "clean") {
-            await resolveMullionOwnThreadsIfClean(app, task, project);
-          }
+          //
+          // Reuses the self-heal's own fetch for the diagnostic below
+          // (independent review, round 3) rather than fetching twice in
+          // the same tick — `null` means either self-heal didn't run
+          // (verdict isn't "clean") or it hit its own early-return
+          // (fetch failure/truncation), either way falling through to a
+          // fresh fetch just for the count.
+          const selfHealResult =
+            task.lastReviewVerdict === "clean"
+              ? await resolveMullionOwnThreadsIfClean(app, task, project)
+              : null;
           try {
-            const threadsResult = await fetchPullRequestReviewThreads(
-              token,
-              repoRef.owner,
-              repoRef.repo,
-              task.prNumber,
-            );
+            const threadsResult =
+              selfHealResult ??
+              (await fetchPullRequestReviewThreads(
+                token,
+                repoRef.owner,
+                repoRef.repo,
+                task.prNumber,
+              ));
             if (threadsResult.truncated) {
               message = "Blocked on the PR, but its review threads couldn't be fully enumerated";
             } else {
@@ -2626,10 +2642,17 @@ async function unlinkFindingsFileIfPresent(
  *
  * Bounded to `mullionLogins` (`resolveMullionReviewLogins`, same set D0's
  * fix uses) — a human's own review thread is NEVER a candidate here,
- * regardless of verdict. This is the one bound that actually matters: it's
- * what keeps `required_conversation_resolution` a real gate against a
- * worker (or Mullion itself) papering over a human's finding, while still
- * closing the self-inflicted deadlock this function exists to fix.
+ * regardless of verdict. Independent review, round 3: ownership is judged
+ * across EVERY comment in the thread, not just the first — a thread that
+ * started as Mullion's own finding but later got a human reply pushing
+ * back inside it (disagreeing the finding is real, adding context) must
+ * stay unresolved too. Auto-resolving on `comments[0]` alone would dismiss
+ * that objection right along with the original finding, which is exactly
+ * the "don't paper over a human's input" bound this function exists to
+ * hold. This is the one bound that actually matters: it's what keeps
+ * `required_conversation_resolution` a real gate against a worker (or
+ * Mullion itself) papering over a human's finding, while still closing the
+ * self-inflicted deadlock this function exists to fix.
  *
  * Best-effort, matching every other GitHub write in this file's own
  * posture: a fetch/mint/resolve failure is logged and skipped, never
@@ -2638,18 +2661,25 @@ async function unlinkFindingsFileIfPresent(
  * surviving to the next tick's `attemptMerge`, not a lost transition. Fails
  * closed on `truncated: true` (an incomplete thread enumeration must not
  * be read as "no threads to resolve").
+ *
+ * Returns the fetched thread result on success (even when nothing ended up
+ * resolved) so `attemptMerge`'s own "blocked" diagnostic — the OTHER
+ * consumer of this exact same fetch — can reuse it instead of paying for a
+ * second GraphQL round trip in the same sweep tick; `null` on any early
+ * return (no PR, no token, fetch failure, truncation), signaling "I
+ * couldn't get you a usable result, fetch your own."
  */
 async function resolveMullionOwnThreadsIfClean(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
-): Promise<void> {
-  if (task.prNumber === null) return;
+): Promise<Awaited<ReturnType<typeof fetchPullRequestReviewThreads>> | null> {
+  if (task.prNumber === null) return null;
 
   const repoRef = await resolveRepoRef(app, project);
-  if (!repoRef) return;
+  if (!repoRef) return null;
   const token = await resolveGitHubToken(app, repoRef, "write");
-  if (!token) return;
+  if (!token) return null;
 
   let result: Awaited<ReturnType<typeof fetchPullRequestReviewThreads>>;
   try {
@@ -2659,14 +2689,14 @@ async function resolveMullionOwnThreadsIfClean(
       { err, taskId: task.id },
       "task reconcile: review-thread fetch failed while checking for Mullion's own threads to resolve",
     );
-    return;
+    return null;
   }
   if (result.truncated) {
     app.log.warn(
       { taskId: task.id, prNumber: task.prNumber },
       "task reconcile: review threads/comments exceeded the fetch page size — skipping auto-resolve this tick rather than resolving an incomplete set",
     );
-    return;
+    return null;
   }
 
   // Independent review, round 2: cheap pre-filter before the reviewer
@@ -2676,13 +2706,16 @@ async function resolveMullionOwnThreadsIfClean(
   // backoff loop, not a one-shot verdict ingestion, so paying for it on
   // every tick even when nothing is unresolved would reproduce the exact
   // pattern D0 fixed elsewhere in this file.
-  if (!result.threads.some((t) => !t.isResolved)) return;
+  if (!result.threads.some((t) => !t.isResolved)) return result;
 
   const mullionLogins = await resolveMullionReviewLogins(app, repoRef, result.viewerLogin);
   const ownUnresolved = result.threads.filter(
-    (t) => !t.isResolved && t.comments.length > 0 && mullionLogins.has(t.comments[0]!.author ?? ""),
+    (t) =>
+      !t.isResolved &&
+      t.comments.length > 0 &&
+      t.comments.every((c) => mullionLogins.has(c.author ?? "")),
   );
-  if (ownUnresolved.length === 0) return;
+  if (ownUnresolved.length === 0) return result;
 
   for (const thread of ownUnresolved) {
     try {
@@ -2694,6 +2727,7 @@ async function resolveMullionOwnThreadsIfClean(
       );
     }
   }
+  return result;
 }
 
 async function processReviewingTasks(app: FastifyInstance): Promise<void> {

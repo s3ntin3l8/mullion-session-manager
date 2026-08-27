@@ -2536,6 +2536,10 @@ describe("reconcileTasks", () => {
           await reconcileTasks(app);
 
           expect(mockResolveReviewThread).toHaveBeenCalledExactlyOnceWith("tok", "thread-own");
+          // Independent review, round 3 — the diagnostic message below must
+          // reuse the self-heal's own fetch rather than paying for a
+          // second GraphQL round trip in the same tick.
+          expect(mockFetchPullRequestReviewThreads).toHaveBeenCalledOnce();
 
           await app.close();
         });
@@ -2584,6 +2588,47 @@ describe("reconcileTasks", () => {
           await reconcileTasks(app);
 
           expect(mockResolveReviewThread).not.toHaveBeenCalled();
+          const row = await getTask(app, taskId);
+          expect(row.mergeError).toBe("Blocked on 1 unresolved review conversation");
+
+          await app.close();
+        });
+
+        // Independent review, round 3 — a repo requiring BOTH an approval
+        // AND conversation resolution can be "blocked" with the approval
+        // requirement already satisfied (reviewDecision: "APPROVED") while
+        // a stale conversation is the sole remaining cause. Treating
+        // "APPROVED" as already-explained (the old behavior) would leave
+        // exactly this combination on the generic, misleading message
+        // forever.
+        it("reports the unresolved-conversation cause even when reviewDecision is APPROVED", async () => {
+          const app = await buildApp();
+          const { taskId } = await createDoneTaskWithPendingMerge(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+          mockGetPullRequestReviewDecision.mockResolvedValue("APPROVED");
+          mockResolveReviewerToken.mockResolvedValue(null);
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads: [
+              {
+                id: "thread-human",
+                isResolved: false,
+                comments: [
+                  {
+                    author: "octocat",
+                    createdAt: "2026-08-20T10:00:00Z",
+                    path: "src/foo.ts",
+                    line: 1,
+                    body: "Please also fix this.",
+                  },
+                ],
+              },
+            ],
+            truncated: false,
+          });
+
+          await reconcileTasks(app);
+
           const row = await getTask(app, taskId);
           expect(row.mergeError).toBe("Blocked on 1 unresolved review conversation");
 
@@ -4815,6 +4860,54 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.lastReviewVerdict).toBe("inconclusive");
         expect(mockFetchPullRequestReviewThreads).not.toHaveBeenCalled();
+        expect(mockResolveReviewThread).not.toHaveBeenCalled();
+
+        await app.close();
+      });
+
+      // Independent review, round 3 — ownership must be judged across
+      // EVERY comment in a thread, not just the first. A thread that
+      // started as Mullion's own finding but later got a human reply
+      // pushing back inside it must stay unresolved: auto-resolving on
+      // comments[0] alone would dismiss that human objection right along
+      // with the original finding.
+      it("does not resolve a thread Mullion started if a human later replied inside it", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+        writeFindings(app, taskId, 0, JSON.stringify({ verdict: "clean", summary: "All good." }));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            {
+              id: "thread-contested",
+              isResolved: false,
+              comments: [
+                {
+                  author: "mullion-reviewer[bot]",
+                  createdAt: "2026-08-20T10:00:00Z",
+                  path: "src/foo.ts",
+                  line: 1,
+                  body: "Fix this.",
+                },
+                {
+                  author: "octocat",
+                  createdAt: "2026-08-20T10:05:00Z",
+                  path: "src/foo.ts",
+                  line: 1,
+                  body: "Disagree, this is intentional.",
+                },
+              ],
+            },
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
         expect(mockResolveReviewThread).not.toHaveBeenCalled();
 
         await app.close();
