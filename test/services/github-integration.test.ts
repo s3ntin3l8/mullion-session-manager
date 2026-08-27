@@ -37,6 +37,7 @@ import {
   clearGitHubApp,
   resolveGitHubToken,
   resolveReviewerToken,
+  resolveMullionReviewLogins,
   verifyAppCredentials,
   GITHUB_PROVIDER,
   GITHUB_REVIEWER_PROVIDER,
@@ -602,6 +603,75 @@ describe("github-integration service", () => {
       expect(primaryAfter.configured).toBe(true);
       const reviewerAfter = await getGitHubAppStatus(app, GITHUB_REVIEWER_PROVIDER);
       expect(reviewerAfter.configured).toBe(false);
+      await app.close();
+    });
+  });
+
+  // Fresh review, PR #737 follow-up (D0) — a gating review round posts from
+  // the reviewer App, a distinct identity from whichever token a caller
+  // used to fetch the PR (github-write.ts's `viewerLogin`). This is the
+  // helper that closes that gap: the set of logins a caller should treat
+  // as "Mullion's own" spans both identities, not just the caller's own.
+  describe("resolveMullionReviewLogins (D0)", () => {
+    it("returns just the primary login when no reviewer App is configured", async () => {
+      const app = await buildApp();
+      const logins = await resolveMullionReviewLogins(
+        app,
+        { owner: "acme", repo: "widgets" },
+        "mullion-bot[bot]",
+      );
+      expect(logins).toEqual(new Set(["mullion-bot[bot]"]));
+      await app.close();
+    });
+
+    it("includes the reviewer App's own login when one is configured and installed", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_reviewer_token",
+        installationsChecked: null,
+      });
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, { data: { viewer: { login: "mullion-reviewer[bot]" } } }),
+      );
+
+      const logins = await resolveMullionReviewLogins(
+        app,
+        { owner: "acme", repo: "widgets" },
+        "mullion-bot[bot]",
+      );
+
+      expect(logins).toEqual(new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]));
+      await app.close();
+    });
+
+    it("degrades to just the primary login when the reviewer identity lookup fails", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_reviewer_token",
+        installationsChecked: null,
+      });
+      fetchMock.mockResolvedValue(jsonResponse(500, { message: "GitHub is down" }));
+
+      const logins = await resolveMullionReviewLogins(
+        app,
+        { owner: "acme", repo: "widgets" },
+        "mullion-bot[bot]",
+      );
+
+      expect(logins).toEqual(new Set(["mullion-bot[bot]"]));
+      await app.close();
+    });
+
+    it("returns an empty set when there is no primary login and no reviewer App", async () => {
+      const app = await buildApp();
+      const logins = await resolveMullionReviewLogins(
+        app,
+        { owner: "acme", repo: "widgets" },
+        null,
+      );
+      expect(logins).toEqual(new Set());
       await app.close();
     });
   });

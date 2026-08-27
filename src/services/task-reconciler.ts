@@ -50,7 +50,11 @@ import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { commitWipChanges, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import { resolveGitHubToken, resolveReviewerToken } from "./github-integration.js";
+import {
+  resolveGitHubToken,
+  resolveReviewerToken,
+  resolveMullionReviewLogins,
+} from "./github-integration.js";
 import {
   getPullRequestByNumber,
   mergePullRequest,
@@ -2017,11 +2021,9 @@ async function attemptReturnPrCommentsToWorker(
   // github-app.ts) while a "write" mint for the SAME installation still
   // succeeds — so a "read" token here could authenticate as a genuinely
   // different identity (the PAT owner) than postReviewFindingsComment's
-  // "write" token (the App). viewerLogin is compared against
-  // postReviewFindingsComment's own posted comments below; if the two
-  // calls can diverge in which identity they resolve to, that comparison
-  // silently breaks and Mullion's own findings get ingested as if a human
-  // wrote them. Matching scopes is what keeps them the same identity.
+  // "write" token (the App). Matching scopes keeps the PRIMARY identity
+  // consistent between the two calls; the reviewer App's own identity
+  // (below) is resolved independently and doesn't depend on this.
   const token = await resolveGitHubToken(app, repoRef, "write");
   if (!token) return false;
 
@@ -2043,15 +2045,34 @@ async function attemptReturnPrCommentsToWorker(
   }
 
   const cursor = task.lastPrReviewCommentAt;
-  const newComments = result.threads
+  // Unresolved + cursor-filtered only, author identity NOT yet checked —
+  // deliberately ordered before resolveMullionReviewLogins below (round 2,
+  // self-review): that call is a live, uncached GraphQL round trip (the
+  // reviewer App's login never changes, but nothing here caches it), and
+  // the ordinary case — nothing new since last tick — should never pay for
+  // it. Only a task with an actual candidate comment reaches that call.
+  const candidateComments = result.threads
     .filter((t) => !t.isResolved)
     .flatMap((t) => t.comments)
-    // Excludes Mullion's own review posts (postReviewFindingsComment posts
-    // as this same `viewerLogin` identity) and any comment whose author is
-    // null (a deleted/ghost account — nothing to filter against, but also
-    // nothing a re-seeded worker can usefully be told "from whom").
-    .filter((c) => c.author !== null && c.author !== result.viewerLogin)
+    .filter((c) => c.author !== null)
     .filter((c) => cursor === null || new Date(c.createdAt).getTime() > cursor.getTime());
+  if (candidateComments.length === 0) return false;
+
+  // Fresh review: a gating review round (#737/#827) posts its findings from
+  // the REVIEWER App, a distinct identity from the primary token above —
+  // `result.viewerLogin` alone no longer covers "Mullion's own comments."
+  // Without this, an unresolved thread from Mullion's own review gets
+  // re-ingested here as if a human had posted it, on the very same tick a
+  // clean follow-up verdict lands, burning an auto-return round on nothing.
+  const mullionLogins = await resolveMullionReviewLogins(app, repoRef, result.viewerLogin);
+
+  // Excludes Mullion's own review posts (primary identity or reviewer App —
+  // see resolveMullionReviewLogins). `c.author` is non-null by construction
+  // of `candidateComments` above (TypeScript can't see that through the
+  // closure, hence the redundant-looking check).
+  const newComments = candidateComments.filter(
+    (c) => c.author !== null && !mullionLogins.has(c.author),
+  );
   if (newComments.length === 0) return false;
 
   const resolvedTaskMaster = resolveTaskMasterConfig(app);

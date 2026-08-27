@@ -820,9 +820,12 @@ export interface PrReviewThread {
 export interface PrReviewThreadsResult {
   /** The login of whichever identity `token` authenticates as — an App's
    * `<slug>[bot]` for an installation token, a human login for a PAT
-   * fallback. Callers use this to filter out the caller's own comments
-   * (Mullion's own review posts as this same identity) without needing to
-   * know or hardcode which auth mode is in play. */
+   * fallback. NOT the same as "Mullion's own comments": since #737/#827 a
+   * gating review round posts from a SECOND, distinct identity (the
+   * reviewer App), which this token's own login does not cover. Callers
+   * filtering out Mullion's own posts must check against
+   * `resolveMullionReviewLogins` (github-integration.ts), not this field
+   * alone. */
   viewerLogin: string | null;
   threads: PrReviewThread[];
   /** True when either page's `first` bound didn't cover every thread/comment
@@ -928,6 +931,23 @@ export async function fetchPullRequestReviewThreads(
     })),
     truncated,
   };
+}
+
+/**
+ * The login `token` authenticates as — an App installation token resolves
+ * to `<slug>[bot]`, a PAT/OAuth token to the human account it belongs to.
+ * Used to build the set of logins Mullion's own review posts can appear
+ * under (`resolveMullionReviewLogins`, github-integration.ts) when a caller
+ * already has a token in hand and just needs its identity, without the
+ * cost of a full `fetchPullRequestReviewThreads` call.
+ */
+export async function fetchViewerLogin(token: string): Promise<string | null> {
+  const data = await githubGraphQL<{ viewer: { login: string } | null }>(
+    token,
+    `query { viewer { login } }`,
+    {},
+  );
+  return data.viewer?.login ?? null;
 }
 
 /**

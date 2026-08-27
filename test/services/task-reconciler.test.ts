@@ -114,6 +114,7 @@ const {
   mockResolveRepoRef,
   mockResolveGitHubToken,
   mockResolveReviewerToken,
+  mockResolveMullionReviewLogins,
   mockGetPullRequestByNumber,
   mockMergePullRequest,
   mockUpdatePullRequestBranch,
@@ -142,6 +143,15 @@ const {
   // #737) never attempts the re-assert path. Only the dedicated #737
   // tests override this.
   mockResolveReviewerToken: vi.fn(),
+  // D0 fix — no pass-through default (the real implementation's own
+  // internal call to resolveReviewerToken bypasses this file's mock
+  // entirely, since it's an intra-module reference — see
+  // resolveMullionReviewLogins's own dedicated tests in
+  // github-integration.test.ts for that). Every pre-existing test in this
+  // file gets a beforeEach default that reproduces the OLD single-identity
+  // filter exactly (just wraps `viewerLogin` in a Set); only the dedicated
+  // D0 test below overrides it to include a second, reviewer-App identity.
+  mockResolveMullionReviewLogins: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
   mockMergePullRequest: vi.fn(),
   mockUpdatePullRequestBranch: vi.fn(),
@@ -219,6 +229,7 @@ vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
     ...actual,
     resolveGitHubToken: mockResolveGitHubToken,
     resolveReviewerToken: mockResolveReviewerToken,
+    resolveMullionReviewLogins: mockResolveMullionReviewLogins,
   };
 });
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
@@ -450,6 +461,15 @@ describe("reconcileTasks", () => {
     // review requirement configured, no reviewer App configured.
     mockGetPullRequestReviewDecision.mockReset().mockResolvedValue(null);
     mockResolveReviewerToken.mockReset().mockResolvedValue(null);
+    // D0 fix — default reproduces the pre-fix single-identity filter (just
+    // the caller's own viewerLogin) so every pre-existing PR-comment test
+    // keeps its original behavior; only the dedicated D0 test overrides
+    // this to add a second, reviewer-App identity to the set.
+    mockResolveMullionReviewLogins
+      .mockReset()
+      .mockImplementation(async (_app, _repo, primaryViewerLogin: string | null) =>
+        primaryViewerLogin !== null ? new Set([primaryViewerLogin]) : new Set(),
+      );
     // #758 — fail-closed defaults (no pre-existing test's task has
     // mergeRequestedAt + a "dirty" mergeableState + autoApprove on, so
     // these are never reached outside the dedicated describe block below).
@@ -3634,6 +3654,84 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      // D0 — a live dry run (2026-08-27) confirmed this exact gap: a
+      // gating review round's own findings post from the REVIEWER App
+      // (#737/#827), a distinct login from `viewerLogin` above (which is
+      // the caller's own, primary-token identity). Before this fix, the
+      // filter above missed comments authored by that second identity
+      // entirely — Mullion re-ingested its own still-unresolved round-1
+      // finding as if a human had posted it, burning an auto-return round
+      // on the same tick a clean follow-up verdict landed.
+      it("also filters out comments authored by the reviewer App's own login, not just the primary identity", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(
+              false,
+              "mullion-reviewer[bot]",
+              "My own gating finding.",
+              "2026-08-20T10:00:00Z",
+            ),
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+        expect(row.lastPrReviewCommentAt).toBeNull();
+
+        await app.close();
+      });
+
+      // Round 2, self-review: the test above only proves the two-identity
+      // set doesn't UNDER-filter (misses the reviewer App). This proves the
+      // companion direction — a two-member `mullionLogins` set must not
+      // OVER-filter a genuine human comment sitting alongside a bot one on
+      // the same PR, which a mis-scoped `mullionLogins.has()` check could
+      // plausibly do without any test catching it.
+      it("still returns the task for a genuine human comment even when the reviewer App's own comment is also present", async () => {
+        const app = await buildApp();
+        const { taskId } = await createPrCommentCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockFetchPullRequestReviewThreads.mockResolvedValue({
+          viewerLogin: "mullion-bot[bot]",
+          threads: [
+            thread(
+              false,
+              "mullion-reviewer[bot]",
+              "My own gating finding.",
+              "2026-08-20T10:00:00Z",
+            ),
+            thread(false, "octocat", "Please also fix this.", "2026-08-20T10:05:00Z"),
+          ],
+          truncated: false,
+        });
+        mockResolveMullionReviewLogins.mockResolvedValue(
+          new Set(["mullion-bot[bot]", "mullion-reviewer[bot]"]),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("pr-comment");
+        expect(row.lastPrReviewCommentAt).toEqual(new Date("2026-08-20T10:05:00Z"));
 
         await app.close();
       });
