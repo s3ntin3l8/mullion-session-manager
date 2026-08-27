@@ -1726,14 +1726,14 @@ describe("mapCodexEvent", () => {
     expect(mapCodexEvent("Notification", {})).toBeNull();
   });
 
-  it("returns null for PreToolUse (still deferred to issue #178) and dispatches PermissionRequest", () => {
+  it("returns null for PreToolUse (Codex has no such hook) and dispatches PermissionRequest to review_gate (issue #264)", () => {
     expect(mapCodexEvent("PreToolUse", {})).toBeNull();
     expect(
       mapCodexEvent("PermissionRequest", {
         tool_name: "Bash",
         tool_input: { command: "npm test" },
       }),
-    ).toEqual({ kind: "permission_request", tool: "Bash", summary: "npm test" });
+    ).toEqual({ kind: "review_gate", state: "waiting", prompt: "npm test" });
   });
 
   it("dispatches UserPromptSubmit to turn_start (issue: extend surfaced session statuses — previously a generic notification)", () => {
@@ -2085,14 +2085,25 @@ describe("formatGateDecision (issue #178, rescoped by #264)", () => {
     );
   });
 
-  // agy has no gate dialect at all (no PermissionRequest-equivalent hook to
-  // build one on) and Codex's dialect lands in a follow-up PR — both are
-  // genuinely unreachable today (see mapCodexPermissionRequest/mapAgyEvent),
-  // not just unimplemented, so this falls to the generic default.
+  // Issue #264 — verified live (installed codex-cli 0.149.0) to be
+  // byte-identical to Claude Code's dialect.
+  it("dispatches to the codex dialect (same shape as claude-code)", () => {
+    expect(formatGateDecision("codex", "approved")).toEqual(
+      formatClaudeCodeGateDecision("approved"),
+    );
+    expect(formatGateDecision("codex", "denied", "looks unsafe")).toEqual(
+      formatClaudeCodeGateDecision("denied", "looks unsafe"),
+    );
+    expect(formatGateDecision("codex", "no_response")).toEqual({});
+  });
+
+  // agy has no gate dialect at all — it never registers a
+  // PermissionRequest-equivalent hook to build one on (see mapAgyEvent's
+  // PreToolUse comment above), so this is genuinely unreachable for it, not
+  // just unimplemented.
   it("falls back to a generic {} shape, with a diagnostic log, for any agent without a real gate dialect", () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      expect(formatGateDecision("codex", "approved")).toEqual({});
       expect(formatGateDecision("agy", "denied")).toEqual({});
       expect(formatGateDecision("some-future-agent", "denied")).toEqual({});
       expect(warn).toHaveBeenCalled();

@@ -780,6 +780,13 @@ export function mapCodexSessionEnd(payload) {
   return { kind: "session_end", reason };
 }
 
+// Issue #264 rescope — PermissionRequest is now the blocking
+// permission-approval channel (see formatGateDecision's codex case, which
+// reuses Claude Code's dialect verbatim — confirmed live against installed
+// codex-cli 0.149.0 that the reply shape is byte-identical). Unlike Claude
+// Code, Codex has no ExitPlanMode-equivalent tool to exempt, so every
+// PermissionRequest becomes a review_gate — there's no observational
+// permission_request fallback left for this agent at all.
 export function mapCodexPermissionRequest(payload) {
   const toolName = typeof payload?.tool_name === "string" ? payload.tool_name : "a tool";
   const input = payload?.tool_input;
@@ -789,8 +796,8 @@ export function mapCodexPermissionRequest(payload) {
       : typeof input?.file_path === "string"
         ? input.file_path
         : null;
-  const summary = detail && detail.length > 0 ? detail : toolName;
-  return { kind: "permission_request", tool: toolName, summary };
+  const prompt = detail && detail.length > 0 ? detail : toolName;
+  return { kind: "review_gate", state: "waiting", prompt };
 }
 
 // Issue: extend surfaced session statuses — was previously mapped to a
@@ -1059,11 +1066,17 @@ export function formatGateDecision(agent, decision, reason) {
   switch (agent) {
     case "claude-code":
       return formatClaudeCodeGateDecision(decision, reason);
-    // Codex gets its own dialect in a follow-up PR (issue #264) — its
-    // PermissionRequest hook isn't wired to emit review_gate yet (see
-    // mapCodexPermissionRequest above), so this stays unreachable for it
-    // until that lands. agy has no gate dialect at all — it never registers
-    // a PermissionRequest-equivalent hook (see mapAgyEvent's PreToolUse
+    case "codex":
+      // Verified live (installed codex-cli 0.149.0, real interactive
+      // session, --dangerously-bypass-hook-trust for verification only):
+      // Codex's PermissionRequest decision shape
+      // (`hookSpecificOutput.decision.{behavior,message}`) is byte-identical
+      // to Claude Code's — see formatClaudeCodeGateDecision above. Never set
+      // `interrupt`, `updatedInput`, or `updatedPermissions`: Codex's own
+      // embedded schema documents all three as fail-closed if present.
+      return formatClaudeCodeGateDecision(decision, reason);
+    // agy has no gate dialect at all — it never registers a
+    // PermissionRequest-equivalent hook (see mapAgyEvent's PreToolUse
     // comment above).
     default:
       console.error(

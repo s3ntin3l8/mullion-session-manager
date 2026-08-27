@@ -56,10 +56,19 @@ import { shellQuote } from "./shared.js";
 // themselves.
 //
 // `Stop`, `SessionStart`, `SessionEnd`, `PermissionRequest`, `UserPromptSubmit`,
-// and `PostToolUse` (apply_patch + Bash matchers) are registered. Gating hooks
-// (`PreToolUse`) are deliberately deferred to issue #178, same reasoning as
-// Claude Code's deferred `PreToolUse`: no endpoint exists yet to answer a real
-// gate decision.
+// and `PostToolUse` (apply_patch + Bash matchers) are registered.
+//
+// PermissionRequest is ALSO the blocking permission-approval channel (issue
+// #264, same rescope as Claude Code's — see hook-adapters/claude-code.ts's
+// file header). Confirmed live against installed codex-cli 0.149.0 (a real
+// interactive session, --dangerously-bypass-hook-trust for verification
+// only): the hook fires with a real `tool_name`/`tool_input` payload,
+// tolerates a timeout well past SessionEnd's separate 1s/3s cap (nothing
+// else in Codex's own hook timeout defaults to below 600s), and its
+// `hookSpecificOutput.decision.{behavior,message}` reply shape is
+// byte-identical to Claude Code's — allow/deny/no-reply-at-all (falls
+// through to Codex's own native prompt) all verified. See
+// forwarder-core.mjs's mapCodexPermissionRequest/formatGateDecision.
 
 const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
 
@@ -74,7 +83,13 @@ export interface CodexHooksFile {
   [key: string]: unknown;
 }
 
-function hookGroup(execPath: string, forwarderPath: string, kind: string, matcher?: string) {
+function hookGroup(
+  execPath: string,
+  forwarderPath: string,
+  kind: string,
+  matcher?: string,
+  timeoutSeconds = 10,
+) {
   return {
     ...(matcher ? { matcher } : {}),
     hooks: [
@@ -85,11 +100,21 @@ function hookGroup(execPath: string, forwarderPath: string, kind: string, matche
         // `/hooks` trust UI — makes clear what it is and that it's safe to
         // remove, without requiring them to go read this file's source.
         statusMessage: "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
-        timeout: 10,
+        timeout: timeoutSeconds,
       },
     ],
   };
 }
+
+// Issue #264 — a blocking permission decision needs long enough for an
+// actual human to notice the amber review indicator and click
+// Approve/Deny, not just enough to stop a wedged process (see hookGroup's
+// own 10s default for the fire-and-forget hooks). Confirmed live (installed
+// codex-cli 0.149.0) that PermissionRequest tolerates a timeout well past
+// this — 300s stays comfortably under Mullion's own server-side timeout
+// (hooks.ts's GATE_TIMEOUT_MS, 290s) controlling the fall-through, same
+// reasoning as Claude Code's PERMISSION_REQUEST_TIMEOUT_SECONDS.
+const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 
 /** True if `group` is one Mullion itself previously wrote — identified by
  * its command referencing this install's own forwarder path, never by
@@ -231,8 +256,9 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
     ),
     // No matcher — fires for ALL tools that trigger a permission dialog,
     // giving us a deterministic "agent needs user input" signal regardless
-    // of tool type.
-    hookGroup(execPath, fwd, "PermissionRequest"),
+    // of tool type. Also the blocking permission-approval channel (issue
+    // #264) — needs the long timeout, not the fire-and-forget default.
+    hookGroup(execPath, fwd, "PermissionRequest", undefined, PERMISSION_REQUEST_TIMEOUT_SECONDS),
   ];
   hooks.UserPromptSubmit = [
     ...(hooks.UserPromptSubmit ?? []).filter(
@@ -277,11 +303,17 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
 // been verified to have equivalents (see the plan doc's "verify, don't
 // assert" note for this adapter), so this list stays deliberately smaller
 // than Claude Code's rather than guessing.
+//
+// `review_gate`, not `permission_request` (issue #264 rescope): Codex's
+// PermissionRequest now always maps to review_gate — unlike Claude Code,
+// Codex has no ExitPlanMode-equivalent tool/dedup concern to exempt, so
+// every PermissionRequest for this agent becomes a gate, with no
+// observational fallback shape surviving at all.
 const CODEX_EMITS = [
   "progress",
   "session_start",
   "session_end",
-  "permission_request",
+  "review_gate",
   "turn_start",
   "file_change",
   "git_branch",

@@ -64,6 +64,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(written.hooks.SessionStart).toHaveLength(1);
     expect(written.hooks.SessionEnd).toHaveLength(1);
     expect(written.hooks.PermissionRequest).toHaveLength(1);
+    // Issue #264 — the blocking permission-approval channel needs the long
+    // timeout, not the fire-and-forget default every other hook here uses.
+    expect(written.hooks.PermissionRequest[0].hooks[0].timeout).toBe(300);
+    expect(written.hooks.Stop[0].hooks[0].timeout).toBe(10);
     expect(written.hooks.UserPromptSubmit).toHaveLength(1);
     expect(written.hooks.PostToolUse).toHaveLength(2);
     expect(written.hooks.PostToolUse[0].matcher).toBe("apply_patch");

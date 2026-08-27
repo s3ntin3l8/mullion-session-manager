@@ -329,19 +329,25 @@ issue #271 gives Claude Code via the `mullion` MCP server). See
 adapter reports. OpenCode's real gating hook is `permission.ask` (mutating
 an `output.status` of `ask`/`deny`/`allow`), confirmed against the installed
 `@opencode-ai/plugin` package's own types — **not** `tool.execute.before`
-throwing, as originally assumed during planning. Unlike Claude Code's
-`PreToolUse`, it's still deliberately not wired up: the review-gate endpoint
-now exists (issue #178), but OpenCode's own `permission.ask` gating dialect
-was never implemented or verified against a live plugin execution — tracked
-in issue #264 alongside Codex's and agy's own deferred gate dialects.
+throwing, as originally assumed during planning. It's still not wired up,
+but not by choice: live testing against the installed CLI (1.18.21–1.18.23)
+confirmed `permission.ask` never fires at all, in either headless or
+interactive mode — a confirmed upstream bug (opencode issues #7006, #19927:
+`PermissionNext.ask()`'s own `if (!needsAsk)` guard skips the plugin trigger
+entirely for a first-encounter command, exactly the case remote approval
+would need). Tracked in issue #264 as blocked upstream, not as a Mullion gap
+— Codex's own dialect shipped (see below); agy has no `PermissionRequest`-
+equivalent hook to build one on at all.
 
 **Codex** reuses the same shared forwarder as Claude Code (`src/hooks/
 forwarder.mjs`, `codex` as its agent argv). As of this writing (rewritten
 here — a previous revision of this doc listed only two of these six),
 `mergeCodexHooks` registers `Stop` (→ `progress: done`), `SessionStart` (→
 `session_start`), `SessionEnd` (→ `session_end`), `PermissionRequest` (→
-`permission_request`, no matcher — every tool that can trigger a permission
-dialog), `UserPromptSubmit` (→ `turn_start`), and `PostToolUse` (matchers
+`review_gate` — issue #264's blocking permission-approval channel, no
+matcher — every tool that can trigger a permission dialog, registered with a
+300s timeout rather than the fire-and-forget default), `UserPromptSubmit`
+(→ `turn_start`), and `PostToolUse` (matchers
 `apply_patch` → `file_change`, and `Bash` → `git_branch`/`cwd_changed` for
 worktree/branch detection) — Codex has no `Notification` event at all. See
 `hook-adapters/codex.ts`'s `CODEX_EMITS` for the capability list this
@@ -397,9 +403,11 @@ above.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
-`terminationReason === "error"`), `PreToolUse` on `run_command` (→
-`git_branch`/`cwd_changed` for worktree/branch detection, plus the blocking
-`review_gate` below), and `PostToolUse` on `write_to_file` /
+`terminationReason === "error"`), `PreToolUse` on `run_command`
+(observational only — `git_branch`/`cwd_changed` for worktree/branch
+detection; issue #264 removed the `review_gate` it used to also emit, since
+agy has no `PermissionRequest`-equivalent hook to build a gate on), and
+`PostToolUse` on `write_to_file` /
 `replace_file_content` / `multi_replace_file_content` (→ `file_change`) —
 rewritten here since a previous revision of this doc said only `Stop` was
 registered, and separately claimed `PostToolUse` was "deliberately not wired
@@ -543,12 +551,18 @@ bell panel (`NotificationBell.tsx`), which calls
 the agent's own decision dialect (`formatGateDecision` in
 `forwarder-core.mjs`) on stdout, and exits.
 
-**Claude Code's `PermissionRequest` has a gate dialect wired up today.**
-Codex's registers the same hook but doesn't emit `review_gate` yet — still
-tracked in issue #264. agy has no `PermissionRequest`-equivalent hook at all,
-so it can't participate; OpenCode's own equivalent (`permission.ask`) is
-confirmed not to fire against the installed CLI at all (a real upstream bug,
-not a Mullion gap — see that issue for the tracking link).
+**Claude Code's and Codex's `PermissionRequest` both have a gate dialect
+wired up today** — confirmed live against installed codex-cli 0.149.0 that
+its `PermissionRequest` decision shape
+(`hookSpecificOutput.decision.{behavior,message}`) is byte-identical to
+Claude Code's (`formatGateDecision` reuses the same formatter for both).
+Unlike Claude Code, Codex has no ExitPlanMode-equivalent tool to exempt, so
+every Codex `PermissionRequest` becomes a `review_gate` — there's no
+observational fallback shape left for this agent at all. agy has no
+`PermissionRequest`-equivalent hook at all, so it can't participate;
+OpenCode's own equivalent (`permission.ask`) is confirmed not to fire against
+the installed CLI at all (a real upstream bug, not a Mullion gap — see issue
+#264 for the tracking link).
 
 **Fall-through, not fail-closed, when nobody answers.** This is the load-bearing
 difference from the old gate: a real human decision is always "approved" or
