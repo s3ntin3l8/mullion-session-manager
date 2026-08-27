@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.50](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.49...v0.2.50) (2026-08-27)
+
+
+### Bug Fixes
+
+* **tasks:** strip a GitHub App viewer login's [bot] suffix before comparing identities ([#837](https://github.com/s3ntin3l8/mullion-session-manager/issues/837)) ([e6f3a85](https://github.com/s3ntin3l8/mullion-session-manager/commit/e6f3a855e8ba66358900f38da6a483c981dcc478))
+
 ## [0.2.49](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.48...v0.2.49) (2026-08-27)
 
 
