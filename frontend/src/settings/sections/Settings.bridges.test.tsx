@@ -16,19 +16,24 @@ import { resetStore } from "../../test/resetStore.js";
 
 describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
   let bridgesDb: BridgeSummary[];
+  let bridgesShouldFail: boolean;
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
   let pairCounter: number;
 
   beforeEach(() => {
     bridgesDb = [];
+    bridgesShouldFail = false;
     pairCounter = 0;
 
     ({ fetchMock, unexpectedCalls } = mockFetch({
       "GET /api/hosts": () => jsonResponse(200, []),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
-      "GET /api/bridges": () => jsonResponse(200, bridgesDb),
+      "GET /api/bridges": () =>
+        bridgesShouldFail
+          ? jsonResponse(500, { message: "internal error" })
+          : jsonResponse(200, bridgesDb),
       "POST /api/bridges": () => {
         pairCounter += 1;
         const id = `bridge-${pairCounter}`;
@@ -77,6 +82,17 @@ describe("Settings -> Hosts -> SSH agent bridges (issue #820 PR7c)", () => {
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
     expect(await screen.findByText(/No SSH agent bridges paired/)).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #869 — a failed fetch used to fall through to the
+  // same "no bridges paired" copy a genuinely empty list gets, reading as
+  // confirmed success rather than "couldn't reach the server."
+  it("shows a load error instead of the empty state when the list fetch fails", async () => {
+    bridgesShouldFail = true;
+    render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+    expect(await screen.findByText("Couldn't load SSH agent bridges.")).toBeInTheDocument();
+    expect(screen.queryByText(/No SSH agent bridges paired/)).not.toBeInTheDocument();
   });
 
   it("lists a paired, connected bridge with its name/platform and status", async () => {

@@ -49,6 +49,12 @@ function describeBridge(bridge: BridgeSummary): string {
 
 export function BridgesSection() {
   const [bridges, setBridges] = useState<BridgeSummary[] | null>(null);
+  // Hermes review, PR #869 — a failed fetch used to fall through to the
+  // exact same `bridges.length === 0` branch a genuinely empty list does,
+  // rendering "No SSH agent bridges paired" (which reads as a confirmed
+  // fact) for what might actually be "couldn't reach the server right
+  // now." Tracked separately so the render below can tell the two apart.
+  const [loadError, setLoadError] = useState(false);
   const [pairOpen, setPairOpen] = useState(false);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   // Tracks an in-flight revoke per row so a double-click can't fire the
@@ -60,8 +66,14 @@ export function BridgesSection() {
   const refresh = () => {
     api
       .listBridges()
-      .then(setBridges)
-      .catch(() => setBridges((prev) => prev ?? []));
+      .then((result) => {
+        setLoadError(false);
+        setBridges(result);
+      })
+      .catch(() => {
+        setLoadError(true);
+        setBridges((prev) => prev ?? []);
+      });
   };
 
   useEffect(refresh, []);
@@ -130,7 +142,10 @@ export function BridgesSection() {
         </AddButton>
       </div>
 
-      {bridges !== null && bridges.length === 0 && (
+      {bridges !== null && bridges.length === 0 && loadError && (
+        <ErrorText style={{ marginTop: 10 }}>Couldn't load SSH agent bridges.</ErrorText>
+      )}
+      {bridges !== null && bridges.length === 0 && !loadError && (
         <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
           No SSH agent bridges paired — a session's SSH_AUTH_SOCK falls back to whatever's
           configured or ambient on the host it runs on until you pair one.
