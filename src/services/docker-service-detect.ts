@@ -240,18 +240,24 @@ function looksBuildOnly(imageRef: string, composeProject: string, service: strin
   return pattern.test(imageRef);
 }
 
-/** Whether every file in `configFiles` still exists — gates using the
- * reconstructed `-f` list at all. Deliberately NOT "does a default-named
- * compose file exist in workingDir": once the logs/pull commands carry an
- * explicit `-f`, that check tests the wrong thing (a stack `up`ed with `-f
+/** Whether every file in `configFiles`, plus `envFile` when one was
+ * recorded, still exists — gates using the reconstructed compose flags at
+ * all. Deliberately NOT "does a default-named compose file exist in
+ * workingDir": once the logs/pull commands carry an explicit `-f`, that
+ * check tests the wrong thing (a stack `up`ed with `-f
  * docker-compose.prod.yml` can sit right next to an unrelated dev
  * `docker-compose.yml`, which would make the default-filename check true
  * for the wrong reason — verified live against this repo's own
- * pocket-portfolio-tracker). Any missing/relative entry falls through to
- * the plain `docker logs -f <containerName>` fallback below, same safety
- * net as before. */
-function isComposeResolvable(configFiles: string[]): boolean {
+ * pocket-portfolio-tracker). `envFile` has to be checked too, not just
+ * `configFiles`: `docker compose --env-file <missing>` hard-fails
+ * ("couldn't find env file") rather than falling back to no env file at
+ * all (verified live) — so a stack whose recorded env file has since been
+ * deleted/moved must fall through to the plain `docker logs -f
+ * <containerName>` fallback below the same as a missing compose file
+ * would, or the reconstructed command breaks instead of degrading. */
+function isComposeResolvable(configFiles: string[], envFile: string | null): boolean {
   if (configFiles.length === 0) return false;
+  if (envFile !== null && !(path.isAbsolute(envFile) && existsSync(envFile))) return false;
   return configFiles.every((file) => path.isAbsolute(file) && existsSync(file));
 }
 
@@ -298,6 +304,7 @@ function dedupe(rows: RawRow[]): RawRow[] {
 
 function toComposeService(row: RawRow): ComposeService {
   const configFiles = parseConfigFiles(row.configFiles);
+  const envFile = row.envFile.length > 0 ? row.envFile : null;
   return {
     composeProject: row.composeProject,
     service: row.service,
@@ -308,9 +315,9 @@ function toComposeService(row: RawRow): ComposeService {
     imageRef: row.image,
     imageId: row.imageId,
     buildOnly: looksBuildOnly(row.image, row.composeProject, row.service),
-    composeResolvable: isComposeResolvable(configFiles),
+    composeResolvable: isComposeResolvable(configFiles, envFile),
     configFiles,
-    envFile: row.envFile.length > 0 ? row.envFile : null,
+    envFile,
   };
 }
 

@@ -405,6 +405,38 @@ describe("docker-service-detect", () => {
       expect(controls[0]?.command).toBe(`docker logs -f --tail=200 ${shellQuote("foo-web")}`);
     });
 
+    it("flags composeResolvable false when the stack's own recorded env file no longer exists on disk", async () => {
+      // `docker compose --env-file <missing>` hard-fails ("couldn't find env
+      // file") rather than degrading gracefully — verified live — so a
+      // deleted/moved env file must force the same docker-logs fallback as
+      // a missing compose file, even though every configFiles entry here
+      // still exists.
+      const missingEnvFile = path.join(resolvableDir, ".env.prod");
+      psOutput = psLine({
+        id: "a",
+        names: "pocket-portfolio-tracker-api-1",
+        state: "running",
+        status: "Up",
+        image: "pocket-portfolio-tracker-api",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "pocket-portfolio-tracker",
+        service: "api",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+        envFile: missingEnvFile,
+      });
+
+      const services = await getComposeServices();
+      expect(services[0]?.composeResolvable).toBe(false);
+
+      const controls = await toDockControls(services);
+      expect(controls[0]?.command).toBe(
+        `docker logs -f --tail=200 ${shellQuote("pocket-portfolio-tracker-api-1")}`,
+      );
+    });
+
     it("returns [] when docker is not installed", async () => {
       dockerInstalled = false;
       expect(await getComposeServices()).toEqual([]);
