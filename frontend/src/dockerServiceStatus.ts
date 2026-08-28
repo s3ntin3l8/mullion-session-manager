@@ -34,10 +34,12 @@ export function dockerServiceStatus(state: string): DockerStatusPresentation {
 }
 
 // Hermes review (PR #857) — `docker compose start` only succeeds from these
-// three states; offering it for `paused` (needs `unpause`, not `start`) or
+// states; offering it for `paused` (needs `unpause`, not `start`) or
 // `restarting` (already mid-transition) surfaces a button that reliably
-// errors.
-const STARTABLE_STATES = new Set(["created", "exited", "dead"]);
+// errors. `dead` is deliberately excluded too: it's a terminal state a
+// container lands in when Docker fails to remove it (driver/storage
+// error) — `start` can't recover it, only removal + recreation can.
+const STARTABLE_STATES = new Set(["created", "exited"]);
 
 export function isStartable(state: string): boolean {
   return STARTABLE_STATES.has(state);

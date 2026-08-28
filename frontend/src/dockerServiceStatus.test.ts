@@ -33,8 +33,8 @@ describe("dockerServiceStatus", () => {
 });
 
 describe("isStartable", () => {
-  it("is true for created/exited/dead — the states docker compose start actually applies to", () => {
-    for (const state of ["created", "exited", "dead"]) {
+  it("is true for created/exited — the states docker compose start actually applies to", () => {
+    for (const state of ["created", "exited"]) {
       expect(isStartable(state)).toBe(true);
     }
   });
@@ -45,6 +45,10 @@ describe("isStartable", () => {
 
   it("is false for restarting — already mid-transition", () => {
     expect(isStartable("restarting")).toBe(false);
+  });
+
+  it("is false for dead — a terminal removal-failure state start can't recover", () => {
+    expect(isStartable("dead")).toBe(false);
   });
 
   it("is false for running and removing", () => {

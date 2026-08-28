@@ -437,7 +437,7 @@ describe("Dock", () => {
       expect(screen.queryByText("Start service")).not.toBeInTheDocument();
     });
 
-    it.each(["paused", "restarting"])(
+    it.each(["paused", "restarting", "dead"])(
       "does not offer 'Start service' for state:%s — docker compose start errors on it",
       async (state) => {
         dockByProject[1] = [dockerControl({ docker: { ...dockerControl().docker, state } })];
