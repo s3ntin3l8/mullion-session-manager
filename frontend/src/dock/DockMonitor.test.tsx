@@ -261,6 +261,43 @@ describe("Dock", () => {
         expect(createSession).toHaveBeenCalledTimes(1);
       });
 
+      it("re-attaches after the container disappears from discovery entirely and comes back (compose down/up)", async () => {
+        // Hermes review — the eligibility map used to grow monotonically,
+        // never dropping an identity absent from the current poll. A plain
+        // container-state change ("running" -> "exited") is covered by the
+        // "does not fight a manual stop" test above, but `docker compose
+        // down` removes the container from `docker ps -a` entirely, so the
+        // control vanishes from discovery rather than merely changing
+        // state — without pruning, the stale `true` survived that gap and
+        // silently suppressed the re-attach edge once `up -d` recreated it.
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+        // "docker compose down" — the control disappears from discovery.
+        dockByProject[1] = [];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
+
+        // "docker compose up -d" — same identity, running again, no session.
+        dockByProject[1] = [dockerControl()];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+      });
+
       it("shows a transient status instead of an unhandled rejection when the auto-attach itself fails", async () => {
         dockByProject[1] = [dockerControl()];
         const createSession = vi.fn().mockRejectedValue(new Error("no free pty slots"));

@@ -508,6 +508,22 @@ function DockColumn({
     // (this effect doesn't re-run just because `sessions` arrives later).
     if (!sessionsLoaded) return;
     const autoAttachOn = settings.dock.autoAttachDockerLogs;
+    // Hermes review — prune identities absent from THIS poll before
+    // checking eligibility below. Without this, a `docker compose down`
+    // (the container disappears from discovery entirely, not just its
+    // state changing) leaves a stale `true` behind forever; the container
+    // coming back via `up -d` would then read as "already eligible last
+    // time" and the edge that's supposed to re-attach it never fires —
+    // exactly the down/up case the "re-attaches after a stopped service
+    // comes back up" claim is meant to cover.
+    const currentIdentities = new Set(
+      discoveredControls
+        .map((control) => dockerSessionIdentity(control))
+        .filter((identity): identity is string => identity !== null),
+    );
+    for (const identity of autoAttachEligibleRef.current.keys()) {
+      if (!currentIdentities.has(identity)) autoAttachEligibleRef.current.delete(identity);
+    }
     for (const control of discoveredControls) {
       const identity = dockerSessionIdentity(control);
       if (identity === null) continue;
