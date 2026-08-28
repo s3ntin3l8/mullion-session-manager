@@ -40,6 +40,14 @@ export default tseslint.config(
         // Node 18+ global, for any of these files that talks HTTP directly
         // (e.g. scripts/capture-screenshots.mjs's own seed calls).
         fetch: "readonly",
+        // Node 21+ globals — src/cli/ssh-agent-helper.mjs (issue #820,
+        // PR6) is the first file here to need them: the laptop-side helper
+        // dials /ws/agent-bridge with the WHATWG WebSocket builtin
+        // (deliberately not the `ws` package — see that file's own header
+        // comment on why), and URL to turn its persisted http(s) baseUrl
+        // into a ws(s) one.
+        WebSocket: "readonly",
+        URL: "readonly",
       },
     },
   },
