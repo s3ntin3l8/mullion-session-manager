@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { MullionSocketClient } from "./client.mjs";
 import { runCommand, parseGlobalFlags, resolveCommand } from "./core.mjs";
+import { runHelper } from "./ssh-agent-helper.mjs";
 
 function buildIo() {
   return {
@@ -72,6 +73,14 @@ async function main() {
   if (!resolved.error && resolved.noun === "mcp") {
     await runMcp();
     return;
+  }
+  // Issue #820 (PR6) — `mullion helper` runs on a laptop with no local
+  // Mullion server to hold a control socket at all, so it's dispatched
+  // here too, before MullionSocketClient is ever constructed, the same way
+  // `mcp` already is just above.
+  if (!resolved.error && resolved.noun === "helper") {
+    const code = await runHelper(resolved.verb, resolved.args, buildIo());
+    process.exit(code);
   }
 
   const client = new MullionSocketClient({ socketPath: socket });

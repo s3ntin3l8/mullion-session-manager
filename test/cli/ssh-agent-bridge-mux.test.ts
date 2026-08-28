@@ -1,0 +1,339 @@
+import { describe, it, expect, afterEach } from "vitest";
+import net, { type Socket } from "node:net";
+import { WebSocketServer } from "ws";
+import { createMuxConnection, type MuxConnection } from "../../src/services/ssh-agent-mux.js";
+import {
+  attachInboundMux,
+  pipeNetSocketToChannel,
+  CHANNEL_WINDOW_BYTES,
+} from "../../src/cli/ssh-agent-bridge-mux.mjs";
+
+// Issue #820 (PR6) — the discriminating test for ssh-agent-bridge-mux.mjs:
+// a codec tested only against itself would happily pass while disagreeing
+// with the real server on every field (wrong byte offset, wrong parity,
+// wrong Ping/Pong handling — all invisible to a self-consistent fake).
+// Instead this runs a REAL `ws` WebSocketServer wrapping the actual
+// src/services/ssh-agent-mux.ts createMuxConnection() on one side (exactly
+// what routes/agent-bridge.ts does), and a real global `WebSocket` client
+// wrapping this file's own .mjs codec on the other (exactly what the
+// laptop helper does) — over a real loopback TCP connection, the same
+// transport both sides use in production.
+
+function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      if (predicate()) return resolve();
+      if (Date.now() - start > timeoutMs) return reject(new Error("waitUntil: timed out"));
+      setTimeout(tick, 5);
+    };
+    tick();
+  });
+}
+
+async function startServer() {
+  const wss = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => wss.once("listening", resolve));
+  const address = wss.address();
+  if (typeof address === "string" || address === null) throw new Error("expected a real address");
+  return { wss, port: address.port };
+}
+
+describe("ssh-agent-bridge-mux.mjs vs. the real ssh-agent-mux.ts", () => {
+  const cleanups: Array<() => void | Promise<void>> = [];
+  afterEach(async () => {
+    while (cleanups.length > 0) await cleanups.pop()!();
+  });
+
+  it("round-trips data both directions through a server-opened channel", async () => {
+    const { wss, port } = await startServer();
+    cleanups.push(() => wss.close());
+
+    const serverMuxReady = new Promise<MuxConnection>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(createMuxConnection(socket, { channelIdParity: "even" }));
+      });
+    });
+
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => client.close());
+
+    let acceptedChannel: unknown;
+    attachInboundMux(client, {
+      onChannel(channel) {
+        acceptedChannel = channel;
+      },
+    });
+
+    await new Promise<void>((resolve) =>
+      client.addEventListener("open", () => resolve(), { once: true }),
+    );
+    const serverMux = await serverMuxReady;
+
+    const serverChannel = await serverMux.openChannel();
+    await waitUntil(() => acceptedChannel !== undefined);
+    // biome-ignore lint: test-only cast, matches the shape attachInboundMux hands to onChannel
+    const clientChannel = acceptedChannel as {
+      onData: (cb: (chunk: Buffer) => void) => void;
+      send: (chunk: Buffer) => void;
+    };
+
+    const receivedOnClient: Buffer[] = [];
+    clientChannel.onData((chunk) => receivedOnClient.push(chunk));
+    serverChannel.send(Buffer.from("hello from server"));
+    await waitUntil(() => receivedOnClient.length > 0);
+    expect(Buffer.concat(receivedOnClient).toString()).toBe("hello from server");
+
+    const receivedOnServer: Buffer[] = [];
+    serverChannel.onData((chunk) => receivedOnServer.push(chunk));
+    clientChannel.send(Buffer.from("hello from client"));
+    await waitUntil(() => receivedOnServer.length > 0);
+    expect(Buffer.concat(receivedOnServer).toString()).toBe("hello from client");
+  });
+
+  // A slow, wall-clock-real-time version of this test (opening a channel
+  // and confirming it stays alive well past PING_INTERVAL_MS/PONG_TIMEOUT_MS
+  // — both hardcoded, unexported constants in ssh-agent-mux.ts) would be the
+  // most literal proof, but at 15s+10s minimum per run that's a bad trade
+  // for CI. This asserts on the exact frame instead: feed a real
+  // FrameType.Ping frame in as a "message" event and check attachInboundMux
+  // sends back FrameType.Pong on channel id 0 — the identical branch a real
+  // server-initiated Ping would hit, verified with a fake-but-precise
+  // WHATWG-shaped socket rather than a real one, since attachInboundMux
+  // only needs addEventListener/send/readyState from its `ws` argument.
+  it("answers a Ping frame with a Pong frame on channel id 0 — a helper that didn't would get disconnected by the real server's PONG_TIMEOUT_MS", () => {
+    const sent: Buffer[] = [];
+    const listeners = new Map<string, Array<(event: unknown) => void>>();
+    const fakeWs = {
+      readyState: 1,
+      binaryType: "blob",
+      addEventListener(event: string, listener: (event: unknown) => void) {
+        const arr = listeners.get(event) ?? [];
+        arr.push(listener);
+        listeners.set(event, arr);
+      },
+      send(frame: Buffer) {
+        sent.push(frame);
+      },
+      close() {},
+    };
+    // fakeWs.readyState (1) matches the real global WebSocket.OPEN's value
+    // (also 1, per the WHATWG spec both implement) — attachInboundMux's own
+    // sendFrame() compares against that global constant, not anything on
+    // `ws` itself, so this fake needs no further stubbing to pass that check.
+    // @ts-expect-error — fake only implements the subset attachInboundMux uses
+    attachInboundMux(fakeWs, { onChannel: () => {} });
+    expect(fakeWs.binaryType).toBe("arraybuffer");
+
+    const PING_FRAME = Buffer.from([8, 0, 0, 0, 0]); // type=8 (Ping), channelId=0
+    for (const listener of listeners.get("message") ?? []) {
+      listener({
+        data: PING_FRAME.buffer.slice(
+          PING_FRAME.byteOffset,
+          PING_FRAME.byteOffset + PING_FRAME.byteLength,
+        ),
+      });
+    }
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].readUInt8(0)).toBe(9); // FrameType.Pong
+    expect(sent[0].readUInt32BE(1)).toBe(0); // channel id 0
+  });
+
+  it("pipeNetSocketToChannel (the .mjs port) delivers real net.Socket bytes through to the real server side", async () => {
+    const { wss, port } = await startServer();
+    cleanups.push(() => wss.close());
+
+    const serverMuxReady = new Promise<MuxConnection>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(createMuxConnection(socket, { channelIdParity: "even" }));
+      });
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => client.close());
+
+    const localAgent = net.createServer((socket) => {
+      socket.on("data", (chunk) => socket.write(Buffer.concat([Buffer.from("echo:"), chunk])));
+    });
+    await new Promise<void>((resolve) => localAgent.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => localAgent.close());
+    const localAgentAddress = localAgent.address();
+    if (localAgentAddress === null || typeof localAgentAddress === "string") {
+      throw new Error("expected a real address");
+    }
+
+    attachInboundMux(client, {
+      onChannel(channel) {
+        const socket = net.connect({ port: localAgentAddress.port, host: "127.0.0.1" });
+        pipeNetSocketToChannel(socket, channel);
+      },
+    });
+    await new Promise<void>((resolve) =>
+      client.addEventListener("open", () => resolve(), { once: true }),
+    );
+    const serverMux = await serverMuxReady;
+
+    const serverChannel = await serverMux.openChannel();
+    const received: Buffer[] = [];
+    serverChannel.onData((chunk) => received.push(chunk));
+    serverChannel.send(Buffer.from("ping"));
+    await waitUntil(() => received.length > 0);
+    expect(Buffer.concat(received).toString()).toBe("echo:ping");
+  });
+
+  // Issue #820 (Hermes review, PR #866) — ssh-agent-mux.ts refuses (OpenFail)
+  // a peer Open once its own tracked channel count reaches
+  // DEFAULT_MAX_CHANNELS, citing that as load-bearing memory-hardening
+  // against a peer that opens and abandons channels without limit.
+  // attachInboundMux ported every other invariant from that module but
+  // initially missed this one — accepted every inbound Open unconditionally,
+  // with no bound on its own `channels` Map — this is the discriminating
+  // test for the fix.
+  //
+  // Deliberately NOT driven through a real server-side openChannel() loop:
+  // createMuxConnection's OWN openChannel() enforces the identical cap
+  // locally, on the SERVER side, before ever sending the 257th Open frame
+  // — a test built that way would silently verify the SERVER's cap and
+  // never actually exercise this file's Open handler at 256+1 at all
+  // (confirmed: an earlier version of this test kept passing even with the
+  // fix under test fully reverted). Feeding raw Open frames directly into
+  // attachInboundMux's own message handler, the same fake-but-precise
+  // WHATWG-shaped socket approach as the Ping/Pong test above, is what
+  // actually isolates this file's own cap from the server's.
+  it("refuses an inbound Open once DEFAULT_MAX_CHANNELS (256) tracked channels are already open", () => {
+    const sent: Buffer[] = [];
+    const listeners = new Map<string, Array<(event: unknown) => void>>();
+    const fakeWs = {
+      readyState: 1,
+      binaryType: "blob",
+      addEventListener(event: string, listener: (event: unknown) => void) {
+        const arr = listeners.get(event) ?? [];
+        arr.push(listener);
+        listeners.set(event, arr);
+      },
+      send(frame: Buffer) {
+        sent.push(frame);
+      },
+      close() {},
+    };
+    // @ts-expect-error — fake only implements the subset attachInboundMux uses
+    attachInboundMux(fakeWs, { onChannel: () => {} });
+
+    function openFrame(channelId: number): ArrayBuffer {
+      const buf = Buffer.alloc(5);
+      buf.writeUInt8(1, 0); // FrameType.Open
+      buf.writeUInt32BE(channelId, 1);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
+
+    const messageListeners = listeners.get("message") ?? [];
+    for (let i = 0; i < 257; i++) {
+      // channel ids 2,4,6,... — even, matching what a real primary
+      // (channelIdParity: "even") would allocate; the exact values don't
+      // matter to this file's own logic (it has no allocator of its own),
+      // only that each is unique.
+      for (const listener of messageListeners) listener({ data: openFrame((i + 1) * 2) });
+    }
+
+    const openAckCount = sent.filter((f) => f.readUInt8(0) === 2).length; // FrameType.OpenAck
+    const openFailCount = sent.filter((f) => f.readUInt8(0) === 3).length; // FrameType.OpenFail
+    expect(openAckCount).toBe(256);
+    expect(openFailCount).toBe(1);
+  });
+
+  // Issue #820 (PR6) — acknowledgeConsumed's own WINDOW_ADJUST-sending
+  // path (crossing WINDOW_ADJUST_THRESHOLD_BYTES) is otherwise untested by
+  // the small hello-world payloads the other tests here use. Sends enough
+  // data through pipeNetSocketToChannel in one direction to force a real
+  // WINDOW_ADJUST frame, and confirms it via the REAL server-side channel's
+  // own sendWindow actually growing back — that can only happen from a
+  // genuine WindowAdjust frame this file sent and ssh-agent-mux.ts
+  // processed, not from anything client-local.
+  it("acknowledgeConsumed sends a real WINDOW_ADJUST once drained data crosses the threshold", async () => {
+    const { wss, port } = await startServer();
+    cleanups.push(() => wss.close());
+
+    const serverMuxReady = new Promise<MuxConnection>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(createMuxConnection(socket, { channelIdParity: "even" }));
+      });
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => client.close());
+
+    const sink = net.createServer((socket) => socket.resume()); // discard, drain fast
+    await new Promise<void>((resolve) => sink.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => sink.close());
+    const sinkAddress = sink.address();
+    if (sinkAddress === null || typeof sinkAddress === "string") {
+      throw new Error("expected a real address");
+    }
+
+    attachInboundMux(client, {
+      onChannel(channel) {
+        const socket = net.connect({ port: sinkAddress.port, host: "127.0.0.1" });
+        pipeNetSocketToChannel(socket, channel);
+      },
+    });
+    await new Promise<void>((resolve) =>
+      client.addEventListener("open", () => resolve(), { once: true }),
+    );
+    const serverMux = await serverMuxReady;
+    const serverChannel = await serverMux.openChannel();
+
+    // Larger than WINDOW_ADJUST_THRESHOLD_BYTES (128 KiB) but within the
+    // 256 KiB channel window, so this is one legal send() call.
+    const windowAfterSend = CHANNEL_WINDOW_BYTES - 150_000;
+    serverChannel.send(Buffer.alloc(150_000, 1));
+    await waitUntil(() => serverChannel.sendWindow > windowAfterSend);
+  });
+
+  // Issue #820 (PR6) — eof()/close() and the receiving end's handleEof/
+  // closeLocally/teardown are otherwise only exercised implicitly, never
+  // asserted on directly. Confirms both propagate to the real local
+  // net.Socket pipeNetSocketToChannel wraps: eof() ends it (half-close),
+  // close() destroys it.
+  it("propagates eof() and close() through to the piped local net.Socket", async () => {
+    const { wss, port } = await startServer();
+    cleanups.push(() => wss.close());
+
+    const serverMuxReady = new Promise<MuxConnection>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(createMuxConnection(socket, { channelIdParity: "even" }));
+      });
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => client.close());
+
+    const echo = net.createServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => echo.close());
+    const echoAddress = echo.address();
+    if (echoAddress === null || typeof echoAddress === "string") {
+      throw new Error("expected a real address");
+    }
+
+    let localSocket: Socket | undefined;
+    attachInboundMux(client, {
+      onChannel(channel) {
+        localSocket = net.connect({ port: echoAddress.port, host: "127.0.0.1" });
+        pipeNetSocketToChannel(localSocket, channel);
+      },
+    });
+    await new Promise<void>((resolve) =>
+      client.addEventListener("open", () => resolve(), { once: true }),
+    );
+    const serverMux = await serverMuxReady;
+    const serverChannel = await serverMux.openChannel();
+    await waitUntil(() => localSocket !== undefined);
+
+    const localEnded = new Promise<void>((resolve) => localSocket!.once("end", resolve));
+    serverChannel.eof();
+    await localEnded;
+
+    const localClosed = new Promise<void>((resolve) => localSocket!.once("close", resolve));
+    serverChannel.close();
+    await localClosed;
+    expect(localSocket!.destroyed).toBe(true);
+  });
+});
