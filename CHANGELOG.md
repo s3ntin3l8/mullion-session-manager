@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.0...v0.3.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* **hooks:** distinguish a lapsed permission gate from a denied one ([#849](https://github.com/s3ntin3l8/mullion-session-manager/issues/849)) ([f5b25fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/f5b25fb94059a51a082d21d5d2db61ef38259c32))
+* **hooks:** parse Codex apply_patch payloads as they actually arrive ([#851](https://github.com/s3ntin3l8/mullion-session-manager/issues/851)) ([3bf9837](https://github.com/s3ntin3l8/mullion-session-manager/commit/3bf9837f6f115c180d314e1ee8e5462e9a8b3488))
+
 ## [0.3.0](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.50...v0.3.0) (2026-08-27)
 
 
