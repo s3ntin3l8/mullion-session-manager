@@ -82,7 +82,7 @@ import {
   getComposeServices,
   mapServicesToProject,
   toDockControls,
-  shellQuote,
+  composeContextFlags,
   pullComposeImageQuietly,
   inspectImageId,
   type ComposeService,
@@ -1106,7 +1106,14 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badRequest("This service has no registry image to pull");
       }
 
-      const projectFlag = `-p ${shellQuote(service.composeProject)} --project-directory ${shellQuote(service.workingDir)}`;
+      // composeContextFlags reconstructs the stack's own recorded -f/--env-file
+      // list — without it this resolves whatever default-named compose file
+      // sits in workingDir instead of the file(s) the stack was actually
+      // `up`ed with (verified live: a bare -p/--project-directory invocation
+      // for a stack started with `-f docker-compose.prod.yml` instead
+      // resolves an unrelated dev docker-compose.yml next to it), and never
+      // auto-loads a compose.override.yaml either way.
+      const projectFlag = composeContextFlags(service);
       const command = `docker compose ${projectFlag} pull && docker compose ${projectFlag} up -d`;
 
       const result = await createSessionRecord(app, {

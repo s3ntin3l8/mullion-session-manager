@@ -54,6 +54,8 @@ interface FixtureService {
   imageId: string;
   buildOnly: boolean;
   composeResolvable: boolean;
+  configFiles: string[];
+  envFile: string | null;
 }
 
 function fixtureService(overrides: Partial<FixtureService> = {}): FixtureService {
@@ -68,6 +70,8 @@ function fixtureService(overrides: Partial<FixtureService> = {}): FixtureService
     imageId: "sha256:current00000000000000000000000000000000000000000000000000000",
     buildOnly: false,
     composeResolvable: true,
+    configFiles: [],
+    envFile: null,
     ...overrides,
   };
 }
@@ -104,6 +108,15 @@ vi.mock("../../src/services/docker-service-detect.js", () => ({
     })),
   ),
   shellQuote: vi.fn((v: string) => `'${v}'`),
+  // Mirrors the real composeContextFlags() shape closely enough for the
+  // route tests below (which assert on substrings of the resulting
+  // command), without re-testing its own formatting — that's
+  // test/services/docker-service-detect.test.ts's job.
+  composeContextFlags: vi.fn((s: FixtureService) => {
+    const envFlag = s.envFile ? `--env-file '${s.envFile}' ` : "";
+    const fileFlags = s.configFiles.map((f) => `-f '${f}'`).join(" ");
+    return `-p '${s.composeProject}' --project-directory '${s.workingDir}' ${envFlag}${fileFlags}`.trim();
+  }),
   pullComposeImageQuietly: vi.fn(async () => pullSucceeds),
   inspectImageId: vi.fn(async () => (pullSucceeds ? latestImageId : null)),
 }));
@@ -442,6 +455,42 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
           kind: "dock",
         }),
       ]);
+
+      await app.close();
+    });
+
+    it("reconstructs the stack's own -f/--env-file flags rather than a bare -p/--project-directory", async () => {
+      discoveredServices = [
+        fixtureService({
+          composeProject: "pocket-portfolio-tracker",
+          service: "api",
+          containerName: "pocket-portfolio-tracker-api-1",
+          workingDir: "/home/user/pocket-portfolio-tracker",
+          configFiles: ["/home/user/pocket-portfolio-tracker/docker-compose.prod.yml"],
+          envFile: "/home/user/pocket-portfolio-tracker/.env.prod",
+        }),
+      ];
+      const app = await buildApp();
+      const projectId = await createProject(app, { cwd: "/home/user/pocket-portfolio-tracker" });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:pocket-portfolio-tracker:api" },
+      });
+      expect(res.statusCode).toBe(201);
+      const command: string = res.json().control.command;
+      // One -f per config file, and --env-file, on BOTH halves of the
+      // pull-then-up command — a bare -p/--project-directory here would
+      // instead resolve whatever default-named compose file happens to sit
+      // in workingDir (the reported bug: a dev docker-compose.yml sitting
+      // next to this prod one).
+      expect(
+        command.match(/-f '\/home\/user\/pocket-portfolio-tracker\/docker-compose\.prod\.yml'/g),
+      ).toHaveLength(2);
+      expect(
+        command.match(/--env-file '\/home\/user\/pocket-portfolio-tracker\/\.env\.prod'/g),
+      ).toHaveLength(2);
 
       await app.close();
     });

@@ -201,10 +201,12 @@ win" precedence as the global/per-project merge above.
 Each discovered monitor:
 
 - **Streams the service's logs** (`docker compose logs -f --tail=200
-<service>`, or a plain `docker logs -f` fallback when compose can't
-  resolve its own config from the working directory alone) — an ordinary
-  `kind: "dock"` session, identical in every other respect to a configured
-  one.
+<service>`, reconstructed with the stack's own recorded `-f`/`--env-file`
+  flags — so a prod stack started with `-f docker-compose.prod.yml` streams
+  logs for that stack, not a dev `docker-compose.yml` sitting in the same
+  directory — or a plain `docker logs -f` fallback when one of those
+  recorded files no longer exists on disk) — an ordinary `kind: "dock"`
+  session, identical in every other respect to a configured one.
 - Shows a **status dot** for the container's own state (running/exited/
   restarting/…) — independent of whether the log stream itself is
   currently toggled on, which the existing "on"/"off" tag next to it still
