@@ -122,6 +122,16 @@ function isProtectedPath(pathname: string): boolean {
   if (pathname === "/api/internal/register") return false;
   if (pathname === "/api/internal/deregister") return false;
   if (pathname === "/api/webhooks/github") return false;
+  // Issue #820 — the SSH-agent bridge's helper-facing WS connection
+  // (routes/agent-bridge.ts). Same shape as the two /api/internal/*
+  // exemptions just above: the helper authenticates with its OWN
+  // credential (a pairing code or rotating session, carried in the
+  // connection's first frame), never this deployment's MULLION_AUTH_TOKEN
+  // or an OIDC session cookie — a laptop/PC running the helper has no way
+  // to obtain either. POST /api/bridges (generating a NEW pairing code) is
+  // deliberately NOT exempted here — that's a Settings-side admin action
+  // and stays behind the normal gate, matching POST /api/hosts.
+  if (pathname === "/ws/agent-bridge") return false;
   if (pathname.startsWith("/api/")) return true;
   return pathname.startsWith("/ws/");
 }

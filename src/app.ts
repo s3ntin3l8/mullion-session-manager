@@ -44,6 +44,8 @@ import { pushRoute } from "./routes/push.js";
 import { internalRoutes } from "./routes/internal.js";
 import { hostsRoute } from "./routes/hosts.js";
 import { enrollmentRoute } from "./routes/enrollment.js";
+import { agentBridgeRoute } from "./routes/agent-bridge.js";
+import { agentBridgePlugin } from "./plugins/agent-bridge.js";
 import { integrationsRoute } from "./routes/integrations.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { githubWSRoute } from "./routes/ws-github.js";
@@ -390,6 +392,11 @@ export async function buildApp() {
   await app.register(pushRoute);
   await app.register(hostsRoute);
   await app.register(enrollmentRoute);
+  // agentBridgePlugin decorates app.connectedBridges — must register
+  // before agentBridgeRoute, which reads/writes it (see the plugin's own
+  // comment on why this needs fastify-plugin at all).
+  await app.register(agentBridgePlugin);
+  await app.register(agentBridgeRoute);
   await app.register(integrationsRoute);
   await app.register(webhookRoutes);
   await app.register(previewsRoute);
