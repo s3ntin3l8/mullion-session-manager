@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { agyAdapter, __testing } from "../../../src/services/hook-adapters/agy.js";
+import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 
 const { mergeAgyHooks, mergeAgyMcpConfig, mergeAgyTrustedWorkspace, MULLION_HOOK_NAME } = __testing;
 
@@ -57,6 +58,8 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
 describe("mergeAgyHooks (issue #253)", () => {
   let dir: string;
   let hooksPath: string;
+  let homeDir: string;
+  const originalHome = process.env.HOME;
 
   const ctx = () => ({
     sessionId: "1",
@@ -71,10 +74,19 @@ describe("mergeAgyHooks (issue #253)", () => {
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-config-"));
     hooksPath = path.join(dir, "nested", "hooks.json");
+    // mergeAgyHooks now also installs the forwarder shim at a fixed
+    // os.homedir()-derived location (forwarder-shim.ts) — HOME must be
+    // redirected here too, or a test run writes into the real developer/
+    // CI-runner's own ~/.mullion.
+    homeDir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-fakehome-"));
+    process.env.HOME = homeDir;
   });
 
   afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
   });
 
   function readHooks() {
@@ -89,11 +101,10 @@ describe("mergeAgyHooks (issue #253)", () => {
     expect(written[MULLION_HOOK_NAME].Stop).toEqual([
       {
         type: "command",
-        command: expect.stringContaining("/abs/install/hooks/forwarder.mjs"),
+        command: forwarderHookCommand("agy", "Stop"),
         timeout: 10,
       },
     ]);
-    expect(written[MULLION_HOOK_NAME].Stop[0].command).toContain("agy Stop");
 
     // PreToolUse group for run_command (worktree detection only, since issue
     // #264 removed the review_gate this used to also emit)
@@ -451,6 +462,8 @@ describe("AGY_EMITS (issue #321)", () => {
 describe("mergeAgyHooks SessionStart (issue #321)", () => {
   let dir: string;
   let hooksPath: string;
+  let homeDir: string;
+  const originalHome = process.env.HOME;
 
   const ctx = () => ({
     sessionId: "1",
@@ -465,10 +478,18 @@ describe("mergeAgyHooks SessionStart (issue #321)", () => {
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-session-hooks-"));
     hooksPath = path.join(dir, "hooks.json");
+    // Same HOME redirection as the "mergeAgyHooks (issue #253)" describe
+    // block above — mergeAgyHooks also installs the forwarder shim at a
+    // fixed os.homedir()-derived location (forwarder-shim.ts).
+    homeDir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-session-fakehome-"));
+    process.env.HOME = homeDir;
   });
 
   afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
   });
 
   it("registers SessionStart hook with the forwarder", () => {

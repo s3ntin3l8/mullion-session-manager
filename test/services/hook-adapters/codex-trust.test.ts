@@ -3,37 +3,32 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { getCodexHookTrust } from "../../../src/services/hook-adapters/codex-trust.js";
+import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 
-// Mirrors codex.test.ts's own CODEX_HOME temp-dir convention. MULLION_HOME is
-// also pinned here (to an arbitrary, non-existent path — resolveForwarderPath
-// only ever joins it, never touches the filesystem) so the forwarder path
-// getCodexHookTrust() resolves is deterministic across dev/CI, rather than
-// depending on where this repo happens to be checked out — see shared.ts.
+// Mirrors codex.test.ts's own CODEX_HOME temp-dir convention. Unlike before
+// the forwarder-shim migration, getCodexHookTrust() is read-only and never
+// touches the filesystem outside CODEX_HOME (isCurrentMullionGroup matches
+// against the FIXED shim command shape, not a resolved, checkout-specific
+// forwarder path) — so no MULLION_HOME/HOME stubbing is needed here at all.
 describe("getCodexHookTrust (issue #259)", () => {
   let codexHome: string;
   const originalCodexHome = process.env.CODEX_HOME;
-  const originalMullionHome = process.env.MULLION_HOME;
-  const mullionHome = "/opt/mullion";
-  const forwarderPath = path.join(mullionHome, "current", "dist", "hooks", "forwarder.mjs");
 
   beforeEach(() => {
     codexHome = mkdtempSync(path.join(os.tmpdir(), "mullion-codex-trust-"));
     process.env.CODEX_HOME = codexHome;
-    process.env.MULLION_HOME = mullionHome;
   });
 
   afterEach(() => {
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
-    if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
-    else process.env.MULLION_HOME = originalMullionHome;
     rmSync(codexHome, { recursive: true, force: true });
   });
 
   function mullionGroup(kind: "Stop" | "PostToolUse") {
     return {
       ...(kind === "PostToolUse" ? { matcher: "apply_patch" } : {}),
-      hooks: [{ type: "command", command: `node ${forwarderPath} codex ${kind}` }],
+      hooks: [{ type: "command", command: forwarderHookCommand("codex", kind) }],
     };
   }
 
