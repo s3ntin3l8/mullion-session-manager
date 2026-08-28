@@ -484,21 +484,35 @@ function DockColumn({
   const discoveredControls = controls.filter((c) => c.source === "docker");
   const dockerGroupControls = [...liveEphemeralControls, ...discoveredControls];
 
+  // Hermes review, round 2 — a transient failure (backend blip, briefly out
+  // of PTY slots) otherwise recorded `eligible: true` right alongside
+  // success, so the false→true edge that's supposed to retry never fires
+  // again for that identity until the container itself cycles through
+  // non-running or the setting is toggled — for a long-lived production
+  // container, one bad attempt permanently and silently loses auto-attach.
+  // Bounded per-identity cooldown instead of retrying every 15s (which
+  // would be spammy for a genuinely dead host): `failedAt` records the last
+  // failure, and a poll is allowed to retry once AUTO_ATTACH_RETRY_MS has
+  // elapsed, without waiting for a real eligibility edge.
+  const AUTO_ATTACH_RETRY_MS = 60_000;
+
   // PR3 (issue #73 follow-up) — settings.dock.autoAttachDockerLogs. Tracks
   // per-container whether it was "eligible" (setting on AND
   // docker.state === "running") the last time this ran, keyed by the same
   // dockerSessionIdentity used for matching above; a container's identity
   // outlives a single poll's `controls` array, so this lives in a ref, not
-  // component state. Fires only on a false→true edge of eligibility — never
-  // on eligibility simply *holding* true — which is what makes both halves
-  // of the spec true at once: toggling the setting on (or a stopped service
-  // coming back up) is an edge and attaches; a user manually stopping the
-  // log stream while the container keeps running is NOT an edge (fills the
-  // same "eligible" box before and after) and is left alone. `runningFor`
-  // is still checked at the edge itself, so a session that's already
-  // attached (manual click, or a still-live stream that survived a plain
-  // `docker restart`) is never double-attached.
-  const autoAttachEligibleRef = useRef<Map<string, boolean>>(new Map());
+  // component state. Fires on a false→true edge of eligibility, or (see
+  // AUTO_ATTACH_RETRY_MS above) once the cooldown has elapsed since a
+  // recorded failure — never merely because eligibility is *holding* true
+  // with no prior failure, which is what makes "don't fight a manual stop"
+  // still true: a user manually stopping the log stream while the
+  // container keeps running leaves `failedAt` untouched (null), so nothing
+  // is due for retry. `runningFor` is still checked at the point of firing,
+  // so a session that's already attached (manual click, or a still-live
+  // stream that survived a plain `docker restart`) is never double-attached.
+  const autoAttachStateRef = useRef<Map<string, { eligible: boolean; failedAt: number | null }>>(
+    new Map(),
+  );
   useEffect(() => {
     // `sessions` loads asynchronously (refreshSessions(), racing this
     // column's own `immediate: true` dock poll on first mount) — without
@@ -511,7 +525,7 @@ function DockColumn({
     // Hermes review — prune identities absent from THIS poll before
     // checking eligibility below. Without this, a `docker compose down`
     // (the container disappears from discovery entirely, not just its
-    // state changing) leaves a stale `true` behind forever; the container
+    // state changing) leaves a stale entry behind forever; the container
     // coming back via `up -d` would then read as "already eligible last
     // time" and the edge that's supposed to re-attach it never fires —
     // exactly the down/up case the "re-attaches after a stopped service
@@ -521,19 +535,28 @@ function DockColumn({
         .map((control) => dockerSessionIdentity(control))
         .filter((identity): identity is string => identity !== null),
     );
-    for (const identity of autoAttachEligibleRef.current.keys()) {
-      if (!currentIdentities.has(identity)) autoAttachEligibleRef.current.delete(identity);
+    for (const identity of autoAttachStateRef.current.keys()) {
+      if (!currentIdentities.has(identity)) autoAttachStateRef.current.delete(identity);
     }
+    // Hoisted out of the loop below — one call per poll, not per control.
+    // effects (unlike render) are allowed side effects; this useEffect's own
+    // exhaustive-deps suppression above appears to be what makes the
+    // compiler's purity pass treat this callback as needing render-purity.
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
     for (const control of discoveredControls) {
       const identity = dockerSessionIdentity(control);
       if (identity === null) continue;
       const eligible = autoAttachOn && control.docker?.state === "running";
-      const wasEligible = autoAttachEligibleRef.current.get(identity) ?? false;
-      if (eligible && !wasEligible && !runningFor(control)) {
-        // Left `eligible` (true) below either way on failure — a dead host
-        // or a bad config retrying every 15s would be spammy; the same
-        // false→true edge that got suppressed here re-arms exactly like a
-        // manual-stop suppression does, once the container cycles.
+      const entry = autoAttachStateRef.current.get(identity);
+      const wasEligible = entry?.eligible ?? false;
+      const failedAt = entry?.failedAt ?? null;
+      const dueForRetry = failedAt !== null && nowMs - failedAt >= AUTO_ATTACH_RETRY_MS;
+      if (eligible && (!wasEligible || dueForRetry) && !runningFor(control)) {
+        // Optimistic: marks eligible/not-yet-failed immediately so a poll
+        // landing mid-flight doesn't also fire; the .then/.catch below
+        // correct this once the attempt actually settles.
+        autoAttachStateRef.current.set(identity, { eligible: true, failedAt });
         useDashboardStore
           .getState()
           .createSession(projectId, control.command, {
@@ -542,12 +565,17 @@ function DockColumn({
             nameLocked: true,
             ...(control.env ? { env: control.env } : {}),
           })
+          .then(() => {
+            autoAttachStateRef.current.set(identity, { eligible: true, failedAt: null });
+          })
           .catch(() => {
             console.warn("[dock] auto-attach docker logs failed", control.id);
             showCheckStatus(control.id, "Auto-attach failed", true);
+            autoAttachStateRef.current.set(identity, { eligible: true, failedAt: Date.now() });
           });
+        continue;
       }
-      autoAttachEligibleRef.current.set(identity, eligible);
+      autoAttachStateRef.current.set(identity, { eligible, failedAt });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runningFor/discoveredControls are recomputed fresh from `controls`/`sessions` every render; depending on `controls` (what actually changes on a poll) avoids re-running this effect on every unrelated re-render of a large, frequently-updated component.
   }, [controls, sessionsLoaded, settings.dock.autoAttachDockerLogs, projectId]);

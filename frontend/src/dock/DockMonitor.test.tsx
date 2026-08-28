@@ -316,6 +316,55 @@ describe("Dock", () => {
         const status = await screen.findByText("Auto-attach failed");
         expect(status).toHaveClass("dock-monitor-check-status", "error");
       });
+
+      it("retries a failed auto-attach once the cooldown elapses, without waiting for a real eligibility edge", async () => {
+        // Hermes review, round 2 — recording `eligible: true` on a FAILED
+        // attempt (indistinguishable from a successful one) meant the
+        // false→true edge that's supposed to retry never fired again for
+        // that identity until the container itself cycled through
+        // non-running or the setting was toggled — a single transient
+        // failure permanently and silently lost auto-attach for a
+        // long-lived container. `Date.now()` is mocked (not real timers)
+        // so this doesn't need to actually wait 60s.
+        const T0 = 1_700_000_000_000;
+        const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+        try {
+          dockByProject[1] = [dockerControl()];
+          const createSession = vi.fn().mockRejectedValueOnce(new Error("no free pty slots"));
+          useDashboardStore.setState({
+            projects: [PROJECT],
+            sessions: [],
+            sessionsLoaded: true,
+            createSession,
+            settings: {
+              ...DEFAULT_SETTINGS,
+              dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+            },
+          });
+          render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+          await screen.findByText("Auto-attach failed");
+          expect(createSession).toHaveBeenCalledTimes(1);
+
+          // Still within the cooldown — a poll must NOT retry yet.
+          createSession.mockResolvedValue({});
+          dockByProject[1] = [dockerControl()];
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+          await screen.findByText("web");
+          await new Promise((r) => setTimeout(r, 0));
+          expect(createSession).toHaveBeenCalledTimes(1);
+
+          // Cooldown elapsed — the next poll retries even with no state
+          // transition at all.
+          dateSpy.mockReturnValue(T0 + 61_000);
+          dockByProject[1] = [dockerControl()];
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+          await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+        } finally {
+          dateSpy.mockRestore();
+        }
+      });
     });
 
     // Previously uncovered (issue #73 follow-up plan) — every other test in
