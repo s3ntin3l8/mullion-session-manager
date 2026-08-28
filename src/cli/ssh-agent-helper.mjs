@@ -254,7 +254,7 @@ async function runPair(args, io) {
   const decoded = decodePairingPayload(payload);
   if (!decoded) {
     throw new CliUsageError(
-      "invalid pairing payload — paste it exactly as shown in Settings -> SSH agent bridge",
+      "invalid pairing payload — paste it exactly as shown in Settings -> Hosts -> SSH agent bridges",
     );
   }
 
@@ -328,7 +328,7 @@ async function runRun(args, io) {
   if (!credential) {
     io.stderr.write(
       "not paired yet — run 'mullion helper pair <payload>' first " +
-        "(generate <payload> from Settings -> SSH agent bridge on the primary).\n",
+        "(generate <payload> from Settings -> Hosts -> SSH agent bridges on the primary).\n",
     );
     return 1;
   }

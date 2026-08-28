@@ -51,6 +51,7 @@ mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
 mullion mcp
+mullion helper pair|run
 mullion config
 ```
 
@@ -270,6 +271,26 @@ only gate in that mode, same posture plain HTTP already takes), every
 handshake resolves to full scope, so all of the above are reachable from
 inside a session too — this isn't new to these tools, it's the existing
 socket-wide posture from `docs/socket-api.md`.
+
+### helper
+
+- `mullion helper pair <payload> [--name <name>]` — redeems a pairing payload
+  (generated from Settings → Hosts → SSH agent bridges on the primary) and
+  persists the resulting session credential.
+- `mullion helper run [--ssh-auth-sock <path>]` — long-running; forwards this
+  machine's SSH agent to every enrolled agent host via the primary, using
+  the credential `pair` persisted. `--ssh-auth-sock` overrides this
+  process's own `SSH_AUTH_SOCK` env var — required under a supervisor that
+  doesn't set one (see below).
+
+The one subcommand meant to run on a machine with **no local Mullion server
+and no control socket at all** — a laptop holding the SSH agent that a
+Mullion session elsewhere needs to reach. Dispatched before
+`MullionSocketClient` is even constructed (same as `mcp` above), so it works
+from a bare extracted release tarball with no `.env`, no database, nothing
+but Node itself. Full walkthrough, including how to get this file onto a
+laptop with no checkout and how to keep `run` alive across reboots:
+[`ssh-agent.md`](ssh-agent.md#ssh-agent-bridge).
 
 ### config
 

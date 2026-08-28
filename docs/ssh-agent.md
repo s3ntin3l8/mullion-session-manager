@@ -1,21 +1,193 @@
 # SSH agent access from a session
 
-A Mullion session runs on the host, not on your laptop, so it can't reach a
+A Mullion session runs on a host, not on your laptop, so it can't reach a
 laptop-local SSH agent (1Password's SSH agent, `ssh-agent`, `gpg-agent`
 in SSH mode, ...) the way a local terminal or an `ssh -A` connection can. If a
 tool run from a session — `ansible`, `git`, plain `ssh` — needs to
 authenticate with a key that deliberately never leaves your laptop, that key
 has to be reachable some other way.
 
-`MULLION_SSH_AUTH_SOCK` closes that gap on the Mullion side: point it at any
-unix socket that speaks the SSH agent protocol, and every session gets
-`SSH_AUTH_SOCK` set to that path. **Mullion does not create, manage, or care
-what's on the other end of that socket** — getting a real agent-protocol
-socket onto the host is a separate, host-level step. The rest of this doc
-covers the transport this is designed against: OpenSSH's own remote
-unix-socket forwarding, which already does this without any bridge code.
+There are two ways to close that gap:
 
-## Why plain OpenSSH is enough
+- **The SSH agent bridge** (recommended) — pair a small laptop-side helper
+  once from Settings, and every enrolled agent host gets a working
+  `SSH_AUTH_SOCK` automatically, with no per-host tunnel to maintain. This is
+  the rest of this doc's main focus.
+- **A manual `ssh -R` tunnel** — point `MULLION_SSH_AUTH_SOCK` at a unix
+  socket you forward yourself, one tunnel per host. Still fully supported
+  (see [Manual tunnel](#manual-tunnel-ssh--r)) — it predates the bridge, has
+  no laptop-side software to install, and if it's already working for you
+  there's no need to switch: **a host's `MULLION_SSH_AUTH_SOCK`, if set,
+  always wins over the bridge** (see [Precedence](#precedence)).
+
+Either way, **Mullion does not create, manage, or care what's on the other
+end of the socket a session ends up with** — the actual agent (1Password,
+`ssh-agent`, ...) always keeps running on your laptop; approval prompts
+(Touch ID, 1Password's biometric unlock, ...) happen there, per signature,
+and nothing about the key's trust model changes.
+
+## SSH agent bridge
+
+A small helper process (`mullion helper`) runs on your laptop, holds a
+persistent connection to the primary's `/ws/agent-bridge` endpoint, and for
+every enrolled agent host, the primary relays signing requests from that
+host's sessions through the bridge to your laptop's real agent and back. One
+pairing serves **every** enrolled agent host — there's no per-host tunnel to
+set up or keep alive, and enrolling a new agent host later needs no laptop-
+side change at all.
+
+Only two request types are ever relayed: listing loaded identities
+(`SSH_AGENTC_REQUEST_IDENTITIES` — what `ssh-add -l` sends) and signing
+(`SSH_AGENTC_SIGN_REQUEST`). Everything else — adding, removing, or locking
+keys — is dropped before it reaches your laptop's agent. A compromised or
+malicious primary can therefore see which keys are loaded and ask them to
+sign, exactly like `ssh -A` already permits, but cannot mutate the agent or
+extract private key material.
+
+Today the bridge supplies `SSH_AUTH_SOCK` to sessions on **agent hosts**
+only. A session running directly on the primary host itself doesn't get a
+bridge-backed socket yet — use the manual tunnel below for that case, or the
+primary's own ambient `SSH_AUTH_SOCK` if it has one.
+
+### Pairing
+
+1. On the primary, open **Settings → Hosts → SSH agent bridges** and click
+   **Pair a new bridge**. This generates a one-time pairing payload, valid
+   for 10 minutes, and starts polling for the helper to redeem it.
+2. On your laptop, get `mullion helper` (see below) and run:
+
+   ```sh
+   mullion helper pair '<payload>'
+   ```
+
+   Quote the payload — it's an opaque, base64url-ish blob, not something to
+   retype. `--name <name>` overrides the default label (your laptop's
+   hostname) shown in Settings.
+
+3. Keep it forwarding:
+
+   ```sh
+   mullion helper run
+   ```
+
+   This is a long-running foreground process — supervise it the same way you
+   would the manual tunnel's `ssh -R` (see [Keeping it
+   running](#keeping-it-running) below). Once it's up, Settings shows the
+   bridge as `connected`, and any session on any enrolled agent host has a
+   working `SSH_AUTH_SOCK` from that point on.
+
+### Getting `mullion helper` onto your laptop
+
+`mullion helper` is one of the `mullion` CLI's subcommands (see
+[`cli.md`](cli.md#helper)), but it's specifically designed to need no local
+Mullion install and no npm — it only touches Node builtins and a handful of
+small sibling files, nothing from `node_modules`. Two ways to get it
+running:
+
+- **From a release tarball** (typical for a laptop with no Mullion checkout).
+  Every GitHub release publishes `mullion-<version>.tgz` plus a
+  `.sha256` checksum — the same artifact the primary itself downloads for
+  self-update (see [`deploy/README.md`](../deploy/README.md)). Download both,
+  verify, and extract:
+
+  ```sh
+  sha256sum -c mullion-<version>.tgz.sha256
+  mkdir mullion-helper && tar -xzf mullion-<version>.tgz -C mullion-helper
+  node mullion-helper/dist/cli/mullion.mjs helper pair '<payload>'
+  node mullion-helper/dist/cli/mullion.mjs helper run
+  ```
+
+  A recent Node is the only dependency — `mullion helper` uses Node's
+  built-in `WebSocket` client, unavailable before Node 22, and the tarball's
+  own `package.json` (`engines.node`) states the exact floor this release
+  was built against. No `npm install` needed — the extracted tarball's
+  `dist/cli/` is self-contained.
+
+- **From a checkout**, if you already have one on this machine (e.g. it's
+  the same machine you develop Mullion on): `node src/cli/mullion.mjs helper
+pair '<payload>'` works identically, no build step required.
+
+### Keeping it running
+
+`mullion helper run` is a plain foreground process — it doesn't daemonize or
+install itself as a service. A first-class `mullion helper install`
+(launchd plist / systemd `--user` unit / Windows Scheduled Task generator)
+is planned but not built yet. Until then, supervise it yourself: the
+`launchd`/`systemd --user` examples in [Manual tunnel](#manual-tunnel-ssh--r)
+below are directly adaptable — swap the `ssh -N -R ...` command in
+`ProgramArguments`/`ExecStart` for
+`/path/to/node /path/to/mullion.mjs helper run --ssh-auth-sock <path>`.
+
+**Pass `--ssh-auth-sock <literal path>` explicitly** when running under a
+supervisor. Neither `launchd` nor `systemd --user` inherits your login
+shell's `SSH_AUTH_SOCK` — the same reasoning as the manual tunnel's own
+[launchd](#macos-launchd)/[systemd](#linux-systemd---user) sections below,
+and `mullion helper run` says so itself if you omit both the flag and a
+usable ambient `SSH_AUTH_SOCK`. Without the flag it falls back to this
+process's own `SSH_AUTH_SOCK` env var, which is fine for an interactive
+terminal but not for a supervised unit.
+
+The helper reconnects on its own if the primary is briefly unreachable
+(laptop sleep, network drop, primary restart) — backing off from 1s up to
+30s between attempts, and it never gives up outright, so a laptop that wakes
+up hours later resumes forwarding without a manual restart, **as long as the
+session credential from pairing hasn't hit its 24h deadline** (see the next
+section — that deadline doesn't reset on reconnect). Once it has, `run`
+prints that the session is no longer valid and exits — under a supervisor
+that restarts it unconditionally, this becomes a restart loop until you
+re-pair with a fresh payload from Settings, not a self-healing retry.
+
+### Credential storage
+
+`mullion helper pair` persists the session credential it gets back to
+`$MULLION_HELPER_STATE_DIR/ssh-agent-bridge.json`, falling back to
+`$XDG_STATE_HOME/mullion/ssh-agent-bridge.json`, and finally
+`~/.local/state/mullion/ssh-agent-bridge.json` — directory created `0700`,
+file `0600`. `mullion helper run` reads it to reconnect without re-pairing;
+delete the file to forget the pairing locally (revoking from Settings, see
+below, is the primary-side equivalent and takes effect immediately either
+way).
+
+**This credential is valid for 24h from the moment you paired, a fixed
+deadline that reconnecting does not extend.** A helper that's been
+disconnected and reconnecting all day, or one that's stayed continuously
+connected, hits the same wall 24h after `pair` ran — there is currently no
+way to renew a session short of re-pairing. Plan on running `mullion helper
+pair` again at least once a day for uninterrupted coverage; a first-class
+renewal path is expected in a later release.
+
+### Revoking
+
+Settings → Hosts → SSH agent bridges → **Revoke** on a bridge's row closes
+its live connection immediately and deletes the pairing — there's no CLI
+verb for this, and no propagation delay to wait out. Re-pairing after a
+revoke needs a fresh payload from Settings; the old one won't work even if
+it hasn't expired yet.
+
+### Status labels
+
+| Settings shows...      | Meaning                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connected`            | The helper's `run` process is currently connected. Sessions on any enrolled agent host can sign.                                                                                                                                                                                                                                      |
+| `pairing pending`      | A pairing code was issued but `mullion helper pair` hasn't redeemed it yet — or it already expired (10 minutes) and needs a fresh one.                                                                                                                                                                                                |
+| `session expired`      | The 24h credential from pairing has hit its fixed deadline (see [Credential storage](#credential-storage) — reconnecting doesn't extend it), or `run` simply isn't running / can't reach the primary within that window. Re-pair with a fresh payload from Settings; restarting `run` alone won't fix an actually-expired credential. |
+| `last seen <time> ago` | Paired, not currently connected, still within the 24h window. Restart `mullion helper run` if it's not running — no re-pair needed yet.                                                                                                                                                                                               |
+
+A bridge that's genuinely been revoked doesn't appear in this list at all —
+revoking deletes the row outright, it never shows up as a lingering
+disconnected entry.
+
+## Manual tunnel (`ssh -R`)
+
+`MULLION_SSH_AUTH_SOCK` is the original, still-supported way to close this
+gap: point it at any unix socket that speaks the SSH agent protocol on the
+host itself, and every session on that host gets `SSH_AUTH_SOCK` set to that
+path. Unlike the bridge, this is entirely host-local — no primary
+involvement, no laptop-side process beyond the tunnel, and it composes with
+multi-host without any bridge code at all (see [Multi-host](#multi-host)
+below).
+
+### Why plain OpenSSH is enough
 
 OpenSSH (≥ 6.7) can forward a _unix-domain socket_ over `-R`, and a forwarded
 agent socket carries the SSH agent protocol natively — no separate protocol,
@@ -30,11 +202,9 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 This binds a socket at that path on the host, backed by whatever
 `$SSH_AUTH_SOCK` resolves to on your laptop (1Password's agent, `ssh-agent`,
-etc.). Approval prompts (Touch ID, 1Password's biometric unlock, ...) still
-happen on your laptop, per signature — nothing about the key's trust model
-changes.
+etc.).
 
-## Host setup (once per host)
+### Host setup (once per host)
 
 1. **`StreamLocalBindUnlink yes`.** A `-R` forward to a unix socket is bound
    by **`sshd`**, not the client, so this is an `sshd_config` setting on the
@@ -62,14 +232,14 @@ changes.
 3. **Set `MULLION_SSH_AUTH_SOCK`** in this host's Mullion `.env` to that path,
    and restart the service.
 
-## Laptop setup (once per host you want to serve)
+### Laptop setup (once per host you want to serve)
 
 Run the `ssh -N -R ...` command above under something that keeps it alive —
 a `launchd` `KeepAlive` job on macOS, a user systemd unit on Linux. One job
 per host. `ExitOnForwardFailure=yes` matters: without it, `ssh` can stay
 "connected" with a silently-dead forward.
 
-### macOS (launchd)
+#### macOS (launchd)
 
 A plain terminal running the `ssh -N -R ...` command works until you close
 the terminal, sleep the laptop past its network timeout, or reboot — none
@@ -137,7 +307,7 @@ agent restart, silently turning every future retry into a connection to a
 dead socket — with 1Password's agent this isn't a concern since its socket
 path is stable.
 
-### Linux (systemd --user)
+#### Linux (systemd --user)
 
 **`$SSH_AUTH_SOCK` must be a literal path here too, not the environment
 variable** — same reasoning as the `launchd` case above, for a different
@@ -192,9 +362,9 @@ unit.
 every signature, a single `ansible-playbook` run across many hosts can mean
 many prompts in a row. Check this on a small run before assuming a large one
 is usable — loosening the approval cadence is a real security trade-off, not
-a default to drift into.
+a default to drift into. This applies equally to the bridge above.
 
-## Troubleshooting
+### Troubleshooting (manual tunnel)
 
 **`remote port forwarding failed for listen path <path>`** (client-side,
 printed by `ssh` itself). This error doesn't say which of two causes it is —
@@ -243,58 +413,103 @@ after setting it) keeps whatever it originally inherited. This is by design
 being live" behavior above) — it means a running session doesn't need to be
 restarted just because the Mac's tunnel dropped and came back, but it also
 means a _config_ change needs a fresh session (or a full session
-reattach — reattaching alone does not re-run this) to take effect.
+reattach — reattaching alone does not re-run this) to take effect. The same
+is true switching to or from the bridge.
 
 **A session has `SSH_AUTH_SOCK` set but `ssh-add -l` fails.** Settings ->
 Hosts -> that host's config panel reports the configured
-`MULLION_SSH_AUTH_SOCK` path and whether the socket currently exists on
-disk. `present: false` almost always means no `ssh -R` tunnel is currently
-up for that host — check the laptop-side tunnel for that specific host, not
-Mullion's own config, since a dangling socket is the expected state whenever
-the tunnel is down (by design, so a session doesn't need respawning when it
-comes back). An older agent build (pre-dating this diagnostic) reports this
-field as absent rather than `false`; that reads as "unknown," not as a
-missing socket. The reported path is resolved (`path.resolve`), host-locally,
-the same way the injection itself resolves it — if you configured a relative
-path, what's shown here is the absolute path it resolved to on that host,
-not the raw string from `.env`.
+`MULLION_SSH_AUTH_SOCK` path, which of `configured` / `ambient` / `bridge`
+tier actually supplied it (see [Precedence](#precedence)), and whether the
+socket currently exists on disk. `present: false` almost always means no
+`ssh -R` tunnel is currently up for that host — check the laptop-side tunnel
+for that specific host, not Mullion's own config, since a dangling socket is
+the expected state whenever the tunnel is down (by design, so a session
+doesn't need respawning when it comes back). An older agent build
+(pre-dating this diagnostic) reports this field as absent rather than
+`false`; that reads as "unknown," not as a missing socket. The reported path
+is resolved (`path.resolve`), host-locally, the same way the injection
+itself resolves it — if you configured a relative path, what's shown here is
+the absolute path it resolved to on that host, not the raw string from
+`.env`.
+
+## Precedence
+
+A session's `SSH_AUTH_SOCK` is resolved once, at launch, in this order:
+
+1. **`configured`** — this host's `MULLION_SSH_AUTH_SOCK`, if set, always
+   wins, whether or not a bridge is ever paired. An operator who already has
+   a working manual tunnel keeps it unchanged after the bridge ships or gets
+   paired elsewhere in the fleet.
+2. **`ambient`** — if this host's own Mullion process inherited a
+   `SSH_AUTH_SOCK` from its environment (systemd `--user`, PAM, a desktop
+   keyring), that value passes through untouched.
+3. **`bridge`** — only if neither of the above applies, and only on an agent
+   host: the socket the bridge materializes, live the moment any laptop
+   pairs, whether or not one happens to be connected at the instant the
+   session launches (a session started before any pairing starts working the
+   moment one connects, no respawn needed).
+4. **`none`** — nothing supplies it; `SSH_AUTH_SOCK` is left unset.
+
+Settings → Hosts reports which tier actually supplied a given host's socket.
 
 ## Multi-host
 
-Since this is host-level config, it composes with Mullion's multi-host
-feature with no extra code: each host (primary or agent) that needs SSH
-access sets its own `MULLION_SSH_AUTH_SOCK`, and you point one `ssh -R` at
-each such host independently. Nothing is proxied through the primary — the
-path is always resolved host-locally, by whichever host's `PtyManager`
-actually spawns the session. A tunnel to one host says nothing about any
-other host's socket state; check each host's own Settings panel separately.
+The bridge and the manual tunnel compose with Mullion's multi-host feature
+very differently:
+
+- **Bridge**: one pairing, done once from the primary's Settings, serves
+  every enrolled **agent** host automatically — pairing again per host is
+  neither needed nor possible (there's one bridge connection, fanned out to
+  whichever agent host's session needs it). Enrolling a new agent host later
+  needs no laptop-side change.
+- **Manual tunnel**: since `MULLION_SSH_AUTH_SOCK` is host-level config, it
+  composes with multi-host with no extra code, but per-host: each host
+  (primary or agent) that needs SSH access sets its own
+  `MULLION_SSH_AUTH_SOCK`, and you point one `ssh -R` at each such host
+  independently. Nothing is proxied through the primary — the path is always
+  resolved host-locally, by whichever host's `PtyManager` actually spawns
+  the session. A tunnel to one host says nothing about any other host's
+  socket state; check each host's own Settings panel separately.
 
 ## Security notes
 
-- The forwarded socket is a **remote signing oracle** for as long as it's
-  connected: anything that can open it can authenticate as you to every host
-  your key trusts. The socket itself is created mode `0600` by `sshd`
-  (`StreamLocalBindMask`'s default), owner-only — but every process on the
-  Mullion host running as that same user, including every session, can use
-  it. That's the same exposure `ssh -A` already gives you; this doesn't add a
-  new trust boundary, but it also doesn't reduce the existing one, and it's
-  reachable for as long as the forward is up rather than only for the
-  lifetime of one interactive connection.
-- Add `-o ForwardAgent=no` to any onward SSH hop made _from_ the Mullion host
+- **Bridge**: only signing and read-only queries are relayed — the primary
+  and any agent host can ask your laptop's agent to sign, but never to list,
+  add, remove, or export keys. A live bridge is reachable by every enrolled
+  agent host's sessions for as long as it's connected, same exposure shape
+  as the manual tunnel below. **Revoking a bridge from Settings takes effect
+  immediately** — the live connection is closed as part of the same request,
+  not on next reconnect.
+- **Manual tunnel**: the forwarded socket is a **remote signing oracle** for
+  as long as it's connected: anything that can open it can authenticate as
+  you to every host your key trusts. The socket itself is created mode
+  `0600` by `sshd` (`StreamLocalBindMask`'s default), owner-only — but every
+  process on the Mullion host running as that same user, including every
+  session, can use it. That's the same exposure `ssh -A` already gives you;
+  this doesn't add a new trust boundary, but it also doesn't reduce the
+  existing one, and it's reachable for as long as the forward is up rather
+  than only for the lifetime of one interactive connection.
+- Add `-o ForwardAgent=no` to any onward SSH hop made _from_ a Mullion host
   (e.g. `ansible_ssh_common_args` in your inventory) so a host you deploy to
-  can't reach back through to your laptop's agent.
-- If this host has in-app auth disabled, that doesn't change anything here —
-  the agent socket is gated by filesystem permissions, not by Mullion's own
-  auth — but it's still worth fixing independently before relying on this on
-  a host anyone else can reach.
+  can't reach back through to your laptop's agent — this applies whether
+  that host got its socket from the bridge or a manual tunnel.
+- If a host has in-app auth disabled, that doesn't change anything here — the
+  agent socket (either kind) is gated by filesystem permissions and, for the
+  bridge, the pairing/session credential, not by Mullion's own in-app auth —
+  but it's still worth fixing independently before relying on this on a host
+  anyone else can reach.
 
 ## A note on the future
 
-The setup above keeps your laptop as the key holder: if it's offline or
-asleep, sessions correctly fail rather than silently using the wrong
-identity (or none). A stable, always-available credential — an SSH CA issuing
-short-lived certificates, or a boot-unlocked `ssh-agent` on the host itself —
-would let this work with the laptop fully out of the loop, at the cost of a
-different (host-anchored, not laptop-anchored) trust model. That's a larger,
-separate piece of work; `MULLION_SSH_AUTH_SOCK` is designed to point at
-whichever kind of socket you choose without any further Mullion-side change.
+The bridge above closes the original gap this doc used to describe as future
+work: your laptop no longer needs a per-host tunnel to serve every enrolled
+agent host. It still keeps your laptop as the key holder, though — if it's
+offline or asleep, sessions correctly fail rather than silently using the
+wrong identity (or none), for both the bridge and the manual tunnel. A
+stable, always-available credential — an SSH CA issuing short-lived
+certificates, or a boot-unlocked `ssh-agent` on the host itself — would let
+this work with the laptop fully out of the loop, at the cost of a different
+(host-anchored, not laptop-anchored) trust model. That's still a larger,
+separate piece of work, and the bridge's own `SSH_AUTH_SOCK` precedence
+(above) means adopting it later wouldn't require ripping either of today's
+approaches out.

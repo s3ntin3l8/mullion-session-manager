@@ -354,6 +354,16 @@ immediately after the restart completes.
 --role agent`, or your own config-management run) — every update after that
 can go through the button.
 
+## SSH agent access across hosts
+
+If a session on an agent host needs to authenticate with a key that lives on
+your laptop (1Password, `ssh-agent`, ...), pair the SSH agent bridge once
+from the primary's Settings → Hosts → SSH agent bridges — that single
+pairing serves every enrolled agent host, with no per-host tunnel or
+laptop-side change needed when you enroll another one later. See
+[`ssh-agent.md`](ssh-agent.md) for setup, the manual per-host `ssh -R`
+alternative, and how the two compose.
+
 ## Current limitations
 
 - Self-registration has no admin-approval queue — any holder of
