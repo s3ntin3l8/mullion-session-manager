@@ -1,0 +1,337 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { buildTestApp } from "../helpers/app.js";
+import { closeDb } from "../../src/db/client.js";
+import { decodePairingPayload, issuePairingCode } from "../../src/services/bridge-registry.js";
+
+// Real integration tests against a genuine listening server — same harness
+// shape as test/routes/ws-tasks.test.ts — app.inject() can't drive a full
+// WebSocket upgrade.
+
+const tmpDb = path.join(os.tmpdir(), `agent-bridge-test-${process.pid}.db`);
+
+interface HandshakeReply {
+  type: "ready" | "error";
+  bridge_id?: string;
+  session_id?: string;
+  session_secret?: string;
+  expires_at?: string;
+  message?: string;
+}
+
+function waitForOpen(ws: WebSocket): Promise<void> {
+  return new Promise((resolve) => ws.addEventListener("open", () => resolve(), { once: true }));
+}
+
+function waitForMessage(ws: WebSocket): Promise<HandshakeReply> {
+  return new Promise((resolve) => {
+    ws.addEventListener(
+      "message",
+      (event) => resolve(JSON.parse(event.data as string) as HandshakeReply),
+      { once: true },
+    );
+  });
+}
+
+function waitForClose(ws: WebSocket): Promise<number> {
+  return new Promise((resolve) => {
+    ws.addEventListener("close", (event) => resolve(event.code), { once: true });
+  });
+}
+
+// The CLIENT's own "close" event and the SERVER's "close" handler (which
+// runs the app.connectedBridges cleanup) aren't guaranteed to land in the
+// same tick — they're two independent listeners on two ends of the same
+// TCP connection. Polling briefly after the client sees "close" avoids a
+// flaky race, same pattern as ws-tasks.test.ts's own waitUntil.
+async function waitUntil(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (check()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("condition never became true");
+}
+
+async function buildAndListen() {
+  const app = await buildTestApp();
+  await app.listen({ port: 0, host: "127.0.0.1" });
+  const address = app.server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("expected a real bound address");
+  }
+  return { app, port: address.port };
+}
+
+describe("agent-bridge routes (POST /api/bridges, GET /ws/agent-bridge, #820)", () => {
+  beforeAll(() => {
+    fs.rmSync(tmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  describe("POST /api/bridges", () => {
+    it("issues a pairing code and returns a payload that decodes to this request's own host", async () => {
+      const { port } = await buildAndListen();
+      // A real fetch through the actual listener, not app.inject() — inject()
+      // synthesizes a fake "localhost:80" Host header rather than routing
+      // through the real bound socket, which would defeat the exact thing
+      // this test checks (that the route reflects the REQUEST's own host).
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        bridge_id: string;
+        pairing_payload: string;
+        expires_at: string;
+      };
+      expect(typeof body.bridge_id).toBe("string");
+      expect(new Date(body.expires_at).getTime()).toBeGreaterThan(Date.now());
+
+      const decoded = decodePairingPayload(body.pairing_payload);
+      expect(decoded).not.toBeNull();
+      expect(decoded!.baseUrl).toBe(`http://127.0.0.1:${port}`);
+      // The payload's own code is opaque base64url, not the raw secret in
+      // plain sight.
+      expect(body.pairing_payload).not.toContain(decoded!.code);
+    });
+  });
+
+  describe("GET /ws/agent-bridge — pair handshake", () => {
+    it("redeems a valid pairing code, replies ready with a fresh session, and tracks the bridge", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code, name: "MacBook", platform: "darwin" }));
+      const reply = await replyPromise;
+
+      expect(reply.type).toBe("ready");
+      expect(reply.bridge_id).toBe(pairRes.json().bridge_id);
+      expect(typeof reply.session_id).toBe("string");
+      expect(typeof reply.session_secret).toBe("string");
+      expect(app.connectedBridges.has(reply.bridge_id!)).toBe(true);
+
+      ws.close();
+    });
+
+    it("rejects a code that's already been redeemed — single-use", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const firstWs = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(firstWs);
+      const firstReply = waitForMessage(firstWs);
+      firstWs.send(JSON.stringify({ type: "pair", code }));
+      expect((await firstReply).type).toBe("ready");
+      firstWs.close();
+
+      const secondWs = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(secondWs);
+      const secondReplyPromise = waitForMessage(secondWs);
+      const closePromise = waitForClose(secondWs);
+      secondWs.send(JSON.stringify({ type: "pair", code }));
+      const secondReply = await secondReplyPromise;
+
+      expect(secondReply.type).toBe("error");
+      expect(secondReply.message).toMatch(/invalid or expired/);
+      await closePromise;
+    });
+
+    it("rejects an unknown pairing code without throwing, closing the connection", async () => {
+      const { port } = await buildAndListen();
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(JSON.stringify({ type: "pair", code: "not-a-real-code" }));
+
+      expect((await replyPromise).type).toBe("error");
+      await closePromise;
+    });
+  });
+
+  describe("GET /ws/agent-bridge — auth (reconnect) handshake", () => {
+    async function pairFreshBridge(port: number) {
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges`, { method: "POST" });
+      const body = (await res.json()) as { bridge_id: string; pairing_payload: string };
+      const { code } = decodePairingPayload(body.pairing_payload)!;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+      ws.close();
+      await waitForClose(ws);
+      return reply as Required<Pick<HandshakeReply, "bridge_id" | "session_id">>;
+    }
+
+    it("re-authenticates with a valid session id and re-tracks the bridge", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+      await waitUntil(() => !app.connectedBridges.has(bridge_id)); // closed above
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      const reply = await replyPromise;
+
+      expect(reply).toEqual({ type: "ready", bridge_id });
+      expect(app.connectedBridges.has(bridge_id)).toBe(true);
+      ws.close();
+    });
+
+    it("rejects a wrong session id for a real bridge, closing the connection", async () => {
+      const { port } = await buildAndListen();
+      const { bridge_id } = await pairFreshBridge(port);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id: "wrong" }));
+
+      expect((await replyPromise).type).toBe("error");
+      await closePromise;
+    });
+
+    it("rejects auth against an unknown bridge id", async () => {
+      const { port } = await buildAndListen();
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id: "does-not-exist", session_id: "x" }));
+
+      expect((await replyPromise).type).toBe("error");
+      await closePromise;
+    });
+  });
+
+  describe("GET /ws/agent-bridge — malformed handshakes", () => {
+    it("rejects a binary first frame", async () => {
+      const { port } = await buildAndListen();
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(new Uint8Array([1, 2, 3]));
+
+      const reply = await replyPromise;
+      expect(reply.type).toBe("error");
+      expect(reply.message).toMatch(/binary/);
+      await closePromise;
+    });
+
+    it("rejects a non-JSON first frame", async () => {
+      const { port } = await buildAndListen();
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send("not json at all");
+
+      const reply = await replyPromise;
+      expect(reply.type).toBe("error");
+      expect(reply.message).toMatch(/valid JSON/);
+      await closePromise;
+    });
+
+    it("rejects well-formed JSON with an unrecognized shape", async () => {
+      const { port } = await buildAndListen();
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(JSON.stringify({ type: "not-a-real-type" }));
+
+      expect((await replyPromise).type).toBe("error");
+      await closePromise;
+    });
+
+    it("rejects a pair handshake missing its code field", async () => {
+      const { port } = await buildAndListen();
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(JSON.stringify({ type: "pair" }));
+
+      expect((await replyPromise).type).toBe("error");
+      await closePromise;
+    });
+  });
+
+  describe("connectedBridges cleanup", () => {
+    it("removes the bridge from connectedBridges when the socket closes", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+      expect(app.connectedBridges.has(reply.bridge_id!)).toBe(true);
+
+      const closePromise = waitForClose(ws);
+      ws.close();
+      await closePromise;
+      await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
+    });
+  });
+
+  describe("auth gate exemption (issue #820)", () => {
+    const TEST_TOKEN = "test-auth-token-0123456789"; // pragma: allowlist secret
+    const TEST_SECRET = "test-session-secret-0123456789"; // pragma: allowlist secret
+
+    afterAll(() => {
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    it("POST /api/bridges requires the configured MULLION_AUTH_TOKEN", async () => {
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "POST", url: "/api/bridges" });
+      expect(res.statusCode).toBe(401);
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    it("GET /ws/agent-bridge's handshake is reachable with NO MULLION_AUTH_TOKEN credential, even when one is configured", async () => {
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      const { app, port } = await buildAndListen();
+
+      // Issue the pairing code via the registry directly (bypassing the
+      // now-gated POST /api/bridges) so this test isolates exactly the
+      // claim under test: the WS upgrade itself needs no Authorization
+      // header or session cookie.
+      const pairing = issuePairingCode(app);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code: pairing.code }));
+      const reply = await replyPromise;
+
+      expect(reply.type).toBe("ready");
+      ws.close();
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+  });
+});
