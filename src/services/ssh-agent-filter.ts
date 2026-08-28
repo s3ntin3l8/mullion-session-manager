@@ -36,6 +36,9 @@ export const MAX_FRAME_BYTES = 256 * 1024;
 
 // SSH_AGENTC_* — client REQUEST message types this filter classifies.
 export const SSH_AGENTC_REQUEST_RSA_IDENTITIES = 1; // legacy v1 protocol
+export const SSH_AGENTC_ADD_RSA_IDENTITY = 7; // legacy v1, mutating
+export const SSH_AGENTC_REMOVE_RSA_IDENTITY = 8; // legacy v1, mutating
+export const SSH_AGENTC_REMOVE_ALL_RSA_IDENTITIES = 9; // legacy v1, mutating
 export const SSH_AGENTC_REQUEST_IDENTITIES = 11;
 export const SSH_AGENTC_SIGN_REQUEST = 13;
 export const SSH_AGENTC_ADD_IDENTITY = 17;
@@ -82,6 +85,13 @@ export const SSH_AGENT_REQUEST_TYPE_VECTORS: readonly SshAgentMessageTypeVector[
   {
     type: SSH_AGENTC_REQUEST_RSA_IDENTITIES,
     name: "SSH_AGENTC_REQUEST_RSA_IDENTITIES",
+    allowed: false,
+  },
+  { type: SSH_AGENTC_ADD_RSA_IDENTITY, name: "SSH_AGENTC_ADD_RSA_IDENTITY", allowed: false },
+  { type: SSH_AGENTC_REMOVE_RSA_IDENTITY, name: "SSH_AGENTC_REMOVE_RSA_IDENTITY", allowed: false },
+  {
+    type: SSH_AGENTC_REMOVE_ALL_RSA_IDENTITIES,
+    name: "SSH_AGENTC_REMOVE_ALL_RSA_IDENTITIES",
     allowed: false,
   },
   { type: SSH_AGENTC_REQUEST_IDENTITIES, name: "SSH_AGENTC_REQUEST_IDENTITIES", allowed: true },
@@ -140,6 +150,32 @@ export interface FilterResult {
 }
 
 /**
+ * Thrown by `SignOnlyFilter.feed()` on an oversized declared frame length
+ * (see its own doc). Carries `partialResult` — whatever frames were
+ * already classified earlier in the SAME `feed()` call, before the
+ * oversized frame was reached (review finding: an earlier version threw a
+ * plain `Error` here, silently discarding those without returning them —
+ * fail-*safe* in the sense that nothing unsafe was forwarded, but a real
+ * functional gap, since a legitimate request that happened to precede a
+ * hostile frame in the same chunk would just vanish with no way for the
+ * caller to recover it). Most callers should still just close the
+ * connection on catching this (see `feed()`'s own doc) — `partialResult`
+ * exists so that choice is explicit and available, not so every caller is
+ * expected to salvage it. */
+export class SshAgentFrameTooLargeError extends Error {
+  constructor(
+    readonly bodyLength: number,
+    readonly partialResult: FilterResult,
+  ) {
+    super(
+      `ssh-agent-filter: frame body length ${bodyLength} exceeds the ` +
+        `${MAX_FRAME_BYTES}-byte limit — malformed or hostile input, refusing to continue`,
+    );
+    this.name = "SshAgentFrameTooLargeError";
+  }
+}
+
+/**
  * Reassembles length-prefixed SSH-agent-protocol frames out of an
  * arbitrary byte-chunk stream (a frame can split across multiple `feed()`
  * calls, or several frames can arrive in one chunk — this module makes no
@@ -160,12 +196,15 @@ export class SignOnlyFilter {
    * into `forward`/`reject`; any trailing partial frame is retained
    * internally for the next call.
    *
-   * Throws if a frame's declared body length exceeds `MAX_FRAME_BYTES` —
-   * this is fail-closed by design (the caller should close the underlying
-   * connection on catching it, the same way any other protocol violation
-   * would be handled), not something to silently cap or truncate, since a
-   * length prefix this module can't trust the declared size of is not a
-   * frame it can safely continue parsing at all.
+   * Throws `SshAgentFrameTooLargeError` if a frame's declared body length
+   * exceeds `MAX_FRAME_BYTES` — this is fail-closed by design (the caller
+   * should close the underlying connection on catching it, the same way
+   * any other protocol violation would be handled), not something to
+   * silently cap or truncate, since a length prefix this module can't
+   * trust the declared size of is not a frame it can safely continue
+   * parsing at all. See `SshAgentFrameTooLargeError`'s own doc for why the
+   * thrown error carries whatever this call had already classified before
+   * hitting the oversized frame, rather than discarding it.
    */
   feed(chunk: Buffer): FilterResult {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
@@ -176,10 +215,7 @@ export class SignOnlyFilter {
       if (this.buffer.length < LENGTH_PREFIX_BYTES) break;
       const bodyLength = this.buffer.readUInt32BE(0);
       if (bodyLength > MAX_FRAME_BYTES) {
-        throw new Error(
-          `ssh-agent-filter: frame body length ${bodyLength} exceeds the ` +
-            `${MAX_FRAME_BYTES}-byte limit — malformed or hostile input, refusing to continue`,
-        );
+        throw new SshAgentFrameTooLargeError(bodyLength, { forward, reject });
       }
       const frameLength = LENGTH_PREFIX_BYTES + bodyLength;
       if (this.buffer.length < frameLength) break; // incomplete — wait for more bytes
