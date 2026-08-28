@@ -156,10 +156,12 @@ the table below — so none of these can ever be overridden by it. Reserved
 keys (`MULLION_*`, `SSH_AUTH_SOCK`) are rejected when a dock config is
 saved, not silently dropped at launch time.
 
-| Variable              | Description                                                                                                                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MULLION_HOOK_SOCKET` | path to this session's hook socket, read by the hook forwarder/adapters                                                                                                                    |
-| `MULLION_HOOK_TOKEN`  | per-session token authenticating that socket connection                                                                                                                                    |
-| `MULLION_SOCKET_PATH` | path to the control socket, so the `mullion` CLI run from inside a session defaults its targeting to that session with no flags                                                            |
-| `MULLION_SESSION_ID`  | this session's own id, read by the `mullion` CLI and MCP client to scope calls to it                                                                                                       |
-| `SSH_AUTH_SOCK`       | set to `MULLION_SSH_AUTH_SOCK`'s configured path when that's non-empty; otherwise this session's inherited `SSH_AUTH_SOCK` (if any) is left untouched — see [`ssh-agent.md`](ssh-agent.md) |
+| Variable                 | Description                                                                                                                                                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MULLION_HOOK_SOCKET`    | path to this session's hook socket, read by the hook forwarder/adapters                                                                                                                                                     |
+| `MULLION_HOOK_TOKEN`     | per-session token authenticating that socket connection                                                                                                                                                                     |
+| `MULLION_SOCKET_PATH`    | path to the control socket, so the `mullion` CLI run from inside a session defaults its targeting to that session with no flags                                                                                             |
+| `MULLION_SESSION_ID`     | this session's own id, read by the `mullion` CLI and MCP client to scope calls to it                                                                                                                                        |
+| `MULLION_FORWARDER_PATH` | absolute path to this session's `forwarder.mjs` — internal plumbing, read only by the fixed forwarder shim agy's/Codex's host-global hook configs invoke, never by the agent itself; see [`agent-hooks.md`](agent-hooks.md) |
+| `MULLION_FORWARDER_NODE` | absolute path to the node binary to run that forwarder with — same internal-plumbing posture as `MULLION_FORWARDER_PATH` above                                                                                              |
+| `SSH_AUTH_SOCK`          | set to `MULLION_SSH_AUTH_SOCK`'s configured path when that's non-empty; otherwise this session's inherited `SSH_AUTH_SOCK` (if any) is left untouched — see [`ssh-agent.md`](ssh-agent.md)                                  |

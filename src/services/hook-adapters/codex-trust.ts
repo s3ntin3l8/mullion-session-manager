@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { isMullionOwned, resolveCodexHome, type CodexHooksFile } from "./codex.js";
-import { resolveForwarderPath } from "./shared.js";
+import { isCurrentMullionGroup, resolveCodexHome, type CodexHooksFile } from "./codex.js";
 
 // Issue #259: Codex silently skips Mullion's merged Stop/PostToolUse hooks
 // until the user grants a one-time interactive `/hooks` trust decision. This
@@ -61,7 +60,9 @@ function readFileOrFallback(filePath: string, fallback: string): string {
  *
  * Detection is read-only and dependency-free by design:
  *  - `hooks.json` tells us which group (event + index) is Mullion's own for
- *    the CURRENTLY resolved forwarder path (`isMullionOwned`, from codex.ts).
+ *    the CURRENT command shape (`isCurrentMullionGroup`, from codex.ts) —
+ *    the fixed forwarder-shim path, not a checkout-specific one, so this no
+ *    longer depends on `MULLION_HOME`/`import.meta.url` resolution at all.
  *  - Codex records grants in `~/.codex/config.toml` under
  *    `[hooks.state."<hooksPath>:<event_snake>:<groupIdx>:<hookIdx>"]`
  *    (verified against a live install — this format is undocumented and
@@ -86,14 +87,15 @@ function readFileOrFallback(filePath: string, fallback: string): string {
  *    hooks are still actually gated) rather than a banner that can never
  *    clear — a much better failure mode for a feature whose whole point is
  *    not nagging the user forever.
- *  - A stale hook group from a previous Mullion release (see shared.ts's
- *    stable-path fix) is simply not "the current" group and is ignored here
- *    — trust is reported only for what would actually fire today.
+ *  - A stale hook group from a previous Mullion release — the pre-shim
+ *    `forwarder.mjs` shape — is simply not "the current" group and is
+ *    ignored here, same as before this module stopped depending on a live
+ *    forwarder path: trust is reported only for what would actually fire
+ *    today.
  */
 export function getCodexHookTrust(): CodexHookTrust {
   const codexHome = resolveCodexHome();
   const hooksPath = path.join(codexHome, "hooks.json");
-  const forwarderPath = resolveForwarderPath();
 
   const hooksJsonText = readFileOrFallback(hooksPath, "");
   if (!hooksJsonText) {
@@ -109,7 +111,7 @@ export function getCodexHookTrust(): CodexHookTrust {
   const stateKeys: string[] = [];
   for (const [event, snake] of Object.entries(EVENT_SNAKE)) {
     const groups = hooksFile.hooks?.[event] ?? [];
-    const groupIdx = groups.findIndex((group) => isMullionOwned(group, forwarderPath));
+    const groupIdx = groups.findIndex((group) => isCurrentMullionGroup(group, event));
     if (groupIdx !== -1) {
       stateKeys.push(`${hooksPath}:${snake}:${groupIdx}:0`);
     }

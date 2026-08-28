@@ -126,22 +126,27 @@ describe("buildLaunchPlan — env scrub", () => {
     process.env.MULLION_HOOK_TOKEN = "leaked-outer-token";
     process.env.MULLION_SOCKET_PATH = "/leaked/outer-mullion.sock";
     process.env.MULLION_SESSION_ID = "leaked-outer-id";
+    process.env.MULLION_FORWARDER_PATH = "/leaked/outer-forwarder.mjs";
+    process.env.MULLION_FORWARDER_NODE = "/leaked/outer-node";
 
     const plan = buildLaunchPlan(baseSession({ id: "42" }));
 
     for (const key of SERVER_ENV_KEYS) {
       // MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN/MULLION_SOCKET_PATH/
-      // MULLION_SESSION_ID are stripped by the scrub and then deliberately
-      // RE-injected by buildLaunchPlan itself (see the five-injections
-      // tests below) — so they're expected to be present again, but as
-      // THIS session's own value, never the leaked outer process.env one
-      // the scrub was supposed to remove.
+      // MULLION_SESSION_ID/MULLION_FORWARDER_PATH/MULLION_FORWARDER_NODE are
+      // stripped by the scrub and then deliberately RE-injected by
+      // buildLaunchPlan itself (see the MULLION_* injections tests below) —
+      // so they're expected to be present again, but as THIS session's own
+      // value, never the leaked outer process.env one the scrub was
+      // supposed to remove.
       if (
         [
           "MULLION_HOOK_SOCKET",
           "MULLION_HOOK_TOKEN",
           "MULLION_SOCKET_PATH",
           "MULLION_SESSION_ID",
+          "MULLION_FORWARDER_PATH",
+          "MULLION_FORWARDER_NODE",
         ].includes(key)
       ) {
         expect(plan.env[key]).toBeDefined();
@@ -167,7 +172,7 @@ describe("buildLaunchPlan — env scrub", () => {
   });
 });
 
-describe("buildLaunchPlan — the five MULLION_* injections", () => {
+describe("buildLaunchPlan — the MULLION_* injections", () => {
   it("injects MULLION_HOOK_SOCKET from session.hookSocketPath", () => {
     const plan = buildLaunchPlan(baseSession({ hookSocketPath: "/tmp/sessions/hooks.sock" }));
     expect(plan.env.MULLION_HOOK_SOCKET).toBe("/tmp/sessions/hooks.sock");
@@ -186,6 +191,23 @@ describe("buildLaunchPlan — the five MULLION_* injections", () => {
   it("injects MULLION_SESSION_ID from session.id", () => {
     const plan = buildLaunchPlan(baseSession({ id: "777" }));
     expect(plan.env.MULLION_SESSION_ID).toBe("777");
+  });
+
+  it("injects MULLION_FORWARDER_PATH from resolveForwarderPath()", () => {
+    const plan = buildLaunchPlan(baseSession({}));
+    expect(plan.env.MULLION_FORWARDER_PATH).toBe("/fake/forwarder.mjs");
+  });
+
+  it("injects MULLION_FORWARDER_NODE from process.execPath", () => {
+    const plan = buildLaunchPlan(baseSession({}));
+    expect(plan.env.MULLION_FORWARDER_NODE).toBe(process.execPath);
+  });
+
+  it("reuses the same resolveForwarderPath() call for the env injection and the hook-adapter context — never able to diverge", () => {
+    buildLaunchPlan(baseSession({}));
+    expect(mockResolveForwarderPath).toHaveBeenCalledTimes(1);
+    const ctxArg = mockApplyHookAdapters.mock.calls[0][1] as HookAdapterContext;
+    expect(ctxArg.forwarderPath).toBe("/fake/forwarder.mjs");
   });
 
   it("an adapter's envAdditions can override the four injections — current, deliberate ordering (Object.assign runs after)", () => {

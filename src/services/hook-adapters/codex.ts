@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { shellQuote } from "./shared.js";
+import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 
 // Codex adapter (issue #252). Unlike Claude Code/OpenCode, this is NOT an
 // ephemeral, per-session injection — verified this PR against the real
@@ -33,9 +34,10 @@ import { shellQuote } from "./shared.js";
 // original "pure env, no argv edit, no managed install" bullet for Codex,
 // which was written before either fact above was verified): an idempotent,
 // Mullion-owned merge into the user's REAL `~/.codex/hooks.json` (never a
-// throwaway scratch file), keyed off `forwarderPath` so re-running this on
-// every launch only ever replaces Mullion's OWN group — any other hooks the
-// user has configured themselves are left completely untouched. Real
+// throwaway scratch file), keyed off a fixed forwarder-shim path
+// (forwarder-shim.ts) so re-running this on every launch only ever replaces
+// Mullion's OWN group — any other hooks the user has configured themselves
+// are left completely untouched. Real
 // CODEX_HOME (auth/config/MCP) stays intact, and because trust is recorded
 // against the REAL, stable home rather than a fresh-per-session one, a
 // one-time `/hooks` trust grant persists across every future
@@ -95,19 +97,13 @@ export interface CodexHooksFile {
   [key: string]: unknown;
 }
 
-function hookGroup(
-  execPath: string,
-  forwarderPath: string,
-  kind: string,
-  matcher?: string,
-  timeoutSeconds = 10,
-) {
+function hookGroup(kind: string, matcher?: string, timeoutSeconds = 10) {
   return {
     ...(matcher ? { matcher } : {}),
     hooks: [
       {
         type: "command" as const,
-        command: `${JSON.stringify(execPath)} ${JSON.stringify(forwarderPath)} codex ${kind}`,
+        command: forwarderHookCommand("codex", kind),
         // Shown to the user when they review this hook via Codex's own
         // `/hooks` trust UI — makes clear what it is and that it's safe to
         // remove, without requiring them to go read this file's source.
@@ -128,78 +124,71 @@ function hookGroup(
 // reasoning as Claude Code's PERMISSION_REQUEST_TIMEOUT_SECONDS.
 const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 
-/** True if `group` is one Mullion itself previously wrote — identified by
- * its command referencing this install's own forwarder path, never by
- * position/index, so re-running this merge never disturbs a hook group the
- * user configured themselves. Exported for codex-trust.ts, which needs the
- * same "is this Mullion's own group" test to locate the group whose Codex
- * `/hooks` trust status it's checking.
- *
- * Deliberately pinned to the CURRENT forwarder path, not a release-agnostic
- * match — codex-trust.ts's trust lookup depends on this returning the exact
- * group index Codex granted trust against (see that file's doc comment). Do
- * NOT loosen this to fix #460; use `isMullionOwnedByAnyRelease` below for
- * that, which mergeCodexHooks uses for pruning instead. */
-export function isMullionOwned(group: CodexHookGroup, forwarderPath: string): boolean {
-  return (group.hooks ?? []).some(
-    (entry) => typeof entry.command === "string" && entry.command.includes(forwarderPath),
-  );
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Broader than `isMullionOwned`: true if `group` is a Mullion-written group
- * from ANY past release, not just the currently resolved forwarder path —
- * identified by the command matching the EXACT shape `hookGroup()` (and the
- * hand-built SessionEnd group) produce: a quoted execPath, then a quoted
- * path ending in `forwarder.mjs` with nothing else around it, then a literal
- * ` codex <kind>` tail, anchored start to end. A versioned-release install's
- * forwarder path changed on every upgrade
- * (`.../releases/<ver>/dist/hooks/forwarder.mjs`) before `shared.ts`'s
- * `resolveForwarderPath()` started preferring the stable `current` symlink
- * (issue #259) — so `isMullionOwned`'s exact-path match left a previous
- * release's group in place forever, each stale group still executing (issue
- * #460). Independent review, PR #464: verified via git history that the
- * affected population is BOUNDED, not open-ended — the Codex adapter and the
- * `current`-symlink fix landed roughly 19 hours apart (v0.2.1 → v0.2.4), so
- * only a host that ran Codex hooks in that narrow window can have more than
- * one legacy group per event. Every release since resolves to the same
- * stable path, so `isMullionOwned` alone already keeps working correctly
- * release over release — this predicate exists to clean up that one bounded
- * legacy population, not to guard against ongoing per-release growth.
+/** True if `group`'s command matches the CURRENT shape `hookGroup()`
+ * produces: a single-quoted path to the fixed forwarder shim
+ * (`forwarder-shim.ts`), a literal ` codex <kind>` tail, and an optional
+ * `|| printf ...` fail-open guard — anchored start to end, not a loose
+ * `includes()` (Hermes review, PR #464, preserved here: a user's own
+ * multi-part command that merely MENTIONS the shim filename and separately
+ * happens to end the same way must not false-positive as Mullion's own).
  *
- * Anchored end-to-end rather than a loose `includes("forwarder.mjs")` +
- * `endsWith(" codex <kind>")` check (Hermes review, PR #464: that pair could
- * match a user's own multi-part command that merely MENTIONS forwarder.mjs
- * somewhere and separately happens to end the same way — this instead
- * requires the SECOND quoted argument specifically to be the forwarder.mjs
- * path, with nothing else in the command).
+ * Unlike the pre-shim `isMullionOwned(group, forwarderPath)` this replaces,
+ * this no longer needs to be pinned to a live, checkout-specific path: the
+ * shim path is now a true host-wide constant (`resolveForwarderShimPath()`),
+ * so "the group Codex granted trust against" and "the group this release
+ * would write" are the same thing for every post-fix group, keyed only by
+ * `kind`. Exported for codex-trust.ts, which needs the same "is this
+ * Mullion's CURRENT group" test to locate the group whose Codex `/hooks`
+ * trust status it's checking.
  *
- * Used ONLY by `mergeCodexHooks`'s prune step, never by codex-trust.ts: this
- * function's whole point is to stop caring which release wrote a group, and
- * codex-trust.ts needs the opposite — the exact index of the CURRENT group,
- * which only `isMullionOwned` (pinned to the live forwarder path) can give
- * it. Mixing the two here would shift a granted trust key's group index out
- * from under it on every prune.
- *
- * Known limitation (independent review, PR #464): a `[^"]*` character class
- * doesn't understand JSON's `\"` escaping, so a `forwarderPath`/`execPath`
- * containing a literal double quote would break the anchored match and this
- * predicate would fail to recognize the group as Mullion's own — the #460
- * bug would persist for that one host rather than being pruned. Fails safe,
- * not open: the effect is "not pruned" (status quo), never a false-positive
- * prune of a real user-authored group. Not handled because it requires an
- * embedded `"` in an installer-controlled path Mullion itself never writes
- * (`execPath = process.execPath`; `forwarderPath` is always a `releases/
- * <ver>/...` or `current` symlink path) — effectively unreachable on the
- * POSIX/systemd deploys this repo targets. */
-function isMullionOwnedByAnyRelease(group: CodexHookGroup, kind: string): boolean {
+ * Known limitation, same posture as the pre-shim version's `[^"]*` caveat
+ * (independent review, PR #464): the `[^']*` character class doesn't
+ * understand an embedded escaped single quote, so a shim path containing a
+ * literal `'` would break this match. Fails safe, not open — the effect is
+ * "not recognized as current" (falls through to legacy/unrecognized, never
+ * pruned as if user-authored), never a false-positive match of a real
+ * user-authored group. Effectively unreachable: `resolveForwarderShimPath()`
+ * is `os.homedir()`-derived, a location this codebase never writes a `'`
+ * into. */
+export function isCurrentMullionGroup(group: CodexHookGroup, kind: string): boolean {
+  const pattern = new RegExp(
+    `^'[^']*mullion-forwarder-shim\\.sh'\\s+codex ${escapeRegExp(kind)}(?:\\s+\\|\\|\\s+printf\\b.*)?$`,
+  );
+  return (group.hooks ?? []).some(
+    (entry) => typeof entry.command === "string" && pattern.test(entry.command),
+  );
+}
+
+/** True if `group`'s command matches the shape a PRE-shim Mullion release
+ * wrote — a quoted execPath, a quoted path ending in `forwarder.mjs` with
+ * nothing else around it, then a literal ` codex <kind>` tail, anchored
+ * start to end. Kept verbatim (including its own `[^"]*`-doesn't-understand-
+ * `\"`-escaping caveat, see the #460/#464 history this predicate
+ * originally addressed) purely so THIS release still recognizes and prunes
+ * a group an older release wrote, during the one-time migration to the
+ * shim shape. Used only by `isMullionOwnedByAnyRelease`'s pruning — never
+ * by codex-trust.ts, which only ever needs to find the CURRENT group. */
+function isLegacyMullionGroup(group: CodexHookGroup, kind: string): boolean {
   const pattern = new RegExp(`^"[^"]*"\\s+"[^"]*forwarder\\.mjs"\\s+codex ${escapeRegExp(kind)}$`);
   return (group.hooks ?? []).some(
     (entry) => typeof entry.command === "string" && pattern.test(entry.command),
   );
+}
+
+/** True if `group` is a Mullion-written group in EITHER the current
+ * shim-based shape or a pre-shim release's `forwarder.mjs`-based shape.
+ * `mergeCodexHooks`'s prune step uses this (not `isCurrentMullionGroup`
+ * alone) so re-running the merge cleans up every past release's group —
+ * including ones from before this shim migration — rather than leaving a
+ * stale legacy group in place alongside the new one (the original #460
+ * bug, which this same broadening once fixed for the pre-shim path
+ * migration and must keep fixing across this one too). */
+function isMullionOwnedByAnyRelease(group: CodexHookGroup, kind: string): boolean {
+  return isCurrentMullionGroup(group, kind) || isLegacyMullionGroup(group, kind);
 }
 
 /** Where Codex keeps its real, non-ephemeral home — see the file header for
@@ -209,9 +198,22 @@ export function resolveCodexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 }
 
-function mergeCodexHooks(ctx: HookAdapterContext): void {
+function mergeCodexHooks(): void {
   const codexHome = resolveCodexHome();
   const hooksPath = path.join(codexHome, "hooks.json");
+
+  // Issue: host-global hook config collision — installs the fixed,
+  // host-stable forwarder shim BEFORE writing any command that references
+  // it, same independently-guarded, log-and-continue posture as agy.ts's
+  // mergeAgyHooks (a failure here must not skip the hooks.json write below
+  // — the emitted commands' `|| printf` guard makes a missing shim degrade
+  // to a safe no-op, never a reason to leave the OLD, checkout-specific
+  // command in place). See forwarder-shim.ts's header.
+  try {
+    ensureForwarderShim();
+  } catch (err) {
+    console.error({ err }, "mergeCodexHooks: failed to install forwarder shim, continuing anyway");
+  }
 
   let existing: CodexHooksFile = {};
   try {
@@ -228,25 +230,24 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
   }
 
   const hooks: Record<string, CodexHookGroup[]> = { ...(existing.hooks ?? {}) };
-  const execPath = process.execPath;
-  const fwd = ctx.forwarderPath;
 
-  // Filtering on isMullionOwnedByAnyRelease (not isMullionOwned) here is the
-  // #460 fix: it prunes every past release's Mullion-owned group, not just
-  // one matching the CURRENT forwarder path, so hooks.json never accumulates
-  // a duplicate group — and therefore a duplicate hook firing — per release
-  // that has ever installed hooks on this host. See that function's doc
-  // comment for why codex-trust.ts must keep using isMullionOwned instead.
+  // Filtering on isMullionOwnedByAnyRelease (not isCurrentMullionGroup) here
+  // is the #460 fix: it prunes every past release's Mullion-owned group —
+  // both the current shim shape and any pre-shim `forwarder.mjs` shape — not
+  // just the current one, so hooks.json never accumulates a duplicate group
+  // (and therefore a duplicate hook firing) per release that has ever
+  // installed hooks on this host. See that function's doc comment for why
+  // codex-trust.ts must keep using isCurrentMullionGroup instead.
   hooks.Stop = [
     ...(hooks.Stop ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "Stop")),
-    hookGroup(execPath, fwd, "Stop"),
+    hookGroup("Stop"),
   ];
   hooks.SessionStart = [
     ...(hooks.SessionStart ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SessionStart")),
     // No matcher — fires on all SessionStart sources (startup/resume/clear/
     // compact). The forwarder extracts the `source` field from the payload
     // when present.
-    hookGroup(execPath, fwd, "SessionStart"),
+    hookGroup("SessionStart"),
   ];
   hooks.SessionEnd = [
     ...(hooks.SessionEnd ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SessionEnd")),
@@ -256,7 +257,7 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
       hooks: [
         {
           type: "command" as const,
-          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} codex SessionEnd`,
+          command: forwarderHookCommand("codex", "SessionEnd"),
           timeout: 3,
         },
       ],
@@ -270,25 +271,25 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
     // giving us a deterministic "agent needs user input" signal regardless
     // of tool type. Also the blocking permission-approval channel (issue
     // #264) — needs the long timeout, not the fire-and-forget default.
-    hookGroup(execPath, fwd, "PermissionRequest", undefined, PERMISSION_REQUEST_TIMEOUT_SECONDS),
+    hookGroup("PermissionRequest", undefined, PERMISSION_REQUEST_TIMEOUT_SECONDS),
   ];
   hooks.UserPromptSubmit = [
     ...(hooks.UserPromptSubmit ?? []).filter(
       (g) => !isMullionOwnedByAnyRelease(g, "UserPromptSubmit"),
     ),
     // No matcher support for UserPromptSubmit (per Codex docs).
-    hookGroup(execPath, fwd, "UserPromptSubmit"),
+    hookGroup("UserPromptSubmit"),
   ];
   hooks.PostToolUse = [
     ...(hooks.PostToolUse ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "PostToolUse")),
-    hookGroup(execPath, fwd, "PostToolUse", "apply_patch"),
+    hookGroup("PostToolUse", "apply_patch"),
     // Issue: sidebar worktree detection — register a Bash matcher so the
     // forwarder receives Bash PostToolUse events and can detect git worktree
     // add commands and forward cwd changes. Currently a no-op for file_change
     // output (mapCodexPostToolUse only handles apply_patch); the Bash matcher
     // is also registered for future payload-shape verification against a live
     // Codex hook firing (tracked as part of issue #264).
-    hookGroup(execPath, fwd, "PostToolUse", "Bash"),
+    hookGroup("PostToolUse", "Bash"),
   ];
   // Issue: extend surfaced session statuses (Codex parity) — confirmed live
   // against installed codex-cli 0.149.0's own embedded hook I/O schemas
@@ -300,26 +301,26 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
   // observational only.
   hooks.PreCompact = [
     ...(hooks.PreCompact ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "PreCompact")),
-    hookGroup(execPath, fwd, "PreCompact"),
+    hookGroup("PreCompact"),
   ];
   hooks.PostCompact = [
     ...(hooks.PostCompact ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "PostCompact")),
-    hookGroup(execPath, fwd, "PostCompact"),
+    hookGroup("PostCompact"),
   ];
   hooks.SubagentStart = [
     ...(hooks.SubagentStart ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SubagentStart")),
-    hookGroup(execPath, fwd, "SubagentStart"),
+    hookGroup("SubagentStart"),
   ];
   hooks.SubagentStop = [
     ...(hooks.SubagentStop ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SubagentStop")),
-    hookGroup(execPath, fwd, "SubagentStop"),
+    hookGroup("SubagentStop"),
   ];
 
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(hooksPath, `${JSON.stringify({ ...existing, hooks }, null, 2)}\n`);
 }
 
-function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
+function prepareLaunch(_ctx: HookAdapterContext): HookLaunchPlan {
   return {
     // async, not a plain arrow wrapping a sync call: a synchronous throw
     // from mergeCodexHooks (e.g. the malformed-JSON bail above) must become
@@ -328,7 +329,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // `Promise.resolve(plan.managedInstall()).catch(...)`, which only
     // catches a rejection, not a synchronous throw from evaluating the call
     // expression itself.
-    managedInstall: async () => mergeCodexHooks(ctx),
+    managedInstall: async () => mergeCodexHooks(),
   };
 }
 

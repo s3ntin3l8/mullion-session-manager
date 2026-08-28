@@ -143,8 +143,13 @@ protocol.
   to the hook socket (`forwarder-core.mjs` holds its pure, unit-tested
   per-agent mapping logic); `opencode-plugin.js` is OpenCode's own bridge,
   auto-injected via `OPENCODE_CONFIG_DIR` (OpenCode has no shell-command
-  hooks, only a JS/TS plugin API). Copied byte-for-byte into `dist/hooks/`
-  by `make build`.
+  hooks, only a JS/TS plugin API); `forwarder-shim.sh` is a small POSIX `sh`
+  script installed at a fixed, host-stable location
+  (`~/.mullion/hooks/mullion-forwarder-shim.sh`) that agy's/Codex's
+  host-global hook configs invoke instead of `forwarder.mjs` directly, so
+  those configs never embed a checkout-specific path — see
+  [`agent-hooks.md`](agent-hooks.md#how-a-hook-command-finds-the-forwarder).
+  Copied byte-for-byte into `dist/hooks/` by `make build`.
 - `src/cli/` — the `mullion` CLI: `mullion.mjs` is a thin, spawned
   `#!/usr/bin/env node` entry point (plain JavaScript, same dev/prod-parity
   reasoning as `src/hooks/`, copied byte-for-byte into `dist/cli/` by

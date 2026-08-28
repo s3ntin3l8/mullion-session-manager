@@ -13,11 +13,12 @@ for command syntax, it's the part most likely to surprise you.
 
 <!-- mullion:tier1:start -->
 
-You have four extra environment variables: `MULLION_HOOK_SOCKET` (structured
-notifications — `mullion notify`), `MULLION_HOOK_TOKEN` (authenticates both
-the hook socket and the control socket, at session scope), `MULLION_SOCKET_PATH`
+You have four extra environment variables that matter to you: `MULLION_HOOK_SOCKET`
+(structured notifications — `mullion notify`), `MULLION_HOOK_TOKEN` (authenticates
+both the hook socket and the control socket, at session scope), `MULLION_SOCKET_PATH`
 (control socket location), and `MULLION_SESSION_ID` (which session you are).
-That's all of them — no fifth var, no config file.
+That's the entire surface you need — no config file, and nothing else here
+grants you anything.
 
 `MULLION_HOOK_TOKEN` gives you **session scope**: everything you need to act
 on yourself (get/rename/logs, the `browser` surface, `project actions`, your
@@ -50,12 +51,12 @@ described below.
 
 ## The four env vars you were spawned with
 
-Every session gets exactly these four extra environment variables, injected
-by `src/services/pty-manager.ts`'s `Session.bootstrapMaster()` (see
-`SERVER_ENV_KEYS` in `src/services/session-env.ts` — they're also scrubbed
-from any _nested_ Mullion you might start, e.g. `make dev` run from inside
-this very session, so a dev instance never mistakes your session's socket/
-token for its own):
+Every session gets these four extra environment variables that matter to
+you, injected by `src/services/pty-manager.ts`'s `Session.bootstrapMaster()`
+(see `SERVER_ENV_KEYS` in `src/services/session-env.ts` — they're also
+scrubbed from any _nested_ Mullion you might start, e.g. `make dev` run from
+inside this very session, so a dev instance never mistakes your session's
+socket/token for its own):
 
 | Variable              | Unlocks                                                                                                                             |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,9 +65,14 @@ token for its own):
 | `MULLION_SOCKET_PATH` | Where the control socket lives — lets `mullion`/`mullion mcp`, run with no flags, find it automatically.                            |
 | `MULLION_SESSION_ID`  | Which session you are — lets `mullion`/`mullion mcp`, run with no flags, default every op to yourself.                              |
 
-That's the entire surface. There is no fifth var, and no config file you
-need to read to use any of this — omit `--session`/`sessionId` everywhere
-below and it defaults to you.
+That's the entire surface you need, and no config file you need to read to
+use any of this — omit `--session`/`sessionId` everywhere below and it
+defaults to you. Mullion also injects a couple of internal plumbing
+variables for agy/Codex sessions specifically (currently
+`MULLION_FORWARDER_PATH`/`MULLION_FORWARDER_NODE`, used only so your own
+hook subprocess can locate this session's forwarder script — see
+`docs/agent-hooks.md`) — ignore them, they grant you nothing beyond what's
+in the table above.
 
 ## The scope model (read this first)
 
