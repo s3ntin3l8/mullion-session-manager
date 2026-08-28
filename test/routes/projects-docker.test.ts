@@ -627,6 +627,28 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       reconstructedHash = "hash-current";
       await app.close();
     });
+
+    it("reports willRecreate:null (not a spurious true) when the recorded config-hash label was never set", async () => {
+      // Hermes review — a container predating the config-hash label (or
+      // whose docker/compose version never sets it) has configHash:"",
+      // which is trivially !== any real reconstructed hash. That must read
+      // as "can't tell," not "yes, will recreate."
+      discoveredServices = [fixtureService({ configHash: "" })];
+      reconstructedHash = "some-real-hash";
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().willRecreate).toBeNull();
+
+      reconstructedHash = "hash-current";
+      await app.close();
+    });
   });
 
   describe("POST /api/projects/:id/docker/service/{restart,stop,start}", () => {
