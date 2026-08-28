@@ -52,7 +52,19 @@ interface PairResponse {
    * server-side guess could (there's no MULLION_PUBLIC_URL-style config;
    * the browser calling this endpoint is standing at the correct vantage
    * point already). Respects `trustProxy` (src/plugins/env.ts) the same
-   * way every other proxy-aware request field in this app does. */
+   * way every other proxy-aware request field in this app does.
+   *
+   * Accepted risk (Hermes review, PR #860): a caller who can influence
+   * this request's Host header could in principle point the generated
+   * payload at a server they control. Not validated against an
+   * allowlist here — there is no expected-host config value anywhere
+   * else in this app to validate against, and the practical exposure is
+   * low: the admin who called this endpoint sees the resulting payload
+   * themselves before ever pasting it into a helper, so a spoofed host
+   * would need to survive that visual check too. Revisit only if this
+   * app ever grows an actual expected-host / allowed-origins config
+   * surface for other reasons — bolting one on for this endpoint alone
+   * wouldn't be worth the new config knob. */
   pairing_payload: string;
   expires_at: string;
 }
@@ -75,6 +87,25 @@ function sendError(socket: NodeWebSocket, message: string): void {
   if (socket.readyState !== socket.OPEN) return;
   socket.send(JSON.stringify({ type: "error", message }));
   socket.close();
+}
+
+/** Records `socket` as the live connection for `bridgeId`, closing
+ * whatever socket was PREVIOUSLY tracked there first (Hermes review, PR
+ * #860). Without this, a reconnect (the "auth" path — a "pair" redeem
+ * can't collide, since a pairing code always produces a brand-new
+ * bridgeId) that lands before the OLD TCP connection has fired its own
+ * "close" event (a flake or a silent network drop, not a clean
+ * disconnect) would silently orphan that old socket: it stays OPEN, but
+ * is no longer in the map, so its own close handler — which only deletes
+ * the entry pointing at ITSELF — never runs the cleanup. Repeated
+ * flapping would leak a growing number of live-but-untracked sockets
+ * until TCP's own idle timeout eventually reaps them. Closing the
+ * superseded socket here means there is only ever at most one tracked
+ * (and one about-to-be-tracked) socket per bridge at any moment. */
+function trackBridge(app: FastifyInstance, bridgeId: string, socket: NodeWebSocket): void {
+  const previous = app.connectedBridges.get(bridgeId);
+  if (previous && previous !== socket) previous.close();
+  app.connectedBridges.set(bridgeId, socket);
 }
 
 export async function agentBridgeRoute(app: FastifyInstance) {
@@ -143,12 +174,21 @@ export async function agentBridgeRoute(app: FastifyInstance) {
             sendError(socket, "invalid or expired pairing code");
             return;
           }
-          app.connectedBridges.set(session.bridgeId, socket);
+          trackBridge(app, session.bridgeId, socket);
           socket.send(
             JSON.stringify({
               type: "ready",
               bridge_id: session.bridgeId,
               session_id: session.sessionId,
+              // Handed to the helper so it can persist it for a future
+              // reconnect, but NOT currently used for anything on the wire
+              // — the "auth" path below re-authenticates on session_id
+              // alone (a 256-bit random value, so this is fine
+              // security-wise). Flagged so a later PR doesn't assume this
+              // is already the reconnect credential and skip actually
+              // wiring it in: rotateBridgeSession (bridge-registry.ts) is
+              // the function that would need a route to make this
+              // meaningful, and none exists yet.
               session_secret: session.sessionSecret,
               expires_at: session.expiresAt.toISOString(),
             }),
@@ -162,7 +202,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
           return;
         }
         touchBridgeLastSeen(app, parsed.bridge_id);
-        app.connectedBridges.set(parsed.bridge_id, socket);
+        trackBridge(app, parsed.bridge_id, socket);
         socket.send(JSON.stringify({ type: "ready", bridge_id: parsed.bridge_id }));
       }
 

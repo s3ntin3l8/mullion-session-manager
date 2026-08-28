@@ -191,6 +191,35 @@ describe("agent-bridge routes (POST /api/bridges, GET /ws/agent-bridge, #820)", 
       ws.close();
     });
 
+    it("closes a superseded socket when a new connection re-authenticates for the same bridge before the old one has disconnected (regression: Hermes review, PR #860 — a reconnect landing before the old TCP connection fires its own close event used to orphan it, live but untracked, until TCP's own idle timeout eventually reaped it)", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      // First connection stays open — deliberately NOT closed, simulating
+      // a flake/silent network drop rather than a clean disconnect.
+      const firstWs = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(firstWs);
+      const firstReadyPromise = waitForMessage(firstWs);
+      firstWs.send(JSON.stringify({ type: "pair", code }));
+      const { bridge_id, session_id } = await firstReadyPromise;
+      const firstClosePromise = waitForClose(firstWs);
+
+      const secondWs = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(secondWs);
+      const secondReplyPromise = waitForMessage(secondWs);
+      secondWs.send(JSON.stringify({ type: "auth", bridge_id, session_id: session_id! }));
+      await secondReplyPromise;
+
+      // The FIRST socket must have been closed by the server as a side
+      // effect of the second connection's successful auth — not left
+      // dangling.
+      await firstClosePromise;
+      expect(app.connectedBridges.get(bridge_id!)).not.toBeUndefined();
+
+      secondWs.close();
+    });
+
     it("rejects a wrong session id for a real bridge, closing the connection", async () => {
       const { port } = await buildAndListen();
       const { bridge_id } = await pairFreshBridge(port);
