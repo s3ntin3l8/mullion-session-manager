@@ -54,6 +54,12 @@ export const sessionsApi = {
     command: string,
     opts?: {
       name?: string;
+      // Issue #73 PR3 — pins `name` against live OSC title updates, same as
+      // an explicit rename (see Session.nameLocked's own doc comment). Used
+      // when `name` carries a docker-log-stream session's stable matching
+      // identity (dockHelpers.ts's dockerSessionIdentity) rather than a
+      // human-facing label, so it must not drift.
+      nameLocked?: boolean;
       cwd?: string;
       kind?: "terminal" | "dock";
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"

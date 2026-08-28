@@ -207,10 +207,19 @@ Each discovered monitor:
   directory — or a plain `docker logs -f` fallback when one of those
   recorded files no longer exists on disk) — an ordinary `kind: "dock"`
   session, identical in every other respect to a configured one.
-- Shows a **status dot** for the container's own state (running/exited/
-  restarting/…) — independent of whether the log stream itself is
-  currently toggled on, which the existing "on"/"off" tag next to it still
-  tracks.
+- Shows a **status dot**, with an always-visible text label beside it
+  (running/exited/restarting/…, not just a hover tooltip) for the
+  container's own state — independent of whether the log stream itself is
+  currently toggled on, which the "logs on"/"logs off" tag at the end of
+  the header still tracks (a plain, non-Docker monitor keeps the older
+  "on"/"off" wording, since it has no separate container-state dot to
+  disambiguate from).
+- **Settings → Dock → "Auto-attach Docker logs"** (default off): when on, a
+  discovered monitor whose container is `running` and has no log session
+  attached starts one automatically, and re-attaches after a stopped
+  service comes back up. It never fights a manual "logs off" — the log
+  stream stays off until the container's state actually changes (or the
+  setting is toggled), not merely re-polled.
 - Shows an **image tag** pill (hover for the full image reference).
 - Has a **⋯ menu**, split into a **Service** group (this one container) and
   a **Stack** group (the whole Compose project):

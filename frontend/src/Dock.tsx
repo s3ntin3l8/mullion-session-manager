@@ -17,7 +17,13 @@ import {
   writeJSON,
   writeNumber,
 } from "./lib/persistedState.js";
-import { clamp, isDockPreviewPath, resolveSelectedValue } from "./dock/dockHelpers.js";
+import {
+  clamp,
+  dockerSessionIdentity,
+  isDockPreviewPath,
+  resolveSelectedValue,
+  runningSessionFor,
+} from "./dock/dockHelpers.js";
 import { useDockGithubStatus } from "./dock/useDockGithubStatus.js";
 import { DockGithubRow } from "./dock/DockGithubRow.js";
 import { useArmedKill } from "./dock/useArmedKill.js";
@@ -323,6 +329,7 @@ function DockColumn({
   const {
     projects,
     sessions,
+    sessionsLoaded,
     gitBranchesByProject,
     settings,
     dockConfigRefreshTrigger,
@@ -331,6 +338,7 @@ function DockColumn({
     useShallow((s) => ({
       projects: s.projects,
       sessions: s.sessions,
+      sessionsLoaded: s.sessionsLoaded,
       gitBranchesByProject: s.gitBranchesByProject,
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
@@ -456,11 +464,14 @@ function DockColumn({
   const allOptions = [...worktreeOptions, ...branchOptions];
   const showSelector = allOptions.length > 1;
 
-  // Match by command alone within a project — the session might have been
-  // created with a worktree-specific cwd override (see worktree selector
-  // below), which would mismatch the old (control.cwd ?? project.cwd) check.
-  const runningFor = (control: DockControl) =>
-    dockSessions.find((s) => s.command === control.command);
+  // PR3 (issue #73 follow-up) — delegates to dockHelpers.ts's
+  // runningSessionFor, which matches a docker-sourced control by its stable
+  // dockerSessionIdentity (containerName) rather than the reconstructed
+  // `command` string alone; a non-docker control still matches by command
+  // (the session might have been created with a worktree-specific cwd
+  // override — see worktree selector below — which would mismatch the old
+  // (control.cwd ?? project.cwd) check).
+  const runningFor = (control: DockControl) => runningSessionFor(control, dockSessions);
 
   // Issue #73 — only an ephemeral control whose spawned session is STILL
   // active gets rendered; a finished/killed update run just disappears from
@@ -472,6 +483,102 @@ function DockColumn({
   const configuredControls = controls.filter((c) => c.source !== "docker");
   const discoveredControls = controls.filter((c) => c.source === "docker");
   const dockerGroupControls = [...liveEphemeralControls, ...discoveredControls];
+
+  // Hermes review, round 2 — a transient failure (backend blip, briefly out
+  // of PTY slots) otherwise recorded `eligible: true` right alongside
+  // success, so the false→true edge that's supposed to retry never fires
+  // again for that identity until the container itself cycles through
+  // non-running or the setting is toggled — for a long-lived production
+  // container, one bad attempt permanently and silently loses auto-attach.
+  // Bounded per-identity cooldown instead of retrying every 15s (which
+  // would be spammy for a genuinely dead host): `failedAt` records the last
+  // failure, and a poll is allowed to retry once AUTO_ATTACH_RETRY_MS has
+  // elapsed, without waiting for a real eligibility edge.
+  const AUTO_ATTACH_RETRY_MS = 60_000;
+
+  // PR3 (issue #73 follow-up) — settings.dock.autoAttachDockerLogs. Tracks
+  // per-container whether it was "eligible" (setting on AND
+  // docker.state === "running") the last time this ran, keyed by the same
+  // dockerSessionIdentity used for matching above; a container's identity
+  // outlives a single poll's `controls` array, so this lives in a ref, not
+  // component state. Fires on a false→true edge of eligibility, or (see
+  // AUTO_ATTACH_RETRY_MS above) once the cooldown has elapsed since a
+  // recorded failure — never merely because eligibility is *holding* true
+  // with no prior failure, which is what makes "don't fight a manual stop"
+  // still true: a user manually stopping the log stream while the
+  // container keeps running leaves `failedAt` untouched (null), so nothing
+  // is due for retry. `runningFor` is still checked at the point of firing,
+  // so a session that's already attached (manual click, or a still-live
+  // stream that survived a plain `docker restart`) is never double-attached.
+  const autoAttachStateRef = useRef<Map<string, { eligible: boolean; failedAt: number | null }>>(
+    new Map(),
+  );
+  useEffect(() => {
+    // `sessions` loads asynchronously (refreshSessions(), racing this
+    // column's own `immediate: true` dock poll on first mount) — without
+    // this gate, a poll that commits before sessions have ever loaded would
+    // see `dockSessions` as `[]`, read every already-attached container as
+    // "no session yet," and attach a duplicate that never gets cleaned up
+    // (this effect doesn't re-run just because `sessions` arrives later).
+    if (!sessionsLoaded) return;
+    const autoAttachOn = settings.dock.autoAttachDockerLogs;
+    // Hermes review — prune identities absent from THIS poll before
+    // checking eligibility below. Without this, a `docker compose down`
+    // (the container disappears from discovery entirely, not just its
+    // state changing) leaves a stale entry behind forever; the container
+    // coming back via `up -d` would then read as "already eligible last
+    // time" and the edge that's supposed to re-attach it never fires —
+    // exactly the down/up case the "re-attaches after a stopped service
+    // comes back up" claim is meant to cover.
+    const currentIdentities = new Set(
+      discoveredControls
+        .map((control) => dockerSessionIdentity(control))
+        .filter((identity): identity is string => identity !== null),
+    );
+    for (const identity of autoAttachStateRef.current.keys()) {
+      if (!currentIdentities.has(identity)) autoAttachStateRef.current.delete(identity);
+    }
+    // Hoisted out of the loop below — one call per poll, not per control.
+    // effects (unlike render) are allowed side effects; this useEffect's own
+    // exhaustive-deps suppression above appears to be what makes the
+    // compiler's purity pass treat this callback as needing render-purity.
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
+    for (const control of discoveredControls) {
+      const identity = dockerSessionIdentity(control);
+      if (identity === null) continue;
+      const eligible = autoAttachOn && control.docker?.state === "running";
+      const entry = autoAttachStateRef.current.get(identity);
+      const wasEligible = entry?.eligible ?? false;
+      const failedAt = entry?.failedAt ?? null;
+      const dueForRetry = failedAt !== null && nowMs - failedAt >= AUTO_ATTACH_RETRY_MS;
+      if (eligible && (!wasEligible || dueForRetry) && !runningFor(control)) {
+        // Optimistic: marks eligible/not-yet-failed immediately so a poll
+        // landing mid-flight doesn't also fire; the .then/.catch below
+        // correct this once the attempt actually settles.
+        autoAttachStateRef.current.set(identity, { eligible: true, failedAt });
+        useDashboardStore
+          .getState()
+          .createSession(projectId, control.command, {
+            kind: "dock",
+            name: identity,
+            nameLocked: true,
+            ...(control.env ? { env: control.env } : {}),
+          })
+          .then(() => {
+            autoAttachStateRef.current.set(identity, { eligible: true, failedAt: null });
+          })
+          .catch(() => {
+            console.warn("[dock] auto-attach docker logs failed", control.id);
+            showCheckStatus(control.id, "Auto-attach failed", true);
+            autoAttachStateRef.current.set(identity, { eligible: true, failedAt: Date.now() });
+          });
+        continue;
+      }
+      autoAttachStateRef.current.set(identity, { eligible, failedAt });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runningFor/discoveredControls are recomputed fresh from `controls`/`sessions` every render; depending on `controls` (what actually changes on a poll) avoids re-running this effect on every unrelated re-render of a large, frequently-updated component.
+  }, [controls, sessionsLoaded, settings.dock.autoAttachDockerLogs, projectId]);
 
   const handleCheckUpdate = async (control: DockControl) => {
     try {
@@ -637,6 +744,13 @@ function DockColumn({
           // relaunch instead of it disappearing into an unhandled rejection
           // — the exact P9 class of bug, previously sitting inside the very
           // restart path U5 fixes.
+          // PR3 — a docker-sourced control's session is named with its
+          // stable dockerSessionIdentity (and locked) so a manual header
+          // click matches the same way an auto-attached session does; see
+          // dockHelpers.ts's own doc comment for why command-string
+          // matching alone isn't reliable for these.
+          const dockIdentity = dockerSessionIdentity(control);
+          const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
           const launchForValue = (value: string) => {
             const effectiveCwd = value.length > 0 ? value : control.cwd;
             if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
@@ -645,12 +759,14 @@ function DockColumn({
                 kind: "dock",
                 worktree: { branch: branchName },
                 worktreeRefresh: effectiveWorktreeRefresh,
+                ...identityOpts,
                 ...(control.env ? { env: control.env } : {}),
               });
             }
             return useDashboardStore.getState().createSession(projectId, control.command, {
               ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
               kind: "dock",
+              ...identityOpts,
               ...(control.env ? { env: control.env } : {}),
             });
           };
