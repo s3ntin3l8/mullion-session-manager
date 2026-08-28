@@ -126,6 +126,14 @@ export async function hostsRoute(app: FastifyInstance) {
       // (hasLoggedFailure, remote-event-subscriber.ts, Hermes review, PR
       // #564 round 5), not on every attempt.
       app.reconfigureRemoteEventSubscriptions();
+      // Issue #820 — same immediate-pickup reasoning as the events call
+      // just above, for ssh-agent-fanout.ts's own desired set (a no-op
+      // unless a bridge already happens to be connected). Unlike the
+      // events subscriber, this reconcile() has no forceReconnect —
+      // reasonable here since a freshly-created host has no OPEN fan-out
+      // connection yet to force; see the PATCH handler below for the one
+      // case where that gap is real.
+      app.reconfigureSshAgentFanout();
       reply.code(201);
       return created;
     },
@@ -154,6 +162,17 @@ export async function hostsRoute(app: FastifyInstance) {
         // baseUrl/token must not be left running until it happens to error
         // out on its own — force it closed and reopened with the fresh row.
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [id] });
+        // Issue #820 — known gap, not silently dropped: unlike the events
+        // subscriber above, ssh-agent-fanout.ts's reconcile() has no
+        // forceReconnect, so an ALREADY-OPEN fan-out connection for this
+        // host keeps running on the OLD baseUrl/token until it happens to
+        // error out on its own (bounded by the same reconnect backoff
+        // every other case here already tolerates). Calling it anyway is
+        // still correct, just not immediate: harmless no-op if this host
+        // has no open fan-out connection, and it's what picks up a host
+        // whose fan-out connection isn't open yet (no bridge was connected
+        // until just now, say).
+        app.reconfigureSshAgentFanout();
       }
       return updated;
     },
@@ -414,6 +433,10 @@ export async function hostsRoute(app: FastifyInstance) {
       // (and failing, since getHostRow(app, id) now returns undefined)
       // until the next fallback reconcile tick.
       app.reconfigureRemoteEventSubscriptions();
+      // Issue #820 — same immediate-teardown reasoning, for
+      // ssh-agent-fanout.ts's own desired set: a deleted host must not
+      // keep an open (or reconnecting) fan-out connection around either.
+      app.reconfigureSshAgentFanout();
       reply.code(204);
     },
   );

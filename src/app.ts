@@ -47,6 +47,7 @@ import { hostsRoute } from "./routes/hosts.js";
 import { enrollmentRoute } from "./routes/enrollment.js";
 import { agentBridgeRoute } from "./routes/agent-bridge.js";
 import { agentBridgePlugin } from "./plugins/agent-bridge.js";
+import { sshAgentFanoutPlugin } from "./plugins/ssh-agent-fanout.js";
 import { integrationsRoute } from "./routes/integrations.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { githubWSRoute } from "./routes/ws-github.js";
@@ -400,8 +401,13 @@ export async function buildApp() {
   await app.register(enrollmentRoute);
   // agentBridgePlugin decorates app.connectedBridges — must register
   // before agentBridgeRoute, which reads/writes it (see the plugin's own
-  // comment on why this needs fastify-plugin at all).
+  // comment on why this needs fastify-plugin at all). sshAgentFanoutPlugin
+  // must register between the two: after agentBridgePlugin (reads
+  // app.connectedBridges inside its own reconcile logic) and before
+  // agentBridgeRoute (calls the app.reconfigureSshAgentFanout() decoration
+  // it provides, on every bridge connect/disconnect).
   await app.register(agentBridgePlugin);
+  await app.register(sshAgentFanoutPlugin);
   await app.register(agentBridgeRoute);
   await app.register(integrationsRoute);
   await app.register(webhookRoutes);
