@@ -346,4 +346,10 @@ describe("forwarder.mjs vs. shim fallback — drift guard", () => {
   it("codex Stop", () => {
     expect(runShimFallback("codex", "Stop")).toBe(runRealForwarderFallback("codex", "Stop"));
   });
+
+  it("codex PermissionRequest — the one Codex kind where the fallback is a real decision (issue #264's blocking gate), not just an observation", () => {
+    expect(runShimFallback("codex", "PermissionRequest")).toBe(
+      runRealForwarderFallback("codex", "PermissionRequest"),
+    );
+  });
 });

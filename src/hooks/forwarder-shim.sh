@@ -75,6 +75,15 @@ command -v "$_mullion_node" >/dev/null 2>&1 || _mullion_fallback "$@"
 # a real decision and gets the same explicit fallback as a missing
 # path/node, rather than an ambiguous empty line reaching agy's PreToolUse
 # handler (exactly the ambiguity commit 8619182 exists to prevent).
+#
+# Accepted tradeoff of not `exec`ing: on a hook timeout, whether the real
+# forwarder's own node process gets killed alongside this shell (vs.
+# orphaned as a lingering child) depends on whether the caller's timeout
+# kills a process GROUP or only the direct child pid — not verified here.
+# Bounded impact either way: the forwarder itself has no unbounded work of
+# its own (its longest wait is the caller-configured hook timeout via
+# runGate()), so a worst-case orphan is a short-lived, harmless process,
+# not a leak.
 _mullion_output=$("$_mullion_node" "$MULLION_FORWARDER_PATH" "$@")
 if [ -n "$_mullion_output" ]; then
   printf '%s\n' "$_mullion_output"

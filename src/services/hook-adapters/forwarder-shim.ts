@@ -1,8 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { shellQuote } from "./shared.js";
+import { shellQuote, resolveForwarderShimSourcePath } from "./shared.js";
 
 // Issue: dev/prod worktree collision on host-global agent hook configs.
 //
@@ -37,22 +36,15 @@ import { shellQuote } from "./shared.js";
 // node-based shim structurally cannot do. See that file's own header
 // comment for its full contract.
 
-/** Resolves the PACKAGED shim script's own source location — same
- * dev(`src/`)/prod(`dist/`) resolution as shared.ts's resolveForwarderPath,
- * duplicated rather than imported from there to avoid a circular import
- * (shared.ts doesn't need to know this module exists). This is read ONCE,
- * synchronously, by the CURRENTLY RUNNING instance to seed
- * ensureForwarderShim()'s target file — unlike resolveForwarderPath(), this
- * path is never itself persisted into a config file, so it carries none of
- * the dangling-path risk this whole module exists to eliminate. */
-function resolveForwarderShimSourcePath(): string {
-  const mullionHome = process.env.MULLION_HOME?.trim();
-  if (mullionHome) {
-    return path.join(mullionHome, "current", "dist", "hooks", "forwarder-shim.sh");
-  }
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.join(here, "..", "..", "hooks", "forwarder-shim.sh");
-}
+// resolveForwarderShimSourcePath() (imported above, from shared.ts) resolves
+// the PACKAGED shim script's own source location — same dev(`src/`)/
+// prod(`dist/`) resolution as resolveForwarderPath(). It's read ONCE,
+// synchronously, by the CURRENTLY RUNNING instance to seed
+// ensureForwarderShim()'s target file below — unlike resolveForwarderPath(),
+// that source path is never itself persisted into a config file, so it
+// carries none of the dangling-path risk this whole module exists to
+// eliminate. Not to be confused with resolveForwarderShimPath() just below,
+// the FIXED, host-stable location the shim is installed AT.
 
 /** The fixed, host-stable, per-user location the shim is installed at —
  * outside every checkout and every versioned release directory, so it

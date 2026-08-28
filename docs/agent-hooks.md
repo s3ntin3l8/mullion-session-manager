@@ -445,15 +445,31 @@ Given both, Mullion instead does an idempotent, Mullion-owned **merge into
 the user's real `~/.codex/hooks.json`** (or `$CODEX_HOME/hooks.json` if the
 user has their own override set) — the same "managed, reversible install"
 posture as agy below, not the plan's original "no argv edit, no managed
-install" assumption for Codex. The merge is keyed off the forwarder's own
-install path, so re-running it on every launch only ever replaces
-Mullion's own hook group; any hooks the user configured themselves are left
-untouched, and a file Mullion can't safely parse is left untouched too
-(never blindly overwritten). Because trust is recorded against the real,
-stable `~/.codex` rather than a fresh-per-session directory, **a one-time
-`/hooks` trust grant persists across every future Mullion-launched Codex
-session** — it just isn't automatic. Until granted, these hooks are
-silently skipped and Codex works exactly as it does today.
+install" assumption for Codex. The merge is keyed off the fixed forwarder
+shim's install path (see "How a hook command finds the forwarder" above),
+so re-running it on every launch only ever replaces Mullion's own hook
+group; any hooks the user configured themselves are left untouched, and a
+file Mullion can't safely parse is left untouched too (never blindly
+overwritten). Because trust is recorded against the real, stable
+`~/.codex` rather than a fresh-per-session directory, **a one-time `/hooks`
+trust grant persists across every future Mullion-launched Codex session**
+— it just isn't automatic. Until granted, these hooks are silently skipped
+and Codex works exactly as it does today.
+
+**Upgrading from a pre-shim release (one-time cost):** Codex's `/hooks`
+trust is granted per hook-group command string — `trusted_hash` in
+`~/.codex/config.toml` (see `codex-trust.ts`'s own doc comment). Migrating
+an already-trusted host to the forwarder-shim command shape changes that
+string once, which re-triggers Codex's interactive `/hooks` review exactly
+once per host, the same way any prior forwarder-path change already did
+before the `current`-symlink stable-path fix (issue #259). Grant that
+review **before** running any unattended Codex session on the upgraded
+host, or it silently sits with no Mullion hooks (same as any other
+not-yet-trusted host) until someone notices and completes it — see
+"Removing managed hooks" below for how to confirm what's currently
+installed. After this one-time migration, the command string is a
+permanent constant across every future release, so this specific cost
+never recurs.
 
 **Live-verified (issue #846):** the `apply_patch` patch-header format the
 file-change extractor parses was confirmed against two real hook firings

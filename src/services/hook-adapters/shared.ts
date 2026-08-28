@@ -39,6 +39,18 @@ export function resolveForwarderPath(): string {
   return path.join(resolveHooksDir(), "forwarder.mjs");
 }
 
+/** Same dev/prod resolution as resolveForwarderPath() above, for the
+ * PACKAGED forwarder shim script (issue: host-global agy/Codex hook
+ * configs pinning a checkout-specific forwarder path — see
+ * hook-adapters/forwarder-shim.ts). Resolves where THIS release's copy of
+ * `forwarder-shim.sh` lives, so `ensureForwarderShim()` can read its
+ * content and install it at the fixed, host-stable location that function
+ * itself resolves independently (`resolveForwarderShimPath()`, homedir-
+ * anchored, deliberately NOT this function). */
+export function resolveForwarderShimSourcePath(): string {
+  return path.join(resolveHooksDir(), "forwarder-shim.sh");
+}
+
 /** Same dev/prod resolution as resolveForwarderPath() above, for OpenCode's
  * plugin file (issue #175) — see src/hooks/opencode-plugin.js's own header
  * comment for why it's plain JS too. */
