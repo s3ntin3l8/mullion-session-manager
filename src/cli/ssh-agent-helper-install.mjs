@@ -189,17 +189,27 @@ function installLaunchd(io, { execPath, scriptPath, sshAuthSock }) {
   // Best-effort teardown of a previous install first — launchctl bootstrap
   // fails outright over an already-loaded label, so a re-install (new
   // --ssh-auth-sock, moved checkout, ...) needs this to be idempotent.
-  runSpawnSync(io, "launchctl", ["bootout", `gui/${uid}/${LAUNCHD_LABEL}`]);
+  const preTeardown = runSpawnSync(io, "launchctl", ["bootout", `gui/${uid}/${LAUNCHD_LABEL}`]);
   fs.writeFileSync(plistPath, buildLaunchdPlist({ execPath, scriptPath, sshAuthSock, logPath }));
   const result = runSpawnSync(io, "launchctl", ["bootstrap", `gui/${uid}`, plistPath]);
   if (result.status !== 0) {
-    // Roll back the just-written file on a failed bootstrap — otherwise
+    // Roll back the just-written file — but ONLY when we're confident
+    // nothing was loaded under this label before we wrote it (preTeardown
+    // succeeded, i.e. there was genuinely nothing to tear down). Otherwise
     // uninstall later finds a plist on disk for a job that was NEVER
     // actually loaded, runs bootout against it, gets launchd's "could not
     // find service" non-zero exit, treats that as a genuine teardown
     // failure (see uninstallLaunchd's own reasoning), and refuses to clean
     // up — wedging the user until they `rm` it by hand (Hermes review).
-    fs.rmSync(plistPath, { force: true });
+    //
+    // If preTeardown itself FAILED, we can't tell "wasn't loaded" apart
+    // from "still loaded and something's wrong" — in that ambiguous case,
+    // deleting the file risks the inverse problem: an old job left running
+    // with no on-disk plist for a later uninstall to find and stop
+    // (Hermes review, round 2). Leaving the file lets uninstall's own
+    // already-tested bootout-failure handling take it from here instead
+    // of duplicating that judgment call here.
+    if (preTeardown.status === 0) fs.rmSync(plistPath, { force: true });
     io.stderr.write(
       `launchctl bootstrap failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
     );

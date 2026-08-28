@@ -345,6 +345,25 @@ describe("runInstall / runUninstall", () => {
     expect(uninstallCode).toBe(0);
   });
 
+  it("darwin: does NOT roll back the plist if the pre-install teardown itself failed (ambiguous — an old job may still be running)", async () => {
+    const { io, dir: d } = baseIo({ platform: "darwin", uid: 501 });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("bootout"))
+        return { status: 1, stdout: "", stderr: "Could not find service" };
+      if (args.includes("bootstrap"))
+        return { status: 1, stdout: "", stderr: "Service already loaded" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const code = await runInstall([], io);
+    expect(code).toBe(1);
+    // Deleting the plist here would be the inverse of the earlier bug: an
+    // old job could genuinely still be running with no on-disk plist left
+    // for a later uninstall to find and stop it (Hermes review, round 2).
+    const plistPath = launchdPlistPath(io);
+    expect(existsSync(plistPath)).toBe(true);
+  });
+
   it("win32: refuses cleanly, no files written", async () => {
     const { io } = baseIo({ platform: "win32" });
     const stderrLines: string[] = [];
