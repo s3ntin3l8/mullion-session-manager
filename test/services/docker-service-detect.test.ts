@@ -37,6 +37,16 @@ interface PsRow {
   workingDir: string;
   imageId: string;
   oneoff: string;
+  // Optional — default "" (no config_files/environment_file label), same
+  // as a stack whose compose invocation carried no explicit -f/--env-file.
+  // Tests that care about compose-context reconstruction set these
+  // explicitly; every other fixture is unaffected by their addition.
+  configFiles?: string;
+  envFile?: string;
+  // Optional — default "" (no config-hash label recorded, e.g. a
+  // pre-labels-era container). Tests that care about the recreate
+  // precondition set this explicitly.
+  configHash?: string;
 }
 
 function psLine(row: PsRow): string {
@@ -52,6 +62,9 @@ function psLine(row: PsRow): string {
     row.workingDir,
     row.imageId,
     row.oneoff,
+    row.configFiles ?? "",
+    row.envFile ?? "",
+    row.configHash ?? "",
   ].join("\t");
 }
 
@@ -62,6 +75,11 @@ let dockerInstalled = true;
 let composeAvailable = true;
 let pullSucceeds = true;
 let inspectedImageId = "sha256:latest000000000000000000000000000000000000000000000000000000";
+let restartSucceeds = true;
+let stopSucceeds = true;
+let startSucceeds = true;
+let configHashSucceeds = true;
+let configHashOutput = "web abc123hash";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -106,6 +124,43 @@ vi.mock("node:child_process", async (importOriginal) => {
           child.emit("close", 0);
           return;
         }
+        if (args[0] === "compose" && args.includes("restart")) {
+          if (restartSucceeds) {
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: restart failed\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
+        if (args[0] === "compose" && args.includes("stop")) {
+          if (stopSucceeds) {
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: stop failed\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
+        if (args[0] === "compose" && args.includes("start")) {
+          if (startSucceeds) {
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: start failed\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
+        if (args[0] === "compose" && args.includes("config")) {
+          if (configHashSucceeds) {
+            child.stdout.emit("data", Buffer.from(`${configHashOutput}\n`));
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: no configuration file provided\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
         child.emit("error", new Error(`unexpected docker args: ${args.join(" ")}`));
       });
       return child;
@@ -120,12 +175,24 @@ const {
   mapServicesToProject,
   toDockControls,
   shellQuote,
+  composeContextArgs,
+  composeContextFlags,
   pullComposeImageQuietly,
   inspectImageId,
+  restartComposeService,
+  stopComposeService,
+  startComposeService,
+  reconstructConfigHash,
 } = await import("../../src/services/docker-service-detect.js");
 
 describe("docker-service-detect", () => {
   let resolvableDir: string;
+  // The absolute path recorded in a fixture's `config_files` label —
+  // composeResolvable is now driven entirely by that label (existsSync on
+  // each recorded path), not by scanning workingDir for a default-named
+  // file, so a "resolvable" fixture must point configFiles at a file that
+  // actually exists.
+  let resolvableComposeFile: string;
   let unresolvableDir: string;
 
   beforeEach(() => {
@@ -134,10 +201,16 @@ describe("docker-service-detect", () => {
     dockerInstalled = true;
     composeAvailable = true;
     pullSucceeds = true;
+    restartSucceeds = true;
+    stopSucceeds = true;
+    startSucceeds = true;
+    configHashSucceeds = true;
+    configHashOutput = "web abc123hash";
     clearComposeCacheForTests();
     clearComposeAvailabilityCacheForTests();
     resolvableDir = fs.mkdtempSync(path.join(os.tmpdir(), "docker-detect-resolvable-"));
-    fs.writeFileSync(path.join(resolvableDir, "docker-compose.yml"), "services: {}\n");
+    resolvableComposeFile = path.join(resolvableDir, "docker-compose.yml");
+    fs.writeFileSync(resolvableComposeFile, "services: {}\n");
     unresolvableDir = fs.mkdtempSync(path.join(os.tmpdir(), "docker-detect-unresolvable-"));
   });
 
@@ -160,6 +233,8 @@ describe("docker-service-detect", () => {
         workingDir: resolvableDir,
         imageId: "sha256:c14dd0e39e89f0c15c2bf462d8a2e05fb17a3b89dc8fe59b60e9f7daa48d7837",
         oneoff: "False",
+        configFiles: resolvableComposeFile,
+        configHash: "hash-sanctuary-web",
       });
 
       const services = await getComposeServices();
@@ -175,8 +250,39 @@ describe("docker-service-detect", () => {
           imageId: "sha256:c14dd0e39e89f0c15c2bf462d8a2e05fb17a3b89dc8fe59b60e9f7daa48d7837",
           buildOnly: false,
           composeResolvable: true,
+          configFiles: [resolvableComposeFile],
+          envFile: null,
+          configHash: "hash-sanctuary-web",
         },
       ]);
+    });
+
+    it("parses a multi-file config_files label (compose.yaml + override) and an environment_file label", async () => {
+      const overrideFile = path.join(resolvableDir, "docker-compose.override.yml");
+      fs.writeFileSync(overrideFile, "services: {}\n");
+      const envFile = path.join(resolvableDir, ".env.prod");
+      fs.writeFileSync(envFile, "");
+
+      psOutput = psLine({
+        id: "abc123",
+        names: "pocket-web-1",
+        state: "running",
+        status: "Up",
+        image: "pocket-web",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "pocket",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: `${resolvableComposeFile},${overrideFile}`,
+        envFile,
+      });
+
+      const services = await getComposeServices();
+      expect(services[0]?.configFiles).toEqual([resolvableComposeFile, overrideFile]);
+      expect(services[0]?.envFile).toBe(envFile);
+      expect(services[0]?.composeResolvable).toBe(true);
     });
 
     it("drops `docker compose run` one-off containers", async () => {
@@ -308,7 +414,7 @@ describe("docker-service-detect", () => {
       expect(services[0]?.buildOnly).toBe(false);
     });
 
-    it("flags composeResolvable false when no default-named compose file exists in workingDir", async () => {
+    it("flags composeResolvable false when the config_files label is empty", async () => {
       psOutput = psLine({
         id: "a",
         names: "foo-web",
@@ -325,6 +431,68 @@ describe("docker-service-detect", () => {
 
       const services = await getComposeServices();
       expect(services[0]?.composeResolvable).toBe(false);
+      expect(services[0]?.configFiles).toEqual([]);
+    });
+
+    it("flags composeResolvable false when the stack's own recorded config file no longer exists on disk", async () => {
+      // Same shape as pocket-portfolio-tracker's prod stack: workingDir has
+      // an unrelated docker-compose.yml sitting in it (or nothing at all),
+      // but the label recorded a file that's since moved/been deleted.
+      // Pre-reconstruction, isComposeResolvable would have wrongly matched
+      // on the unrelated default-named file; it must not do so here.
+      const missingFile = path.join(resolvableDir, "docker-compose.prod.yml");
+      psOutput = psLine({
+        id: "a",
+        names: "foo-web",
+        state: "running",
+        status: "Up",
+        image: "nginx:latest",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "foo",
+        service: "web",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: missingFile,
+      });
+
+      const services = await getComposeServices();
+      expect(services[0]?.composeResolvable).toBe(false);
+
+      const controls = await toDockControls(services);
+      expect(controls[0]?.command).toBe(`docker logs -f --tail=200 ${shellQuote("foo-web")}`);
+    });
+
+    it("flags composeResolvable false when the stack's own recorded env file no longer exists on disk", async () => {
+      // `docker compose --env-file <missing>` hard-fails ("couldn't find env
+      // file") rather than degrading gracefully — verified live — so a
+      // deleted/moved env file must force the same docker-logs fallback as
+      // a missing compose file, even though every configFiles entry here
+      // still exists.
+      const missingEnvFile = path.join(resolvableDir, ".env.prod");
+      psOutput = psLine({
+        id: "a",
+        names: "pocket-portfolio-tracker-api-1",
+        state: "running",
+        status: "Up",
+        image: "pocket-portfolio-tracker-api",
+        createdAt: "2026-08-01 00:00:00 +0000 UTC",
+        project: "pocket-portfolio-tracker",
+        service: "api",
+        workingDir: resolvableDir,
+        imageId: "sha256:x",
+        oneoff: "False",
+        configFiles: resolvableComposeFile,
+        envFile: missingEnvFile,
+      });
+
+      const services = await getComposeServices();
+      expect(services[0]?.composeResolvable).toBe(false);
+
+      const controls = await toDockControls(services);
+      expect(controls[0]?.command).toBe(
+        `docker logs -f --tail=200 ${shellQuote("pocket-portfolio-tracker-api-1")}`,
+      );
     });
 
     it("returns [] when docker is not installed", async () => {
@@ -400,29 +568,27 @@ describe("docker-service-detect", () => {
   describe("toDockControls", () => {
     it("synthesizes a docker-compose logs command when compose is available and resolvable", async () => {
       composeAvailable = true;
-      const controls = await toDockControls([
-        {
-          composeProject: "sanctuary",
-          service: "web",
-          containerName: "sanctuary-web",
-          workingDir: resolvableDir,
-          state: "running",
-          status: "Up 6 days",
-          imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
-          imageId: "sha256:x",
-          buildOnly: false,
-          composeResolvable: true,
-        },
-      ]);
+      const svc = {
+        composeProject: "sanctuary",
+        service: "web",
+        containerName: "sanctuary-web",
+        workingDir: resolvableDir,
+        state: "running" as const,
+        status: "Up 6 days",
+        imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+        imageId: "sha256:x",
+        buildOnly: false,
+        composeResolvable: true,
+        configFiles: [resolvableComposeFile],
+        envFile: null,
+      };
+      const controls = await toDockControls([svc]);
 
       expect(controls).toEqual([
         {
           id: "docker:sanctuary:web",
           title: "web",
-          command:
-            `docker compose -p ${shellQuote("sanctuary")} ` +
-            `--project-directory ${shellQuote(resolvableDir)} ` +
-            `logs -f --tail=200 ${shellQuote("web")}`,
+          command: `docker compose ${composeContextFlags(svc)} logs -f --tail=200 ${shellQuote("web")}`,
           source: "docker",
           docker: {
             composeProject: "sanctuary",
@@ -436,6 +602,31 @@ describe("docker-service-detect", () => {
           },
         },
       ]);
+    });
+
+    it("includes --env-file in the reconstructed logs command when one is recorded", async () => {
+      composeAvailable = true;
+      const envFile = path.join(resolvableDir, ".env.prod");
+      const svc = {
+        composeProject: "pocket-portfolio-tracker",
+        service: "api",
+        containerName: "pocket-portfolio-tracker-api-1",
+        workingDir: resolvableDir,
+        state: "running" as const,
+        status: "Up",
+        imageRef: "pocket-portfolio-tracker-api",
+        imageId: "sha256:x",
+        buildOnly: true,
+        composeResolvable: true,
+        configFiles: [path.join(resolvableDir, "docker-compose.prod.yml")],
+        envFile,
+      };
+      const controls = await toDockControls([svc]);
+
+      expect(controls[0]?.command).toContain(`--env-file ${shellQuote(envFile)}`);
+      expect(controls[0]?.command).toBe(
+        `docker compose ${composeContextFlags(svc)} logs -f --tail=200 ${shellQuote("api")}`,
+      );
     });
 
     it("falls back to `docker logs` when composeResolvable is false", async () => {
@@ -452,6 +643,8 @@ describe("docker-service-detect", () => {
           imageId: "sha256:x",
           buildOnly: false,
           composeResolvable: false,
+          configFiles: [],
+          envFile: null,
         },
       ]);
 
@@ -472,6 +665,8 @@ describe("docker-service-detect", () => {
           imageId: "sha256:x",
           buildOnly: false,
           composeResolvable: true,
+          configFiles: [resolvableComposeFile],
+          envFile: null,
         },
       ]);
 
@@ -493,12 +688,80 @@ describe("docker-service-detect", () => {
           imageId: "sha256:x",
           buildOnly: false,
           composeResolvable: false, // dangerousDir doesn't actually exist
+          configFiles: [],
+          envFile: null,
         },
       ]);
       // composeResolvable: false forces the docker-logs fallback here, so
       // assert the quoting directly instead.
       expect(shellQuote("a'b")).toContain("'\\''");
       expect(controls[0]?.command).toBe(`docker logs -f --tail=200 ${shellQuote("x")}`);
+    });
+  });
+
+  describe("composeContextArgs / composeContextFlags", () => {
+    const svc = {
+      composeProject: "pocket-portfolio-tracker",
+      service: "api",
+      containerName: "pocket-portfolio-tracker-api-1",
+      workingDir: "/home/user/pocket-portfolio-tracker",
+      state: "running" as const,
+      status: "Up",
+      imageRef: "pocket-portfolio-tracker-api",
+      imageId: "sha256:x",
+      buildOnly: true,
+      composeResolvable: true,
+      configFiles: ["/home/user/pocket-portfolio-tracker/docker-compose.prod.yml"],
+      envFile: "/home/user/pocket-portfolio-tracker/.env.prod",
+    };
+
+    it("composeContextArgs includes -p, --project-directory, --env-file, and one -f per config file", () => {
+      expect(composeContextArgs(svc)).toEqual([
+        "-p",
+        "pocket-portfolio-tracker",
+        "--project-directory",
+        "/home/user/pocket-portfolio-tracker",
+        "--env-file",
+        "/home/user/pocket-portfolio-tracker/.env.prod",
+        "-f",
+        "/home/user/pocket-portfolio-tracker/docker-compose.prod.yml",
+      ]);
+    });
+
+    it("composeContextArgs omits --env-file when none was recorded", () => {
+      expect(composeContextArgs({ ...svc, envFile: null })).toEqual([
+        "-p",
+        "pocket-portfolio-tracker",
+        "--project-directory",
+        "/home/user/pocket-portfolio-tracker",
+        "-f",
+        "/home/user/pocket-portfolio-tracker/docker-compose.prod.yml",
+      ]);
+    });
+
+    it("composeContextArgs emits one -f per file, in order, for a multi-file (override) stack", () => {
+      const multiFile = {
+        ...svc,
+        envFile: null,
+        configFiles: ["/home/user/app/compose.yaml", "/home/user/app/compose.override.yaml"],
+      };
+      const args = composeContextArgs(multiFile);
+      expect(args.filter((a) => a === "-f")).toHaveLength(2);
+      expect(args.slice(-4)).toEqual([
+        "-f",
+        "/home/user/app/compose.yaml",
+        "-f",
+        "/home/user/app/compose.override.yaml",
+      ]);
+    });
+
+    it("composeContextFlags shell-quotes every component", () => {
+      expect(composeContextFlags(svc)).toBe(
+        `-p ${shellQuote("pocket-portfolio-tracker")} ` +
+          `--project-directory ${shellQuote("/home/user/pocket-portfolio-tracker")} ` +
+          `--env-file ${shellQuote("/home/user/pocket-portfolio-tracker/.env.prod")} ` +
+          `-f ${shellQuote("/home/user/pocket-portfolio-tracker/docker-compose.prod.yml")}`,
+      );
     });
   });
 
@@ -515,6 +778,8 @@ describe("docker-service-detect", () => {
         imageId: "y",
         buildOnly: false,
         composeResolvable: true,
+        configFiles: [],
+        envFile: null,
       },
       {
         composeProject: "nested",
@@ -527,6 +792,8 @@ describe("docker-service-detect", () => {
         imageId: "y",
         buildOnly: false,
         composeResolvable: true,
+        configFiles: [],
+        envFile: null,
       },
       {
         composeProject: "unrelated",
@@ -539,6 +806,8 @@ describe("docker-service-detect", () => {
         imageId: "y",
         buildOnly: false,
         composeResolvable: true,
+        configFiles: [],
+        envFile: null,
       },
     ];
 
@@ -577,6 +846,12 @@ describe("docker-service-detect", () => {
       imageId: "sha256:old000000000000000000000000000000000000000000000000000000000",
       buildOnly: false,
       composeResolvable: true,
+      configFiles: [
+        "/home/user/sanctuary/docker-compose.yml",
+        "/home/user/sanctuary/docker-compose.override.yml",
+      ],
+      envFile: null,
+      configHash: "abc123hash",
     };
 
     it("pullComposeImageQuietly resolves true on success", async () => {
@@ -589,6 +864,32 @@ describe("docker-service-detect", () => {
       expect(await pullComposeImageQuietly(service)).toBe(false);
     });
 
+    it("pullComposeImageQuietly reconstructs the -f list from configFiles, not a bare -p/--project-directory", async () => {
+      const { spawn } = await import("node:child_process");
+      const spawnMock = vi.mocked(spawn);
+      spawnMock.mockClear();
+      pullSucceeds = true;
+
+      await pullComposeImageQuietly(service);
+
+      const call = spawnMock.mock.calls.find((c) => (c[1] as string[])?.includes("pull"));
+      const args = call?.[1] as string[];
+      expect(args).toEqual([
+        "compose",
+        "-p",
+        "sanctuary",
+        "--project-directory",
+        "/home/user/sanctuary",
+        "-f",
+        "/home/user/sanctuary/docker-compose.yml",
+        "-f",
+        "/home/user/sanctuary/docker-compose.override.yml",
+        "pull",
+        "--quiet",
+        "web",
+      ]);
+    });
+
     it("inspectImageId returns the trimmed image id", async () => {
       inspectedImageId = "sha256:deadbeef";
       expect(await inspectImageId("ghcr.io/s3ntin3l8/sanctuary:edge")).toBe("sha256:deadbeef");
@@ -597,6 +898,104 @@ describe("docker-service-detect", () => {
     it("inspectImageId returns null when docker is not installed", async () => {
       dockerInstalled = false;
       expect(await inspectImageId("ghcr.io/s3ntin3l8/sanctuary:edge")).toBeNull();
+    });
+  });
+
+  describe("restartComposeService / stopComposeService / startComposeService", () => {
+    const service = {
+      composeProject: "sanctuary",
+      service: "web",
+      containerName: "sanctuary-web",
+      workingDir: "/home/user/sanctuary",
+      state: "running" as const,
+      status: "Up",
+      imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+      imageId: "sha256:x",
+      buildOnly: false,
+      composeResolvable: true,
+      configFiles: ["/home/user/sanctuary/docker-compose.yml"],
+      envFile: null,
+      configHash: "abc123hash",
+    };
+
+    it("restartComposeService resolves true on success and reconstructs the compose context", async () => {
+      const { spawn } = await import("node:child_process");
+      const spawnMock = vi.mocked(spawn);
+      spawnMock.mockClear();
+      restartSucceeds = true;
+
+      expect(await restartComposeService(service)).toBe(true);
+
+      const call = spawnMock.mock.calls.find((c) => (c[1] as string[])?.includes("restart"));
+      expect(call?.[1]).toEqual([
+        "compose",
+        "-p",
+        "sanctuary",
+        "--project-directory",
+        "/home/user/sanctuary",
+        "-f",
+        "/home/user/sanctuary/docker-compose.yml",
+        "restart",
+        "web",
+      ]);
+    });
+
+    it("restartComposeService resolves false on failure", async () => {
+      restartSucceeds = false;
+      expect(await restartComposeService(service)).toBe(false);
+    });
+
+    it("stopComposeService resolves true on success", async () => {
+      stopSucceeds = true;
+      expect(await stopComposeService(service)).toBe(true);
+    });
+
+    it("stopComposeService resolves false on failure", async () => {
+      stopSucceeds = false;
+      expect(await stopComposeService(service)).toBe(false);
+    });
+
+    it("startComposeService resolves true on success", async () => {
+      startSucceeds = true;
+      expect(await startComposeService(service)).toBe(true);
+    });
+
+    it("startComposeService resolves false on failure", async () => {
+      startSucceeds = false;
+      expect(await startComposeService(service)).toBe(false);
+    });
+  });
+
+  describe("reconstructConfigHash", () => {
+    const service = {
+      composeProject: "sanctuary",
+      service: "web",
+      containerName: "sanctuary-web",
+      workingDir: "/home/user/sanctuary",
+      state: "running" as const,
+      status: "Up",
+      imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+      imageId: "sha256:x",
+      buildOnly: false,
+      composeResolvable: true,
+      configFiles: ["/home/user/sanctuary/docker-compose.yml"],
+      envFile: null,
+      configHash: "abc123hash",
+    };
+
+    it("parses the hash out of `<service> <hash>` output", async () => {
+      configHashOutput = "web abc123hash";
+      expect(await reconstructConfigHash(service)).toBe("abc123hash");
+    });
+
+    it("returns null when the compose invocation fails (missing compose file, docker unreachable, ...)", async () => {
+      configHashSucceeds = false;
+      expect(await reconstructConfigHash(service)).toBeNull();
+    });
+
+    it("returns null on blank output", async () => {
+      configHashOutput = "";
+      expect(await reconstructConfigHash(service)).toBeNull();
     });
   });
 });

@@ -24,13 +24,6 @@ const DOCKER_TIMEOUT_MS = 5_000;
 // in-flight map below.
 const CACHE_TTL_MS = 10_000;
 
-const COMPOSE_DEFAULT_FILENAMES = [
-  "compose.yaml",
-  "compose.yml",
-  "docker-compose.yaml",
-  "docker-compose.yml",
-];
-
 export type ComposeServiceState =
   "running" | "exited" | "paused" | "restarting" | "created" | "dead" | "removing";
 
@@ -62,9 +55,32 @@ export interface ComposeService {
    * transient failure doesn't permanently hide the update actions for a
    * service that legitimately has a registry image. */
   buildOnly: boolean;
-  /** Whether a default-named compose file exists directly in workingDir —
-   * see toDockControls() for why this decides the synthesized command. */
+  /** Whether every file compose originally recorded in `configFiles` still
+   * exists — see composeContextArgs() for why this decides the synthesized
+   * command. */
   composeResolvable: boolean;
+  /** The exact `-f` list the stack was `up`ed with, in order (compose's own
+   * `com.docker.compose.project.config_files` label, split on `,`) — e.g.
+   * `["docker-compose.yml", "docker-compose.override.yml"]`. Verified
+   * byte-exact against a live stack: reissuing `compose <flags> config
+   * --hash=<service>` with this list reproduces the running container's own
+   * `com.docker.compose.config-hash` label. Absolute paths (compose always
+   * records them as such). Splitting on a bare `,` inherits the same
+   * limitation `COMPOSE_FILE` itself has — a path containing a literal
+   * comma can't round-trip — same tradeoff as every other `docker`-shell-out
+   * in this file. */
+  configFiles: string[];
+  /** `com.docker.compose.project.environment_file` — absolute path to the
+   * `--env-file` the stack was `up`ed with, or `null` when compose used no
+   * explicit one (its own `.env` discovery still applies without this
+   * flag). */
+  envFile: string | null;
+  /** `com.docker.compose.config-hash` — the hash of this service's config
+   * AT THE TIME the running container was created. Compared against a
+   * freshly reconstructed `compose config --hash=<service>` by the
+   * recreate-precondition check (projects.ts) to tell a caller "this action
+   * will recreate the container" before it runs. */
+  configHash: string;
 }
 
 function warn(message: string, err?: unknown): void {
@@ -155,6 +171,9 @@ const PS_FORMAT = [
   '{{.Label "com.docker.compose.project.working_dir"}}',
   '{{.Label "com.docker.compose.image"}}',
   '{{.Label "com.docker.compose.oneoff"}}',
+  '{{.Label "com.docker.compose.project.config_files"}}',
+  '{{.Label "com.docker.compose.project.environment_file"}}',
+  '{{.Label "com.docker.compose.config-hash"}}',
 ].join("\t");
 
 interface RawRow {
@@ -168,6 +187,9 @@ interface RawRow {
   workingDir: string;
   imageId: string;
   oneoff: string;
+  configFiles: string;
+  envFile: string;
+  configHash: string;
 }
 
 function parsePsOutput(output: string): RawRow[] {
@@ -189,6 +211,9 @@ function parsePsOutput(output: string): RawRow[] {
       workingDir,
       imageId,
       oneoff,
+      configFiles,
+      envFile,
+      configHash,
     ] = fields;
     if (!composeProject || !service || !workingDir) continue;
     rows.push({
@@ -202,6 +227,9 @@ function parsePsOutput(output: string): RawRow[] {
       workingDir,
       imageId: imageId ?? "",
       oneoff: oneoff ?? "",
+      configFiles: configFiles ?? "",
+      envFile: envFile ?? "",
+      configHash: configHash ?? "",
     });
   }
   return rows;
@@ -222,9 +250,35 @@ function looksBuildOnly(imageRef: string, composeProject: string, service: strin
   return pattern.test(imageRef);
 }
 
-function isComposeResolvable(workingDir: string): boolean {
-  if (!path.isAbsolute(workingDir)) return false;
-  return COMPOSE_DEFAULT_FILENAMES.some((name) => existsSync(path.join(workingDir, name)));
+/** Whether every file in `configFiles`, plus `envFile` when one was
+ * recorded, still exists — gates using the reconstructed compose flags at
+ * all. Deliberately NOT "does a default-named compose file exist in
+ * workingDir": once the logs/pull commands carry an explicit `-f`, that
+ * check tests the wrong thing (a stack `up`ed with `-f
+ * docker-compose.prod.yml` can sit right next to an unrelated dev
+ * `docker-compose.yml`, which would make the default-filename check true
+ * for the wrong reason — verified live against this repo's own
+ * pocket-portfolio-tracker). `envFile` has to be checked too, not just
+ * `configFiles`: `docker compose --env-file <missing>` hard-fails
+ * ("couldn't find env file") rather than falling back to no env file at
+ * all (verified live) — so a stack whose recorded env file has since been
+ * deleted/moved must fall through to the plain `docker logs -f
+ * <containerName>` fallback below the same as a missing compose file
+ * would, or the reconstructed command breaks instead of degrading. */
+function isComposeResolvable(configFiles: string[], envFile: string | null): boolean {
+  if (configFiles.length === 0) return false;
+  if (envFile !== null && !(path.isAbsolute(envFile) && existsSync(envFile))) return false;
+  return configFiles.every((file) => path.isAbsolute(file) && existsSync(file));
+}
+
+function parseConfigFiles(raw: string): string[] {
+  // Compose's own `COMPOSE_FILE`-style comma join — inherits the same
+  // limitation as that env var (a path containing a literal comma can't
+  // round-trip); see ComposeService.configFiles's own doc comment.
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 function toComposeState(raw: string): ComposeServiceState {
@@ -259,6 +313,8 @@ function dedupe(rows: RawRow[]): RawRow[] {
 }
 
 function toComposeService(row: RawRow): ComposeService {
+  const configFiles = parseConfigFiles(row.configFiles);
+  const envFile = row.envFile.length > 0 ? row.envFile : null;
   return {
     composeProject: row.composeProject,
     service: row.service,
@@ -269,7 +325,10 @@ function toComposeService(row: RawRow): ComposeService {
     imageRef: row.image,
     imageId: row.imageId,
     buildOnly: looksBuildOnly(row.image, row.composeProject, row.service),
-    composeResolvable: isComposeResolvable(row.workingDir),
+    composeResolvable: isComposeResolvable(configFiles, envFile),
+    configFiles,
+    envFile,
+    configHash: row.configHash,
   };
 }
 
@@ -353,16 +412,7 @@ const PULL_TIMEOUT_MS = 45_000;
  * Returns whether the pull succeeded; never throws. */
 export async function pullComposeImageQuietly(service: ComposeService): Promise<boolean> {
   const output = await runDocker(
-    [
-      "compose",
-      "-p",
-      service.composeProject,
-      "--project-directory",
-      service.workingDir,
-      "pull",
-      "--quiet",
-      service.service,
-    ],
+    ["compose", ...composeContextArgs(service), "pull", "--quiet", service.service],
     PULL_TIMEOUT_MS,
   );
   return output !== null;
@@ -377,6 +427,74 @@ export async function inspectImageId(imageRef: string): Promise<string | null> {
   if (output === null) return null;
   const trimmed = output.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+// restart/stop/start are ordinary, bounded compose operations — none of
+// them can run indefinitely the way `up -d` or a build can, so they get a
+// timeout well under PULL_TIMEOUT_MS rather than sharing it. Still an order
+// of magnitude above the 5s default DOCKER_TIMEOUT_MS used for cheap
+// `ps`/`inspect` probes, since restart/stop wait out the container's own
+// stop-grace-period — compose's own default is 10s, but a service can
+// override `stop_grace_period` well past that (Hermes review, PR #857: the
+// original 20s could time out and report `success:false` on a container
+// that was still gracefully stopping, not actually failing). 35s covers a
+// generous override while staying under PULL_TIMEOUT_MS and the ~60s
+// reverse-proxy idle default reasoned about above; docs/dock.md notes the
+// remaining edge case for an even longer override.
+const SERVICE_ACTION_TIMEOUT_MS = 35_000;
+
+/** Runs `docker compose <ctx> restart <service>` for one service — same
+ * argv-from-ComposeService-fields shape as pullComposeImageQuietly (never
+ * from a request body). Returns whether it succeeded; never throws. */
+export async function restartComposeService(service: ComposeService): Promise<boolean> {
+  const output = await runDocker(
+    ["compose", ...composeContextArgs(service), "restart", service.service],
+    SERVICE_ACTION_TIMEOUT_MS,
+  );
+  return output !== null;
+}
+
+/** Runs `docker compose <ctx> stop <service>` for one service. */
+export async function stopComposeService(service: ComposeService): Promise<boolean> {
+  const output = await runDocker(
+    ["compose", ...composeContextArgs(service), "stop", service.service],
+    SERVICE_ACTION_TIMEOUT_MS,
+  );
+  return output !== null;
+}
+
+/** Runs `docker compose <ctx> start <service>` for one service — for a
+ * stopped (`exited`) service; a no-op start on an already-running one is
+ * harmless but the caller (projects.ts) only offers this when state isn't
+ * already `running`. */
+export async function startComposeService(service: ComposeService): Promise<boolean> {
+  const output = await runDocker(
+    ["compose", ...composeContextArgs(service), "start", service.service],
+    SERVICE_ACTION_TIMEOUT_MS,
+  );
+  return output !== null;
+}
+
+/** `docker compose <ctx> config --hash=<service>` — recomputes the config
+ * hash for the service's definition AS IT STANDS ON DISK RIGHT NOW, for
+ * comparison against `ComposeService.configHash` (the hash recorded on the
+ * currently-running container, i.e. what it was `up`ed with). A mismatch
+ * means the compose file has changed since the container was created, so
+ * an action that can recreate (`up -d`, pull-restart, rebuild-restart)
+ * would replace it — see projects.ts's willRecreateOnApply(). Output is
+ * `"<service> <hash>"`; null on any failure (missing compose file, docker
+ * unreachable, …), same "can't tell" convention as inspectImageId. */
+export async function reconstructConfigHash(service: ComposeService): Promise<string | null> {
+  const output = await runDocker([
+    "compose",
+    ...composeContextArgs(service),
+    "config",
+    `--hash=${service.service}`,
+  ]);
+  if (output === null) return null;
+  const trimmed = output.trim();
+  const hash = trimmed.split(/\s+/).pop();
+  return hash && hash.length > 0 ? hash : null;
 }
 
 /**
@@ -426,21 +544,54 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Reconstructs the flags the stack was originally `up`ed with, from its own
+ * container labels — verified byte-exact live: reissuing `compose
+ * <these flags> config --hash=<service>` reproduces the running
+ * container's own `com.docker.compose.config-hash` label, for both a
+ * single explicit `-f` (a prod stack started with `-f
+ * docker-compose.prod.yml --env-file .env.prod`) and a multi-file one (a
+ * dev stack relying on `compose.yaml` + `compose.override.yaml`). Without
+ * this, a bare `-p <project> --project-directory <dir>` invocation instead
+ * resolves whatever *default-named* compose file happens to sit in that
+ * directory — a different stack entirely when a dev and a prod compose
+ * file live side by side (this repo's own pocket-portfolio-tracker) — and
+ * never auto-loads an override file either way. Argv form for spawning
+ * `docker` directly (no shell involved, so no quoting needed — see
+ * pullComposeImageQuietly's own comment on why). */
+export function composeContextArgs(svc: ComposeService): string[] {
+  return [
+    "-p",
+    svc.composeProject,
+    "--project-directory",
+    svc.workingDir,
+    ...(svc.envFile ? ["--env-file", svc.envFile] : []),
+    ...svc.configFiles.flatMap((file) => ["-f", file]),
+  ];
+}
+
+/** Shell-string form of composeContextArgs() for commands built as a single
+ * string that runs through PtyManager's shell (the logs/update commands
+ * below) — every component still originates from this ComposeService's own
+ * fields, so shellQuote is defense in depth, not a trust boundary. */
+export function composeContextFlags(svc: ComposeService): string {
+  const envFlag = svc.envFile ? `--env-file ${shellQuote(svc.envFile)} ` : "";
+  const fileFlags = svc.configFiles.map((file) => `-f ${shellQuote(file)}`).join(" ");
+  return (
+    `-p ${shellQuote(svc.composeProject)} ` +
+    `--project-directory ${shellQuote(svc.workingDir)} ` +
+    `${envFlag}${fileFlags}`
+  );
+}
+
 function composeLogsCommand(svc: ComposeService, composeAvailableNow: boolean): string {
   if (composeAvailableNow && svc.composeResolvable) {
-    return (
-      `docker compose -p ${shellQuote(svc.composeProject)} ` +
-      `--project-directory ${shellQuote(svc.workingDir)} ` +
-      `logs -f --tail=200 ${shellQuote(svc.service)}`
-    );
+    return `docker compose ${composeContextFlags(svc)} logs -f --tail=200 ${shellQuote(svc.service)}`;
   }
   // Fallback: either `docker compose` itself is unavailable (Compose
-  // V1-only host), or dropping -f means compose would have to resolve its
-  // config by default filename under --project-directory, and no
-  // default-named file exists there (a stack started with an explicit
-  // `-f docker-compose.prod.yml`, or a compose dir that's since been
-  // removed) — either way, the compose invocation would fail the instant
-  // it's toggled on. `docker logs` needs no compose config at all.
+  // V1-only host), or one of the stack's own recorded `-f` files no longer
+  // exists on disk (composeResolvable is false) — either way, the compose
+  // invocation would fail the instant it's toggled on. `docker logs` needs
+  // no compose config at all.
   return `docker logs -f --tail=200 ${shellQuote(svc.containerName)}`;
 }
 

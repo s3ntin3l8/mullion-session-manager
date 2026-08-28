@@ -201,33 +201,63 @@ win" precedence as the global/per-project merge above.
 Each discovered monitor:
 
 - **Streams the service's logs** (`docker compose logs -f --tail=200
-<service>`, or a plain `docker logs -f` fallback when compose can't
-  resolve its own config from the working directory alone) — an ordinary
-  `kind: "dock"` session, identical in every other respect to a configured
-  one.
+<service>`, reconstructed with the stack's own recorded `-f`/`--env-file`
+  flags — so a prod stack started with `-f docker-compose.prod.yml` streams
+  logs for that stack, not a dev `docker-compose.yml` sitting in the same
+  directory — or a plain `docker logs -f` fallback when one of those
+  recorded files no longer exists on disk) — an ordinary `kind: "dock"`
+  session, identical in every other respect to a configured one.
 - Shows a **status dot** for the container's own state (running/exited/
   restarting/…) — independent of whether the log stream itself is
   currently toggled on, which the existing "on"/"off" tag next to it still
   tracks.
 - Shows an **image tag** pill (hover for the full image reference).
-- Has a **⋯ menu** with:
+- Has a **⋯ menu**, split into a **Service** group (this one container) and
+  a **Stack** group (the whole Compose project):
+  - **Restart service** / **Stop service** — `docker compose restart|stop
+<service>`. Stop arms for 3 seconds before firing (matching the
+    stack-wide actions below); restart doesn't.
+  - **Start service** — `docker compose start <service>`, only offered when
+    the status dot shows the container isn't already `running`.
   - **Check for update** — runs a quiet `docker compose pull` for that one
     service and compares the resulting local image id against the running
     container's own image, without pulling or restarting it. Disabled for
     a `build:`-only service (no registry image to compare).
-  - **Pull & restart stack** — pulls and restarts the **whole** Compose
-    stack (`docker compose pull && docker compose up -d`), not just the
-    one service, so the stack isn't left internally inconsistent. Requires
-    two clicks (arms for 3 seconds after the first), and itself runs as
-    another `kind: "dock"` session so its output streams live and a slow
-    pull/restart can't time out the request — it appears as its own
-    temporary monitor in the same column until it exits.
+  - **Pull & restart stack** _or_ **Rebuild & restart stack** — exactly one
+    of the two renders, based on whether the service has a registry image
+    to pull (`build:`-only services get the rebuild variant instead of a
+    permanently-disabled pull action). Pull-restart runs `docker compose
+pull && docker compose up -d`; rebuild-restart runs `docker compose
+build --pull && docker compose up -d`. Both act on the **whole**
+    Compose stack, not just the one service, so it isn't left internally
+    inconsistent, and both require two clicks (arm for 3 seconds after the
+    first).
+  - **Restart stack** / **Apply config** — `docker compose restart` / `up
+-d` for the whole stack, no confirmation needed.
+  - **Stop stack** — `docker compose stop` for the whole stack. Arms for 3
+    seconds before firing.
+
+Every stack-wide action (pull-restart, rebuild-restart, restart, apply,
+stop) runs as its own `kind: "dock"` session, same as the log stream, so
+its output streams live and a slow operation can't time out the request —
+it appears as its own temporary monitor in the same column until it exits.
+The per-service actions (restart/stop/start) run synchronously instead,
+since `restart`/`stop`/`start` are all bounded operations with nothing
+worth streaming.
+
+An action that can recreate the container(s) (`up -d`, either restart
+variant of pull/rebuild) checks the on-disk compose config against what the
+running container was actually created from, and surfaces a "will
+recreate" note if they've drifted — advisory only, it never blocks the
+action.
 
 Discovered monitor ids are `docker:<compose-project>:<service>` — put a
 `.crs/dock.json` control at that same id to replace one (e.g. to point its
-log command at extra flags), or `docker-update:<compose-project>` if you
-ever need to collide with the ephemeral "Pull & restart" monitor (unlikely;
-that id is never emitted by this discovery pass, only by a live update run).
+log command at extra flags), or `docker-update:<compose-project>` (also
+`docker-restart:`, `docker-apply:`, `docker-rebuild:`, `docker-stop:`) if
+you ever need to collide with one of the ephemeral stack-action monitors
+(unlikely; none of those ids are ever emitted by discovery, only by a live
+run of the matching action).
 
 Turn this off entirely in **Settings → Dock → "Docker Compose services"**;
 discovered monitors are still just monitors, so switching it off/on never
@@ -244,6 +274,19 @@ starts or stops anything already running.
 - **One-off `docker compose run` containers are excluded**, and replicas/
   stale containers for the same service are deduped down to one
   (preferring the running one).
+- **No `docker compose down` action, deliberately.** It removes the
+  container(s) entirely, so the service would drop out of `docker ps -a`,
+  discovery would stop finding it, and its Dock monitor would vanish with
+  no UI path back. **Stop stack**/**Stop service** cover "I want this off"
+  while leaving an `exited` container that still shows up and can be
+  started again.
+- **Restart/stop/start service run synchronously with a 35s timeout.** A
+  service with a `stop_grace_period` override longer than that (compose's
+  own default is 10s) can report a failed action even though the container
+  goes on to stop gracefully moments later — the request times out and
+  kills the client-side `docker compose` process, but the daemon-side stop
+  isn't cancelled by that. Rare in practice; a subsequent Dock poll shows
+  the container's real end state regardless of what the action reported.
 
 ## Dev server port detection
 

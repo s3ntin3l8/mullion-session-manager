@@ -82,9 +82,13 @@ import {
   getComposeServices,
   mapServicesToProject,
   toDockControls,
-  shellQuote,
+  composeContextFlags,
   pullComposeImageQuietly,
   inspectImageId,
+  restartComposeService,
+  stopComposeService,
+  startComposeService,
+  reconstructConfigHash,
   type ComposeService,
 } from "../services/docker-service-detect.js";
 import { createSessionRecord } from "../services/session-lifecycle.js";
@@ -1106,7 +1110,14 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badRequest("This service has no registry image to pull");
       }
 
-      const projectFlag = `-p ${shellQuote(service.composeProject)} --project-directory ${shellQuote(service.workingDir)}`;
+      // composeContextFlags reconstructs the stack's own recorded -f/--env-file
+      // list — without it this resolves whatever default-named compose file
+      // sits in workingDir instead of the file(s) the stack was actually
+      // `up`ed with (verified live: a bare -p/--project-directory invocation
+      // for a stack started with `-f docker-compose.prod.yml` instead
+      // resolves an unrelated dev docker-compose.yml next to it), and never
+      // auto-loads a compose.override.yaml either way.
+      const projectFlag = composeContextFlags(service);
       const command = `docker compose ${projectFlag} pull && docker compose ${projectFlag} up -d`;
 
       const result = await createSessionRecord(app, {
@@ -1127,9 +1138,227 @@ export async function projectsRoute(app: FastifyInstance) {
           command,
           source: "docker" as const,
         },
+        willRecreate: await willRecreateOnApply(service),
       });
     },
   );
+
+  // Whether an action that runs `up -d` (this route's own pull-restart,
+  // plus stack/apply and stack/rebuild below) would RECREATE the
+  // container(s) — the on-disk compose config no longer matches what the
+  // running container was actually created from, so `up -d` would replace
+  // it rather than leave it untouched. Advisory only, never a guard: `null`
+  // ("couldn't tell" — compose file missing, docker unreachable, no
+  // recorded hash to compare against, …) and `true` both let the caller
+  // proceed, just with different confirm-label wording on the frontend
+  // (issue #73 follow-up plan's "surface it in the arm-confirm label rather
+  // than blocking").
+  async function willRecreateOnApply(service: ComposeService): Promise<boolean | null> {
+    // Hermes review — parsePsOutput defaults a missing config-hash label to
+    // "", and an empty string trivially `!==` any real hash, so a container
+    // predating this label (or whose docker/compose version never sets it)
+    // would otherwise always report willRecreate:true even with an
+    // unchanged config. Treat "nothing recorded" the same as "couldn't
+    // recompute" — both are "can't tell," not "yes."
+    if (service.configHash === "") return null;
+    const currentHash = await reconstructConfigHash(service);
+    if (currentHash === null) return null;
+    return currentHash !== service.configHash;
+  }
+
+  // Shared by every stack-wide lifecycle route below (restart/apply/
+  // rebuild/stop) — same "spawn a kind:dock session, echo an ephemeral
+  // control" shape the docker/update route above established, so a
+  // multi-minute compose operation streams its own output instead of
+  // blocking the request or risking a reverse-proxy idle timeout.
+  async function startStackSession(
+    projectId: number,
+    service: ComposeService,
+    actionId: string,
+    title: string,
+    command: string,
+  ): Promise<
+    | {
+        ok: true;
+        sessionId: number;
+        control: { id: string; title: string; command: string; source: "docker" };
+      }
+    | { ok: false }
+  > {
+    const result = await createSessionRecord(app, {
+      projectId,
+      command,
+      kind: "dock",
+      name: title,
+    });
+    if (!result.ok) return { ok: false };
+    return {
+      ok: true,
+      sessionId: result.row.id,
+      control: {
+        id: `${actionId}:${service.composeProject}`,
+        title,
+        command,
+        source: "docker" as const,
+      },
+    };
+  }
+
+  // Per-service, inline lifecycle actions (restart/stop/start) — bounded
+  // compose operations (SERVICE_ACTION_TIMEOUT_MS in
+  // docker-service-detect.ts), so unlike the stack-wide actions below they
+  // run synchronously and return their own result rather than spawning a
+  // session. Force-refreshes the discovery cache on success so the very
+  // next `GET .../dock` poll reflects the new state instead of serving up
+  // to CACHE_TTL_MS of staleness.
+  const dockerServiceActionRoutes: Array<{
+    path: string;
+    run: (service: ComposeService) => Promise<boolean>;
+  }> = [
+    { path: "/api/projects/:id/docker/service/restart", run: restartComposeService },
+    { path: "/api/projects/:id/docker/service/stop", run: stopComposeService },
+    { path: "/api/projects/:id/docker/service/start", run: startComposeService },
+  ];
+  for (const { path, run } of dockerServiceActionRoutes) {
+    app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+      path,
+      { schema: dockerControlSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+      async (request, reply) => {
+        const projectId = Number(request.params.id);
+        if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        if (!project) return reply.notFound();
+        if (project.hostId !== LOCAL_HOST_ID) {
+          return reply.badRequest("Docker service management is only available for local projects");
+        }
+
+        const service = await resolveOwnedService(project, request.body.controlId);
+        if (!service) return reply.notFound();
+
+        const success = await run(service);
+        if (success) await getComposeServices(true);
+        return { success };
+      },
+    );
+  }
+
+  // Stack-wide lifecycle actions — each restarts/rebuilds/stops the WHOLE
+  // compose stack (not just the one service the controlId names), same
+  // "don't leave the stack internally inconsistent" reasoning as the
+  // existing pull-restart route above. Deliberately no `down`: it removes
+  // the containers entirely, so the service would drop out of `docker ps
+  // -a`, discovery would stop finding it, and the Dock control would
+  // vanish with no UI path back — `stop` covers "I want this off" while
+  // leaving a way back on.
+  //
+  // Table-driven (Hermes review) — the 4 routes previously repeated the
+  // same project-lookup/local-host/resolveOwnedService prologue verbatim;
+  // since that prologue IS the authz/injection guard, keeping it in one
+  // loop body means a future hardening change can't accidentally miss one
+  // of the copies.
+  interface StackActionSpec {
+    path: string;
+    actionId: string;
+    // Human word for the badGateway error message below — actionId is a
+    // control-id prefix (e.g. "docker-rebuild"), not prose a user should see.
+    verb: string;
+    title: (composeProject: string) => string;
+    buildCommand: (service: ComposeService) => string;
+    // Returns a 400 message when the action doesn't apply to this service
+    // (only `rebuild` uses this — the buildOnly mirror-guard of the
+    // existing pull-restart route above).
+    guard?: (service: ComposeService) => string | null;
+    // Only an action that runs `up -d` needs the recreate precondition.
+    reportWillRecreate?: boolean;
+  }
+
+  const stackActionRoutes: StackActionSpec[] = [
+    {
+      path: "/api/projects/:id/docker/stack/restart",
+      actionId: "docker-restart",
+      verb: "restart",
+      title: (p) => `Restart ${p}`,
+      buildCommand: (s) => `docker compose ${composeContextFlags(s)} restart`,
+    },
+    {
+      path: "/api/projects/:id/docker/stack/apply",
+      actionId: "docker-apply",
+      verb: "apply",
+      title: (p) => `Apply config ${p}`,
+      buildCommand: (s) => `docker compose ${composeContextFlags(s)} up -d`,
+      reportWillRecreate: true,
+    },
+    {
+      path: "/api/projects/:id/docker/stack/rebuild",
+      actionId: "docker-rebuild",
+      verb: "rebuild",
+      title: (p) => `Rebuild ${p}`,
+      buildCommand: (s) => {
+        const flags = composeContextFlags(s);
+        return `docker compose ${flags} build --pull && docker compose ${flags} up -d`;
+      },
+      // The `build:`-only counterpart to the existing pull-restart route
+      // above — gated the mirror-opposite way (buildOnly must be TRUE
+      // here, not false), since a build-only service has no registry
+      // image for `pull` to do anything useful with.
+      guard: (s) =>
+        s.buildOnly ? null : "This service has a registry image — use Pull & restart instead",
+      reportWillRecreate: true,
+    },
+    {
+      path: "/api/projects/:id/docker/stack/stop",
+      actionId: "docker-stop",
+      verb: "stop",
+      title: (p) => `Stop ${p}`,
+      buildCommand: (s) => `docker compose ${composeContextFlags(s)} stop`,
+    },
+  ];
+
+  for (const spec of stackActionRoutes) {
+    app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+      spec.path,
+      { schema: dockerControlSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+      async (request, reply) => {
+        const projectId = Number(request.params.id);
+        if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        if (!project) return reply.notFound();
+        if (project.hostId !== LOCAL_HOST_ID) {
+          return reply.badRequest("Docker service management is only available for local projects");
+        }
+
+        const service = await resolveOwnedService(project, request.body.controlId);
+        if (!service) return reply.notFound();
+
+        const guardError = spec.guard?.(service);
+        if (guardError) return reply.badRequest(guardError);
+
+        const command = spec.buildCommand(service);
+        const started = await startStackSession(
+          projectId,
+          service,
+          spec.actionId,
+          spec.title(service.composeProject),
+          command,
+        );
+        if (!started.ok) return reply.badGateway(`Failed to start the ${spec.verb} session`);
+        if (!spec.reportWillRecreate) return reply.code(201).send(started);
+        // Ordering here is incidental, not load-bearing: the session (and
+        // its `up -d`/build) has already been spawned by the time this
+        // reads the on-disk config, so it's a best-effort snapshot that the
+        // just-started command may itself change moments later — same
+        // "advisory, not a guarantee" contract documented on
+        // willRecreateOnApply above. What actually matters is only that
+        // this resolves before the reply is sent, so the client gets a
+        // value instead of a promise.
+        return reply
+          .code(201)
+          .send({ ...started, willRecreate: await willRecreateOnApply(service) });
+      },
+    );
+  }
 
   // Per-project GitHub status: open issue/PR counts + lists for whatever
   // repo this project's `origin` remote points at (issue #27). Degrades to

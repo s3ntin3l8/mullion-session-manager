@@ -54,6 +54,9 @@ interface FixtureService {
   imageId: string;
   buildOnly: boolean;
   composeResolvable: boolean;
+  configFiles: string[];
+  envFile: string | null;
+  configHash: string;
 }
 
 function fixtureService(overrides: Partial<FixtureService> = {}): FixtureService {
@@ -68,6 +71,9 @@ function fixtureService(overrides: Partial<FixtureService> = {}): FixtureService
     imageId: "sha256:current00000000000000000000000000000000000000000000000000000",
     buildOnly: false,
     composeResolvable: true,
+    configFiles: [],
+    envFile: null,
+    configHash: "hash-current",
     ...overrides,
   };
 }
@@ -77,6 +83,12 @@ function fixtureService(overrides: Partial<FixtureService> = {}): FixtureService
 let discoveredServices: FixtureService[] = [];
 let pullSucceeds = true;
 let latestImageId = "sha256:latest0000000000000000000000000000000000000000000000000000000";
+let restartSucceeds = true;
+let stopSucceeds = true;
+let startSucceeds = true;
+// `null` mirrors reconstructConfigHash()'s own "couldn't tell" convention —
+// tests that care about willRecreate override this per-case.
+let reconstructedHash: string | null = "hash-current";
 
 vi.mock("../../src/services/docker-service-detect.js", () => ({
   getComposeServices: vi.fn(async () => discoveredServices),
@@ -104,8 +116,21 @@ vi.mock("../../src/services/docker-service-detect.js", () => ({
     })),
   ),
   shellQuote: vi.fn((v: string) => `'${v}'`),
+  // Mirrors the real composeContextFlags() shape closely enough for the
+  // route tests below (which assert on substrings of the resulting
+  // command), without re-testing its own formatting — that's
+  // test/services/docker-service-detect.test.ts's job.
+  composeContextFlags: vi.fn((s: FixtureService) => {
+    const envFlag = s.envFile ? `--env-file '${s.envFile}' ` : "";
+    const fileFlags = s.configFiles.map((f) => `-f '${f}'`).join(" ");
+    return `-p '${s.composeProject}' --project-directory '${s.workingDir}' ${envFlag}${fileFlags}`.trim();
+  }),
   pullComposeImageQuietly: vi.fn(async () => pullSucceeds),
   inspectImageId: vi.fn(async () => (pullSucceeds ? latestImageId : null)),
+  restartComposeService: vi.fn(async () => restartSucceeds),
+  stopComposeService: vi.fn(async () => stopSucceeds),
+  startComposeService: vi.fn(async () => startSucceeds),
+  reconstructConfigHash: vi.fn(async () => reconstructedHash),
 }));
 
 const { buildApp } = await import("../../src/app.js");
@@ -446,6 +471,42 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       await app.close();
     });
 
+    it("reconstructs the stack's own -f/--env-file flags rather than a bare -p/--project-directory", async () => {
+      discoveredServices = [
+        fixtureService({
+          composeProject: "pocket-portfolio-tracker",
+          service: "api",
+          containerName: "pocket-portfolio-tracker-api-1",
+          workingDir: "/home/user/pocket-portfolio-tracker",
+          configFiles: ["/home/user/pocket-portfolio-tracker/docker-compose.prod.yml"],
+          envFile: "/home/user/pocket-portfolio-tracker/.env.prod",
+        }),
+      ];
+      const app = await buildApp();
+      const projectId = await createProject(app, { cwd: "/home/user/pocket-portfolio-tracker" });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:pocket-portfolio-tracker:api" },
+      });
+      expect(res.statusCode).toBe(201);
+      const command: string = res.json().control.command;
+      // One -f per config file, and --env-file, on BOTH halves of the
+      // pull-then-up command — a bare -p/--project-directory here would
+      // instead resolve whatever default-named compose file happens to sit
+      // in workingDir (the reported bug: a dev docker-compose.yml sitting
+      // next to this prod one).
+      expect(
+        command.match(/-f '\/home\/user\/pocket-portfolio-tracker\/docker-compose\.prod\.yml'/g),
+      ).toHaveLength(2);
+      expect(
+        command.match(/--env-file '\/home\/user\/pocket-portfolio-tracker\/\.env\.prod'/g),
+      ).toHaveLength(2);
+
+      await app.close();
+    });
+
     it("rejects a build-only service", async () => {
       discoveredServices = [fixtureService({ buildOnly: true })];
       const app = await buildApp();
@@ -513,6 +574,297 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         url: "/api/settings",
         payload: { dock: { dockerServices: true } },
       });
+      await app.close();
+    });
+
+    it("reports willRecreate:true when the on-disk config hash no longer matches the running container's", async () => {
+      discoveredServices = [fixtureService({ configHash: "hash-old" })];
+      reconstructedHash = "hash-new";
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.json().willRecreate).toBe(true);
+
+      reconstructedHash = "hash-current";
+      await app.close();
+    });
+
+    it("reports willRecreate:false when the on-disk config hash still matches", async () => {
+      discoveredServices = [fixtureService({ configHash: "hash-current" })];
+      reconstructedHash = "hash-current";
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.json().willRecreate).toBe(false);
+
+      await app.close();
+    });
+
+    it("reports willRecreate:null (advisory only, never blocks) when the hash can't be reconstructed", async () => {
+      discoveredServices = [fixtureService()];
+      reconstructedHash = null;
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().willRecreate).toBeNull();
+
+      reconstructedHash = "hash-current";
+      await app.close();
+    });
+
+    it("reports willRecreate:null (not a spurious true) when the recorded config-hash label was never set", async () => {
+      // Hermes review — a container predating the config-hash label (or
+      // whose docker/compose version never sets it) has configHash:"",
+      // which is trivially !== any real reconstructed hash. That must read
+      // as "can't tell," not "yes, will recreate."
+      discoveredServices = [fixtureService({ configHash: "" })];
+      reconstructedHash = "some-real-hash";
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().willRecreate).toBeNull();
+
+      reconstructedHash = "hash-current";
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:id/docker/service/{restart,stop,start}", () => {
+    const cases: Array<{
+      path: string;
+      flag: "restartSucceeds" | "stopSucceeds" | "startSucceeds";
+    }> = [
+      { path: "restart", flag: "restartSucceeds" },
+      { path: "stop", flag: "stopSucceeds" },
+      { path: "start", flag: "startSucceeds" },
+    ];
+
+    for (const { path: actionPath, flag } of cases) {
+      it(`${actionPath}: returns {success:true} and forces a discovery refresh on success`, async () => {
+        discoveredServices = [fixtureService()];
+        if (flag === "restartSucceeds") restartSucceeds = true;
+        if (flag === "stopSucceeds") stopSucceeds = true;
+        if (flag === "startSucceeds") startSucceeds = true;
+        const app = await buildApp();
+        const projectId = await createProject(app);
+
+        const { getComposeServices } = await import("../../src/services/docker-service-detect.js");
+        vi.mocked(getComposeServices).mockClear();
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/service/${actionPath}`,
+          payload: { controlId: "docker:sanctuary:web" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ success: true });
+        expect(vi.mocked(getComposeServices)).toHaveBeenCalledWith(true);
+
+        await app.close();
+      });
+
+      it(`${actionPath}: returns {success:false} without forcing a refresh when the action fails`, async () => {
+        discoveredServices = [fixtureService()];
+        if (flag === "restartSucceeds") restartSucceeds = false;
+        if (flag === "stopSucceeds") stopSucceeds = false;
+        if (flag === "startSucceeds") startSucceeds = false;
+        const app = await buildApp();
+        const projectId = await createProject(app);
+
+        const { getComposeServices } = await import("../../src/services/docker-service-detect.js");
+        vi.mocked(getComposeServices).mockClear();
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/service/${actionPath}`,
+          payload: { controlId: "docker:sanctuary:web" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ success: false });
+        expect(vi.mocked(getComposeServices)).not.toHaveBeenCalledWith(true);
+
+        restartSucceeds = true;
+        stopSucceeds = true;
+        startSucceeds = true;
+        await app.close();
+      });
+
+      it(`${actionPath}: 404s for a controlId not owned by this project`, async () => {
+        discoveredServices = [fixtureService()];
+        const app = await buildApp();
+        const projectId = await createProject(app);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/service/${actionPath}`,
+          payload: { controlId: "docker:some-other-project:web" },
+        });
+        expect(res.statusCode).toBe(404);
+
+        await app.close();
+      });
+    }
+  });
+
+  describe("POST /api/projects/:id/docker/stack/{restart,apply,stop}", () => {
+    const cases = [
+      { path: "restart", idPrefix: "docker-restart", titlePrefix: "Restart" },
+      { path: "apply", idPrefix: "docker-apply", titlePrefix: "Apply config" },
+      { path: "stop", idPrefix: "docker-stop", titlePrefix: "Stop" },
+    ];
+
+    for (const { path: actionPath, idPrefix, titlePrefix } of cases) {
+      it(`${actionPath}: spawns a kind:dock session and returns an ephemeral control`, async () => {
+        discoveredServices = [fixtureService()];
+        const app = await buildApp();
+        const projectId = await createProject(app);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/stack/${actionPath}`,
+          payload: { controlId: "docker:sanctuary:web" },
+        });
+        expect(res.statusCode).toBe(201);
+        const body = res.json();
+        expect(typeof body.sessionId).toBe("number");
+        expect(body.control).toMatchObject({
+          id: `${idPrefix}:sanctuary`,
+          title: `${titlePrefix} sanctuary`,
+          source: "docker",
+        });
+
+        await app.close();
+      });
+
+      it(`${actionPath}: 404s for a controlId not owned by this project`, async () => {
+        discoveredServices = [fixtureService()];
+        const app = await buildApp();
+        const projectId = await createProject(app);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/docker/stack/${actionPath}`,
+          payload: { controlId: "docker:some-other-project:web" },
+        });
+        expect(res.statusCode).toBe(404);
+
+        await app.close();
+      });
+    }
+
+    it("restart: command has no -f/--env-file... it's a bare compose restart on the reconstructed context", async () => {
+      discoveredServices = [
+        fixtureService({ configFiles: ["/home/user/sanctuary/docker-compose.yml"] }),
+      ];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const command: string = res.json().control.command;
+      expect(command).toContain("restart");
+      expect(command).not.toContain("up -d");
+      expect(command).not.toContain("pull");
+
+      await app.close();
+    });
+
+    it("apply: command runs `up -d` and reports willRecreate", async () => {
+      discoveredServices = [fixtureService({ configHash: "hash-old" })];
+      reconstructedHash = "hash-new";
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/apply`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const body = res.json();
+      expect(body.control.command).toContain("up -d");
+      expect(body.control.command).not.toContain("pull");
+      expect(body.willRecreate).toBe(true);
+
+      reconstructedHash = "hash-current";
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:id/docker/stack/rebuild", () => {
+    it("spawns a build+up session and reports willRecreate for a build-only service", async () => {
+      discoveredServices = [fixtureService({ buildOnly: true, configHash: "hash-old" })];
+      reconstructedHash = "hash-new";
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/rebuild`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.control).toMatchObject({ id: "docker-rebuild:sanctuary", source: "docker" });
+      expect(body.control.command).toContain("build --pull");
+      expect(body.control.command).toContain("up -d");
+      expect(body.willRecreate).toBe(true);
+
+      reconstructedHash = "hash-current";
+      await app.close();
+    });
+
+    it("rejects a service that has a registry image (use pull-restart instead)", async () => {
+      discoveredServices = [fixtureService({ buildOnly: false })];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/rebuild`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("404s for a controlId not owned by this project", async () => {
+      discoveredServices = [fixtureService({ buildOnly: true })];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/rebuild`,
+        payload: { controlId: "docker:some-other-project:web" },
+      });
+      expect(res.statusCode).toBe(404);
+
       await app.close();
     });
   });
