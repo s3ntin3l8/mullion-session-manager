@@ -71,12 +71,17 @@ export interface SshAgentFanoutHandle {
  * bridge isn't scoped to one agent host, so ANY live bridge serves EVERY
  * enrolled agent host. When more than one is connected (a user pairing a
  * second machine, or a stale entry mid-teardown), the most recently
- * connected one wins — logged once per pick when ambiguous, not a
- * configurable policy; `connectedAt` (plugins/agent-bridge.ts), not `Map`
- * iteration order, is what makes "most recent" well-defined (`Map.set` on
- * an existing key does not move it to the end). Returns `null` when no
- * bridge is connected at all — the caller must close the agent channel
- * immediately in that case rather than leave it open (see onChannel below).
+ * connected one wins — not a configurable policy; `connectedAt`
+ * (plugins/agent-bridge.ts), not `Map` iteration order, is what makes
+ * "most recent" well-defined (`Map.set` on an existing key does not move
+ * it to the end). Returns `null` when no bridge is connected at all — the
+ * caller must close the agent channel immediately in that case rather
+ * than leave it open (see onChannel below).
+ *
+ * Deliberately pure/stateless — no logging here. The ambiguous-pick log
+ * (onChannel below) is throttled per-fanout-instance, which needs state
+ * this function has no natural place to hold without becoming a stateful
+ * singleton every caller (including this module's own tests) would share.
  */
 export function pickBridge(app: FastifyInstance): { bridgeId: string; mux: MuxConnection } | null {
   let best: { bridgeId: string; connectedAt: number; mux: MuxConnection } | null = null;
@@ -85,18 +90,21 @@ export function pickBridge(app: FastifyInstance): { bridgeId: string; mux: MuxCo
       best = { bridgeId, connectedAt: bridge.connectedAt, mux: bridge.mux };
     }
   }
-  if (best !== null && app.connectedBridges.size > 1) {
-    app.log.info(
-      { bridgeId: best.bridgeId, connectedBridgeCount: app.connectedBridges.size },
-      "[ssh-agent-fanout] multiple bridges connected, routing to the most recently connected",
-    );
-  }
   return best;
 }
 
 export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle {
   const fanouts = new Map<string, HostFanout>();
   let stopped = false;
+  // Throttles the "multiple bridges connected" info log to once per
+  // ambiguity streak (Hermes review, PR #864) — without this, sustained
+  // channel-open traffic (an `ansible --forks=N`-style fan-out, or just a
+  // busy `ssh` user) with two paired machines would log on every single
+  // channel open. Reset the moment a channel opens while unambiguous
+  // again, so a LATER ambiguity streak still logs — same "streak, not
+  // call count" shape as remote-event-subscriber.ts's own
+  // hasLoggedFailure.
+  let hasLoggedBridgeAmbiguity = false;
 
   function closeFanout(f: HostFanout): void {
     f.stopped = true;
@@ -186,6 +194,17 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
       // (ssh-agent-socket.ts, PR5a) — pair it with a fresh channel toward
       // whichever bridge is currently live.
       mux.onChannel((agentChannel) => {
+        // Same defensive posture as remote-event-subscriber.ts's own
+        // message handler (Hermes review, PR #564 round 4): a channel-open
+        // can in principle arrive in the narrow window between this
+        // HostFanout (or the whole subscriber) being torn down and this
+        // listener actually being removed — `f.mux.close()` closing the
+        // underlying connection normally prevents further onChannel firing
+        // on its own, but this guard doesn't rely on that being airtight.
+        if (f.stopped || stopped) {
+          agentChannel.close();
+          return;
+        }
         const bridge = pickBridge(app);
         if (bridge === null) {
           // Raced with the last bridge disconnecting between the agent's
@@ -197,9 +216,30 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
           agentChannel.close();
           return;
         }
+        if (app.connectedBridges.size > 1) {
+          if (!hasLoggedBridgeAmbiguity) {
+            app.log.info(
+              { bridgeId: bridge.bridgeId, connectedBridgeCount: app.connectedBridges.size },
+              "[ssh-agent-fanout] multiple bridges connected, routing to the most recently connected",
+            );
+            hasLoggedBridgeAmbiguity = true;
+          }
+        } else {
+          hasLoggedBridgeAmbiguity = false;
+        }
         bridge.mux
           .openChannel()
           .then((bridgeChannel) => {
+            // Re-checked after the await: stopped (or the agent channel
+            // itself closed) while this was pending is a real possibility
+            // for the same reason the guard above exists — piping a
+            // freshly-opened bridge channel into an already-dead pairing
+            // would just leak it.
+            if (f.stopped || stopped || agentChannel.closed) {
+              bridgeChannel.close();
+              agentChannel.close();
+              return;
+            }
             pipeFilteredChannelToChannel(agentChannel, bridgeChannel);
           })
           .catch((err: unknown) => {

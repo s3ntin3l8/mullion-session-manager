@@ -85,7 +85,13 @@ function fakeApp(connectedBridgeCount = 1): FastifyInstance {
   for (let i = 0; i < connectedBridgeCount; i++) {
     connectedBridges.set(`bridge-${i}`, {
       socket: {},
-      mux: { openChannel: vi.fn() },
+      // Never resolves — these lifecycle/pickBridge tests only care about
+      // selection/gating, not the channel-pairing outcome (covered
+      // separately, with real MuxConnections, in the "channel fan-out"
+      // tests below). A never-resolving Promise avoids a "cannot read
+      // properties of undefined" throw if a test's onChannel handler ever
+      // reaches `.then()` on it.
+      mux: { openChannel: vi.fn(() => new Promise(() => {})) },
       connectedAt: i,
     });
   }
@@ -261,16 +267,6 @@ describe("pickBridge", () => {
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-old");
   });
-
-  it("logs once when more than one bridge is connected, not when there's only one", () => {
-    const single = fakeApp(1);
-    pickBridge(single);
-    expect(single.log.info).not.toHaveBeenCalled();
-
-    const multiple = fakeApp(3);
-    pickBridge(multiple);
-    expect(multiple.log.info).toHaveBeenCalledTimes(1);
-  });
 });
 
 // --- channel fan-out: real MuxConnections on every leg ---
@@ -439,5 +435,32 @@ describe("startSshAgentFanout — channel fan-out", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(agentChannel.closed).toBe(true);
+  });
+
+  it("throttles the 'multiple bridges connected' log to once per ambiguity streak, resetting once back to a single bridge", async () => {
+    const app = fakeApp(2); // ambiguous from the start
+    const { agentConn } = await setupPrimaryAndAgent(app);
+
+    await agentConn.openChannel();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(app.log.info).toHaveBeenCalledTimes(1);
+
+    await agentConn.openChannel(); // still ambiguous — must NOT log again
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(app.log.info).toHaveBeenCalledTimes(1);
+
+    app.connectedBridges.delete("bridge-1"); // back to a single bridge
+    await agentConn.openChannel();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(app.log.info).toHaveBeenCalledTimes(1); // unambiguous now — no new log
+
+    app.connectedBridges.set("bridge-1", {
+      socket: {},
+      mux: { openChannel: vi.fn(() => new Promise(() => {})) },
+      connectedAt: 99,
+    });
+    await agentConn.openChannel(); // ambiguous again — a fresh streak logs once more
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(app.log.info).toHaveBeenCalledTimes(2);
   });
 });
