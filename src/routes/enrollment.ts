@@ -152,6 +152,13 @@ export async function enrollmentRoute(app: FastifyInstance) {
         const renewed = rotateSession(app, hostId, token);
         if (!renewed) return reply.unauthorized("session renewal rejected");
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [renewed.hostId] });
+        // Issue #820 — no forceReconnect equivalent yet (see hosts.ts's
+        // PATCH handler for the same documented gap): an already-open
+        // ssh-agent-fanout connection for this host keeps its old
+        // credential until it errors out on its own. Still correct to
+        // call — a no-op unless this host's fan-out connection isn't open
+        // yet, in which case this is what opens it.
+        app.reconfigureSshAgentFanout();
         return respond(renewed);
       }
 
@@ -161,6 +168,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
       const claimed = claimHost(app, token, input);
       if (claimed) {
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [claimed.hostId] });
+        app.reconfigureSshAgentFanout();
         return respond(claimed);
       }
 
@@ -177,6 +185,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         }
         const enrolled = enrollHost(app, input);
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
+        app.reconfigureSshAgentFanout();
         return respond(enrolled);
       }
 

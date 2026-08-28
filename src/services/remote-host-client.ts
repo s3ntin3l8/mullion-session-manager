@@ -1157,6 +1157,32 @@ export class RemoteHostClient {
   }
 
   /**
+   * Opens (but does not wait for) a WS connection to this agent's
+   * `/internal/ws/ssh-agent` (issue #820, PR5b) — bearer+signature-authed
+   * the same header-only way as openEventsStream() above. The caller
+   * (ssh-agent-fanout.ts's subscriber, PR5c) is expected to immediately
+   * wrap the returned socket in `createMuxConnection(socket,
+   * {channelIdParity: "odd"})` — THIS side (primary) dials out, so it must
+   * be "odd" to match the agent's own "even" pin (routes/internal.ts's
+   * `/internal/ws/ssh-agent` handler). `maxPayload` matches
+   * openEventsStream()'s own 1 MiB cap (plugins/websocket.ts's identical
+   * server-side limit) — well above `CHANNEL_WINDOW_BYTES` (256 KiB,
+   * ssh-agent-mux.ts), the largest a single mux Data frame's payload can
+   * legitimately be.
+   */
+  openSshAgentStream(): NodeWebSocket {
+    const requestTarget = "/internal/ws/ssh-agent";
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
+      maxPayload: 1024 * 1024,
+      ...this.pinnedWsOptions(),
+    });
+  }
+
+  /**
    * Forwards an HTTP preview request to this agent's own
    * `/internal/preview/:port/*` (issue #28 phase 6) — the agent, not this
    * process, dials the actual dev server, always on its own loopback (see

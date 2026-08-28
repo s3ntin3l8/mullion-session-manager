@@ -9,8 +9,9 @@ import {
 } from "../../src/services/request-signature.js";
 
 // Issue #249 / roadmap 7.5 — the 5 non-request() sites (openAttach,
-// openBrowserWs, openEventsStream, openPreviewWs) construct a real `ws`
-// package WebSocket; mocked here the same way `fetch` is stubbed above, so
+// openBrowserWs, openEventsStream, openPreviewWs, openSshAgentStream)
+// construct a real `ws` package WebSocket; mocked here the same way
+// `fetch` is stubbed above, so
 // the exact constructor args (in particular the headers option, which is
 // where signing/auth headers land) can be asserted without an actual
 // network connection attempt.
@@ -1225,6 +1226,30 @@ describe("RemoteHostClient", () => {
       // buggy or compromised agent.
       it("openEventsStream bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
         sessionClient("the-secret").openEventsStream();
+        const [, options] = wsConstructorCalls[0] as [string, { maxPayload: number }];
+        expect(options.maxPayload).toBe(1024 * 1024);
+      });
+
+      it("openSshAgentStream signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").openSshAgentStream();
+        const [url, options] = wsConstructorCalls[0] as [
+          string,
+          { headers: Record<string, string> },
+        ];
+        expect(url).toBe("ws://example.invalid:1234/internal/ws/ssh-agent");
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget: "/internal/ws/ssh-agent",
+          timestamp: options.headers[TIMESTAMP_HEADER],
+          nonce: options.headers[NONCE_HEADER],
+          bodyHashed: true,
+          bodyHash: hashBody(""),
+        });
+        expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
+      });
+
+      it("openSshAgentStream bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
+        sessionClient("the-secret").openSshAgentStream();
         const [, options] = wsConstructorCalls[0] as [string, { maxPayload: number }];
         expect(options.maxPayload).toBe(1024 * 1024);
       });

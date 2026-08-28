@@ -122,7 +122,12 @@ function trackBridge(app: FastifyInstance, bridgeId: string, socket: NodeWebSock
   // "odd" on THAT connection — a different connection, no collision risk,
   // but PR5c's fan-out logic must not confuse the two).
   const mux = createMuxConnection(socket, { channelIdParity: "even" });
-  app.connectedBridges.set(bridgeId, { socket, mux });
+  app.connectedBridges.set(bridgeId, { socket, mux, connectedAt: Date.now() });
+  // A bridge going from zero-connected to one-connected (or a genuinely
+  // new bridge arriving) changes ssh-agent-fanout.ts's own desired set —
+  // see its own reconcile() doc comment for why this can't wait for that
+  // module's periodic/other triggers alone.
+  app.reconfigureSshAgentFanout();
 }
 
 export async function agentBridgeRoute(app: FastifyInstance) {
@@ -227,9 +232,23 @@ export async function agentBridgeRoute(app: FastifyInstance) {
 
       socket.on("close", () => {
         clearTimeout(handshakeTimeout);
+        let removed = false;
         for (const [bridgeId, tracked] of app.connectedBridges) {
-          if (tracked.socket === socket) app.connectedBridges.delete(bridgeId);
+          if (tracked.socket === socket) {
+            app.connectedBridges.delete(bridgeId);
+            removed = true;
+          }
         }
+        // Only reconcile when THIS close actually removed a tracked entry
+        // — trackBridge's own supersede path already closes the OLD socket
+        // (whose "close" handler fires here too, belatedly), and that
+        // socket is no longer the one tracked under its bridgeId by the
+        // time this runs, so `removed` stays false for it. Without this
+        // guard, a reconnect would trigger two reconcile() calls instead
+        // of one — harmless (reconcile is idempotent), but the guard
+        // documents that this is genuinely a "bridge went away" event, not
+        // just "a socket closed."
+        if (removed) app.reconfigureSshAgentFanout();
       });
     },
   );

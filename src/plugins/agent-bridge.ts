@@ -20,8 +20,8 @@ export const agentBridgePlugin = fp(async (app: FastifyInstance) => {
 
 /** A live, authenticated bridge connection — both the raw socket (identity
  * for the close-tracking dance in routes/agent-bridge.ts's `trackBridge`)
- * and the `MuxConnection` wrapping it (what a later PR's fan-out logic
- * actually calls `.openChannel()` on to pair an agent-side SSH-client
+ * and the `MuxConnection` wrapping it (what ssh-agent-fanout.ts's
+ * `pickBridge` calls `.openChannel()` on to pair an agent-side SSH-client
  * channel with one toward this bridge). Two fields, not just the
  * `MuxConnection` alone, because `trackBridge`'s own superseded-socket
  * check needs the raw socket identity — `MuxConnection` has no identity
@@ -30,6 +30,15 @@ export const agentBridgePlugin = fp(async (app: FastifyInstance) => {
 export interface ConnectedBridge {
   readonly socket: NodeWebSocket;
   readonly mux: MuxConnection;
+  /** `Date.now()` at the moment this connection was tracked (PR5c). The
+   * `bridges` table has no per-host scoping — any live bridge serves every
+   * enrolled agent host — so when more than one is connected,
+   * ssh-agent-fanout.ts's `pickBridge` needs a deterministic tiebreaker
+   * (most recently connected wins) rather than relying on `Map` iteration
+   * order, which reflects INSERTION order and does NOT move an existing
+   * key to the end on a re-`set()` (trackBridge re-`set()`s the same
+   * bridgeId key on every reconnect). */
+  readonly connectedAt: number;
 }
 
 declare module "fastify" {
