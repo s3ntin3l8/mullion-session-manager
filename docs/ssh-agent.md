@@ -473,13 +473,14 @@ very differently:
 
 ## Security notes
 
-- **Bridge**: only signing and read-only queries are relayed — the primary
-  and any agent host can ask your laptop's agent to sign, but never to list,
-  add, remove, or export keys. A live bridge is reachable by every enrolled
-  agent host's sessions for as long as it's connected, same exposure shape
-  as the manual tunnel below. **Revoking a bridge from Settings takes effect
-  immediately** — the live connection is closed as part of the same request,
-  not on next reconnect.
+- **Bridge**: only listing loaded identities and signing are relayed — the
+  primary and any agent host can ask your laptop's agent which keys are
+  loaded and to sign with them, but never to add, remove, lock, or export
+  keys. A live bridge is reachable by every enrolled agent host's sessions
+  for as long as it's connected, same exposure shape as the manual tunnel
+  below. **Revoking a bridge from Settings takes effect immediately** — the
+  live connection is closed as part of the same request, not on next
+  reconnect.
 - **Manual tunnel**: the forwarded socket is a **remote signing oracle** for
   as long as it's connected: anything that can open it can authenticate as
   you to every host your key trusts. The socket itself is created mode
