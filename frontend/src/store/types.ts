@@ -146,6 +146,7 @@ export interface SessionsSlice {
     command: string,
     opts?: {
       name?: string;
+      nameLocked?: boolean;
       cwd?: string;
       kind?: "terminal" | "dock";
       worktree?: { baseRef: string; branchName?: string } | { branch: string };

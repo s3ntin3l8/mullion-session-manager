@@ -154,6 +154,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultWorktreeRefresh: false,
     autoDetectDevServer: "ask",
     dockerServices: true,
+    autoAttachDockerLogs: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

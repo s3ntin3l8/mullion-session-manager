@@ -1179,6 +1179,11 @@ export interface AppSettings {
     // kill-switch, not the safety gate — a discovered control still never
     // auto-starts either way.
     dockerServices: boolean;
+    // Mirrors src/services/settings.ts's AppSettings.dock.autoAttachDockerLogs
+    // 1:1. Default false — when on, a discovered Docker monitor with no
+    // matching session and docker.state === "running" starts its log stream
+    // automatically instead of waiting for a manual header click.
+    autoAttachDockerLogs: boolean;
   };
   sessions: {
     namePattern: string;

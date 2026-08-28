@@ -93,6 +93,32 @@ describe("settings route", () => {
     await app.close();
   });
 
+  // PR3 of the docker-integration plan (issue #73 follow-up) — the new
+  // dock.autoAttachDockerLogs field round-trips through the real PATCH/GET
+  // route, not just the frontend's typed stub (patchSettingsSchema has
+  // additionalProperties: true and deepMerge is generic, but this is the
+  // only check that actually exercises that boundary rather than assuming
+  // it — see TASK_ROW_COLUMNS' own silent-drop history for why that
+  // assumption previously bit two other PRs).
+  it("persists dock.autoAttachDockerLogs through PATCH and reads it back via GET", async () => {
+    const app = await buildApp();
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { dock: { autoAttachDockerLogs: true } },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().dock.autoAttachDockerLogs).toBe(true);
+    // Siblings of autoAttachDockerLogs inside dock must survive untouched.
+    expect(patched.json().dock.dockerServices).toBe(DEFAULT_SETTINGS.dock.dockerServices);
+
+    const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(fetched.json().dock.autoAttachDockerLogs).toBe(true);
+
+    await app.close();
+  });
+
   it("rejects a non-object PATCH body", async () => {
     const app = await buildApp();
     const res = await app.inject({

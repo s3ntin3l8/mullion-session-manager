@@ -1231,6 +1231,18 @@
   font-weight: 600;
   animation: cmuxAttn 1.4s ease-out infinite;
 }
+/* PR3 (issue #73 follow-up) — the container-state dot's own meaning used to
+   live only in a hover title; this is that same label, always visible,
+   right next to the dot. Sized/toned like .dock-monitor-tag rather than the
+   accent-tinted .dock-monitor-url pills — this is status text, not an
+   actionable/clickable pill. */
+.dock-monitor-container-state {
+  font-size: 9.5px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .dock-monitor-worktree-select {
   max-width: 120px;
   min-width: 0;
