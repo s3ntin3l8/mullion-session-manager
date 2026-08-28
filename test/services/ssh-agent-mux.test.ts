@@ -252,6 +252,30 @@ describe("ssh-agent-mux", () => {
       expect(drainSpy).toHaveBeenCalledOnce();
       expect(clientChannel.sendWindow).toBeGreaterThan(0);
     });
+
+    it("clamps accumulated sendWindow to the channel's original window, refusing to trust an over-large WINDOW_ADJUST from a malicious or corrupt peer (regression: Hermes review, PR #853, round 2 — sendWindowBytes += byteCount was previously accepted unchecked)", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      createMuxConnection(b as never, { channelIdParity: "even" });
+      const clientChannel = await connA.openChannel();
+
+      // A well-behaved peer would only ever grant up to CHANNEL_WINDOW_BYTES
+      // of cumulative credit — this simulates one that doesn't, by
+      // delivering a raw WINDOW_ADJUST frame directly (bypassing
+      // acknowledgeConsumed's own honest accounting entirely) claiming an
+      // absurdly large byteCount.
+      const hostileAdjust = Buffer.alloc(9);
+      hostileAdjust.writeUInt8(5, 0); // WindowAdjust
+      hostileAdjust.writeUInt32BE(clientChannel.id, 1);
+      hostileAdjust.writeUInt32BE(0xffffffff, 5);
+      a.receive(hostileAdjust);
+
+      expect(clientChannel.sendWindow).toBe(CHANNEL_WINDOW_BYTES);
+      expect(() => clientChannel.send(Buffer.alloc(CHANNEL_WINDOW_BYTES))).not.toThrow();
+      expect(clientChannel.sendWindow).toBe(0);
+    });
   });
 
   describe("channel cap", () => {
@@ -534,6 +558,50 @@ describe("ssh-agent-mux", () => {
 
       netB.emit("data", Buffer.from("response"));
       expect(netA.written[0].toString()).toBe("response");
+    });
+
+    it("contains a socket that violates the pause() contract to just its own channel — closes that channel/socket, does NOT throw (regression: Hermes review, PR #853, round 2 — an earlier version threw here, which would have crashed the whole process and every OTHER multiplexed channel with it)", async () => {
+      const wsA = new FakeSocket();
+      const wsB = new FakeSocket();
+      link(wsA, wsB);
+      const connA = createMuxConnection(wsA as never, { channelIdParity: "odd" });
+      createMuxConnection(wsB as never, { channelIdParity: "even" });
+      const clientChannel = await connA.openChannel();
+
+      // Deliberately does NOT honor pause() — unlike FakeNetSocket, which
+      // now enforces that contract and so can't be used to exercise a
+      // violation of it. Simulates a non-conforming data source.
+      const misbehaving = {
+        destroyed: false,
+        listeners: new Map<string, Array<(...args: never[]) => void>>(),
+        on(event: string, listener: (...args: never[]) => void) {
+          const arr = this.listeners.get(event) ?? [];
+          arr.push(listener);
+          this.listeners.set(event, arr);
+          return this;
+        },
+        emit(event: string, ...args: unknown[]) {
+          for (const l of this.listeners.get(event) ?? [])
+            (l as (...a: unknown[]) => void)(...args);
+        },
+        pause() {},
+        resume() {},
+        write() {
+          return true;
+        },
+        end() {},
+        destroy() {
+          this.destroyed = true;
+        },
+      };
+      pipeNetSocketToChannel(misbehaving as never, clientChannel);
+
+      misbehaving.emit("data", Buffer.alloc(CHANNEL_WINDOW_BYTES)); // exhausts the window, no overflow yet
+      expect(() => misbehaving.emit("data", Buffer.alloc(1))).not.toThrow(); // overflow #1 — queued
+      expect(() => misbehaving.emit("data", Buffer.alloc(1))).not.toThrow(); // overflow #2 while still queued — the violation
+
+      expect(clientChannel.closed).toBe(true);
+      expect(misbehaving.destroyed).toBe(true);
     });
 
     it("acknowledges consumption via the real net.Socket.write() completion callback, not merely on receipt — driving an actual WINDOW_ADJUST end to end through the pipe, with no manual acknowledgeConsumed() call", async () => {

@@ -254,7 +254,10 @@ class ChannelImpl implements MuxChannel {
 
   constructor(
     readonly id: number,
-    initialSendWindow: number,
+    // Doubles as the ceiling `handleWindowAdjust` clamps accumulated
+    // `sendWindowBytes` against — see that method's own comment for why a
+    // cap is needed at all.
+    private readonly maxSendWindow: number,
     private readonly sendFrame: (frame: Buffer) => void,
     // Called exactly once, from `close()` only (never from
     // `closeLocally()`, which fires when the connection is already tearing
@@ -271,7 +274,7 @@ class ChannelImpl implements MuxChannel {
     // work that build on it.
     private readonly onLocalClose: (id: number) => void,
   ) {
-    this.sendWindowBytes = initialSendWindow;
+    this.sendWindowBytes = maxSendWindow;
   }
 
   get sendWindow(): number {
@@ -341,14 +344,27 @@ class ChannelImpl implements MuxChannel {
 
   /** @internal */
   handleWindowAdjust(byteCount: number): void {
+    // Clamped to `maxSendWindow`, not accepted unchecked (Hermes review,
+    // PR #853, round 2): an honest peer never legitimately grants more
+    // cumulative outstanding credit than the window it originally offered
+    // — every WindowAdjust it sends corresponds 1:1 to bytes it has
+    // actually drained, so total outstanding credit can't exceed
+    // `maxSendWindow` from a well-behaved peer. A corrupt or malicious
+    // peer isn't bound by that, though, and nothing here previously capped
+    // it: `sendWindowBytes += byteCount` with an attacker-controlled
+    // `byteCount` could inflate this side's own belief about how much it's
+    // allowed to send far past any real buffer size, defeating the exact
+    // memory-hardening posture `CHANNEL_WINDOW_BYTES`'s own doc comment
+    // describes ("small enough that one stalled channel can't buffer
+    // unbounded memory") the moment something acts on the inflated value.
+    this.sendWindowBytes = Math.min(this.sendWindowBytes + byteCount, this.maxSendWindow);
     // Fires unconditionally on any well-formed adjustment (Hermes review,
-    // PR #853): a prior `if (wasExhausted || sendWindowBytes > 0)` guard
-    // here was dead logic — a well-formed WINDOW_ADJUST always adds > 0
-    // bytes, so the window is provably > 0 afterward regardless of the
+    // PR #853, round 1): a prior `if (wasExhausted || sendWindowBytes > 0)`
+    // guard here was dead logic — a well-formed WINDOW_ADJUST always adds
+    // > 0 bytes, so the window is provably > 0 afterward regardless of the
     // `wasExhausted` branch, making the condition always true. Harmless
     // (`pipeNetSocketToChannel`'s `flushPending` already no-ops when
     // there's nothing queued), just not doing what it visually claimed to.
-    this.sendWindowBytes += byteCount;
     for (const listener of this.drainListeners) listener();
   }
 
@@ -659,17 +675,24 @@ export function pipeNetSocketToChannel(socket: net.Socket, channel: MuxChannel):
     if (channel.closed) return;
     // `socket.pause()` (below) is supposed to make this event impossible
     // while a chunk is already queued — a real `net.Socket` guarantees it.
-    // Thrown, not silently overwritten: overwriting `pendingChunk` here
-    // would silently drop the bytes already queued, which is exactly the
-    // per-connection frame-dropping failure mode (see this file's header
-    // comment) this module exists to avoid. A source that can violate
-    // `pause()`'s contract is a bug in that source, not something to paper
-    // over quietly.
+    // Contained to THIS channel/socket, not thrown (Hermes review, PR
+    // #853, round 2): this runs synchronously inside the socket's own
+    // "data" dispatch, and `decodeFrame`'s own comment elsewhere in this
+    // file establishes the rule that an uncaught throw here would crash
+    // the whole process — every OTHER multiplexed channel along with it —
+    // not just this one connection. An earlier version of this guard threw
+    // unconditionally, contradicting that rule; closing/destroying just
+    // this pair is the fix, mirroring exactly how the "error" handler
+    // below already reacts to a broken source. Silently overwriting
+    // `pendingChunk` instead (dropping the already-queued bytes) was
+    // rejected for the same reason as always in this file — that's the
+    // exact per-connection frame-dropping failure mode this module exists
+    // to avoid — so "contain, don't drop and don't crash" is the only
+    // remaining option for a condition that should be unreachable anyway.
     if (pendingChunk !== null) {
-      throw new Error(
-        'ssh-agent-mux: pipeNetSocketToChannel received a "data" event while a chunk was ' +
-          "already queued waiting on window — socket.pause() should have prevented this",
-      );
+      if (!channel.closed) channel.close();
+      if (!socket.destroyed) socket.destroy();
+      return;
     }
     if (chunk.length > channel.sendWindow) {
       socket.pause();
