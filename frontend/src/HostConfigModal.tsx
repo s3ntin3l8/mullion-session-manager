@@ -11,14 +11,32 @@ interface HostConfigModalProps {
   onClose: () => void;
 }
 
+// Issue #820 PR7a's `source` tag, rendered as a short trailing label — see
+// HostConfig.sshAuthSock's own comment for why "none" never appears here
+// (that tier is the `null` case renderSshAuthSock's own caller handles
+// separately). Absent entirely for a `source`-predating build (see
+// renderSshAuthSock below), which returns "" here so the base path/present
+// string renders unchanged rather than growing a stray trailing space.
+function renderSshAuthSockSource(source: NonNullable<HostConfig["sshAuthSock"]>["source"]): string {
+  if (source === "configured") return " — configured via MULLION_SSH_AUTH_SOCK";
+  if (source === "ambient") return " — ambient (inherited on that host, not managed by Mullion)";
+  if (source === "bridge") return " — SSH agent bridge (Settings > Hosts)";
+  return "";
+}
+
 // Hermes review, PR #828 — pulled out of the render body since it's three
 // genuinely distinct states (see HostConfig.sshAuthSock's own comment),
 // not two nested booleans; a helper reads better than the nested ternary
-// as-inline, and leaves room for a fourth state later.
+// as-inline. PR7a/PR7c added a fourth, `source`, layered onto the
+// configured/present state rather than a fifth top-level branch — a build
+// that predates PR7a reports `sshAuthSock` with no `source` key at all
+// (still a normal, non-`undefined` object), which renderSshAuthSockSource
+// above turns into "" so this renders exactly what it always did.
 function renderSshAuthSock(sshAuthSock: HostConfig["sshAuthSock"]): string {
   if (sshAuthSock === undefined) return "unknown (agent predates this field)";
   if (sshAuthSock === null) return "not configured";
-  return `${sshAuthSock.path} (${sshAuthSock.present ? "present" : "not present — no tunnel up?"})`;
+  const presence = sshAuthSock.present ? "present" : "not present — no tunnel up?";
+  return `${sshAuthSock.path} (${presence})${renderSshAuthSockSource(sshAuthSock.source)}`;
 }
 
 // Issue #247 / roadmap 7.4 — read-only view of GET /api/hosts/:id/config.

@@ -297,6 +297,20 @@
   border-radius: 9px;
   color: var(--fg);
 }
+/* SSH-agent bridge pairing command (PairBridgeModal.tsx, issue #820 PR7c) —
+   same dashed-box treatment as .device-flow-code above, but left-aligned
+   and wrapping: unlike GitHub's short user_code, this embeds a base64url
+   payload that can run to a couple hundred characters. */
+.bridge-pairing-command {
+  font-family: "Geist Mono", monospace;
+  font-size: 12.5px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--fg);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
 .settings-modal-close:hover {
   color: var(--fg);
 }

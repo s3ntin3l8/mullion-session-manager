@@ -91,6 +91,9 @@ export type {
   Host,
   HostConfig,
   HostUpdateStatus,
+  SshAuthSockSource,
+  BridgeSummary,
+  BridgePairingResponse,
   GitHubAppStatus,
   SetGitHubAppResult,
   GitHubIntegration,
@@ -168,6 +171,7 @@ import { tasksApi } from "./tasks.js";
 import { githubApi } from "./github.js";
 import { gitApi } from "./git.js";
 import { hostsApi } from "./hosts.js";
+import { bridgesApi } from "./bridges.js";
 import { workspacesApi } from "./workspaces.js";
 import { settingsApi } from "./settings.js";
 import { dockerApi } from "./docker.js";
@@ -188,6 +192,7 @@ export const api = {
   ...githubApi,
   ...gitApi,
   ...hostsApi,
+  ...bridgesApi,
   ...workspacesApi,
   ...settingsApi,
   ...dockerApi,

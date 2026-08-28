@@ -150,6 +150,13 @@ export interface Host {
   lastCheckedAt: string | null;
 }
 
+// Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
+// #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why
+// HostConfig.sshAuthSock.path has the value it does — "none" is never sent
+// over the wire (that tier reports the whole field as `null` instead, see
+// HostConfig's own comment).
+export type SshAuthSockSource = "configured" | "ambient" | "bridge";
+
 // Mirrors src/services/remote-host-client.ts's AgentConfig 1:1 — issue #247 /
 // roadmap 7.4. No idle timeout: that's a DB-backed Settings value on the
 // primary with no env-var equivalent, so a remote agent has no way to know
@@ -166,7 +173,49 @@ export interface HostConfig {
   // HostConfigModal.tsx renders as "unknown" rather than "not configured"
   // (null) or "socket missing" ({ present: false }) — those are three
   // distinct states, not one.
-  sshAuthSock?: { path: string; present: boolean } | null;
+  //
+  // PR7a/PR7c: `source` is itself optional within the object, one level
+  // down from the field's own optionality — a host on a build between PR5d
+  // (this field's introduction) and PR7a (the source tag) reports
+  // `{path, present}` with no `source` key, which HostConfigModal.tsx
+  // renders as a fourth "unknown which tier" state rather than guessing.
+  sshAuthSock?: { path: string; present: boolean; source?: SshAuthSockSource } | null;
+}
+
+// Mirrors src/routes/agent-bridge.ts's BridgeListItem 1:1 — issue #820
+// PR7b/PR7c. GET /api/bridges's response shape: bridge-registry.ts's
+// already-sanitized DB-recorded intent merged with live connection state
+// (`connected`) at the route layer — same split as Host/HostHealthStatus
+// above.
+export interface BridgeSummary {
+  id: string;
+  name: string | null;
+  platform: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  /** A live, unexpired session exists on this row — "paired, and the
+   * credential hasn't expired" — independent of whether a helper is
+   * actually connected right now (see `connected`). */
+  hasLiveSession: boolean;
+  /** A helper is connected right now (`app.connectedBridges.has(id)` at
+   * request time on the primary). Can be `false` while `hasLiveSession` is
+   * `true` — a paired bridge whose helper process isn't currently running. */
+  connected: boolean;
+}
+
+// Mirrors POST /api/bridges's response shape 1:1 (src/routes/agent-bridge.ts's
+// PairResponse) — snake_case field names, unlike every other type in this
+// file, because this is also exactly the wire shape `mullion helper pair`
+// (src/cli/ssh-agent-helper.mjs) decodes on the laptop side; keeping the
+// frontend's type a literal passthrough rather than renaming fields avoids
+// a translation layer that could silently drift from what that CLI expects.
+export interface BridgePairingResponse {
+  bridge_id: string;
+  /** The full one-paste payload a user copies into `mullion helper pair
+   * <payload>` on their laptop — see agent-bridge.ts's own PairResponse
+   * comment for what's encoded inside it. */
+  pairing_payload: string;
+  expires_at: string;
 }
 
 // Mirrors GET /api/hosts/:id/update's response (src/routes/hosts.ts) —

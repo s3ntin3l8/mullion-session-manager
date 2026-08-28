@@ -156,6 +156,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "hosts", text: "test connection ping online offline" },
   { section: "hosts", text: "cascade delete host projects" },
   { section: "hosts", text: "agent update version skew self-update" },
+  { section: "hosts", text: "ssh agent bridge pair laptop 1password forward helper revoke" },
   { section: "launchers", text: "detected clis shells agents refresh" },
   { section: "launchers", text: "ai agents skip perms status show" },
   { section: "launchers", text: "default shell" },
