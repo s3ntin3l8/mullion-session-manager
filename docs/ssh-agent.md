@@ -110,22 +110,44 @@ pair '<payload>'` works identically, no build step required.
 ### Keeping it running
 
 `mullion helper run` is a plain foreground process — it doesn't daemonize or
-install itself as a service. A first-class `mullion helper install`
-(launchd plist / systemd `--user` unit / Windows Scheduled Task generator)
-is planned but not built yet. Until then, supervise it yourself: the
-`launchd`/`systemd --user` examples in [Manual tunnel](#manual-tunnel-ssh--r)
-below are directly adaptable — swap the `ssh -N -R ...` command in
-`ProgramArguments`/`ExecStart` for
-`/path/to/node /path/to/mullion.mjs helper run --ssh-auth-sock <path>`.
+install itself as a service on its own. `mullion helper install` does that
+for you on **macOS and Linux**:
 
-**Pass `--ssh-auth-sock <literal path>` explicitly** when running under a
-supervisor. Neither `launchd` nor `systemd --user` inherits your login
-shell's `SSH_AUTH_SOCK` — the same reasoning as the manual tunnel's own
-[launchd](#macos-launchd)/[systemd](#linux-systemd---user) sections below,
-and `mullion helper run` says so itself if you omit both the flag and a
-usable ambient `SSH_AUTH_SOCK`. Without the flag it falls back to this
-process's own `SSH_AUTH_SOCK` env var, which is fine for an interactive
-terminal but not for a supervised unit.
+```sh
+mullion helper install --ssh-auth-sock "$SSH_AUTH_SOCK"
+```
+
+This generates and registers a launchd job (`~/Library/LaunchAgents/de.s3ntin3l8.mullion-helper.plist`)
+or a systemd `--user` unit (`~/.config/systemd/user/mullion-helper.service`),
+starts it immediately, and re-running the command later cleanly replaces the
+previous install (new `--ssh-auth-sock`, moved checkout, ...) rather than
+erroring over an already-loaded job. `mullion helper uninstall` stops and
+removes it again — a no-op, not an error, if nothing is installed. On Linux,
+also run `loginctl enable-linger $(whoami)` so the unit survives logout, the
+same requirement the manual tunnel's own [systemd
+section](#linux-systemd---user) below has.
+
+**Windows isn't supported by `install`/`uninstall` yet** — run `mullion
+helper run` under a supervisor manually there (a Scheduled Task, NSSM, ...).
+Track native support at [issue
+#871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
+
+**Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
+above. Neither `launchd` nor `systemd --user` inherits your login shell's
+`SSH_AUTH_SOCK` — the same reasoning as the manual tunnel's own
+[launchd](#macos-launchd)/[systemd](#linux-systemd---user) sections below —
+so `install` captures whatever `--ssh-auth-sock` resolves to (the flag, or
+your current shell's `$SSH_AUTH_SOCK`) as a literal path baked into the
+generated job, once, at install time; it is not re-read from the
+environment afterward. `install` refuses outright, rather than generating a
+job that would fail at every restart, if neither is available.
+
+If you'd rather supervise it yourself instead of using `install` — a
+process manager you already run, a platform `install` doesn't cover yet —
+the `launchd`/`systemd --user` examples in [Manual
+tunnel](#manual-tunnel-ssh--r) below are directly adaptable: swap the
+`ssh -N -R ...` command in `ProgramArguments`/`ExecStart` for
+`/path/to/node /path/to/mullion.mjs helper run --ssh-auth-sock <path>`.
 
 The helper reconnects on its own if the primary is briefly unreachable
 (laptop sleep, network drop, primary restart) — backing off from 1s up to

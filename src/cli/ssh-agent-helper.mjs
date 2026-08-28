@@ -4,7 +4,7 @@
 // every OTHER `mullion` subcommand it never touches the control socket
 // (src/cli/mullion.mjs dispatches it before constructing a
 // MullionSocketClient, the same way it already does for `mullion mcp`).
-// Two verbs:
+// Four verbs:
 //   - `pair <payload>` — one-shot. Decodes the payload Settings generated
 //     (ssh-agent-bridge-pairing.mjs), redeems it against POST /api/bridges'
 //     pairing code over /ws/agent-bridge, and persists the resulting
@@ -13,11 +13,11 @@
 //     wraps the connection in the inbound-only mux (ssh-agent-bridge-mux.mjs),
 //     and for every channel the primary opens, dials this laptop's own real
 //     SSH_AUTH_SOCK and pipes the two together.
-//
-// Service-manager installers (`mullion helper install` — launchd plist /
-// systemd --user unit / Windows Scheduled Task) are a separate PR (#6b):
-// this file only needs a foreground process that can be supervised by one,
-// not the supervisor itself.
+//   - `install`/`uninstall` (PR6b, ssh-agent-helper-install.mjs) — generate
+//     and (de)register a launchd job (macOS) or systemd --user unit (Linux)
+//     that supervises `run`. `stateDir`/`loadCredential` are exported below
+//     specifically so that file can reuse them without duplicating the
+//     credential-file logic.
 
 import net from "node:net";
 import fs from "node:fs";
@@ -26,6 +26,7 @@ import path from "node:path";
 import { decodePairingPayload } from "./ssh-agent-bridge-pairing.mjs";
 import { attachInboundMux, pipeNetSocketToChannel } from "./ssh-agent-bridge-mux.mjs";
 import { extractFlags, CliUsageError } from "./core.mjs";
+import { runInstall, runUninstall } from "./ssh-agent-helper-install.mjs";
 
 // Mirrors ssh-agent-fanout.ts's own reconnect ladder (src/services/) —
 // same reasoning: fast retries for a blip, backing off for a genuinely
@@ -193,7 +194,7 @@ function isValidHttpBaseUrl(value) {
   }
 }
 
-function stateDir(io) {
+export function stateDir(io) {
   if (io.env.MULLION_HELPER_STATE_DIR) return io.env.MULLION_HELPER_STATE_DIR;
   const base = io.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
   return path.join(base, "mullion");
@@ -206,7 +207,7 @@ function credentialPath(io) {
 /** `null` for a missing or malformed credential file, never a throw — the
  * caller's job is to print a "run 'mullion helper pair'" hint, not to
  * surface a raw parse error for a file the user never hand-edits. */
-function loadCredential(io) {
+export function loadCredential(io) {
   let raw;
   try {
     raw = fs.readFileSync(credentialPath(io), "utf8");
@@ -381,7 +382,7 @@ async function runRun(args, io) {
   return 0;
 }
 
-const VERBS = { pair: runPair, run: runRun };
+const VERBS = { pair: runPair, run: runRun, install: runInstall, uninstall: runUninstall };
 
 export async function runHelper(verb, args, io) {
   const target = VERBS[verb];
