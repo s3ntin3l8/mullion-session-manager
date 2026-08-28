@@ -1,4 +1,5 @@
 import net from "node:net";
+import path from "node:path";
 import { chmodSync } from "node:fs";
 import { reclaimSocketPath } from "./unix-socket.js";
 import { pipeNetSocketToChannel, type MuxChannel } from "./ssh-agent-mux.js";
@@ -71,6 +72,68 @@ export async function materializeSshAgentSocket(
         server.close(() => resolve());
       }),
   };
+}
+
+// The one deterministic name/location this socket is ever created at (see
+// plugins/ssh-agent.ts) — shared with resolveSshAuthSock below and with
+// routes/internal.ts's buildAgentConfig (its own diagnostic report of the
+// effective SSH_AUTH_SOCK) so no caller re-derives or hardcodes the
+// filename and risks drifting from where materializeSshAgentSocket above
+// actually listens.
+export function sshAgentSocketPath(sessionsDir: string): string {
+  return path.join(sessionsDir, "ssh-agent.sock");
+}
+
+// Issue #820 (Hermes review, PR #865) — mirrors sshAgentPlugin's own
+// registration predicate (src/app.ts's `MULLION_ROLE === "agent"` branch,
+// the only place that registers it): true exactly when this process will
+// materialize a bridge socket (plugins/ssh-agent.ts). plugins/pty.ts and
+// routes/internal.ts's buildAgentConfig both need this same answer for the
+// same reason resolveSshAuthSock exists at all — call this instead of each
+// keeping its own `=== "agent"` copy, so a PR5e primary-local bridge socket
+// only has to change this one function, not hunt down every call site that
+// silently assumed "agent-only" and risk missing one.
+export function materializesBridgeSocket(role: string): boolean {
+  return role === "agent";
+}
+
+/**
+ * Issue #820 PR5d — what a spawned session's SSH_AUTH_SOCK should resolve
+ * to, given the three things that can supply it. Precedence:
+ *
+ * 1. `configured` (MULLION_SSH_AUTH_SOCK) always wins when set — an
+ *    operator who already pointed this at a working `ssh -R` tunnel gets
+ *    exactly that, unchanged, whether or not a bridge is ever enrolled.
+ * 2. Otherwise, if `ambient` (this process's own inherited SSH_AUTH_SOCK —
+ *    systemd --user env, PAM, a desktop keyring) is set, returning "" here
+ *    leaves it alone: launch-plan.ts only overwrites a session's
+ *    SSH_AUTH_SOCK when this function's result is truthy, so "" means
+ *    "don't touch it" and the ambient value passes through
+ *    buildSessionEnv() untouched, same as before this feature existed.
+ * 3. Only when neither is present do we fall back to the bridge-
+ *    materialized socket — and only when the caller says this process
+ *    actually materializes one (`materializesBridgeSocket`; see
+ *    plugins/ssh-agent.ts, agent-role-only today, primary local sessions
+ *    are a later PR).
+ *
+ * Deliberately NOT gated on whether a bridge is *currently* connected: the
+ * bridge socket is a stable path (materializeSshAgentSocket binds it
+ * unconditionally at boot) exactly like the static config path always was
+ * — a session spawned before any laptop ever pairs starts working the
+ * moment one does, with no respawn needed. Gating on point-in-time
+ * liveness here would also silently break case 1 turning into "sometimes
+ * case 3" every time the laptop sleeps, which is worse than either
+ * fixed choice.
+ */
+export function resolveSshAuthSock(opts: {
+  configured: string;
+  ambient: string | undefined;
+  materializesBridgeSocket: boolean;
+  sessionsDir: string;
+}): string {
+  if (opts.configured) return opts.configured;
+  if (opts.ambient) return "";
+  return opts.materializesBridgeSocket ? sshAgentSocketPath(opts.sessionsDir) : "";
 }
 
 async function handleConnection(

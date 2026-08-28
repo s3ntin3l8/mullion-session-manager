@@ -252,6 +252,12 @@ describe("internal routes (agent role, issue #26)", () => {
   // absence, same posture as the MULLION_ROLE/TOKEN/PROJECTS_ROOTS vars
   // just below.
   let prevSshAuthSock: string | undefined;
+  // Issue #820 PR5d — resolveSshAuthSock's ambient tier reads this
+  // process's own SSH_AUTH_SOCK, so it needs the same save/restore
+  // treatment as MULLION_SSH_AUTH_SOCK above for the same reason: this
+  // suite must not silently pass or fail depending on whether the shell
+  // that happens to run it has a real ssh-agent exported.
+  let prevAmbientSshAuthSock: string | undefined;
 
   beforeAll(() => {
     projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-discover-root-"));
@@ -265,6 +271,8 @@ describe("internal routes (agent role, issue #26)", () => {
     process.env.PROJECTS_ROOTS = projectsRoot;
     prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
     delete process.env.MULLION_SSH_AUTH_SOCK;
+    prevAmbientSshAuthSock = process.env.SSH_AUTH_SOCK;
+    delete process.env.SSH_AUTH_SOCK;
   });
 
   afterAll(() => {
@@ -274,6 +282,8 @@ describe("internal routes (agent role, issue #26)", () => {
     delete process.env.PROJECTS_ROOTS;
     if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
     else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
+    if (prevAmbientSshAuthSock === undefined) delete process.env.SSH_AUTH_SOCK;
+    else process.env.SSH_AUTH_SOCK = prevAmbientSshAuthSock;
   });
 
   beforeEach(() => {
@@ -322,7 +332,13 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
-  // Issue #247 / roadmap 7.4.
+  // Issue #247 / roadmap 7.4. Issue #820 PR5d — sshAuthSock is no longer
+  // unconditionally null here: with MULLION_SSH_AUTH_SOCK and ambient
+  // SSH_AUTH_SOCK both unset (this describe block's own beforeAll), the
+  // agent role falls back to the bridge-materialized socket
+  // (resolveSshAuthSock's tier 3) — and sshAgentPlugin has genuinely bound
+  // that socket by the time this request runs, so `present` is true, not
+  // a dangling-path case.
   it("returns this agent's own effective config, with no idle timeout (that's DB-backed on the primary)", async () => {
     const app = await buildApp();
     const res = await app.inject({
@@ -338,7 +354,10 @@ describe("internal routes (agent role, issue #26)", () => {
       sessionsDir: app.config.SESSIONS_DIR,
       crsConfigDir: app.config.CRS_CONFIG_DIR,
       browserEnabled: app.config.BROWSER_ENABLED,
-      sshAuthSock: null,
+    });
+    expect(body.sshAuthSock).toEqual({
+      path: path.join(path.dirname(app.pty.hookSocketPath), "ssh-agent.sock"),
+      present: true,
     });
     expect(typeof body.version).toBe("string");
     expect(body).not.toHaveProperty("idleTimeout");

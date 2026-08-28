@@ -75,6 +75,7 @@ import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket } from "./events.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import { resolveSshAuthSock, materializesBridgeSocket } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -406,13 +407,37 @@ function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | nu
  * forcing them to stay in sync if a field is ever added.
  */
 export function buildAgentConfig(app: FastifyInstance): AgentConfig {
-  const rawSshAuthSock = app.config.MULLION_SSH_AUTH_SOCK;
+  // Issue #820 PR5d — mirror plugins/pty.ts's own resolveSshAuthSock call
+  // exactly (same three-tier precedence: configured > ambient > bridge),
+  // so this diagnostic reports what a session *actually* gets, not just
+  // the raw MULLION_SSH_AUTH_SOCK value. Before this, buildAgentConfig was
+  // a second, independent producer of this fact that PtyManager's own
+  // resolution could silently drift from (e.g. reporting "not configured"
+  // while sessions were actually getting the bridge socket). Note that
+  // "not configured" (`sshAuthSock: null` below) still covers the ambient
+  // tier: when MULLION_SSH_AUTH_SOCK is unset but this process already
+  // inherits a real SSH_AUTH_SOCK, resolveSshAuthSock deliberately returns
+  // "" (see its own doc comment) — a session genuinely receives that
+  // inherited value, this just means *Mullion* isn't the one supplying it,
+  // so there's nothing Mullion-owned to report a path for.
+  // path.dirname(app.pty.hookSocketPath), not app.config.SESSIONS_DIR:
+  // ptyPlugin's own ensureSessionsDir() can redirect a too-long sessionsDir
+  // to a short /tmp/ fallback, and hookSocketPath already reflects whichever
+  // one actually won — the same reasoning plugins/ssh-agent.ts's own
+  // sshAgentSocketPath call already relies on.
+  const rawSshAuthSock = resolveSshAuthSock({
+    configured: app.config.MULLION_SSH_AUTH_SOCK,
+    ambient: process.env.SSH_AUTH_SOCK,
+    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
+    sessionsDir: path.dirname(app.pty.hookSocketPath),
+  });
   // Resolved the same way PtyManager's own constructor resolves this same
-  // config value (pty-manager.ts) — a relative MULLION_SSH_AUTH_SOCK must
-  // not be reported (or existsSync'd) as-is, since PtyManager resolves it
-  // once, up front, precisely so it doesn't get re-resolved against some
-  // other cwd later. Reporting the raw string here would show an operator
-  // a path that doesn't match what sessions actually receive.
+  // value (pty-manager.ts) — a relative path must not be reported (or
+  // existsSync'd) as-is, since PtyManager resolves it once, up front,
+  // precisely so it doesn't get re-resolved against some other cwd later.
+  // Reporting the raw string here would show an operator a path that
+  // doesn't match what sessions actually receive. (The bridge-socket case
+  // above is already absolute, so this is a no-op for it.)
   const sshAuthSockPath = rawSshAuthSock === "" ? "" : path.resolve(rawSshAuthSock);
   return {
     role: app.config.MULLION_ROLE,
