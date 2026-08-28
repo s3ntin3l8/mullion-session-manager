@@ -360,6 +360,7 @@ describe("multi-host proxy (issue #26)", () => {
     expect(body.sshAuthSock).toEqual({
       path: path.join(path.dirname(agent.app.pty.hookSocketPath), "ssh-agent.sock"),
       present: true,
+      source: "bridge",
     });
     expect(typeof body.version).toBe("string");
   });

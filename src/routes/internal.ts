@@ -425,19 +425,42 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // to a short /tmp/ fallback, and hookSocketPath already reflects whichever
   // one actually won — the same reasoning plugins/ssh-agent.ts's own
   // sshAgentSocketPath call already relies on.
-  const rawSshAuthSock = resolveSshAuthSock({
+  const ambientSshAuthSock = process.env.SSH_AUTH_SOCK;
+  const resolved = resolveSshAuthSock({
     configured: app.config.MULLION_SSH_AUTH_SOCK,
-    ambient: process.env.SSH_AUTH_SOCK,
+    ambient: ambientSshAuthSock,
     materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
     sessionsDir: path.dirname(app.pty.hookSocketPath),
   });
-  // Resolved the same way PtyManager's own constructor resolves this same
-  // value (pty-manager.ts) — a relative path must not be reported (or
-  // existsSync'd) as-is, since PtyManager resolves it once, up front,
-  // precisely so it doesn't get re-resolved against some other cwd later.
-  // Reporting the raw string here would show an operator a path that
-  // doesn't match what sessions actually receive. (The bridge-socket case
-  // above is already absolute, so this is a no-op for it.)
+  // PR7a: the "ambient" tier's own `path` is always "" (resolveSshAuthSock's
+  // signal to "don't touch it" — see its own doc comment), so there's no
+  // Mullion-resolved path to report for it. Report the ambient value itself
+  // instead — it's a real path this process inherited and sessions actually
+  // get it — so Settings > Hosts can show *something* other than "unknown"
+  // for the one tier resolveSshAuthSock deliberately returns empty for.
+  // `?? ""` is defensive, not reachable: resolveSshAuthSock only ever
+  // returns source "ambient" when it saw `ambientSshAuthSock` truthy (see
+  // its own precedence — that's the whole point of this substitution).
+  const rawSshAuthSock = resolved.source === "ambient" ? (ambientSshAuthSock ?? "") : resolved.path;
+  // For `configured`/`bridge`, resolved the same way PtyManager's own
+  // constructor resolves this same value (pty-manager.ts) — a relative path
+  // must not be reported (or existsSync'd) as-is, since PtyManager resolves
+  // it once, up front, precisely so it doesn't get re-resolved against some
+  // other cwd later. Reporting the raw string here would show an operator a
+  // path that doesn't match what sessions actually receive. (The
+  // bridge-socket case is already absolute, so this is a no-op for it.)
+  //
+  // For `ambient`, this is best-effort diagnostics only, NOT the same
+  // resolution a session gets: launch-plan.ts only overwrites
+  // SSH_AUTH_SOCK when resolveSshAuthSock's result is truthy, so the
+  // ambient tier is skipped there entirely and a spawned session inherits
+  // this process's own SSH_AUTH_SOCK exactly as-is via normal env
+  // inheritance — PtyManager never sees or resolves it. If that value were
+  // ever relative (unusual for an ssh-agent socket, but not something
+  // Mullion controls), resolving it here against this server process's own
+  // cwd for display could report a path a session doesn't actually use —
+  // acceptable for a read-only diagnostic, but don't read this as "what the
+  // session gets" the way it is for the other two tiers.
   const sshAuthSockPath = rawSshAuthSock === "" ? "" : path.resolve(rawSshAuthSock);
   return {
     role: app.config.MULLION_ROLE,
@@ -450,10 +473,18 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     // function's two callers (this route, and hosts.ts's `local` branch)
     // needs to change shape. A dangling socket is expected, not an error
     // (see AgentConfig's own comment); this is read-only visibility only.
+    // `source` is present on every non-null case below; the only case with
+    // no `source` to report is sshAuthSockPath === "" (the "none" tier),
+    // which reports `null` for the whole field below — same as before
+    // PR7a — rather than an object with nothing useful in it.
     sshAuthSock:
       sshAuthSockPath === ""
         ? null
-        : { path: sshAuthSockPath, present: existsSync(sshAuthSockPath) },
+        : {
+            path: sshAuthSockPath,
+            present: existsSync(sshAuthSockPath),
+            source: resolved.source,
+          },
   };
 }
 
