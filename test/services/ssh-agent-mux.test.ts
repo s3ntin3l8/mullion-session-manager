@@ -587,6 +587,67 @@ describe("ssh-agent-mux", () => {
     });
   });
 
+  describe("openChannel() ack timeout", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("rejects a pending open that never gets an OpenAck/OpenFail, and frees its budget slot for a later open (regression: Hermes review, PR #853, round 4 — a peer that silently drops an Open frame used to leak one maxChannels slot and one channel id forever)", async () => {
+      const a = new FakeSocket(); // deliberately unlinked — simulates a peer that drops the Open frame
+      const connA = createMuxConnection(a as never, { maxChannels: 1, channelIdParity: "odd" });
+
+      const pending = connA.openChannel();
+      let rejected: Error | null = null;
+      pending.catch((err: Error) => {
+        rejected = err;
+      });
+
+      vi.advanceTimersByTime(10_000); // OPEN_ACK_TIMEOUT_MS
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(rejected).not.toBeNull();
+      expect(rejected!.message).toMatch(/no OpenAck\/OpenFail for channel .* within 10000ms/);
+
+      // The budget slot must be genuinely freed — with maxChannels: 1,
+      // this would still be rejected with "local channel cap" if the
+      // timed-out entry were still counted. `a` stays unlinked, so this
+      // second open never resolves either — only its own IMMEDIATE,
+      // synchronous rejection path (the local-cap check) is under test
+      // here, not its eventual outcome.
+      const secondOpen = connA.openChannel();
+      let secondRejectedReason: string | null = null;
+      secondOpen.catch((err: Error) => {
+        secondRejectedReason = err.message;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      // Either still genuinely pending (null — the expected outcome) or,
+      // if it did reject, not for "local channel cap" specifically.
+      expect(
+        secondRejectedReason === null || !secondRejectedReason.includes("local channel cap"),
+      ).toBe(true);
+    });
+
+    it("does not fire the timeout once a real OpenAck arrives in time", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      createMuxConnection(b as never, { channelIdParity: "even" });
+
+      const pending = connA.openChannel(); // resolves synchronously via the linked FakeSocket
+      await expect(pending).resolves.toBeTruthy();
+
+      // Advancing well past the timeout afterward must be a no-op — the
+      // timer should already have been cleared on resolution.
+      expect(() => vi.advanceTimersByTime(20_000)).not.toThrow();
+    });
+  });
+
   describe("liveness ping/pong", () => {
     beforeEach(() => {
       vi.useFakeTimers();

@@ -42,9 +42,20 @@ import type { WebSocket as NodeWebSocket, RawData } from "ws";
  * channel's own window, so the two aren't meant to match: large enough
  * that a single `ssh-add -l` round trip never blocks on a window refill,
  * small enough that one stalled channel can't buffer unbounded memory
- * while waiting for its peer, and small enough that many concurrent
- * channels (an `ansible --forks=N` fan-out) can each hold a full window
- * without collectively approaching the WS-level buffer cap. */
+ * while waiting for its peer.
+ *
+ * NOT currently enforced (Hermes review, PR #853, round 4): a channel's
+ * window bounds what the PEER may send US, not what WE buffer into the
+ * shared underlying WebSocket — `sendFrame` never checks
+ * `socket.bufferedAmount` before calling `socket.send()`. Under a
+ * genuinely stalled network with many channels simultaneously saturated
+ * (an `ansible --forks=N` fan-out), up to `maxChannels * CHANNEL_
+ * WINDOW_BYTES` (256 * 256 KiB ≈ 64 MiB by default) of unsent frames could
+ * sit in that one WS's send buffer — bounded by these constants, so not a
+ * leak, but well past `WS_BACKPRESSURE_MAX_BUFFERED_BYTES`'s own 4 MiB
+ * figure despite this module's design intent. Flagged rather than fixed
+ * here, per Hermes's own recommendation to revisit once PR2+ actually
+ * wires this module up to a real WebSocket in routes. */
 export const CHANNEL_WINDOW_BYTES = 256 * 1024;
 
 /** A WINDOW_ADJUST is sent as soon as the consumed-since-last-adjust total
@@ -65,6 +76,20 @@ const PING_INTERVAL_MS = 15_000;
  * connect-timeout enforces, just for an already-open connection rather than
  * a still-connecting one. */
 const PONG_TIMEOUT_MS = 10_000;
+
+/** A pending `openChannel()` that gets no `OpenAck`/`OpenFail` within this
+ * window is rejected and its `pendingOpens` entry freed (Hermes review, PR
+ * #853, round 4). Without this, a peer that stays alive for liveness PONGs
+ * but silently drops (or never processes) an Open frame — dead code, a
+ * bug, or deliberately hostile — permanently consumes one `maxChannels`
+ * budget slot and one channel id per dropped open, with no way to recover
+ * it short of tearing down the whole connection. Every OTHER
+ * malicious-peer surface in this module is already bounded (inbound-id
+ * collision rejected, window credit clamped, peer channel cap enforced);
+ * this closes the one that wasn't. Scaled off `PONG_TIMEOUT_MS` rather
+ * than an unrelated constant, since both represent "how long to wait for
+ * a specific reply before assuming something's wrong." */
+const OPEN_ACK_TIMEOUT_MS = PONG_TIMEOUT_MS;
 
 const enum FrameType {
   Open = 1,
@@ -515,7 +540,33 @@ export function createMuxConnection(
     }
     const id = allocateChannelId();
     return new Promise<MuxChannel>((resolve, reject) => {
-      pendingOpens.set(id, { resolve, reject });
+      // See OPEN_ACK_TIMEOUT_MS's own doc for why this exists at all.
+      // Wrapping resolve/reject (rather than reading them back out of
+      // `pendingOpens` from inside the timer) keeps "clear the timer" and
+      // "settle the promise" atomic through every settlement path —
+      // handleMessage's OpenAck/OpenFail branches, and teardown()'s own
+      // bulk-reject on connection close — without each of those needing to
+      // know this timer exists.
+      const timeoutTimer = setTimeout(() => {
+        pendingOpens.delete(id);
+        reject(
+          new Error(
+            `ssh-agent-mux: no OpenAck/OpenFail for channel ${id} within ` +
+              `${OPEN_ACK_TIMEOUT_MS}ms — peer may have dropped the Open frame`,
+          ),
+        );
+      }, OPEN_ACK_TIMEOUT_MS);
+      timeoutTimer.unref?.();
+      pendingOpens.set(id, {
+        resolve: (channel) => {
+          clearTimeout(timeoutTimer);
+          resolve(channel);
+        },
+        reject: (err) => {
+          clearTimeout(timeoutTimer);
+          reject(err);
+        },
+      });
       sendFrame(encodeHeader(FrameType.Open, id));
     });
   }
@@ -741,6 +792,13 @@ export function pipeNetSocketToChannel(socket: net.Socket, channel: MuxChannel):
     // to avoid — so "contain, don't drop and don't crash" is the only
     // remaining option for a condition that should be unreachable anyway.
     if (pendingChunk !== null) {
+      // Cleared, not just left set (Hermes review, PR #853, round 4 nit):
+      // harmless as-is, since the channel is closing right below and
+      // `flushPending` bails out on `channel.closed` regardless — but
+      // leaving a stale chunk sitting in a supposedly-closed pipe's state
+      // makes this branch depend on that OTHER guard to stay safe instead
+      // of being correct on its own.
+      pendingChunk = null;
       if (!channel.closed) channel.close();
       if (!socket.destroyed) socket.destroy();
       return;
