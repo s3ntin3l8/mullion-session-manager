@@ -11,6 +11,8 @@ import type {
   DockControlInput,
   DockerUpdateCheckResult,
   DockerUpdateResult,
+  DockerStackActionResult,
+  DockerServiceActionResult,
 } from "./types.js";
 import type { DockControl } from "../../../src/shared/types.js";
 
@@ -42,6 +44,54 @@ export const dockerApi = {
 
   updateDockerStack: (projectId: number, controlId: string) =>
     request<DockerUpdateResult>(`/api/projects/${projectId}/docker/update`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  // Per-service, inline lifecycle actions — run synchronously server-side
+  // (bounded compose operations), so the response is just success/failure,
+  // never a session to render.
+  restartDockerService: (projectId: number, controlId: string) =>
+    request<DockerServiceActionResult>(`/api/projects/${projectId}/docker/service/restart`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  stopDockerService: (projectId: number, controlId: string) =>
+    request<DockerServiceActionResult>(`/api/projects/${projectId}/docker/service/stop`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  startDockerService: (projectId: number, controlId: string) =>
+    request<DockerServiceActionResult>(`/api/projects/${projectId}/docker/service/start`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  // Stack-wide lifecycle actions — each spawns a kind:"dock" session (same
+  // shape as updateDockerStack above) so a slow compose operation streams
+  // its own output instead of blocking the request.
+  restartDockerStack: (projectId: number, controlId: string) =>
+    request<DockerStackActionResult>(`/api/projects/${projectId}/docker/stack/restart`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  applyDockerStack: (projectId: number, controlId: string) =>
+    request<DockerStackActionResult>(`/api/projects/${projectId}/docker/stack/apply`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  rebuildDockerStack: (projectId: number, controlId: string) =>
+    request<DockerStackActionResult>(`/api/projects/${projectId}/docker/stack/rebuild`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  stopDockerStack: (projectId: number, controlId: string) =>
+    request<DockerStackActionResult>(`/api/projects/${projectId}/docker/stack/stop`, {
       method: "POST",
       body: JSON.stringify({ controlId }),
     }),

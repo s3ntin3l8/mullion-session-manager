@@ -43,6 +43,10 @@ interface PsRow {
   // explicitly; every other fixture is unaffected by their addition.
   configFiles?: string;
   envFile?: string;
+  // Optional — default "" (no config-hash label recorded, e.g. a
+  // pre-labels-era container). Tests that care about the recreate
+  // precondition set this explicitly.
+  configHash?: string;
 }
 
 function psLine(row: PsRow): string {
@@ -60,6 +64,7 @@ function psLine(row: PsRow): string {
     row.oneoff,
     row.configFiles ?? "",
     row.envFile ?? "",
+    row.configHash ?? "",
   ].join("\t");
 }
 
@@ -70,6 +75,11 @@ let dockerInstalled = true;
 let composeAvailable = true;
 let pullSucceeds = true;
 let inspectedImageId = "sha256:latest000000000000000000000000000000000000000000000000000000";
+let restartSucceeds = true;
+let stopSucceeds = true;
+let startSucceeds = true;
+let configHashSucceeds = true;
+let configHashOutput = "web abc123hash";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -114,6 +124,43 @@ vi.mock("node:child_process", async (importOriginal) => {
           child.emit("close", 0);
           return;
         }
+        if (args[0] === "compose" && args.includes("restart")) {
+          if (restartSucceeds) {
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: restart failed\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
+        if (args[0] === "compose" && args.includes("stop")) {
+          if (stopSucceeds) {
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: stop failed\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
+        if (args[0] === "compose" && args.includes("start")) {
+          if (startSucceeds) {
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: start failed\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
+        if (args[0] === "compose" && args.includes("config")) {
+          if (configHashSucceeds) {
+            child.stdout.emit("data", Buffer.from(`${configHashOutput}\n`));
+            child.emit("close", 0);
+          } else {
+            child.stderr.emit("data", Buffer.from("Error: no configuration file provided\n"));
+            child.emit("close", 1);
+          }
+          return;
+        }
         child.emit("error", new Error(`unexpected docker args: ${args.join(" ")}`));
       });
       return child;
@@ -132,6 +179,10 @@ const {
   composeContextFlags,
   pullComposeImageQuietly,
   inspectImageId,
+  restartComposeService,
+  stopComposeService,
+  startComposeService,
+  reconstructConfigHash,
 } = await import("../../src/services/docker-service-detect.js");
 
 describe("docker-service-detect", () => {
@@ -150,6 +201,11 @@ describe("docker-service-detect", () => {
     dockerInstalled = true;
     composeAvailable = true;
     pullSucceeds = true;
+    restartSucceeds = true;
+    stopSucceeds = true;
+    startSucceeds = true;
+    configHashSucceeds = true;
+    configHashOutput = "web abc123hash";
     clearComposeCacheForTests();
     clearComposeAvailabilityCacheForTests();
     resolvableDir = fs.mkdtempSync(path.join(os.tmpdir(), "docker-detect-resolvable-"));
@@ -178,6 +234,7 @@ describe("docker-service-detect", () => {
         imageId: "sha256:c14dd0e39e89f0c15c2bf462d8a2e05fb17a3b89dc8fe59b60e9f7daa48d7837",
         oneoff: "False",
         configFiles: resolvableComposeFile,
+        configHash: "hash-sanctuary-web",
       });
 
       const services = await getComposeServices();
@@ -195,6 +252,7 @@ describe("docker-service-detect", () => {
           composeResolvable: true,
           configFiles: [resolvableComposeFile],
           envFile: null,
+          configHash: "hash-sanctuary-web",
         },
       ]);
     });
@@ -793,6 +851,7 @@ describe("docker-service-detect", () => {
         "/home/user/sanctuary/docker-compose.override.yml",
       ],
       envFile: null,
+      configHash: "abc123hash",
     };
 
     it("pullComposeImageQuietly resolves true on success", async () => {
@@ -839,6 +898,104 @@ describe("docker-service-detect", () => {
     it("inspectImageId returns null when docker is not installed", async () => {
       dockerInstalled = false;
       expect(await inspectImageId("ghcr.io/s3ntin3l8/sanctuary:edge")).toBeNull();
+    });
+  });
+
+  describe("restartComposeService / stopComposeService / startComposeService", () => {
+    const service = {
+      composeProject: "sanctuary",
+      service: "web",
+      containerName: "sanctuary-web",
+      workingDir: "/home/user/sanctuary",
+      state: "running" as const,
+      status: "Up",
+      imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+      imageId: "sha256:x",
+      buildOnly: false,
+      composeResolvable: true,
+      configFiles: ["/home/user/sanctuary/docker-compose.yml"],
+      envFile: null,
+      configHash: "abc123hash",
+    };
+
+    it("restartComposeService resolves true on success and reconstructs the compose context", async () => {
+      const { spawn } = await import("node:child_process");
+      const spawnMock = vi.mocked(spawn);
+      spawnMock.mockClear();
+      restartSucceeds = true;
+
+      expect(await restartComposeService(service)).toBe(true);
+
+      const call = spawnMock.mock.calls.find((c) => (c[1] as string[])?.includes("restart"));
+      expect(call?.[1]).toEqual([
+        "compose",
+        "-p",
+        "sanctuary",
+        "--project-directory",
+        "/home/user/sanctuary",
+        "-f",
+        "/home/user/sanctuary/docker-compose.yml",
+        "restart",
+        "web",
+      ]);
+    });
+
+    it("restartComposeService resolves false on failure", async () => {
+      restartSucceeds = false;
+      expect(await restartComposeService(service)).toBe(false);
+    });
+
+    it("stopComposeService resolves true on success", async () => {
+      stopSucceeds = true;
+      expect(await stopComposeService(service)).toBe(true);
+    });
+
+    it("stopComposeService resolves false on failure", async () => {
+      stopSucceeds = false;
+      expect(await stopComposeService(service)).toBe(false);
+    });
+
+    it("startComposeService resolves true on success", async () => {
+      startSucceeds = true;
+      expect(await startComposeService(service)).toBe(true);
+    });
+
+    it("startComposeService resolves false on failure", async () => {
+      startSucceeds = false;
+      expect(await startComposeService(service)).toBe(false);
+    });
+  });
+
+  describe("reconstructConfigHash", () => {
+    const service = {
+      composeProject: "sanctuary",
+      service: "web",
+      containerName: "sanctuary-web",
+      workingDir: "/home/user/sanctuary",
+      state: "running" as const,
+      status: "Up",
+      imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+      imageId: "sha256:x",
+      buildOnly: false,
+      composeResolvable: true,
+      configFiles: ["/home/user/sanctuary/docker-compose.yml"],
+      envFile: null,
+      configHash: "abc123hash",
+    };
+
+    it("parses the hash out of `<service> <hash>` output", async () => {
+      configHashOutput = "web abc123hash";
+      expect(await reconstructConfigHash(service)).toBe("abc123hash");
+    });
+
+    it("returns null when the compose invocation fails (missing compose file, docker unreachable, ...)", async () => {
+      configHashSucceeds = false;
+      expect(await reconstructConfigHash(service)).toBeNull();
+    });
+
+    it("returns null on blank output", async () => {
+      configHashOutput = "";
+      expect(await reconstructConfigHash(service)).toBeNull();
     });
   });
 });

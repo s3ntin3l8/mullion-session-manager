@@ -132,6 +132,8 @@ export type {
   DockControlInput,
   DockerUpdateCheckResult,
   DockerUpdateResult,
+  DockerStackActionResult,
+  DockerServiceActionResult,
   Preview,
   ProjectUrl,
   ServerInfo,
