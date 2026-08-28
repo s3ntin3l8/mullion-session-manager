@@ -69,6 +69,51 @@ export const hosts = sqliteTable("hosts", {
     .$defaultFn(() => new Date()),
 });
 
+// Issue #820 — a laptop/PC "helper" that dials OUT to the primary over
+// `/ws/agent-bridge`, carrying its SSH agent's traffic to every host that
+// needs it (see src/services/ssh-agent-mux.ts / ssh-agent-filter.ts and
+// docs/ssh-agent.md's design plan). Deliberately its OWN table, not a row
+// in `hosts` — a bridge is never a place sessions run (it has no baseUrl a
+// PtyManager/RemoteHostClient would dial), it's the opposite direction
+// (something that dials INTO the primary), so it doesn't belong in the
+// same table as something project.hostId can point at.
+//
+// Two credential phases, mutually exclusive at any moment — never both a
+// live pairing code AND a live session at once (redeemPairingCode clears
+// the former the instant it issues the latter, same "one bootstrap
+// credential, one rotating session" shape host-registry.ts's D1/D2 split
+// uses for agent enrollment):
+//   1. Pairing (bootstrap): `pairingSecretEnc`/`pairingExpiresAt`, issued
+//      once from Settings, single-use, short TTL. Encrypted at rest the
+//      same way `hosts.authTokenEnc` is (see EncryptionService) — not
+//      hashed, since the redeem path needs the plaintext back to compare
+//      via timingSafeTokenMatch against every candidate row, the same
+//      constant-time-across-all-candidates shape claimHost() uses.
+//   2. Session (live): `sessionIdEnc`/`sessionSecretEnc`/
+//      `sessionExpiresAt` — the bridge's actual inbound credential once
+//      paired, renewed well before expiry the same way an enrolled host's
+//      session is (agent-enrollment.ts's own renewal timer).
+export const bridges = sqliteTable("bridges", {
+  id: text("id").primaryKey(),
+  // User-facing label — the helper's own reported hostname by default,
+  // renamable from Settings. Null until the pairing code is redeemed (a
+  // freshly-issued, not-yet-claimed pairing code has no helper to name
+  // yet).
+  name: text("name"),
+  pairingSecretEnc: text("pairing_secret_enc"),
+  pairingExpiresAt: integer("pairing_expires_at", { mode: "timestamp" }),
+  sessionIdEnc: text("session_id_enc"),
+  sessionSecretEnc: text("session_secret_enc"),
+  sessionExpiresAt: integer("session_expires_at", { mode: "timestamp" }),
+  // Free-form, helper-reported ("darwin" | "win32" | ...) — informational
+  // only, same non-enforced posture as hosts.agentMetadata.
+  platform: text("platform"),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 // A project is just a folder new sessions get created in — now on a specific
 // host (issue #26). Every session under a project inherits its host; a
 // session has no hostId of its own since a project can't change host (cwd is
