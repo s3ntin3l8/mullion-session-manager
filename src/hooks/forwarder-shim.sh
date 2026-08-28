@@ -85,9 +85,25 @@ command -v "$_mullion_node" >/dev/null 2>&1 || _mullion_fallback "$@"
 # runGate()), so a worst-case orphan is a short-lived, harmless process,
 # not a leak.
 _mullion_output=$("$_mullion_node" "$MULLION_FORWARDER_PATH" "$@")
-if [ -n "$_mullion_output" ]; then
-  printf '%s\n' "$_mullion_output"
-else
-  _mullion_fallback "$@"
-fi
+# Reject empty OR multi-line output as a fallback trigger too, not just
+# empty (Hermes review, PR #861): forwarder.mjs's own `finally` always
+# emits exactly one JSON line, so more than one line means something
+# unexpected happened (a stray extra print, corrupted output) rather than
+# a real decision — printing it verbatim would hand a malformed multi-line
+# blob to a caller expecting one JSON object. `$_mullion_nl` holds a
+# literal newline (POSIX `case` has no `\n` escape) purely to test for one.
+_mullion_nl='
+'
+case "$_mullion_output" in
+  "" | *"$_mullion_nl"*)
+    _mullion_fallback "$@"
+    ;;
+esac
+printf '%s\n' "$_mullion_output"
+# Unconditional, not `|| exit $?`: a real DENY/DENIAL decision from the
+# forwarder is carried entirely in the JSON printed above, never in the
+# exit status — the whole point of this shim's own exit code being
+# constant 0 (see the "Deliberately NOT `exec`" comment above). Making
+# this conditional on the forwarder's own exit code would silently
+# reintroduce the exact hard-block bug this file exists to prevent.
 exit 0

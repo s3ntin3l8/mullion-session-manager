@@ -250,6 +250,22 @@ describe("forwarder-shim.sh — real sh execution, fail-open behavior", () => {
     expect(out).toBe('{"decision":"allow"}\n');
   });
 
+  it("a forwarder that prints MORE than one line (unexpected — forwarder.mjs's own finally always emits exactly one) is rejected as malformed, never printed verbatim (Hermes review, PR #861)", () => {
+    const multiLineForwarder = path.join(scratchDir, "multiline-forwarder.mjs");
+    writeFileSync(
+      multiLineForwarder,
+      `console.log(JSON.stringify({real: "content", should: "not print"}));\nconsole.log("{}");\n`,
+    );
+    // agy Stop, not agy PreToolUse — its fallback ({}) is visually
+    // distinct from the real (rejected) first line, so a pass here proves
+    // the guard actually fired rather than coincidentally matching.
+    const out = runShim(["agy", "Stop"], {
+      MULLION_FORWARDER_PATH: multiLineForwarder,
+      MULLION_FORWARDER_NODE: process.execPath,
+    });
+    expect(out).toBe("{}\n");
+  });
+
   it("stdin passes straight through to the real forwarder", () => {
     const echoStdin = path.join(scratchDir, "echo-stdin-forwarder.mjs");
     writeFileSync(

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { shellQuote, resolveForwarderShimSourcePath } from "./shared.js";
@@ -87,6 +87,17 @@ function parseShimVersion(content: string): number | null {
  *   launching agy sessions at once), and this makes it benign rather than
  *   merely rare.
  *
+ * "Never downgrades" is best-effort, not fully atomic against a concurrent
+ * writer (Hermes review, PR #861): the version check is re-run immediately
+ * before the final `renameSync` to narrow the race window as far as
+ * possible without OS-level locking, but a newer release's write landing in
+ * the gap between that re-check and this process's own `renameSync` could
+ * still be overwritten. Accepted rather than adding a lock file, for two
+ * reasons: every writer today ships byte-identical v1 content, so the race
+ * is unreachable until a v2 ever exists; and even then it's self-healing —
+ * `ensureForwarderShim` runs on every agy/Codex launch, so any instance
+ * still running v2 corrects a lost race on its own very next launch.
+ *
  * Read failures (permissions, a directory where the file should be) are
  * treated as "absent" and overwritten — same posture as agy.ts's/codex.ts's
  * own "a missing config is not an error" handling; a shim we can't verify
@@ -97,25 +108,39 @@ export function ensureForwarderShim(
 ): string {
   const content = readFileSync(sourcePath, "utf8");
 
-  let existing: string | null;
-  try {
-    existing = readFileSync(targetPath, "utf8");
-  } catch {
-    existing = null;
-  }
-
-  if (existing !== null) {
-    if (existing === content) return targetPath;
-    const existingVersion = parseShimVersion(existing);
-    if (existingVersion !== null && existingVersion > CURRENT_SHIM_VERSION) {
-      // A newer release's shim is already installed — leave it alone.
-      return targetPath;
+  function readExisting(): string | null {
+    try {
+      return readFileSync(targetPath, "utf8");
+    } catch {
+      return null;
     }
   }
+
+  function isNewerThanOurs(existing: string | null): boolean {
+    if (existing === null) return false;
+    const existingVersion = parseShimVersion(existing);
+    return existingVersion !== null && existingVersion > CURRENT_SHIM_VERSION;
+  }
+
+  const existing = readExisting();
+  if (existing !== null && existing === content) return targetPath;
+  if (isNewerThanOurs(existing)) return targetPath;
 
   mkdirSync(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.${process.pid}.tmp`;
   writeFileSync(tmpPath, content, { mode: 0o755 });
+  // Re-check immediately before the rename — narrows, without fully
+  // closing, the TOCTOU window described above.
+  if (isNewerThanOurs(readExisting())) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // Best-effort scratch-file cleanup — a leftover `.<pid>.tmp` file is
+      // harmless (never read by anything) and not worth failing this call
+      // over.
+    }
+    return targetPath;
+  }
   renameSync(tmpPath, targetPath);
   return targetPath;
 }
