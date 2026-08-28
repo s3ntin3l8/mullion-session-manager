@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
-import { materializeSshAgentSocket } from "../services/ssh-agent-socket.js";
+import { materializeSshAgentSocket, sshAgentSocketPath } from "../services/ssh-agent-socket.js";
 import type { MuxConnection } from "../services/ssh-agent-mux.js";
 
 // Issue #820 — the agent-host half of the bridge: materializes the local
@@ -25,7 +25,9 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   // own short-fallback resolution (pty.ts) already guards the 108-byte
   // sun_path limit for that socket; reusing its directory means this one
   // inherits the same guarantee for free instead of re-deriving it.
-  const socketPath = path.join(path.dirname(app.pty.hookSocketPath), "ssh-agent.sock");
+  // sshAgentSocketPath is the same helper resolveSshAuthSock/buildAgentConfig
+  // use (PR5d) so the filename never drifts from where this actually binds.
+  const socketPath = sshAgentSocketPath(path.dirname(app.pty.hookSocketPath));
   const handle = await materializeSshAgentSocket({
     socketPath,
     openChannel: () => (holder.current ? holder.current.openChannel() : Promise.resolve(null)),

@@ -2,7 +2,11 @@ import { describe, it, expect, afterEach } from "vitest";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { materializeSshAgentSocket } from "../../src/services/ssh-agent-socket.js";
+import {
+  materializeSshAgentSocket,
+  resolveSshAuthSock,
+  sshAgentSocketPath,
+} from "../../src/services/ssh-agent-socket.js";
 import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
 
 function tmpSocketPath(name: string): string {
@@ -164,5 +168,73 @@ describe("ssh-agent-socket", () => {
       client.once("connect", () => resolve(false));
     });
     expect(errored).toBe(true);
+  });
+});
+
+describe("sshAgentSocketPath", () => {
+  it("is deterministic given the same sessionsDir — the one name every caller must agree on", () => {
+    expect(sshAgentSocketPath("/var/lib/mullion/sessions")).toBe(
+      "/var/lib/mullion/sessions/ssh-agent.sock",
+    );
+  });
+});
+
+describe("resolveSshAuthSock", () => {
+  const sessionsDir = "/var/lib/mullion/sessions";
+  const bridgePath = sshAgentSocketPath(sessionsDir);
+
+  it("prefers the configured static path over everything else", () => {
+    expect(
+      resolveSshAuthSock({
+        configured: "/run/ssh-r-tunnel.sock",
+        ambient: "/run/some-ambient.sock",
+        materializesBridgeSocket: true,
+        sessionsDir,
+      }),
+    ).toBe("/run/ssh-r-tunnel.sock");
+  });
+
+  it("prefers configured even when this process would otherwise materialize a bridge socket — an existing ssh -R deployment must not regress on upgrade", () => {
+    expect(
+      resolveSshAuthSock({
+        configured: "/run/ssh-r-tunnel.sock",
+        ambient: undefined,
+        materializesBridgeSocket: true,
+        sessionsDir,
+      }),
+    ).toBe("/run/ssh-r-tunnel.sock");
+  });
+
+  it("returns empty (don't touch SSH_AUTH_SOCK) when unconfigured but an ambient value already exists, even with a bridge socket available — a systemd/PAM/keyring-supplied agent must not be silently shadowed", () => {
+    expect(
+      resolveSshAuthSock({
+        configured: "",
+        ambient: "/run/user/1000/keyring/ssh",
+        materializesBridgeSocket: true,
+        sessionsDir,
+      }),
+    ).toBe("");
+  });
+
+  it("falls back to the bridge-materialized socket only when neither configured nor ambient is set", () => {
+    expect(
+      resolveSshAuthSock({
+        configured: "",
+        ambient: undefined,
+        materializesBridgeSocket: true,
+        sessionsDir,
+      }),
+    ).toBe(bridgePath);
+  });
+
+  it("does not fall back to a bridge path when this process doesn't materialize one (e.g. primary, pre-PR5e)", () => {
+    expect(
+      resolveSshAuthSock({
+        configured: "",
+        ambient: undefined,
+        materializesBridgeSocket: false,
+        sessionsDir,
+      }),
+    ).toBe("");
   });
 });

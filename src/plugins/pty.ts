@@ -8,6 +8,7 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
+import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 
@@ -150,9 +151,23 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       "sessionsDir socket path approaches 108-byte sun_path limit, using short fallback",
     );
   }
+  // Issue #820 PR5d — see resolveSshAuthSock's own doc comment for the full
+  // precedence (configured > ambient > bridge-materialized). Read once here,
+  // at boot: PtyManager freezes this into every Session it spawns for the
+  // life of this process (see pty-manager.ts's own sshAuthSock field
+  // comments), so there is no later point where re-reading it would matter.
+  // materializesBridgeSocket mirrors app.ts's own sshAgentPlugin
+  // registration condition below (agent-role-only today; a primary-local
+  // bridge socket is a later PR) — this can't read app.sshAgentBridgeConnection
+  // directly instead, since sshAgentPlugin registers after ptyPlugin.
   const manager = new PtyManager({
     sessionsDir,
-    sshAuthSock: app.config.MULLION_SSH_AUTH_SOCK,
+    sshAuthSock: resolveSshAuthSock({
+      configured: app.config.MULLION_SSH_AUTH_SOCK,
+      ambient: process.env.SSH_AUTH_SOCK,
+      materializesBridgeSocket: app.config.MULLION_ROLE === "agent",
+      sessionsDir,
+    }),
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),
