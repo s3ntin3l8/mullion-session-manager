@@ -189,6 +189,24 @@ export interface MuxChannel {
 
 export interface MuxConnectionOptions {
   maxChannels?: number;
+  /** Which parity this side allocates its own channel ids from — REQUIRED,
+   * with no default, and the two ends of a connection must be given
+   * opposite values. This is the fix for a real bug caught in review
+   * (Hermes, PR #853): with both sides independently allocating from a
+   * single shared id space starting at 1, two sides' simultaneous
+   * `openChannel()` calls could pick the SAME id, and whichever side's
+   * `OpenAck` arrived second would silently overwrite the other's
+   * already-accepted inbound channel in its own `channels` map — orphaning
+   * it (its `onChannel` consumer, and whatever `pipeNetSocketToChannel`
+   * wired to it, would still exist but receive nothing further) while
+   * misrouting the peer's Data frames onto an unrelated new channel.
+   * Deliberately made required (not defaulted to e.g. `"odd"`) so this
+   * can't regress by omission the way the shared-namespace bug did in the
+   * first place — a caller MUST consciously assign complementary parities
+   * to the two ends, typically tied to a role that already exists at the
+   * call site (e.g. "odd" for the side that dials out as the WS client,
+   * "even" for the side that accepts the WS connection). */
+  channelIdParity: "even" | "odd";
 }
 
 export interface MuxConnection {
@@ -197,19 +215,19 @@ export interface MuxConnection {
    * connection close/error while pending, or if this side has hit
    * `maxChannels` locally without asking the peer at all.
    *
-   * IMPORTANT — currently safe only under a single-opener convention: each
-   * side allocates channel ids independently (`allocateChannelId`, starting
-   * at 1) into ONE shared wire-level `channelId` namespace, unlike the RFC
-   * 4254 channel protocol this module's flow control otherwise mirrors,
-   * which uses distinct sender/recipient channel numbers specifically to
-   * avoid this. If both peers on the same `MuxConnection` ever call
-   * `openChannel()` concurrently, self-chosen ids CAN collide and silently
-   * corrupt `channels` map entries on one side. Every intended caller of
-   * this module (the side that accepts real local `net.Socket`/named-pipe
-   * connections calls `openChannel()`; the side fronting the real SSH
-   * agent only ever responds via `onChannel()`) satisfies this by
-   * construction, but nothing in this module enforces it — flagged for
-   * whoever wires up the next caller, not fixed here. */
+   * Safe to call concurrently from both peers on the same `MuxConnection`
+   * (e.g. simultaneous fan-out from each end at once): the two ends'
+   * self-chosen ids can never collide, because each allocates only from
+   * its own configured `channelIdParity` (odd vs. even) — a structural
+   * guarantee, not a caller convention. An earlier version of this module
+   * shared one id namespace between both ends with no parity separation,
+   * which meant two sides' simultaneous opens could pick the same id and
+   * one side would silently overwrite its own already-accepted inbound
+   * channel when the resulting `OpenAck` arrived, orphaning it while
+   * misrouting the peer's subsequent `Data` frames onto an unrelated new
+   * channel. Caught in review (Hermes) before this PR merged; fixed by the
+   * parity split, not by hoping every caller happens to satisfy a
+   * single-opener convention. */
   openChannel(): Promise<MuxChannel>;
   /** Fired for every peer-initiated channel this side accepts (i.e. did not
    * already reject for being at `maxChannels`) — the OpenAck has already
@@ -323,11 +341,15 @@ class ChannelImpl implements MuxChannel {
 
   /** @internal */
   handleWindowAdjust(byteCount: number): void {
-    const wasExhausted = this.sendWindowBytes === 0;
+    // Fires unconditionally on any well-formed adjustment (Hermes review,
+    // PR #853): a prior `if (wasExhausted || sendWindowBytes > 0)` guard
+    // here was dead logic — a well-formed WINDOW_ADJUST always adds > 0
+    // bytes, so the window is provably > 0 afterward regardless of the
+    // `wasExhausted` branch, making the condition always true. Harmless
+    // (`pipeNetSocketToChannel`'s `flushPending` already no-ops when
+    // there's nothing queued), just not doing what it visually claimed to.
     this.sendWindowBytes += byteCount;
-    if (wasExhausted || this.sendWindowBytes > 0) {
-      for (const listener of this.drainListeners) listener();
-    }
+    for (const listener of this.drainListeners) listener();
   }
 
   /** Called by the receiving side once `chunk` has actually been drained
@@ -353,14 +375,15 @@ class ChannelImpl implements MuxChannel {
  * Wraps an already-open `ws` WebSocket (either side — the laptop helper's
  * client connection to `/ws/agent-bridge`, or the primary's own client
  * connection to an agent's `/internal/ws/ssh-agent`) as a `MuxConnection`.
- * Symmetric: both ends run the identical protocol, so which side happens to
- * be the WS client vs. server is irrelevant here — that distinction is
+ * The two ends run the identical protocol — which side happens to be the WS
+ * client vs. server is irrelevant here, that distinction is
  * `/ws/agent-bridge`/`/internal/ws/ssh-agent`'s auth/routing concern, not
- * this module's.
+ * this module's — EXCEPT for `opts.channelIdParity`, which the caller must
+ * set to opposite values on the two ends (see its own doc for why).
  */
 export function createMuxConnection(
   socket: NodeWebSocket,
-  opts: MuxConnectionOptions = {},
+  opts: MuxConnectionOptions,
 ): MuxConnection {
   const maxChannels = opts.maxChannels ?? DEFAULT_MAX_CHANNELS;
   const channels = new Map<number, ChannelImpl>();
@@ -370,7 +393,15 @@ export function createMuxConnection(
   >();
   const channelListeners: Array<(channel: MuxChannel) => void> = [];
   const closeListeners: Array<() => void> = [];
-  let nextChannelId = 1;
+  // The two ends' allocators only ever produce disjoint ids (odd vs. even),
+  // which is what actually prevents the collision described on
+  // `MuxConnectionOptions.channelIdParity` — starting each side's counter
+  // at a different offset and stepping by 2 (rather than, say, both
+  // starting at 1 and hoping convention keeps them apart) makes the two
+  // allocators structurally unable to agree on a number, not just unlikely
+  // to in practice.
+  const startChannelId = opts.channelIdParity === "even" ? 2 : 1;
+  let nextChannelId = startChannelId;
   let closed = false;
   let pingTimer: ReturnType<typeof setInterval> | null = null;
   let pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -407,23 +438,28 @@ export function createMuxConnection(
   }
 
   function allocateChannelId(): number {
-    // Wraps at 2**32 rather than growing unbounded — fine even for an
-    // extremely long-lived connection, since a wrapped id can only collide
-    // with a still-open channel if over 4 billion channels were opened
-    // without ever fully draining `channels`, which `maxChannels` (at most
-    // a few hundred concurrently) makes unreachable in practice.
+    // Steps by 2, not 1 — stays within this side's own parity
+    // (`startChannelId`'s odd/even-ness) for the connection's entire
+    // lifetime, which is the actual mechanism that makes the two ends'
+    // independently-chosen ids disjoint (see `channelIdParity`'s doc).
+    // Wraps back to `startChannelId` rather than growing unbounded — fine
+    // even for an extremely long-lived connection, since a wrapped id can
+    // only collide with a still-open channel if over 2 billion channels of
+    // this side's own parity were opened without ever fully draining
+    // `channels`, which `maxChannels` (at most a few hundred concurrently)
+    // makes unreachable in practice.
     //
-    // Checks the candidate BEFORE advancing, not after — an earlier version
-    // of this loop advanced unconditionally on every iteration including
-    // the first, so the very first id `nextChannelId` (1) was never
-    // actually used and every allocation skipped one value. Caught in
-    // review; verified the fix with five sequential allocations producing
-    // 1, 2, 3, 4, 5 rather than 2, 4, 6, 8, 10.
+    // Checks the candidate BEFORE advancing, not after — an earlier
+    // version of this loop advanced unconditionally on every iteration
+    // including the first, so the very first id was never actually used
+    // and every allocation skipped one value. Caught in review; verified
+    // the fix with five sequential allocations producing 1, 3, 5, 7, 9
+    // (odd parity) rather than 3, 5, 7, 9, 11.
     let id = nextChannelId;
     while (channels.has(id) || pendingOpens.has(id)) {
-      id = (id % 0xffffffff) + 1;
+      id = id >= 0xfffffffe ? startChannelId : id + 2;
     }
-    nextChannelId = (id % 0xffffffff) + 1;
+    nextChannelId = id >= 0xfffffffe ? startChannelId : id + 2;
     return id;
   }
 

@@ -146,8 +146,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      const connB = createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
 
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => {
@@ -173,8 +173,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      const connB = createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -190,8 +190,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      const connB = createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -208,8 +208,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      createMuxConnection(b as never, { channelIdParity: "even" });
       const clientChannel = await connA.openChannel();
 
       expect(() => clientChannel.send(Buffer.alloc(CHANNEL_WINDOW_BYTES + 1))).toThrow(
@@ -223,8 +223,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      const connB = createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -259,8 +259,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      createMuxConnection(b as never, { maxChannels: 1 });
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      createMuxConnection(b as never, { maxChannels: 1, channelIdParity: "even" });
 
       await connA.openChannel(); // fills the responder's one slot
       await expect(connA.openChannel()).rejects.toThrow(/peer refused channel/);
@@ -270,8 +270,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never, { maxChannels: 1 });
-      createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { maxChannels: 1, channelIdParity: "odd" });
+      createMuxConnection(b as never, { channelIdParity: "even" });
 
       await connA.openChannel();
       const sentBefore = a.sent.length;
@@ -283,8 +283,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never); // no explicit maxChannels
-      createMuxConnection(b as never); // also default — must accept all of them as peer opens
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" }); // no explicit maxChannels
+      createMuxConnection(b as never, { channelIdParity: "even" }); // also default — must accept all of them as peer opens
 
       for (let i = 0; i < DEFAULT_MAX_CHANNELS; i++) {
         await connA.openChannel();
@@ -298,8 +298,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never, { maxChannels: 3 });
-      createMuxConnection(b as never, { maxChannels: 3 });
+      const connA = createMuxConnection(a as never, { maxChannels: 3, channelIdParity: "odd" });
+      createMuxConnection(b as never, { maxChannels: 3, channelIdParity: "even" });
 
       // Open-and-close, one at a time, well under the cap each time — the
       // ordinary lifecycle every real `ssh`/`ssh-add`/ansible-fork
@@ -322,7 +322,7 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      createMuxConnection(a as never);
+      createMuxConnection(a as never, { channelIdParity: "odd" });
 
       expect(() => b.send(Buffer.from([1, 2, 3]))).not.toThrow(); // shorter than HEADER_BYTES
       expect(() => b.send(Buffer.from([99, 0, 0, 0, 0]))).not.toThrow(); // unrecognized type
@@ -330,7 +330,7 @@ describe("ssh-agent-mux", () => {
 
     it("ignores a non-binary (text) message — this protocol is binary-only", () => {
       const a = new FakeSocket();
-      createMuxConnection(a as never);
+      createMuxConnection(a as never, { channelIdParity: "odd" });
       expect(() => a.receive(Buffer.from("not a frame"), false)).not.toThrow();
     });
 
@@ -341,7 +341,7 @@ describe("ssh-agent-mux", () => {
       // `toBuffer()`'s `Array.isArray` branch directly.
       const a = new FakeSocket();
       let opened: MuxChannel | null = null;
-      createMuxConnection(a as never).onChannel((ch) => (opened = ch));
+      createMuxConnection(a as never, { channelIdParity: "odd" }).onChannel((ch) => (opened = ch));
 
       const openFrame = Buffer.from([1, 0, 0, 0, 42]); // type=Open, channelId=42
       a.receive([openFrame.subarray(0, 2), openFrame.subarray(2)]);
@@ -352,13 +352,83 @@ describe("ssh-agent-mux", () => {
     });
   });
 
+  describe("concurrent bidirectional opens", () => {
+    it("never collides on ids when both peers call openChannel() before either side's OpenAck has arrived (regression: Hermes review, PR #853 — a shared, non-parity-separated id space let two simultaneous opens pick the same id, silently overwriting one side's already-accepted inbound channel)", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+
+      const aInbound: MuxChannel[] = [];
+      const bInbound: MuxChannel[] = [];
+      connA.onChannel((ch) => aInbound.push(ch));
+      connB.onChannel((ch) => bInbound.push(ch));
+
+      // Both sides open a channel "at the same time" — with these fakes'
+      // synchronous delivery, each openChannel() call fully round-trips
+      // (Open -> OpenAck) before the next line runs, but each side's
+      // allocator was seeded independently at construction time (both
+      // would start at id 1 under the pre-fix scheme), which is exactly
+      // the condition that used to collide.
+      const fromA = await connA.openChannel();
+      const fromB = await connB.openChannel();
+
+      // Every channel — both self-opened and peer-accepted, on both
+      // sides — must be distinct objects with distinct ids. Under the old
+      // bug, `fromA`'s id (1) would equal the id `connB`'s independent
+      // allocator (also starting at 1) picked for `fromB`, and one of
+      // the two connections would have silently overwritten an entry in
+      // its own `channels` map.
+      expect(fromA.id).not.toBe(fromB.id);
+      expect(aInbound).toHaveLength(1); // A accepted B's inbound open
+      expect(bInbound).toHaveLength(1); // B accepted A's inbound open
+      expect(aInbound[0].id).toBe(fromB.id);
+      expect(bInbound[0].id).toBe(fromA.id);
+
+      // Both channels actually work — data sent on one is NOT silently
+      // swallowed by an orphaned/overwritten channel object.
+      const receivedOnB: Buffer[] = [];
+      bInbound[0].onData((chunk) => receivedOnB.push(chunk));
+      fromA.send(Buffer.from("via-a"));
+      expect(receivedOnB[0]?.toString()).toBe("via-a");
+
+      const receivedOnA: Buffer[] = [];
+      aInbound[0].onData((chunk) => receivedOnA.push(chunk));
+      fromB.send(Buffer.from("via-b"));
+      expect(receivedOnA[0]?.toString()).toBe("via-b");
+    });
+
+    it("allocates strictly odd ids on one side and strictly even ids on the other, never overlapping across many allocations", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+
+      const idsFromA: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        idsFromA.push((await connA.openChannel()).id);
+      }
+      const idsFromB: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        idsFromB.push((await connB.openChannel()).id);
+      }
+
+      expect(idsFromA.every((id) => id % 2 === 1)).toBe(true);
+      expect(idsFromB.every((id) => id % 2 === 0)).toBe(true);
+      expect(idsFromA).toEqual([1, 3, 5, 7, 9]);
+      expect(idsFromB).toEqual([2, 4, 6, 8, 10]);
+    });
+  });
+
   describe("MuxConnection.close()", () => {
     it("closes every open channel, sends Close frames, and closes the socket", async () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      const connB = createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -378,8 +448,8 @@ describe("ssh-agent-mux", () => {
       const a = new FakeSocket();
       const b = new FakeSocket();
       link(a, b);
-      const connA = createMuxConnection(a as never);
-      createMuxConnection(b as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      createMuxConnection(b as never, { channelIdParity: "even" });
       const clientChannel = await connA.openChannel();
       const closeSpy = vi.fn();
       clientChannel.onClose(closeSpy);
@@ -391,7 +461,7 @@ describe("ssh-agent-mux", () => {
 
     it("rejects any still-pending openChannel() when the connection closes", async () => {
       const a = new FakeSocket(); // deliberately unlinked — the Open frame goes nowhere
-      const connA = createMuxConnection(a as never);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
       const pending = connA.openChannel();
       a.close();
       await expect(pending).rejects.toThrow(/connection closed while channel open was pending/);
@@ -408,7 +478,7 @@ describe("ssh-agent-mux", () => {
 
     it("sends a PING on interval and clears the timeout when a PONG arrives", () => {
       const a = new FakeSocket();
-      createMuxConnection(a as never);
+      createMuxConnection(a as never, { channelIdParity: "odd" });
 
       vi.advanceTimersByTime(15_000);
       expect(a.sent).toHaveLength(1);
@@ -425,7 +495,7 @@ describe("ssh-agent-mux", () => {
     it("terminates the connection if no PONG arrives within the timeout", () => {
       const a = new FakeSocket();
       const closeSpy = vi.fn();
-      const conn = createMuxConnection(a as never);
+      const conn = createMuxConnection(a as never, { channelIdParity: "odd" });
       conn.onClose(closeSpy);
 
       vi.advanceTimersByTime(15_000); // triggers the PING
@@ -436,7 +506,7 @@ describe("ssh-agent-mux", () => {
 
     it("replies to an incoming PING with a PONG", () => {
       const a = new FakeSocket();
-      createMuxConnection(a as never);
+      createMuxConnection(a as never, { channelIdParity: "odd" });
       a.receive(Buffer.from([8, 0, 0, 0, 0])); // peer's Ping, channelId 0
       expect(a.sent).toHaveLength(1);
       expect(frameType(a.sent[0])).toBe(9); // Pong
@@ -448,8 +518,8 @@ describe("ssh-agent-mux", () => {
       const wsA = new FakeSocket();
       const wsB = new FakeSocket();
       link(wsA, wsB);
-      const connA = createMuxConnection(wsA as never);
-      const connB = createMuxConnection(wsB as never);
+      const connA = createMuxConnection(wsA as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(wsB as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -470,8 +540,8 @@ describe("ssh-agent-mux", () => {
       const wsA = new FakeSocket();
       const wsB = new FakeSocket();
       link(wsA, wsB);
-      const connA = createMuxConnection(wsA as never);
-      const connB = createMuxConnection(wsB as never);
+      const connA = createMuxConnection(wsA as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(wsB as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -503,8 +573,8 @@ describe("ssh-agent-mux", () => {
       const wsA = new FakeSocket();
       const wsB = new FakeSocket();
       link(wsA, wsB);
-      const connA = createMuxConnection(wsA as never);
-      const connB = createMuxConnection(wsB as never);
+      const connA = createMuxConnection(wsA as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(wsB as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
@@ -532,8 +602,8 @@ describe("ssh-agent-mux", () => {
       const wsA = new FakeSocket();
       const wsB = new FakeSocket();
       link(wsA, wsB);
-      const connA = createMuxConnection(wsA as never);
-      createMuxConnection(wsB as never); // answers the Open with an OpenAck
+      const connA = createMuxConnection(wsA as never, { channelIdParity: "odd" });
+      createMuxConnection(wsB as never, { channelIdParity: "even" }); // answers the Open with an OpenAck
       const clientChannel = await connA.openChannel();
       const netA = new FakeNetSocket();
       pipeNetSocketToChannel(netA as never, clientChannel);
@@ -546,8 +616,8 @@ describe("ssh-agent-mux", () => {
       const wsA = new FakeSocket();
       const wsB = new FakeSocket();
       link(wsA, wsB);
-      const connA = createMuxConnection(wsA as never);
-      const connB = createMuxConnection(wsB as never);
+      const connA = createMuxConnection(wsA as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(wsB as never, { channelIdParity: "even" });
       let serverChannel: MuxChannel | null = null;
       connB.onChannel((ch) => (serverChannel = ch));
       const clientChannel = await connA.openChannel();
