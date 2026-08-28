@@ -297,6 +297,22 @@ async function runPair(args, io) {
   return 0;
 }
 
+/**
+ * Accepted risk (CodeQL js/file-access-to-http, PR #866 — same posture as
+ * routes/agent-bridge.ts's own "Accepted risk" comment, PR #860): this
+ * function reads the credential file (loadCredential) and its contents
+ * flow into an outbound network request (handshake's `ws.send`) below —
+ * exactly the shape that query flags, and exactly the intended behavior
+ * of "reconnect using the session token I saved earlier," the same
+ * pattern every token-based CLI (kubectl, aws, gh) uses. loadCredential
+ * already validates baseUrl/bridgeId/sessionId against the precise shape
+ * bridge-registry.ts issues them in before returning non-null (see its
+ * own comment) — CodeQL's static analysis doesn't recognize that
+ * validation as a sanitizer for this query, but it's real hardening
+ * against a corrupted or hand-edited credential file; eliminating the
+ * flow entirely would mean removing the reconnect-with-saved-credential
+ * feature outright, not narrowing it.
+ */
 async function runRun(args, io) {
   const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
   const sshAuthSock = flags["ssh-auth-sock"] || io.env.SSH_AUTH_SOCK;
