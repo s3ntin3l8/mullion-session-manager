@@ -3145,6 +3145,135 @@ describe("internal routes (agent role, issue #26)", () => {
     }, 10_000);
   });
 
+  describe("/internal/ws/ssh-agent (issue #820, PR5b)", () => {
+    it("rejects a connection with no Authorization header", async () => {
+      const { app, port } = await buildAndListen();
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/internal/ws/ssh-agent`);
+      const outcome = await waitForOpenOrClose(ws);
+      expect(outcome).toBe("close");
+
+      await app.close();
+    });
+
+    it("wraps a successful connection in a MuxConnection tracked as app.sshAgentBridgeConnection.current", async () => {
+      const { app, port } = await buildAndListen();
+      expect(app.sshAgentBridgeConnection.current).toBeNull();
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/ssh-agent`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("close", () => reject(new Error("WS closed instead of opening")));
+        ws.once("error", reject);
+      });
+      await waitUntil(() => app.sshAgentBridgeConnection.current !== null);
+      expect(typeof app.sshAgentBridgeConnection.current!.openChannel).toBe("function");
+
+      ws.close();
+      await app.close();
+    });
+
+    it("clears app.sshAgentBridgeConnection.current when the connection closes", async () => {
+      const { app, port } = await buildAndListen();
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/ssh-agent`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("close", () => reject(new Error("WS closed instead of opening")));
+        ws.once("error", reject);
+      });
+      await waitUntil(() => app.sshAgentBridgeConnection.current !== null);
+
+      ws.close();
+      await waitUntil(() => app.sshAgentBridgeConnection.current === null);
+
+      await app.close();
+    });
+
+    it("supersedes an old connection when a new one connects — closes the old socket, doesn't clobber the new one on the old one's belated close", async () => {
+      const { app, port } = await buildAndListen();
+
+      const firstWs = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/ssh-agent`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const firstClosePromise = new Promise<void>((resolve) => firstWs.once("close", resolve));
+      await new Promise<void>((resolve, reject) => {
+        firstWs.once("open", () => resolve());
+        firstWs.once("error", reject);
+      });
+      await waitUntil(() => app.sshAgentBridgeConnection.current !== null);
+      const firstMux = app.sshAgentBridgeConnection.current;
+
+      const secondWs = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/ssh-agent`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      await new Promise<void>((resolve, reject) => {
+        secondWs.once("open", () => resolve());
+        secondWs.once("error", reject);
+      });
+
+      // The FIRST connection must be closed as a side effect of the SECOND
+      // one connecting — not left dangling (regression shape: routes/
+      // agent-bridge.ts's own equivalent "superseded socket" test, #860).
+      await firstClosePromise;
+      await waitUntil(() => app.sshAgentBridgeConnection.current !== firstMux);
+      expect(app.sshAgentBridgeConnection.current).not.toBeNull();
+
+      secondWs.close();
+      await app.close();
+    });
+
+    it("end-to-end: a local SSH client connecting to ssh-agent.sock gets closed immediately with no primary connected, and gets a real channel once one is", async () => {
+      const { app, port } = await buildAndListen();
+      const socketPath = path.join(path.dirname(app.pty.hookSocketPath), "ssh-agent.sock");
+
+      // No primary connection yet — ssh-agent-socket.ts's own "no bridge
+      // reachable" fail-fast path (PR5a) must close this immediately
+      // rather than hang, since `ssh` blocks on SSH_AUTH_SOCK until the
+      // agent answers or the connection drops.
+      const before = net.createConnection(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        before.once("close", () => resolve());
+        before.once("connect", () => {
+          // Connecting is expected (the listener itself is always up) —
+          // only a prompt close afterward is being asserted here.
+        });
+        setTimeout(() => reject(new Error("local socket did not close without a primary")), 2000);
+      });
+
+      // Now a primary dials in — the exact same handshake the earlier
+      // tests in this block exercise.
+      const bridgeWs = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/ssh-agent`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      await new Promise<void>((resolve, reject) => {
+        bridgeWs.once("open", () => resolve());
+        bridgeWs.once("error", reject);
+      });
+      await waitUntil(() => app.sshAgentBridgeConnection.current !== null);
+
+      // A fresh local connection now completes an actual channel open —
+      // observed as a real Open frame (type byte 1) arriving on the
+      // primary-side socket, not a prompt close.
+      const framesFromAgent: Buffer[] = [];
+      bridgeWs.on("message", (data) => framesFromAgent.push(data as Buffer));
+      const after = net.createConnection(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        after.once("connect", () => resolve());
+        after.once("error", reject);
+      });
+      await waitUntil(() => framesFromAgent.some((f) => f.length >= 1 && f[0] === 1));
+
+      after.destroy();
+      bridgeWs.close();
+      await app.close();
+    });
+  });
+
   describe("/internal/preview* (issue #28 phase 6 — the agent's own loopback-only proxy half)", () => {
     let stubHttpServer: http.Server;
     let stubWss: WebSocketServer;

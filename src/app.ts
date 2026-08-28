@@ -8,6 +8,7 @@ import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { browserPlugin } from "./plugins/browser.js";
 import { hooksPlugin } from "./plugins/hooks.js";
+import { sshAgentPlugin } from "./plugins/ssh-agent.js";
 import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
@@ -274,6 +275,11 @@ export async function buildApp() {
     await app.register(browserPlugin);
     await app.register(hooksPlugin);
     await app.register(websocketPlugin);
+    // After ptyPlugin (reads app.pty.hookSocketPath to place the local
+    // ssh-agent.sock next to hooks.sock). Before internalRoutes: decorates
+    // app.sshAgentBridgeConnection, which its own `/internal/ws/ssh-agent`
+    // route (registered inside internalRoutes) reads/writes.
+    await app.register(sshAgentPlugin);
     await app.register(healthRoute);
     // Before internalRoutes: decorates app.agentSession, which
     // internalRoutes' own onRequest gate additively checks alongside the
