@@ -82,9 +82,23 @@ describe("ssh-agent-filter", () => {
 
     it("blocks a mutating request (ADD_IDENTITY) and synthesizes exactly one SSH_AGENT_FAILURE reply, never forwarding it", () => {
       const f = new SignOnlyFilter();
-      const result = f.feed(frame(SSH_AGENTC_ADD_IDENTITY, Buffer.from("private-key-material")));
+      const blocked = frame(SSH_AGENTC_ADD_IDENTITY, Buffer.from("private-key-material"));
+      const result = f.feed(blocked);
       expect(result.forward).toHaveLength(0);
       expect(result.reject).toEqual([SSH_AGENT_FAILURE_FRAME]);
+      // rejectedLengths carries the ORIGINAL blocked frame's size, not the
+      // fixed-size SSH_AGENT_FAILURE_FRAME reply's — a relay acknowledging
+      // flow-control credit for the request needs the real size.
+      expect(result.rejectedLengths).toEqual([blocked.length]);
+    });
+
+    it("rejectedLengths stays parallel to reject across a mix of differently-sized blocked frames in one feed() call", () => {
+      const f = new SignOnlyFilter();
+      const small = frame(SSH_AGENTC_LOCK);
+      const large = frame(SSH_AGENTC_ADD_IDENTITY, Buffer.alloc(5000, 7));
+      const result = f.feed(Buffer.concat([small, large]));
+      expect(result.reject).toEqual([SSH_AGENT_FAILURE_FRAME, SSH_AGENT_FAILURE_FRAME]);
+      expect(result.rejectedLengths).toEqual([small.length, large.length]);
     });
 
     it("blocks an unrecognized/future message type not present in the table at all — default-deny, not default-allow", () => {

@@ -162,6 +162,14 @@ export interface FilterResult {
    * encountered, in stream order — send these back to the requester
    * directly. These frames must never reach the real agent. */
   reject: Buffer[];
+  /** Parallel to `reject`: each entry is the ORIGINAL blocked frame's byte
+   * length (length prefix + body), in the same order. `reject` itself
+   * can't be used for this — every entry there is the same fixed-size
+   * `SSH_AGENT_FAILURE_FRAME` regardless of how large the blocked request
+   * actually was. A relay acknowledging flow-control credit for the
+   * original request (ssh-agent-relay.ts) needs the real size, not the
+   * reply's. */
+  rejectedLengths: number[];
 }
 
 /**
@@ -259,12 +267,13 @@ export class SignOnlyFilter {
     this.append(chunk);
     const forward: Buffer[] = [];
     const reject: Buffer[] = [];
+    const rejectedLengths: number[] = [];
 
     for (;;) {
       if (this.length < LENGTH_PREFIX_BYTES) break;
       const bodyLength = this.buffer.readUInt32BE(0);
       if (bodyLength > MAX_FRAME_BYTES) {
-        throw new SshAgentFrameTooLargeError(bodyLength, { forward, reject });
+        throw new SshAgentFrameTooLargeError(bodyLength, { forward, reject, rejectedLengths });
       }
       const frameLength = LENGTH_PREFIX_BYTES + bodyLength;
       if (this.length < frameLength) break; // incomplete — wait for more bytes
@@ -293,9 +302,10 @@ export class SignOnlyFilter {
         forward.push(frame);
       } else {
         reject.push(SSH_AGENT_FAILURE_FRAME);
+        rejectedLengths.push(frameLength);
       }
     }
 
-    return { forward, reject };
+    return { forward, reject, rejectedLengths };
   }
 }
