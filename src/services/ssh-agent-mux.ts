@@ -1,0 +1,583 @@
+import type net from "node:net";
+import type { WebSocket as NodeWebSocket, RawData } from "ws";
+
+// Issue #820 — the transport `/ws/agent-bridge` (laptop -> primary) and
+// `/internal/ws/ssh-agent` (primary -> agent) both run over: many
+// concurrent logical channels (one per accepted SSH-agent-protocol client
+// connection — `ssh`, `ssh-add`, and every one of `ansible --forks=N`'s
+// simultaneous connections) multiplexed onto ONE WebSocket.
+//
+// Deliberately NOT `pipeWsFrames` (ws-pipe.ts) or `SocketChannel`
+// (socket-channel.ts):
+//   - `pipeWsFrames` is exactly two sockets, one relationship, and it DROPS
+//     frames once `upstream.bufferedAmount` crosses a threshold
+//     (`WS_BACKPRESSURE_MAX_BUFFERED_BYTES`). That's fine for a terminal or
+//     an HMR websocket, where a dropped frame is a garbled render the user
+//     can refresh. It is not fine for the SSH agent wire protocol: an agent
+//     message is length-prefixed and a client reads a *specific* number of
+//     bytes for a *specific* reply — losing one frame doesn't garble a
+//     render, it desyncs the stream for the rest of the connection's life.
+//   - `SocketChannel` multiplexes many streams onto one `net.Socket` (the
+//     control socket), which is the closest existing precedent for "many
+//     channels, one connection" but has no flow control of its own either
+//     (relies on the OS-buffered `net.Socket.write` callback per stream,
+//     fine for a local IPC pipe, not for a channel that can genuinely stall
+//     for seconds behind a slow/asleep laptop).
+//
+// So this module implements real, per-channel, credit-based flow control —
+// deliberately mirroring the SSH transport protocol's own channel window
+// (RFC 4254 §5.2), which is a fitting shape for a module whose entire job
+// is carrying SSH agent traffic: each channel starts with a fixed receive
+// window; every DATA frame the peer sends consumes window; when the local
+// consumer has actually drained what it already received (not merely
+// "received", but drained downstream — see `pipeNetSocketToChannel`'s
+// `net.Socket.write` callback), a WINDOW_ADJUST frame replenishes it. A
+// channel whose peer has exhausted its window is paused at the true
+// source (the accepted `net.Socket`/named pipe), not silently dropped.
+
+/** Initial and replenishment-threshold channel window, in bytes. Matched to
+ * `WS_BACKPRESSURE_MAX_BUFFERED_BYTES` (ws-pipe.ts) — large enough that a
+ * single `ssh-add -l` round trip never blocks on a window refill, small
+ * enough that one stalled channel can't buffer unbounded memory while
+ * waiting for its peer. */
+export const CHANNEL_WINDOW_BYTES = 256 * 1024;
+
+/** A WINDOW_ADJUST is sent as soon as the consumed-since-last-adjust total
+ * reaches this fraction of the window, rather than only once the window
+ * hits zero — keeps a busy channel's effective throughput close to
+ * `CHANNEL_WINDOW_BYTES` per round trip instead of full-stop/full-refill. */
+const WINDOW_ADJUST_THRESHOLD_BYTES = CHANNEL_WINDOW_BYTES / 2;
+
+/** Default cap on concurrently open channels per `MuxConnection`. Well
+ * above any single `ansible --forks=N` fan-out in practice, but bounded so
+ * a runaway or malicious peer can't open unbounded channels and exhaust
+ * memory. Overridable per connection (`MuxConnectionOptions.maxChannels`). */
+export const DEFAULT_MAX_CHANNELS = 256;
+
+const PING_INTERVAL_MS = 15_000;
+/** A missed PONG within this window after a PING tears the connection down
+ * — mirrors the liveness contract `remote-event-subscriber.ts`'s own
+ * connect-timeout enforces, just for an already-open connection rather than
+ * a still-connecting one. */
+const PONG_TIMEOUT_MS = 10_000;
+
+const enum FrameType {
+  Open = 1,
+  OpenAck = 2,
+  OpenFail = 3,
+  Data = 4,
+  WindowAdjust = 5,
+  Eof = 6,
+  Close = 7,
+  Ping = 8,
+  Pong = 9,
+}
+
+/** Wire layout, all integers big-endian:
+ *   [1 byte type][4 bytes channelId]<type-specific payload>
+ * Open/OpenAck/OpenFail/Eof/Close/Ping/Pong carry no payload beyond the
+ * header (Ping/Pong use channelId 0, which is never a real channel id).
+ * WindowAdjust: +4 bytes byteCount. Data: the remainder of the frame is the
+ * raw SSH-agent-protocol bytes, unmodified — never JSON/base64-wrapped,
+ * so a data frame costs exactly 5 bytes of overhead. */
+const HEADER_BYTES = 5;
+
+function encodeHeader(type: FrameType, channelId: number): Buffer {
+  const buf = Buffer.allocUnsafe(HEADER_BYTES);
+  buf.writeUInt8(type, 0);
+  buf.writeUInt32BE(channelId, 1);
+  return buf;
+}
+
+function encodeWindowAdjust(channelId: number, byteCount: number): Buffer {
+  const buf = Buffer.allocUnsafe(HEADER_BYTES + 4);
+  buf.writeUInt8(FrameType.WindowAdjust, 0);
+  buf.writeUInt32BE(channelId, 1);
+  buf.writeUInt32BE(byteCount, 5);
+  return buf;
+}
+
+function encodeData(channelId: number, payload: Buffer): Buffer {
+  return Buffer.concat([encodeHeader(FrameType.Data, channelId), payload]);
+}
+
+function toBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
+type ParsedFrame =
+  | { type: FrameType.Open | FrameType.OpenAck | FrameType.OpenFail; channelId: number }
+  | { type: FrameType.Eof | FrameType.Close; channelId: number }
+  | { type: FrameType.Ping | FrameType.Pong; channelId: number }
+  | { type: FrameType.WindowAdjust; channelId: number; byteCount: number }
+  | { type: FrameType.Data; channelId: number; payload: Buffer };
+
+/** Returns `null` for anything too short or of an unrecognized type — a
+ * malformed frame is dropped, never thrown: this runs synchronously inside
+ * the WS socket's own "message" event, so an uncaught throw here would take
+ * down the whole process, not just this one connection (same reasoning as
+ * `SocketChannel.send`'s JSON.parse try/catch). */
+function decodeFrame(raw: Buffer): ParsedFrame | null {
+  if (raw.length < HEADER_BYTES) return null;
+  const type = raw.readUInt8(0) as FrameType;
+  const channelId = raw.readUInt32BE(1);
+  switch (type) {
+    case FrameType.Open:
+    case FrameType.OpenAck:
+    case FrameType.OpenFail:
+    case FrameType.Eof:
+    case FrameType.Close:
+    case FrameType.Ping:
+    case FrameType.Pong:
+      return { type, channelId };
+    case FrameType.WindowAdjust:
+      if (raw.length < HEADER_BYTES + 4) return null;
+      return { type, channelId, byteCount: raw.readUInt32BE(HEADER_BYTES) };
+    case FrameType.Data:
+      return { type, channelId, payload: raw.subarray(HEADER_BYTES) };
+    default:
+      return null;
+  }
+}
+
+export interface MuxChannel {
+  readonly id: number;
+  /** Bytes currently permitted to send before the peer's window is
+   * exhausted. Send-side flow control: check before `send()`, or use the
+   * `"drain"` event to resume once it's replenished. */
+  readonly sendWindow: number;
+  /** `true` once EOF or CLOSE has been sent or received on this channel. */
+  readonly closed: boolean;
+  /** Sends raw bytes on this channel. Caller is responsible for respecting
+   * `sendWindow`/`"drain"` — unlike `pipeWsFrames`, this module never
+   * silently drops a frame that would exceed it; that's the caller's
+   * backpressure signal to pause its own upstream source instead. Throws
+   * if `chunk.length` would exceed the remaining `sendWindow` or the
+   * channel is already closed, since sending past the negotiated window is
+   * a caller bug, not a runtime condition to swallow. */
+  send(chunk: Buffer): void;
+  /** Signals no more data will be sent on this channel (half-close). */
+  eof(): void;
+  /** Fully closes this channel — idempotent, safe to call from either
+   * side or after the underlying connection is already gone. */
+  close(): void;
+  onData(listener: (chunk: Buffer) => void): void;
+  onEof(listener: () => void): void;
+  onClose(listener: () => void): void;
+  /** Fired when `sendWindow` grows from 0 (or grows at all after having
+   * been too small for a pending write) — the resume signal for a paused
+   * upstream source, mirroring `net.Socket`'s own `"drain"`. */
+  onDrain(listener: () => void): void;
+  /** The receive-side half of window flow control: tell the peer
+   * `byteCount` bytes of what it sent have now actually been drained
+   * downstream (not merely received off the wire — see
+   * `pipeNetSocketToChannel`), so it may grow its `sendWindow` back. A
+   * consumer that reads `onData` but never calls this will permanently
+   * exhaust the peer's window after `CHANNEL_WINDOW_BYTES` of traffic. */
+  acknowledgeConsumed(byteCount: number): void;
+}
+
+export interface MuxConnectionOptions {
+  maxChannels?: number;
+}
+
+export interface MuxConnection {
+  /** Opens a new channel and resolves once the peer OpenAcks it. Rejects on
+   * OpenFail (peer at its own channel cap, or otherwise refusing), on
+   * connection close/error while pending, or if this side has hit
+   * `maxChannels` locally without asking the peer at all. */
+  openChannel(): Promise<MuxChannel>;
+  /** Fired for every peer-initiated channel this side accepts (i.e. did not
+   * already reject for being at `maxChannels`) — the OpenAck has already
+   * been sent by the time this fires. */
+  onChannel(listener: (channel: MuxChannel) => void): void;
+  /** Fired once, when the underlying WebSocket closes or a liveness
+   * PING goes unanswered — after this, every open channel has already had
+   * its own `onClose` fired too. */
+  onClose(listener: () => void): void;
+  /** Closes every open channel and the underlying WebSocket. Idempotent. */
+  close(): void;
+}
+
+class ChannelImpl implements MuxChannel {
+  closed = false;
+  private sendWindowBytes: number;
+  /** Bytes received but not yet acknowledged back to the peer via
+   * WINDOW_ADJUST — see `WINDOW_ADJUST_THRESHOLD_BYTES`. */
+  private unacknowledgedBytes = 0;
+  private dataListeners: Array<(chunk: Buffer) => void> = [];
+  private eofListeners: Array<() => void> = [];
+  private closeListeners: Array<() => void> = [];
+  private drainListeners: Array<() => void> = [];
+
+  constructor(
+    readonly id: number,
+    initialSendWindow: number,
+    private readonly sendFrame: (frame: Buffer) => void,
+  ) {
+    this.sendWindowBytes = initialSendWindow;
+  }
+
+  get sendWindow(): number {
+    return this.sendWindowBytes;
+  }
+
+  send(chunk: Buffer): void {
+    if (this.closed) throw new Error(`ssh-agent-mux: send() on closed channel ${this.id}`);
+    if (chunk.length > this.sendWindowBytes) {
+      throw new Error(
+        `ssh-agent-mux: send() of ${chunk.length} bytes exceeds channel ${this.id}'s ` +
+          `remaining window of ${this.sendWindowBytes} — caller must respect sendWindow/onDrain`,
+      );
+    }
+    this.sendWindowBytes -= chunk.length;
+    this.sendFrame(encodeData(this.id, chunk));
+  }
+
+  eof(): void {
+    if (this.closed) return;
+    this.sendFrame(encodeHeader(FrameType.Eof, this.id));
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.sendFrame(encodeHeader(FrameType.Close, this.id));
+    for (const listener of this.closeListeners) listener();
+  }
+
+  /** Local-close on peer/connection teardown — does NOT send a Close frame
+   * (there is nowhere left to send it to). Distinct from `close()` so a
+   * caller that already knows the peer is gone doesn't write to a dead or
+   * closing WebSocket. */
+  closeLocally(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const listener of this.closeListeners) listener();
+  }
+
+  onData(listener: (chunk: Buffer) => void): void {
+    this.dataListeners.push(listener);
+  }
+
+  onEof(listener: () => void): void {
+    this.eofListeners.push(listener);
+  }
+
+  onClose(listener: () => void): void {
+    this.closeListeners.push(listener);
+  }
+
+  onDrain(listener: () => void): void {
+    this.drainListeners.push(listener);
+  }
+
+  /** @internal — dispatch from `MuxConnectionImpl`'s frame handler only. */
+  handleData(chunk: Buffer): void {
+    for (const listener of this.dataListeners) listener(chunk);
+  }
+
+  /** @internal */
+  handleEof(): void {
+    for (const listener of this.eofListeners) listener();
+  }
+
+  /** @internal */
+  handleWindowAdjust(byteCount: number): void {
+    const wasExhausted = this.sendWindowBytes === 0;
+    this.sendWindowBytes += byteCount;
+    if (wasExhausted || this.sendWindowBytes > 0) {
+      for (const listener of this.drainListeners) listener();
+    }
+  }
+
+  /** Called by the receiving side once `chunk` has actually been drained
+   * downstream (see `pipeNetSocketToChannel`) — accumulates toward
+   * `WINDOW_ADJUST_THRESHOLD_BYTES` and emits a WINDOW_ADJUST frame once
+   * crossed. Deliberately NOT called the moment a DATA frame arrives:
+   * acknowledging on receipt rather than on drain would let a channel whose
+   * downstream consumer (e.g. a stalled named pipe write on the laptop)
+   * can't keep up still tell the peer "send more", defeating the entire
+   * point of window-based flow control. */
+  acknowledgeConsumed(byteCount: number): void {
+    if (this.closed) return;
+    this.unacknowledgedBytes += byteCount;
+    if (this.unacknowledgedBytes >= WINDOW_ADJUST_THRESHOLD_BYTES) {
+      const toAcknowledge = this.unacknowledgedBytes;
+      this.unacknowledgedBytes = 0;
+      this.sendFrame(encodeWindowAdjust(this.id, toAcknowledge));
+    }
+  }
+}
+
+/**
+ * Wraps an already-open `ws` WebSocket (either side — the laptop helper's
+ * client connection to `/ws/agent-bridge`, or the primary's own client
+ * connection to an agent's `/internal/ws/ssh-agent`) as a `MuxConnection`.
+ * Symmetric: both ends run the identical protocol, so which side happens to
+ * be the WS client vs. server is irrelevant here — that distinction is
+ * `/ws/agent-bridge`/`/internal/ws/ssh-agent`'s auth/routing concern, not
+ * this module's.
+ */
+export function createMuxConnection(
+  socket: NodeWebSocket,
+  opts: MuxConnectionOptions = {},
+): MuxConnection {
+  const maxChannels = opts.maxChannels ?? DEFAULT_MAX_CHANNELS;
+  const channels = new Map<number, ChannelImpl>();
+  const pendingOpens = new Map<
+    number,
+    { resolve: (ch: MuxChannel) => void; reject: (err: Error) => void }
+  >();
+  const channelListeners: Array<(channel: MuxChannel) => void> = [];
+  const closeListeners: Array<() => void> = [];
+  let nextChannelId = 1;
+  let closed = false;
+  let pingTimer: ReturnType<typeof setInterval> | null = null;
+  let pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function sendFrame(frame: Buffer): void {
+    // A frame produced after the socket has started closing (e.g. a
+    // channel's own close() racing the connection's own teardown) is
+    // simply swallowed — every channel is force-closed locally in
+    // `teardown()` regardless, so there is no reply to lose.
+    if (socket.readyState !== socket.OPEN) return;
+    socket.send(frame);
+  }
+
+  function teardown(): void {
+    if (closed) return;
+    closed = true;
+    if (pingTimer !== null) clearInterval(pingTimer);
+    if (pongTimeoutTimer !== null) clearTimeout(pongTimeoutTimer);
+    for (const { reject } of pendingOpens.values()) {
+      reject(new Error("ssh-agent-mux: connection closed while channel open was pending"));
+    }
+    pendingOpens.clear();
+    for (const channel of channels.values()) channel.closeLocally();
+    channels.clear();
+    for (const listener of closeListeners) listener();
+  }
+
+  function allocateChannelId(): number {
+    // Wraps at 2**32 rather than growing unbounded — fine even for an
+    // extremely long-lived connection, since a wrapped id can only collide
+    // with a still-open channel if over 4 billion channels were opened
+    // without ever fully draining `channels`, which `maxChannels` (at most
+    // a few hundred concurrently) makes unreachable in practice.
+    let id = nextChannelId;
+    do {
+      id = (id % 0xffffffff) + 1;
+    } while (channels.has(id) || pendingOpens.has(id));
+    nextChannelId = id + 1;
+    return id;
+  }
+
+  function openChannel(): Promise<MuxChannel> {
+    if (closed) return Promise.reject(new Error("ssh-agent-mux: connection already closed"));
+    if (channels.size + pendingOpens.size >= maxChannels) {
+      return Promise.reject(new Error(`ssh-agent-mux: local channel cap (${maxChannels}) reached`));
+    }
+    const id = allocateChannelId();
+    return new Promise<MuxChannel>((resolve, reject) => {
+      pendingOpens.set(id, { resolve, reject });
+      sendFrame(encodeHeader(FrameType.Open, id));
+    });
+  }
+
+  function handleMessage(data: RawData, isBinary: boolean): void {
+    if (!isBinary) return; // this protocol is binary-only; a stray text frame is not ours
+    const frame = decodeFrame(toBuffer(data));
+    if (frame === null) return;
+
+    if (frame.type === FrameType.Ping) {
+      sendFrame(encodeHeader(FrameType.Pong, 0));
+      return;
+    }
+    if (frame.type === FrameType.Pong) {
+      if (pongTimeoutTimer !== null) {
+        clearTimeout(pongTimeoutTimer);
+        pongTimeoutTimer = null;
+      }
+      return;
+    }
+
+    if (frame.type === FrameType.Open) {
+      if (channels.size >= maxChannels) {
+        sendFrame(encodeHeader(FrameType.OpenFail, frame.channelId));
+        return;
+      }
+      const channel = new ChannelImpl(frame.channelId, CHANNEL_WINDOW_BYTES, sendFrame);
+      channels.set(frame.channelId, channel);
+      sendFrame(encodeHeader(FrameType.OpenAck, frame.channelId));
+      for (const listener of channelListeners) listener(channel);
+      return;
+    }
+
+    if (frame.type === FrameType.OpenAck) {
+      const pending = pendingOpens.get(frame.channelId);
+      if (pending === undefined) return; // unknown/already-resolved id — ignore, don't throw
+      pendingOpens.delete(frame.channelId);
+      const channel = new ChannelImpl(frame.channelId, CHANNEL_WINDOW_BYTES, sendFrame);
+      channels.set(frame.channelId, channel);
+      pending.resolve(channel);
+      return;
+    }
+
+    if (frame.type === FrameType.OpenFail) {
+      const pending = pendingOpens.get(frame.channelId);
+      if (pending === undefined) return;
+      pendingOpens.delete(frame.channelId);
+      pending.reject(new Error(`ssh-agent-mux: peer refused channel ${frame.channelId}`));
+      return;
+    }
+
+    // Every remaining type is channel-scoped and requires an already-open
+    // channel; an id that doesn't (or no longer) resolve is a frame for a
+    // channel this side already closed locally — dropped, not an error,
+    // since the peer's own teardown is inherently racy with this side's.
+    const channel = channels.get(frame.channelId);
+    if (channel === undefined) return;
+
+    switch (frame.type) {
+      case FrameType.Data:
+        channel.handleData(frame.payload);
+        return;
+      case FrameType.WindowAdjust:
+        channel.handleWindowAdjust(frame.byteCount);
+        return;
+      case FrameType.Eof:
+        channel.handleEof();
+        return;
+      case FrameType.Close:
+        channels.delete(frame.channelId);
+        channel.closeLocally();
+        return;
+    }
+  }
+
+  socket.on("message", handleMessage);
+  socket.on("close", teardown);
+  socket.on("error", teardown);
+
+  // Liveness: a stalled TCP connection (laptop sleep, network drop without
+  // a clean FIN) can leave a WebSocket reporting OPEN indefinitely with no
+  // other signal. One PING per interval; a PONG that doesn't arrive within
+  // `PONG_TIMEOUT_MS` terminates the connection outright — mirroring
+  // `remote-event-subscriber.ts`'s own connect-timeout-then-terminate
+  // shape, just applied to an already-open connection's ongoing liveness
+  // rather than its initial handshake.
+  pingTimer = setInterval(() => {
+    if (socket.readyState !== socket.OPEN) return;
+    sendFrame(encodeHeader(FrameType.Ping, 0));
+    if (pongTimeoutTimer !== null) clearTimeout(pongTimeoutTimer);
+    pongTimeoutTimer = setTimeout(() => {
+      socket.terminate();
+      teardown();
+    }, PONG_TIMEOUT_MS);
+    pongTimeoutTimer.unref?.();
+  }, PING_INTERVAL_MS);
+  pingTimer.unref?.();
+
+  return {
+    openChannel,
+    onChannel(listener) {
+      channelListeners.push(listener);
+    },
+    onClose(listener) {
+      closeListeners.push(listener);
+    },
+    close() {
+      if (closed) return;
+      // Give every still-open channel a chance to tell its peer it's
+      // closing (rather than jumping straight to closeLocally via
+      // teardown) before tearing the whole connection down.
+      for (const channel of channels.values()) channel.close();
+      if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
+        socket.close();
+      }
+      teardown();
+    },
+  };
+}
+
+/**
+ * Pipes an accepted `net.Socket` (a real client's connection to the
+ * `<SESSIONS_DIR>/ssh-agent.sock` unix socket, or — on the laptop helper —
+ * the socket/named-pipe connection opened *to* 1Password's own agent
+ * endpoint) through a `MuxChannel`, with real two-way backpressure in both
+ * directions:
+ *
+ *   - socket -> channel: paused (`socket.pause()`) the instant `send()`
+ *     would exceed the channel's remaining `sendWindow`, resumed on
+ *     `onDrain`. Never buffers unboundedly and never drops a chunk — it
+ *     waits.
+ *   - channel -> socket: `channel.acknowledgeConsumed()` is called from
+ *     `net.Socket.write`'s own completion callback, i.e. only once the
+ *     chunk has actually been accepted by the OS on this side, not merely
+ *     received off the wire. A downstream `write()` that itself pushes
+ *     back (returns `false`) still gets acknowledged once its callback
+ *     fires — `net.Socket.write`'s callback firing IS "drained enough to
+ *     accept more" by definition, so no separate `"drain"` listener is
+ *     needed here.
+ */
+export function pipeNetSocketToChannel(socket: net.Socket, channel: MuxChannel): void {
+  let socketEnded = false;
+  // At most one chunk is ever "in flight" waiting on window here, because
+  // `socket.pause()` below guarantees no further `"data"` events fire until
+  // `socket.resume()` is called — so a single slot (rather than a queue)
+  // and a single, pipe-lifetime `onDrain` listener are both sufficient.
+  // (An earlier version of this function registered a fresh `onDrain`
+  // listener per overflow episode and never removed it — each one kept
+  // firing forever, including re-`send()`ing an already-sent chunk on a
+  // later, unrelated window adjustment. Caught in review before merge.)
+  let pendingChunk: Buffer | null = null;
+
+  function flushPending(): void {
+    if (pendingChunk === null) return;
+    if (channel.closed || socketEnded) {
+      pendingChunk = null;
+      return;
+    }
+    if (pendingChunk.length > channel.sendWindow) return; // still not enough room yet
+    const chunk = pendingChunk;
+    pendingChunk = null;
+    channel.send(chunk);
+    socket.resume();
+  }
+  channel.onDrain(flushPending);
+
+  socket.on("data", (chunk: Buffer) => {
+    if (channel.closed) return;
+    if (chunk.length > channel.sendWindow) {
+      socket.pause();
+      pendingChunk = chunk;
+      return;
+    }
+    channel.send(chunk);
+  });
+  socket.on("end", () => {
+    socketEnded = true;
+    if (!channel.closed) channel.eof();
+  });
+  socket.on("close", () => {
+    if (!channel.closed) channel.close();
+  });
+  socket.on("error", () => {
+    if (!channel.closed) channel.close();
+  });
+
+  channel.onData((chunk) => {
+    if (socket.destroyed) return;
+    const byteLength = chunk.length;
+    socket.write(chunk, () => channel.acknowledgeConsumed(byteLength));
+  });
+  channel.onEof(() => {
+    if (!socket.destroyed) socket.end();
+  });
+  channel.onClose(() => {
+    if (!socket.destroyed) socket.destroy();
+  });
+}
