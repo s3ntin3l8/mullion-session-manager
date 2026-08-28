@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   createMuxConnection,
+  pipeChannelToChannel,
   pipeNetSocketToChannel,
   CHANNEL_WINDOW_BYTES,
   DEFAULT_MAX_CHANNELS,
@@ -690,6 +691,110 @@ describe("ssh-agent-mux", () => {
       a.receive(Buffer.from([8, 0, 0, 0, 0])); // peer's Ping, channelId 0
       expect(a.sent).toHaveLength(1);
       expect(frameType(a.sent[0])).toBe(9); // Pong
+    });
+  });
+
+  describe("pipeChannelToChannel", () => {
+    // Two independent mux connections (X<->Y, P<->Q), each with one open
+    // channel. pipeChannelToChannel(chanY, chanP) simulates a relay hop
+    // (e.g. an agent-originated channel piped to a bridge-helper-facing
+    // channel): whatever chanX sends arrives at chanY and gets relayed to
+    // chanP -> chanQ, and vice versa.
+    async function setupRelay() {
+      const wsX = new FakeSocket();
+      const wsY = new FakeSocket();
+      link(wsX, wsY);
+      const connX = createMuxConnection(wsX as never, { channelIdParity: "odd" });
+      const connY = createMuxConnection(wsY as never, { channelIdParity: "even" });
+      let chanY: MuxChannel | null = null;
+      connY.onChannel((ch) => (chanY = ch));
+      const chanX = await connX.openChannel();
+
+      const wsP = new FakeSocket();
+      const wsQ = new FakeSocket();
+      link(wsP, wsQ);
+      const connP = createMuxConnection(wsP as never, { channelIdParity: "odd" });
+      const connQ = createMuxConnection(wsQ as never, { channelIdParity: "even" });
+      let chanQ: MuxChannel | null = null;
+      connQ.onChannel((ch) => (chanQ = ch));
+      const chanP = await connP.openChannel();
+
+      pipeChannelToChannel(chanY!, chanP);
+      return { chanX, chanY: chanY!, chanP, chanQ: chanQ! };
+    }
+
+    it("relays data in both directions across the two hops", async () => {
+      const { chanX, chanQ } = await setupRelay();
+
+      const atQ: Buffer[] = [];
+      chanQ.onData((chunk) => atQ.push(chunk));
+      chanX.send(Buffer.from("request"));
+      expect(atQ[0]?.toString()).toBe("request");
+
+      const atX: Buffer[] = [];
+      chanX.onData((chunk) => atX.push(chunk));
+      chanQ.send(Buffer.from("response"));
+      expect(atX[0]?.toString()).toBe("response");
+    });
+
+    it("propagates eof() across both hops without closing", async () => {
+      const { chanX, chanQ } = await setupRelay();
+      const eofSpy = vi.fn();
+      chanQ.onEof(eofSpy);
+      chanX.eof();
+      expect(eofSpy).toHaveBeenCalledOnce();
+      expect(chanQ.closed).toBe(false);
+    });
+
+    it("propagates close() across both hops", async () => {
+      const { chanX, chanQ } = await setupRelay();
+      const closeSpy = vi.fn();
+      chanQ.onClose(closeSpy);
+      chanX.close();
+      expect(closeSpy).toHaveBeenCalledOnce();
+      expect(chanQ.closed).toBe(true);
+    });
+
+    it("respects the destination channel's backpressure — queues rather than exceeding sendWindow, and delivers everything once drained", async () => {
+      const { chanX, chanP, chanQ } = await setupRelay();
+      const atQ: Buffer[] = [];
+      chanQ.onData((chunk) => atQ.push(chunk));
+
+      // A first full-window chunk fits chanP's window exactly, so the
+      // relay forwards it onward in the very same synchronous call and
+      // immediately acknowledges chanY for it — crossing
+      // WINDOW_ADJUST_THRESHOLD_BYTES right away, which replenishes
+      // chanX's window before this call even returns. It's chanP's window
+      // (not chanX's) that's left exhausted afterward.
+      const chunk1 = Buffer.alloc(CHANNEL_WINDOW_BYTES, 1);
+      chanX.send(chunk1);
+      expect(chanP.sendWindow).toBe(0);
+      expect(chanX.sendWindow).toBeGreaterThan(0);
+
+      // A second full-window chunk exhausts chanX's window again — but
+      // this time the relay can't forward it onward (chanP has no room
+      // left), so it queues internally without acknowledging chanY, and
+      // chanX's window stays exhausted this time.
+      const chunk2 = Buffer.alloc(CHANNEL_WINDOW_BYTES, 2);
+      chanX.send(chunk2);
+      expect(chanX.sendWindow).toBe(0);
+      expect(() => chanX.send(Buffer.alloc(1))).toThrow(/remaining window/);
+
+      // Q "catches up" on chunk1 — flowing a WINDOW_ADJUST back to chanP,
+      // whose onDrain flushes the queued chunk2 onward, which in turn
+      // acknowledges chanY and flows a WINDOW_ADJUST back to chanX.
+      chanQ.acknowledgeConsumed(CHANNEL_WINDOW_BYTES);
+      expect(chanX.sendWindow).toBeGreaterThan(0);
+
+      // Q catches up on chunk2 too, so chanP's window is fully free again
+      // and a further send actually reaches Q instead of queuing behind
+      // chunk2.
+      chanQ.acknowledgeConsumed(CHANNEL_WINDOW_BYTES);
+
+      chanX.send(Buffer.from("more"));
+      const totalBytes = atQ.reduce((sum, chunk) => sum + chunk.length, 0);
+      expect(totalBytes).toBe(2 * CHANNEL_WINDOW_BYTES + 4);
+      expect(atQ.at(-1)?.toString()).toBe("more");
     });
   });
 

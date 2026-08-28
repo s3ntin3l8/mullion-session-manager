@@ -833,3 +833,65 @@ export function pipeNetSocketToChannel(socket: net.Socket, channel: MuxChannel):
     if (!socket.destroyed) socket.destroy();
   });
 }
+
+// A single direction of pipeChannelToChannel. Exported (in addition to
+// pipeChannelToChannel itself) so ssh-agent-relay.ts can reuse this exact
+// backpressure-respecting shape for the one direction that stays
+// unfiltered (a real agent's reply traffic), while composing the other
+// direction with SignOnlyFilter instead of calling this function directly.
+// Kept separate from pipeNetSocketToChannel's own pause/resume shape
+// rather than reusing it, because a MuxChannel has no `pause()`: unlike a
+// `net.Socket`, WE (the receiving side) don't control whether `source`'s
+// peer sends more data, only whether WE tell them they're allowed to (via
+// acknowledgeConsumed). That's actually a cleaner backpressure primitive
+// than pause/resume — simply withholding acknowledgeConsumed on `source`
+// until `dest` can accept the data IS the backpressure signal, propagating
+// all the way back to source's peer through its own window accounting —
+// but it does mean `source.onData` can fire again before we've caught up
+// (the peer's own remaining send window, decremented when IT sent, isn't
+// contingent on our acknowledgement), so this needs a real queue, not
+// pipeNetSocketToChannel's single-slot design. The queue can never exceed
+// one channel-window's worth of bytes (CHANNEL_WINDOW_BYTES): `source`'s
+// peer can only ever have that much outstanding-unacknowledged data by
+// construction, since further sends are gated on window we deliberately
+// aren't replenishing yet.
+export function pipeChannelDirection(source: MuxChannel, dest: MuxChannel): void {
+  const pending: Buffer[] = [];
+
+  function flush(): void {
+    while (pending.length > 0) {
+      const next = pending[0];
+      if (dest.closed || next.length > dest.sendWindow) return;
+      pending.shift();
+      dest.send(next);
+      source.acknowledgeConsumed(next.length);
+    }
+  }
+
+  source.onData((chunk) => {
+    if (dest.closed) return;
+    pending.push(chunk);
+    flush();
+  });
+  dest.onDrain(flush);
+  source.onEof(() => {
+    if (!dest.closed) dest.eof();
+  });
+  source.onClose(() => {
+    if (!dest.closed) dest.close();
+  });
+}
+
+/**
+ * Relays two already-open channels to each other, raw and unfiltered in
+ * both directions — the "no policy" building block PR5's fan-out/relay
+ * logic (ssh-agent-relay.ts) composes with `SignOnlyFilter` for the
+ * direction that actually needs filtering, and uses as-is for the other
+ * (a real agent's own replies, which are always relayed unfiltered — see
+ * ssh-agent-filter.ts's own header comment on why). Symmetric: which
+ * channel is `a` vs. `b` has no bearing on behavior.
+ */
+export function pipeChannelToChannel(a: MuxChannel, b: MuxChannel): void {
+  pipeChannelDirection(a, b);
+  pipeChannelDirection(b, a);
+}
