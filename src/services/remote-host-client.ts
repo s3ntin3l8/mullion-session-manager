@@ -18,6 +18,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import type { GitStatus } from "./git-status.js";
+import type { SshAuthSockSource } from "./ssh-agent-socket.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
 import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
@@ -247,7 +248,21 @@ export interface AgentConfig {
   // arrives at runtime despite this being a locally-built object on this
   // process. HostConfigModal.tsx renders that distinctly from `null`
   // ("unknown, agent predates this field" vs. "not configured").
-  sshAuthSock?: { path: string; present: boolean } | null;
+  //
+  // PR7a: `source` says which of resolveSshAuthSock's tiers is *why* `path`
+  // has this value (configured / ambient / bridge — "none" is never
+  // reported here, it's the `null` case above). For `configured`/`bridge`,
+  // `path` is exactly what resolveSshAuthSock itself returned. For
+  // `ambient`, resolveSshAuthSock's own result is always `path: ""` (its
+  // signal to "don't touch it" — buildAgentConfig substitutes the process's
+  // real ambient SSH_AUTH_SOCK afterward purely for diagnostics; see its
+  // own comment). Optional for the same reason the whole field is: a remote
+  // agent on a build between this field's introduction (PR5d) and PR7a
+  // reports `{path, present}` with no `source` — treat that as "unknown
+  // which tier, but Mullion did resolve *a* path" rather than defaulting it
+  // to "configured", which would be actively wrong for what was actually a
+  // bridge-backed agent on that build.
+  sshAuthSock?: { path: string; present: boolean; source?: SshAuthSockSource } | null;
 }
 
 export class RemoteHostClient {

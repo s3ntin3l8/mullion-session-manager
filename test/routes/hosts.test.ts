@@ -405,8 +405,17 @@ describe("hosts route (issue #26)", () => {
     // Hermes review, PR #828 — don't trust ambient absence of
     // MULLION_SSH_AUTH_SOCK; a shell that actually has this feature
     // configured (e.g. on mgmt) would otherwise make this assertion fail.
+    // Issue #820 PR7a — same treatment for the ambient SSH_AUTH_SOCK tier:
+    // before PR7a this leaked silently (resolveSshAuthSock's ambient tier
+    // always resolved to path "" -> null regardless), but now that the
+    // ambient tier reports the real inherited path tagged `source:
+    // "ambient"`, a shell with a real ambient agent (e.g. this one, under
+    // Mullion) makes this assertion fail without the same save/restore
+    // internal.test.ts and multi-host.test.ts already do for it.
     const prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
     delete process.env.MULLION_SSH_AUTH_SOCK;
+    const prevAmbientSshAuthSock = process.env.SSH_AUTH_SOCK;
+    delete process.env.SSH_AUTH_SOCK;
     try {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
@@ -416,6 +425,8 @@ describe("hosts route (issue #26)", () => {
     } finally {
       if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
       else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
+      if (prevAmbientSshAuthSock === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = prevAmbientSshAuthSock;
     }
   });
 
@@ -427,7 +438,11 @@ describe("hosts route (issue #26)", () => {
       process.env.MULLION_SSH_AUTH_SOCK = sockPath;
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
-      expect(res.json().sshAuthSock).toEqual({ path: sockPath, present: true });
+      expect(res.json().sshAuthSock).toEqual({
+        path: sockPath,
+        present: true,
+        source: "configured",
+      });
       await app.close();
     } finally {
       delete process.env.MULLION_SSH_AUTH_SOCK;

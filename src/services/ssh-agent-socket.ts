@@ -97,6 +97,15 @@ export function materializesBridgeSocket(role: string): boolean {
   return role === "agent";
 }
 
+/** Which of resolveSshAuthSock's three tiers (or genuine absence) produced
+ * its result — see that function's own doc comment for the precedence.
+ * Issue #820 PR7a: exists so a caller (routes/internal.ts's
+ * buildAgentConfig, for Settings > Hosts) can report *why* a session gets
+ * the SSH_AUTH_SOCK it does, not just the resulting path. Exported so
+ * remote-host-client.ts's AgentConfig type can reuse it rather than
+ * hand-copying the four string literals and risking drift. */
+export type SshAuthSockSource = "configured" | "ambient" | "bridge" | "none";
+
 /**
  * Issue #820 PR5d — what a spawned session's SSH_AUTH_SOCK should resolve
  * to, given the three things that can supply it. Precedence:
@@ -105,9 +114,9 @@ export function materializesBridgeSocket(role: string): boolean {
  *    operator who already pointed this at a working `ssh -R` tunnel gets
  *    exactly that, unchanged, whether or not a bridge is ever enrolled.
  * 2. Otherwise, if `ambient` (this process's own inherited SSH_AUTH_SOCK —
- *    systemd --user env, PAM, a desktop keyring) is set, returning "" here
- *    leaves it alone: launch-plan.ts only overwrites a session's
- *    SSH_AUTH_SOCK when this function's result is truthy, so "" means
+ *    systemd --user env, PAM, a desktop keyring) is set, returning `path:
+ *    ""` here leaves it alone: launch-plan.ts only overwrites a session's
+ *    SSH_AUTH_SOCK when the result's `path` is truthy, so "" means
  *    "don't touch it" and the ambient value passes through
  *    buildSessionEnv() untouched, same as before this feature existed.
  * 3. Only when neither is present do we fall back to the bridge-
@@ -124,16 +133,25 @@ export function materializesBridgeSocket(role: string): boolean {
  * liveness here would also silently break case 1 turning into "sometimes
  * case 3" every time the laptop sleeps, which is worse than either
  * fixed choice.
+ *
+ * PR7a: returns `{path, source}` instead of a bare string so a caller can
+ * report which tier won (Settings > Hosts needs to distinguish
+ * bridge-backed from MULLION_SSH_AUTH_SOCK-backed, not just show a path).
+ * `path` alone is still exactly what it was before — callers that only
+ * ever consumed the path (PtyManager) just read `.path` now.
  */
 export function resolveSshAuthSock(opts: {
   configured: string;
   ambient: string | undefined;
   materializesBridgeSocket: boolean;
   sessionsDir: string;
-}): string {
-  if (opts.configured) return opts.configured;
-  if (opts.ambient) return "";
-  return opts.materializesBridgeSocket ? sshAgentSocketPath(opts.sessionsDir) : "";
+}): { path: string; source: SshAuthSockSource } {
+  if (opts.configured) return { path: opts.configured, source: "configured" };
+  if (opts.ambient) return { path: "", source: "ambient" };
+  if (opts.materializesBridgeSocket) {
+    return { path: sshAgentSocketPath(opts.sessionsDir), source: "bridge" };
+  }
+  return { path: "", source: "none" };
 }
 
 async function handleConnection(

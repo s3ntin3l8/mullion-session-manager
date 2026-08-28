@@ -202,7 +202,7 @@ describe("resolveSshAuthSock", () => {
         materializesBridgeSocket: true,
         sessionsDir,
       }),
-    ).toBe("/run/ssh-r-tunnel.sock");
+    ).toEqual({ path: "/run/ssh-r-tunnel.sock", source: "configured" });
   });
 
   it("prefers configured even when this process would otherwise materialize a bridge socket — an existing ssh -R deployment must not regress on upgrade", () => {
@@ -213,7 +213,7 @@ describe("resolveSshAuthSock", () => {
         materializesBridgeSocket: true,
         sessionsDir,
       }),
-    ).toBe("/run/ssh-r-tunnel.sock");
+    ).toEqual({ path: "/run/ssh-r-tunnel.sock", source: "configured" });
   });
 
   it("returns empty (don't touch SSH_AUTH_SOCK) when unconfigured but an ambient value already exists, even with a bridge socket available — a systemd/PAM/keyring-supplied agent must not be silently shadowed", () => {
@@ -224,7 +224,7 @@ describe("resolveSshAuthSock", () => {
         materializesBridgeSocket: true,
         sessionsDir,
       }),
-    ).toBe("");
+    ).toEqual({ path: "", source: "ambient" });
   });
 
   it("falls back to the bridge-materialized socket only when neither configured nor ambient is set", () => {
@@ -235,7 +235,7 @@ describe("resolveSshAuthSock", () => {
         materializesBridgeSocket: true,
         sessionsDir,
       }),
-    ).toBe(bridgePath);
+    ).toEqual({ path: bridgePath, source: "bridge" });
   });
 
   it("does not fall back to a bridge path when this process doesn't materialize one (e.g. primary, pre-PR5e)", () => {
@@ -246,6 +246,6 @@ describe("resolveSshAuthSock", () => {
         materializesBridgeSocket: false,
         sessionsDir,
       }),
-    ).toBe("");
+    ).toEqual({ path: "", source: "none" });
   });
 });

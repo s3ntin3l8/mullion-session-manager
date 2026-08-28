@@ -358,6 +358,7 @@ describe("internal routes (agent role, issue #26)", () => {
     expect(body.sshAuthSock).toEqual({
       path: path.join(path.dirname(app.pty.hookSocketPath), "ssh-agent.sock"),
       present: true,
+      source: "bridge",
     });
     expect(typeof body.version).toBe("string");
     expect(body).not.toHaveProperty("idleTimeout");
@@ -382,7 +383,11 @@ describe("internal routes (agent role, issue #26)", () => {
         url: "/internal/config",
         headers: { authorization: `Bearer ${TOKEN}` },
       });
-      expect(presentRes.json().sshAuthSock).toEqual({ path: presentSockPath, present: true });
+      expect(presentRes.json().sshAuthSock).toEqual({
+        path: presentSockPath,
+        present: true,
+        source: "configured",
+      });
       await presentApp.close();
 
       process.env.MULLION_SSH_AUTH_SOCK = absentSockPath;
@@ -392,10 +397,45 @@ describe("internal routes (agent role, issue #26)", () => {
         url: "/internal/config",
         headers: { authorization: `Bearer ${TOKEN}` },
       });
-      expect(absentRes.json().sshAuthSock).toEqual({ path: absentSockPath, present: false });
+      expect(absentRes.json().sshAuthSock).toEqual({
+        path: absentSockPath,
+        present: false,
+        source: "configured",
+      });
       await absentApp.close();
     } finally {
       delete process.env.MULLION_SSH_AUTH_SOCK;
+      fs.rmSync(socketDir, { recursive: true, force: true });
+    }
+  });
+
+  // Issue #820 PR7a — before this, the ambient tier reported `sshAuthSock:
+  // null`, identical to genuinely having nothing configured at all
+  // (resolveSshAuthSock's "none" tier). Settings > Hosts needs to tell
+  // these apart, so the ambient tier now reports the inherited path itself
+  // (not the bridge/configured path — there isn't one; Mullion isn't
+  // supplying this value) tagged `source: "ambient"`.
+  it("reports the ambient SSH_AUTH_SOCK itself, tagged source: ambient — distinct from the null 'nothing configured' case", async () => {
+    const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), "internal-ssh-sock-ambient-"));
+    const ambientSockPath = path.join(socketDir, "keyring-agent.sock");
+    fs.writeFileSync(ambientSockPath, "");
+
+    try {
+      process.env.SSH_AUTH_SOCK = ambientSockPath;
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.json().sshAuthSock).toEqual({
+        path: ambientSockPath,
+        present: true,
+        source: "ambient",
+      });
+      await app.close();
+    } finally {
+      delete process.env.SSH_AUTH_SOCK;
       fs.rmSync(socketDir, { recursive: true, force: true });
     }
   });
@@ -423,7 +463,11 @@ describe("internal routes (agent role, issue #26)", () => {
         url: "/internal/config",
         headers: { authorization: `Bearer ${TOKEN}` },
       });
-      expect(res.json().sshAuthSock).toEqual({ path: sockPath, present: true });
+      expect(res.json().sshAuthSock).toEqual({
+        path: sockPath,
+        present: true,
+        source: "configured",
+      });
       await app.close();
     } finally {
       delete process.env.MULLION_SSH_AUTH_SOCK;

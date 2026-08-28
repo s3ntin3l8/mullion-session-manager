@@ -167,7 +167,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       ambient: process.env.SSH_AUTH_SOCK,
       materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
       sessionsDir,
-    }),
+    }).path,
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),
