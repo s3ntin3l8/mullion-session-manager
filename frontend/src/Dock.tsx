@@ -503,9 +503,72 @@ function DockColumn({
       // force one now so the monitor renders immediately instead of after
       // whatever's left of store.ts's live-refresh interval.
       await useDashboardStore.getState().refreshSessions();
+      if (result.willRecreate === true) showCheckStatus(control.id, "Pulling — will recreate");
     } catch {
       console.warn("[dock] docker pull & restart failed", control.id);
       showCheckStatus(control.id, "Failed to start update", true);
+    }
+  };
+
+  const handleRebuildAndRestart = async (control: DockControl) => {
+    try {
+      const result = await api.rebuildDockerStack(projectId, control.id);
+      addEphemeralControl(result.control);
+      await useDashboardStore.getState().refreshSessions();
+      if (result.willRecreate === true) showCheckStatus(control.id, "Rebuilding — will recreate");
+    } catch {
+      console.warn("[dock] docker rebuild & restart failed", control.id);
+      showCheckStatus(control.id, "Failed to start rebuild", true);
+    }
+  };
+
+  // Per-service, inline actions (restart/stop/start) — the backend runs
+  // these synchronously and force-refreshes its own discovery cache on
+  // success (projects.ts), so this immediately re-fetches .../dock rather
+  // than waiting out the rest of DOCKER_POLL_INTERVAL_MS for the new
+  // container state (dot color/state) to show up.
+  const refreshControlsNow = async () => {
+    try {
+      setControls(await api.listProjectDock(projectId));
+    } catch {
+      // The next scheduled poll will retry — this is a "sooner," not a
+      // "must succeed," refresh.
+    }
+  };
+
+  const handleServiceAction = async (
+    control: DockControl,
+    action: (projectId: number, controlId: string) => Promise<{ success: boolean }>,
+    failureMessage: string,
+  ) => {
+    try {
+      const result = await action(projectId, control.id);
+      if (result.success) {
+        await refreshControlsNow();
+      } else {
+        showCheckStatus(control.id, failureMessage, true);
+      }
+    } catch {
+      console.warn("[dock] docker service action failed", control.id);
+      showCheckStatus(control.id, failureMessage, true);
+    }
+  };
+
+  // Stack-wide restart/apply/stop — same ephemeral-session shape as
+  // handlePullAndRestart/handleRebuildAndRestart above.
+  const handleStackAction = async (
+    control: DockControl,
+    action: (projectId: number, controlId: string) => ReturnType<typeof api.restartDockerStack>,
+    failureMessage: string,
+  ) => {
+    try {
+      const result = await action(projectId, control.id);
+      addEphemeralControl(result.control);
+      await useDashboardStore.getState().refreshSessions();
+      if (result.willRecreate === true) showCheckStatus(control.id, "Applying — will recreate");
+    } catch {
+      console.warn("[dock] docker stack action failed", control.id);
+      showCheckStatus(control.id, failureMessage, true);
     }
   };
 
@@ -741,6 +804,25 @@ function DockColumn({
               onHeaderActivate={handleHeaderActivate}
               onCheckUpdate={() => void handleCheckUpdate(control)}
               onPullAndRestart={() => void handlePullAndRestart(control)}
+              onRebuildAndRestart={() => void handleRebuildAndRestart(control)}
+              onServiceRestart={() =>
+                void handleServiceAction(control, api.restartDockerService, "Restart failed")
+              }
+              onServiceStop={() =>
+                void handleServiceAction(control, api.stopDockerService, "Stop failed")
+              }
+              onServiceStart={() =>
+                void handleServiceAction(control, api.startDockerService, "Start failed")
+              }
+              onStackRestart={() =>
+                void handleStackAction(control, api.restartDockerStack, "Failed to start restart")
+              }
+              onStackApply={() =>
+                void handleStackAction(control, api.applyDockerStack, "Failed to apply config")
+              }
+              onStackStop={() =>
+                void handleStackAction(control, api.stopDockerStack, "Failed to start stop")
+              }
             />
           );
         })}
