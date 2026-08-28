@@ -198,6 +198,22 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // other existing purpose to collide with (session-env.ts).
   sessionEnv.MULLION_SOCKET_PATH = session.controlSocketPath;
   sessionEnv.MULLION_SESSION_ID = session.id;
+  // MULLION_FORWARDER_PATH/MULLION_FORWARDER_NODE — issue: host-global agy/
+  // Codex hook configs (~/.gemini/config/hooks.json, ~/.codex/hooks.json)
+  // are shared by every Mullion instance on the host, so they can never
+  // embed a checkout-specific absolute path (a dev worktree's forwarder
+  // path, once that worktree is removed, would dangle and break every
+  // agy/Codex session on the host — see forwarder-shim.ts's header
+  // comment). Those configs instead invoke a fixed, host-stable shim
+  // script that resolves the REAL forwarder for THIS session from these two
+  // env vars at run time — same "injected after the scrub, SERVER_ENV_KEYS
+  // lists them only so a nested Mullion re-scrubs them from ITS OWN
+  // sessions" reasoning as the hook socket/token above. Computed once here
+  // and reused below at the applyHookAdapters() call so the two can never
+  // diverge within a single launch.
+  const forwarderPath = resolveForwarderPath();
+  sessionEnv.MULLION_FORWARDER_PATH = forwarderPath;
+  sessionEnv.MULLION_FORWARDER_NODE = process.execPath;
   // MULLION_SSH_AUTH_SOCK — lets a session reach an SSH agent that lives
   // outside this host (e.g. one forwarded in via `ssh -R`, see
   // docs/ssh-agent.md) without a private key ever touching this host. Set
@@ -266,7 +282,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     hookSocketPath: session.hookSocketPath,
     hookToken: session.hookToken,
     controlSocketPath: session.controlSocketPath,
-    forwarderPath: resolveForwarderPath(),
+    forwarderPath,
     injectAgentGuide: session.injectAgentGuide,
     injectProjectBriefing: session.injectProjectBriefing,
     cwd: session.cwd,

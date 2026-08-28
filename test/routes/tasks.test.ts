@@ -124,6 +124,19 @@ async function connectPat(app: Awaited<ReturnType<typeof buildApp>>, token: stri
 }
 
 describe("tasks route", () => {
+  // Claiming a task spawns a real "codex"/"agy" session through the real
+  // hook-adapter merge (routes/tasks.ts's claim endpoint → session-
+  // lifecycle.ts → launch-plan.ts's applyHookAdapters — node-pty/
+  // child_process are mocked, but codex.ts's/agy.ts's own fs writes into
+  // the agent's REAL config location are not). CODEX_HOME/HOME must be
+  // redirected to scratch dirs for the whole file, or these tests write
+  // into the developer/CI-runner's own ~/.codex, ~/.gemini/config, and (as
+  // of the forwarder-shim migration) ~/.mullion.
+  let codexHome: string;
+  let fakeHome: string;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalHome = process.env.HOME;
+
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -142,6 +155,10 @@ describe("tasks route", () => {
     // expect. Raised high here; the cap's own enforcement gets a dedicated
     // test below with its own explicit low value.
     process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
+    codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-tasks-codex-home-"));
+    process.env.CODEX_HOME = codexHome;
+    fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-tasks-fake-home-"));
+    process.env.HOME = fakeHome;
   });
 
   afterAll(() => {
@@ -150,6 +167,12 @@ describe("tasks route", () => {
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_TASK_MASTER_ENABLED;
     delete process.env.MULLION_TASK_MAX_CONCURRENT;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    fs.rmSync(codexHome, { recursive: true, force: true });
+    fs.rmSync(fakeHome, { recursive: true, force: true });
   });
 
   it("returns [] when no tasks exist", async () => {

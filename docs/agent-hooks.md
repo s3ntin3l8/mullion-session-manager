@@ -14,19 +14,67 @@ before.
 
 ## What's injected
 
-Every session's shell gets two extra environment variables at spawn time,
-alongside whatever its launcher command already sets:
+Every session's shell gets several extra environment variables at spawn
+time, alongside whatever its launcher command already sets. The two this
+doc is about:
 
 | Variable              | Meaning                                                                        |
 | --------------------- | ------------------------------------------------------------------------------ |
 | `MULLION_HOOK_SOCKET` | Absolute path to a Unix domain socket, shared by every session on this host.   |
 | `MULLION_HOOK_TOKEN`  | A per-session secret, unique to this one session, used in the handshake below. |
 
-Both are stripped from a session's env if that session itself starts a
+(`MULLION_SOCKET_PATH`/`MULLION_SESSION_ID` — the control-socket path and
+this session's id — are injected the same way but belong to the `mullion`
+CLI/MCP surface, not this hook channel; see `docs/agent-guide.md`.)
+
+All are stripped from a session's env if that session itself starts a
 nested Mullion (e.g. running `make dev` from inside a Mullion-managed
 terminal) — the same env-leak protection `session-env.ts`'s
 `SERVER_ENV_KEYS` already applies to every other Mullion-owned config value
 (issue #70).
+
+### How a hook command finds the forwarder
+
+`forwarder.mjs` is the actual per-agent JSON shim that speaks this socket's
+wire protocol (below) — but the command Mullion registers in agy's and
+Codex's own hook configs never invokes it directly. Both `~/.gemini/config/
+hooks.json` and `~/.codex/hooks.json` are **host-global, persistent** files
+shared by every Mullion instance on the host (a production install and any
+number of `.wt/<slug>` dev worktrees running `make dev`), so the command
+string those files carry can never embed a checkout-specific, possibly
+worktree-relative path to `forwarder.mjs` — the moment such a worktree is
+removed, that path would dangle, and agy treats a non-zero PreToolUse exit
+as a hard tool-call abort, breaking `run_command` for every agy session on
+the host, not just this repo's.
+
+Instead, both configs invoke a small, dependency-free POSIX `sh` script —
+`src/hooks/forwarder-shim.sh`, installed at a fixed, host-stable, per-user
+location (`~/.mullion/hooks/mullion-forwarder-shim.sh`, see
+`src/services/hook-adapters/forwarder-shim.ts`) that is identical no matter
+which Mullion instance last wrote it. At run time the shim resolves the
+REAL, per-session forwarder from two more injected env vars:
+
+| Variable                 | Meaning                                          |
+| ------------------------ | ------------------------------------------------ |
+| `MULLION_FORWARDER_PATH` | Absolute path to THIS session's `forwarder.mjs`. |
+| `MULLION_FORWARDER_NODE` | Absolute path to the node binary to run it with. |
+
+so a dev instance and the production install can run agy/Codex sessions
+concurrently without clobbering each other's hook config, and a removed
+worktree can never dangle it again.
+
+Three layers of fail-open protect every hook invocation, so a missing
+forwarder degrades to a silent no-op rather than a failed tool call:
+
+1. `forwarder.mjs` itself — no `MULLION_HOOK_SOCKET`/`_TOKEN`, an unmapped
+   payload, or a gate timeout all fall through to printing the correct JSON
+   and exiting 0 (see "Wire protocol" below).
+2. The shim — `MULLION_FORWARDER_PATH` unset, pointing at a removed
+   worktree, or `MULLION_FORWARDER_NODE` missing all print the same
+   fail-open JSON and exit 0.
+3. The hook command string itself — a `|| printf '<fallback>'` guard covers
+   the shim file being missing/not executable, the one case the shim can't
+   cover for itself.
 
 ## Wire protocol
 
@@ -397,15 +445,31 @@ Given both, Mullion instead does an idempotent, Mullion-owned **merge into
 the user's real `~/.codex/hooks.json`** (or `$CODEX_HOME/hooks.json` if the
 user has their own override set) — the same "managed, reversible install"
 posture as agy below, not the plan's original "no argv edit, no managed
-install" assumption for Codex. The merge is keyed off the forwarder's own
-install path, so re-running it on every launch only ever replaces
-Mullion's own hook group; any hooks the user configured themselves are left
-untouched, and a file Mullion can't safely parse is left untouched too
-(never blindly overwritten). Because trust is recorded against the real,
-stable `~/.codex` rather than a fresh-per-session directory, **a one-time
-`/hooks` trust grant persists across every future Mullion-launched Codex
-session** — it just isn't automatic. Until granted, these hooks are
-silently skipped and Codex works exactly as it does today.
+install" assumption for Codex. The merge is keyed off the fixed forwarder
+shim's install path (see "How a hook command finds the forwarder" above),
+so re-running it on every launch only ever replaces Mullion's own hook
+group; any hooks the user configured themselves are left untouched, and a
+file Mullion can't safely parse is left untouched too (never blindly
+overwritten). Because trust is recorded against the real, stable
+`~/.codex` rather than a fresh-per-session directory, **a one-time `/hooks`
+trust grant persists across every future Mullion-launched Codex session**
+— it just isn't automatic. Until granted, these hooks are silently skipped
+and Codex works exactly as it does today.
+
+**Upgrading from a pre-shim release (one-time cost):** Codex's `/hooks`
+trust is granted per hook-group command string — `trusted_hash` in
+`~/.codex/config.toml` (see `codex-trust.ts`'s own doc comment). Migrating
+an already-trusted host to the forwarder-shim command shape changes that
+string once, which re-triggers Codex's interactive `/hooks` review exactly
+once per host, the same way any prior forwarder-path change already did
+before the `current`-symlink stable-path fix (issue #259). Grant that
+review **before** running any unattended Codex session on the upgraded
+host, or it silently sits with no Mullion hooks (same as any other
+not-yet-trusted host) until someone notices and completes it — see
+"Removing managed hooks" below for how to confirm what's currently
+installed. After this one-time migration, the command string is a
+permanent constant across every future release, so this specific cost
+never recurs.
 
 **Live-verified (issue #846):** the `apply_patch` patch-header format the
 file-change extractor parses was confirmed against two real hook firings
@@ -744,14 +808,23 @@ release.
 ### Removing managed hooks
 
 - **Codex** — open `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) and
-  delete every hook group whose `command` references a `forwarder.mjs`
-  path (`Stop`/`SessionStart`/`SessionEnd`/`PermissionRequest`/
-  `UserPromptSubmit`/`PostToolUse` — see the registration list above) —
-  each entry also carries a `"statusMessage"` of `"Mullion agent-hook
-forwarder — safe to remove, see docs/agent-hooks.md"` so it's
-  identifiable without cross-referencing this file.
+  delete every hook group whose `command` references
+  `mullion-forwarder-shim.sh` (`Stop`/`SessionStart`/`SessionEnd`/
+  `PermissionRequest`/`UserPromptSubmit`/`PostToolUse` — see the
+  registration list above) — each entry also carries a `"statusMessage"` of
+  `"Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md"`
+  so it's identifiable without cross-referencing this file. On a host that
+  hasn't relaunched a Mullion-owned Codex session since the forwarder-shim
+  migration, a group may still reference an older `forwarder.mjs` path
+  directly instead — the same rule applies, delete it.
 - **agy** — open `~/.gemini/config/hooks.json` and delete the top-level
   `"mullion-hook-forwarder"` key.
+- **The shim itself** — `rm -rf ~/.mullion/hooks` removes
+  `mullion-forwarder-shim.sh`. Safe at any time: every hook command that
+  invokes it carries its own fail-open guard (see "How a hook command finds
+  the forwarder" above), so a missing shim degrades hooks to a silent
+  no-op, never a failed tool call. It's also self-healing — the next agy/
+  Codex session launch reinstalls it automatically.
 
 Any other hooks in either file are Mullion's to leave alone, never to
 touch.

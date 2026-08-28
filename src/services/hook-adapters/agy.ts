@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { resolveMcpServerPath, shellQuote } from "./shared.js";
+import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 
 // agy (Antigravity CLI) adapter (issue #253). Verified against the
 // installed `agy` CLI's own bundled documentation during this PR (the
@@ -39,8 +40,20 @@ import { resolveMcpServerPath, shellQuote } from "./shared.js";
 // process (per its own docs) — env-var inheritance down to that
 // subprocess is assumed, not verified live (same accepted risk as Codex's
 // adapter); if agy's hook subprocess doesn't inherit
-// $MULLION_HOOK_SOCKET/$MULLION_HOOK_TOKEN, the forwarder just silently
-// no-ops (safe failure mode, not a security or correctness bug).
+// $MULLION_HOOK_SOCKET/$MULLION_HOOK_TOKEN/$MULLION_FORWARDER_PATH/
+// $MULLION_FORWARDER_NODE, the forwarder-shim.ts shim just prints its
+// fail-open JSON and exits 0 (safe failure mode, not a security or
+// correctness bug — see that file's header for the full design).
+//
+// The commands below reference a FIXED, host-stable shim script
+// (forwarderHookCommand(), forwarder-shim.ts), never `ctx.forwarderPath`
+// directly — `~/.gemini/config/hooks.json` is a host-global file shared by
+// every Mullion instance on this host, so it can never embed a
+// checkout-specific path (a dev worktree's forwarder path would dangle the
+// moment that worktree is removed, breaking agy hooks for every session on
+// the host, not just this repo's). Each session's OWN real forwarder is
+// resolved by the shim at run time from env vars launch-plan.ts injects
+// per-session.
 
 const AGY_COMMAND_RE = /^(?:\S*\/)?agy(?:\s|$)/;
 const MULLION_HOOK_NAME = "mullion-hook-forwarder";
@@ -102,17 +115,29 @@ function resolveAgyHooksPath(): string {
 }
 
 function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath()): void {
+  // Issue: host-global hook config collision — installs the fixed, host-
+  // stable forwarder shim BEFORE writing any command that references it,
+  // so the config never points at a shim that isn't there yet. Guarded
+  // independently: a failure here must not skip the hooks.json write below
+  // (a shim install failure just means the emitted commands silently no-op
+  // via the `|| printf` guard, exactly the safe degradation this whole
+  // design exists to provide — never a reason to leave the OLD,
+  // checkout-specific command in place). See forwarder-shim.ts's header.
+  try {
+    ensureForwarderShim();
+  } catch (err) {
+    console.error({ err }, "mergeAgyHooks: failed to install forwarder shim, continuing anyway");
+  }
+
   const existing = readAgyJsonConfig<AgyHooksFile>(hooksPath);
 
-  const execPath = process.execPath;
-  const fwd = ctx.forwarderPath;
   const merged: AgyHooksFile = {
     ...existing,
     [MULLION_HOOK_NAME]: {
       Stop: [
         {
           type: "command",
-          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy Stop`,
+          command: forwarderHookCommand("agy", "Stop"),
           // agy's Stop has no documented timeout; 10s is generous for a
           // local socket round trip.
           timeout: 10,
@@ -131,7 +156,7 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
           hooks: [
             {
               type: "command",
-              command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy PreToolUse`,
+              command: forwarderHookCommand("agy", "PreToolUse"),
               timeout: 10,
             },
           ],
@@ -143,7 +168,7 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
           hooks: [
             {
               type: "command",
-              command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy PostToolUse`,
+              command: forwarderHookCommand("agy", "PostToolUse"),
               // Fire-and-forget, not a gate — 10s is generous enough.
               timeout: 10,
             },
@@ -158,7 +183,7 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
       SessionStart: [
         {
           type: "command",
-          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy SessionStart`,
+          command: forwarderHookCommand("agy", "SessionStart"),
           timeout: 10,
         },
       ],

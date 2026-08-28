@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { codexAdapter } from "../../../src/services/hook-adapters/codex.js";
+import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 
 describe("codexAdapter.matches (issue #252)", () => {
   it("matches a bare codex invocation", () => {
@@ -28,7 +29,9 @@ describe("codexAdapter.matches (issue #252)", () => {
 
 describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", () => {
   let codexHome: string;
+  let homeDir: string;
   const originalCodexHome = process.env.CODEX_HOME;
+  const originalHome = process.env.HOME;
 
   const ctx = () => ({
     sessionId: "1",
@@ -43,12 +46,21 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
   beforeEach(() => {
     codexHome = mkdtempSync(path.join(os.tmpdir(), "mullion-codex-home-"));
     process.env.CODEX_HOME = codexHome;
+    // mergeCodexHooks now also installs the forwarder shim at a fixed
+    // os.homedir()-derived location (forwarder-shim.ts) — HOME must be
+    // redirected here too, or a test run writes into the real developer/
+    // CI-runner's own ~/.mullion.
+    homeDir = mkdtempSync(path.join(os.tmpdir(), "mullion-codex-fakehome-"));
+    process.env.HOME = homeDir;
   });
 
   afterEach(() => {
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     rmSync(codexHome, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
   });
 
   function readHooks() {
@@ -72,8 +84,7 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(written.hooks.PostToolUse).toHaveLength(2);
     expect(written.hooks.PostToolUse[0].matcher).toBe("apply_patch");
     expect(written.hooks.PostToolUse[1].matcher).toBe("Bash");
-    expect(written.hooks.Stop[0].hooks[0].command).toContain("/abs/install/hooks/forwarder.mjs");
-    expect(written.hooks.Stop[0].hooks[0].command).toContain("codex Stop");
+    expect(written.hooks.Stop[0].hooks[0].command).toBe(forwarderHookCommand("codex", "Stop"));
 
     // Issue: extend surfaced session statuses (Codex parity) — all four
     // fire-and-forget, observational only, default 10s timeout.
@@ -116,8 +127,9 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
       ),
     ).toBe(true);
     expect(
-      written.hooks.Stop.some((g: { hooks: Array<{ command: string }> }) =>
-        g.hooks[0].command.includes("forwarder.mjs"),
+      written.hooks.Stop.some(
+        (g: { hooks: Array<{ command: string }> }) =>
+          g.hooks[0].command === forwarderHookCommand("codex", "Stop"),
       ),
     ).toBe(true);
   });
@@ -224,8 +236,7 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     ] as const) {
       expect(written.hooks[event]).toHaveLength(expectedLength);
     }
-    const currentForwarderCommand = (kind: string) =>
-      `"${process.execPath}" "/abs/install/hooks/forwarder.mjs" codex ${kind}`;
+    const currentForwarderCommand = (kind: string) => forwarderHookCommand("codex", kind);
     for (const [event, kind] of [
       ["SessionStart", "SessionStart"],
       ["SessionEnd", "SessionEnd"],

@@ -6217,18 +6217,24 @@ describe("PtyManager", () => {
       describe("codex", () => {
         let codexHome: string;
         const originalCodexHome = process.env.CODEX_HOME;
+        const originalHome = process.env.HOME;
 
         beforeEach(() => {
           // Same scratch-dir redirection as the existing "Codex (issue
           // #252)" describe block above — codex.ts merges into the REAL
-          // $CODEX_HOME/hooks.json.
+          // $CODEX_HOME/hooks.json, and (since the forwarder-shim
+          // migration) also installs the shim at a fixed os.homedir()-
+          // derived location, so HOME needs the same redirection.
           codexHome = path.join(sessionsDir, "codex-home-scratch-prompt");
           process.env.CODEX_HOME = codexHome;
+          process.env.HOME = path.join(sessionsDir, "fake-home-codex-prompt");
         });
 
         afterEach(() => {
           if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
           else process.env.CODEX_HOME = originalCodexHome;
+          if (originalHome === undefined) delete process.env.HOME;
+          else process.env.HOME = originalHome;
         });
 
         it("appends the shell-quoted prompt as a trailing positional, with skipPermissions off", async () => {
@@ -6383,6 +6389,7 @@ describe("PtyManager", () => {
     describe("Codex (issue #252)", () => {
       let codexHome: string;
       const originalCodexHome = process.env.CODEX_HOME;
+      const originalHome = process.env.HOME;
 
       beforeEach(() => {
         // Codex's adapter merges into the REAL $CODEX_HOME/hooks.json (see
@@ -6391,11 +6398,18 @@ describe("PtyManager", () => {
         // real developer/CI-runner's own ~/.codex.
         codexHome = path.join(sessionsDir, "codex-home-scratch");
         process.env.CODEX_HOME = codexHome;
+        // mergeCodexHooks() now also installs the forwarder shim at a
+        // fixed os.homedir()-derived location (forwarder-shim.ts) — HOME
+        // must be redirected too, or spawning "codex" for real here writes
+        // into the developer/CI-runner's own ~/.mullion.
+        process.env.HOME = path.join(sessionsDir, "fake-home-codex-252");
       });
 
       afterEach(() => {
         if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = originalCodexHome;
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
       });
 
       it("spawns a matching (codex) command completely unchanged, merging a managed hooks.json into $CODEX_HOME (not sessionsDir)", async () => {

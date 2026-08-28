@@ -26,15 +26,21 @@ import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
 // stripped either, but buildSessionEnv() below unconditionally *overwrites*
 // it (same treatment as COLORTERM) rather than passing through whatever the
 // server process happened to inherit — see the TERM comment below for why.
-// MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN (Phase 2, issue #172) and
-// MULLION_SOCKET_PATH/MULLION_SESSION_ID (Phase 4, #134) are injected
-// into a session's env deliberately, per-session, *after* buildSessionEnv()
-// returns — see pty-manager.ts's bootstrapMaster(). They're listed here too
-// so a *nested* Mullion (a `make dev` run from inside a session that itself
-// has hooks/the control socket enabled) doesn't inherit the outer session's
-// socket path(s)/token/id and mistake them for its own: the same env-leak
-// class buildSessionEnv() exists to prevent for every other Mullion-owned
-// config key.
+// MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN (Phase 2, issue #172),
+// MULLION_SOCKET_PATH/MULLION_SESSION_ID (Phase 4, #134), and
+// MULLION_FORWARDER_PATH/MULLION_FORWARDER_NODE (issue: host-global agy/
+// Codex hook configs pinning a checkout-specific forwarder path — see
+// hook-adapters/forwarder-shim.ts) are injected into a session's env
+// deliberately, per-session, *after* buildSessionEnv() returns — see
+// pty-manager.ts's bootstrapMaster(). They're listed here too so a
+// *nested* Mullion (a `make dev` run from inside a session that itself
+// has hooks/the control socket enabled) doesn't inherit the outer
+// session's socket path(s)/token/id/forwarder location and mistake them
+// for its own: the same env-leak class buildSessionEnv() exists to
+// prevent for every other Mullion-owned config key. Without this, a
+// nested Mullion's own agy/Codex sessions would resolve the OUTER
+// session's forwarder — silently wrong, and exactly the same class of
+// dangling-path risk this whole fix exists to eliminate.
 // MULLION_SSH_AUTH_SOCK (the config key that names the path launch-plan.ts
 // injects as SSH_AUTH_SOCK) is stripped for the same nested-Mullion reason as
 // every other key in this list. SSH_AUTH_SOCK itself is deliberately NOT
@@ -100,6 +106,8 @@ export const SERVER_ENV_KEYS = [
   "MULLION_SOCKET_PATH",
   "MULLION_SSH_AUTH_SOCK",
   "MULLION_SESSION_ID",
+  "MULLION_FORWARDER_PATH",
+  "MULLION_FORWARDER_NODE",
   "NODE_ENV",
   // OPENCODE_CONFIG_CONTENT is a per-session injection Mullion sets on the
   // env of a spawned opencode session (hook-adapters/opencode.ts's
