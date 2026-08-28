@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -64,7 +64,7 @@ async function buildAndListen() {
   return { app, port: address.port };
 }
 
-describe("agent-bridge routes (POST /api/bridges, GET /ws/agent-bridge, #820)", () => {
+describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridge, #820)", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -351,28 +351,185 @@ describe("agent-bridge routes (POST /api/bridges, GET /ws/agent-bridge, #820)", 
     });
   });
 
+  // This file's other describe blocks share ONE persistent DB (the outer
+  // beforeAll's tmpDb) across every test, run in declaration order — by
+  // the time these blocks run, earlier tests (pairing, MuxConnection,
+  // connectedBridges cleanup) have already left their own bridge rows
+  // behind. So these tests find/filter their own bridge by id rather than
+  // assert the full list's exact contents, the same accommodation any
+  // later-declared test in a shared-fixture file has to make.
+  describe("GET /api/bridges (PR7b)", () => {
+    it("returns a well-formed array (smoke test — this file's shared DB may already hold bridges from earlier tests)", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/bridges" });
+      expect(res.statusCode).toBe(200);
+      expect(Array.isArray(res.json())).toBe(true);
+    });
+
+    it("lists a paired bridge with its name/platform, hasLiveSession and connected both true", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code, name: "laptop-1", platform: "darwin" }));
+      const reply = await replyPromise;
+
+      const listRes = await app.inject({ method: "GET", url: "/api/bridges" });
+      const entry = (listRes.json() as Array<Record<string, unknown>>).find(
+        (b) => b.id === reply.bridge_id,
+      );
+      expect(entry).toMatchObject({
+        name: "laptop-1",
+        platform: "darwin",
+        hasLiveSession: true,
+        connected: true,
+      });
+      // BridgeListItem must only ever carry bridge-registry.ts's already-
+      // sanitized BridgeSummary fields, never a raw BridgeRow (which has
+      // pairingSecretEnc/sessionIdEnc/sessionSecretEnc columns) — pinned
+      // explicitly rather than left to toMatchObject's subset match above,
+      // which would stay green even if a future edit reintroduced one of
+      // these into the response.
+      expect(Object.keys(entry!).sort()).toEqual(
+        ["connected", "createdAt", "hasLiveSession", "id", "lastSeenAt", "name", "platform"].sort(),
+      );
+      ws.close();
+    });
+
+    // Distinguishes "paired, credential still valid" from "a helper is
+    // actually reachable right now" — the exact split BridgeListItem's own
+    // comment documents. A false "connected: true" here would tell an
+    // operator revoking a stale/offline bridge is pointless busywork when
+    // it's actually the normal way to clean one up.
+    it("reports connected: false once the socket closes, while hasLiveSession stays true", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+
+      const closePromise = waitForClose(ws);
+      ws.close();
+      await closePromise;
+      await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
+
+      const listRes = await app.inject({ method: "GET", url: "/api/bridges" });
+      const entry = (listRes.json() as Array<Record<string, unknown>>).find(
+        (b) => b.id === reply.bridge_id,
+      );
+      expect(entry).toMatchObject({ hasLiveSession: true, connected: false });
+    });
+  });
+
+  describe("DELETE /api/bridges/:id (PR7b)", () => {
+    it("404s an unknown bridge id", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "DELETE", url: "/api/bridges/does-not-exist" });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("deletes an unpaired (pairing-code-only) row", async () => {
+      const app = await buildTestApp();
+      const pairing = issuePairingCode(app);
+
+      const delRes = await app.inject({
+        method: "DELETE",
+        url: `/api/bridges/${pairing.bridgeId}`,
+      });
+      expect(delRes.statusCode).toBe(204);
+
+      const listRes = await app.inject({ method: "GET", url: "/api/bridges" });
+      const entry = (listRes.json() as Array<Record<string, unknown>>).find(
+        (b) => b.id === pairing.bridgeId,
+      );
+      expect(entry).toBeUndefined();
+    });
+
+    // The discriminating case (advisor review, PR7b): revoke must actually
+    // sever an already-connected helper's channel, not just delete the DB
+    // row — otherwise a "revoked" bridge keeps serving signatures through
+    // its still-open mux until its socket happens to drop on its own,
+    // defeating the entire point of revoke.
+    it("closes the live connection AND removes it from connectedBridges when revoking a connected bridge — not just the row", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+      expect(app.connectedBridges.has(reply.bridge_id!)).toBe(true);
+
+      const closePromise = waitForClose(ws);
+      const delRes = await app.inject({
+        method: "DELETE",
+        url: `/api/bridges/${reply.bridge_id}`,
+      });
+      expect(delRes.statusCode).toBe(204);
+
+      // The helper's own socket must actually die — proves this isn't just
+      // a DB delete, the live MuxConnection was really torn down.
+      await closePromise;
+      await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
+
+      const listRes = await app.inject({ method: "GET", url: "/api/bridges" });
+      const entry = (listRes.json() as Array<Record<string, unknown>>).find(
+        (b) => b.id === reply.bridge_id,
+      );
+      expect(entry).toBeUndefined();
+    });
+  });
+
   describe("auth gate exemption (issue #820)", () => {
     const TEST_TOKEN = "test-auth-token-0123456789"; // pragma: allowlist secret
     const TEST_SECRET = "test-session-secret-0123456789"; // pragma: allowlist secret
 
-    afterAll(() => {
+    // beforeEach/afterEach, not a manual set-then-delete inline in each
+    // test body (PR7b — the original shape here left the two env vars set
+    // for the rest of the file if an assertion above a test's own cleanup
+    // lines ever threw, since only afterAll backstopped it, not afterEach).
+    beforeEach(() => {
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+    });
+    afterEach(() => {
       delete process.env.MULLION_AUTH_TOKEN;
       delete process.env.MULLION_SESSION_SECRET;
     });
 
     it("POST /api/bridges requires the configured MULLION_AUTH_TOKEN", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
       const app = await buildTestApp();
       const res = await app.inject({ method: "POST", url: "/api/bridges" });
       expect(res.statusCode).toBe(401);
-      delete process.env.MULLION_AUTH_TOKEN;
-      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    // PR7b — GET/DELETE /api/bridges are the same Settings-side admin
+    // surface as POST just above (list/revoke enrolled bridges), not the
+    // helper's own credentialed WS connection — they must stay behind the
+    // normal gate too, not silently inherit /ws/agent-bridge's exemption
+    // just by sharing the /api/bridges prefix.
+    it("GET /api/bridges requires the configured MULLION_AUTH_TOKEN", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "GET", url: "/api/bridges" });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("DELETE /api/bridges/:id requires the configured MULLION_AUTH_TOKEN", async () => {
+      const app = await buildTestApp();
+      const res = await app.inject({ method: "DELETE", url: "/api/bridges/does-not-exist" });
+      expect(res.statusCode).toBe(401);
     });
 
     it("GET /ws/agent-bridge's handshake is reachable with NO MULLION_AUTH_TOKEN credential, even when one is configured", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
       const { app, port } = await buildAndListen();
 
       // Issue the pairing code via the registry directly (bypassing the
@@ -389,8 +546,6 @@ describe("agent-bridge routes (POST /api/bridges, GET /ws/agent-bridge, #820)", 
 
       expect(reply.type).toBe("ready");
       ws.close();
-      delete process.env.MULLION_AUTH_TOKEN;
-      delete process.env.MULLION_SESSION_SECRET;
     });
   });
 });

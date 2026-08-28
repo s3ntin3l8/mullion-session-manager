@@ -1,8 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket, RawData } from "ws";
 import {
+  deleteBridge,
   encodePairingPayload,
+  getBridgeRow,
   issuePairingCode,
+  listBridges,
   redeemPairingCode,
   touchBridgeLastSeen,
   verifyBridgeSession,
@@ -10,10 +13,18 @@ import {
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 
 // Issue #820 — the primary-side half of the SSH-agent bridge's laptop-
-// facing surface (see the design plan). Two routes:
+// facing surface (see the design plan). Four routes:
 //   - POST /api/bridges — Settings generates a pairing code. A normal,
 //     in-app-auth-gated admin action (same posture as POST /api/hosts),
 //     NOT exempted from authPlugin's global gate.
+//   - GET /api/bridges — Settings lists every enrolled bridge (PR7b),
+//     merging DB-recorded intent with live connection state — same
+//     posture, same gate, same "not exempted" reasoning as POST above.
+//   - DELETE /api/bridges/:id — Settings revokes a bridge (PR7b): closes
+//     its live connection (if any) before deleting the row, so a revoked
+//     helper stops being able to serve signatures immediately rather than
+//     whenever its socket happens to drop on its own. Same gate as the
+//     other two.
 //   - GET /ws/agent-bridge — the helper's actual persistent connection.
 //     Authenticated by its OWN credential (pairing code on first connect,
 //     a rotating session on every one after), carried in the connection's
@@ -71,6 +82,28 @@ interface PairResponse {
    * wouldn't be worth the new config knob. */
   pairing_payload: string;
   expires_at: string;
+}
+
+interface BridgeListItem {
+  id: string;
+  name: string | null;
+  platform: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  /** A live, unexpired session exists on this row (bridge-registry.ts's own
+   * `hasLiveSession`) — "this bridge is paired and its credential hasn't
+   * expired," independent of whether a socket happens to be open RIGHT
+   * NOW. */
+  hasLiveSession: boolean;
+  /** `app.connectedBridges.has(id)` at request time — "a helper is
+   * actually connected right now." Reported alongside `hasLiveSession`
+   * rather than instead of it, same "DB row = intent, in-memory map = live
+   * state, route merges the two" split hosts.ts's own GET /api/hosts uses
+   * for heartbeat health: a bridge can be paired (`hasLiveSession: true`)
+   * with its helper process not currently running (`connected: false`),
+   * and Settings needs to tell those apart, not collapse them into one
+   * status. */
+  connected: boolean;
 }
 
 type ClientHandshake =
@@ -144,6 +177,49 @@ export async function agentBridgeRoute(app: FastifyInstance) {
       };
     },
   );
+
+  app.get("/api/bridges", async (): Promise<BridgeListItem[]> => {
+    return listBridges(app).map((bridge) => ({
+      id: bridge.id,
+      name: bridge.name,
+      platform: bridge.platform,
+      lastSeenAt: bridge.lastSeenAt ? bridge.lastSeenAt.toISOString() : null,
+      createdAt: bridge.createdAt.toISOString(),
+      hasLiveSession: bridge.hasLiveSession,
+      connected: app.connectedBridges.has(bridge.id),
+    }));
+  });
+
+  // PR7b — revokes a bridge from Settings. Closes the live connection (if
+  // any) BEFORE deleting the row: a revoked helper must stop being able to
+  // serve signatures immediately, not whenever its socket happens to drop
+  // on its own — deleting the row alone would leave an already-open
+  // MuxConnection (and any channels ssh-agent-fanout.ts has paired through
+  // it) completely unaffected, since nothing on that live connection's own
+  // path re-checks the `bridges` table once a session is established
+  // (verifyBridgeSession only runs at handshake time).
+  app.delete<{ Params: { id: string } }>("/api/bridges/:id", async (request, reply) => {
+    const { id } = request.params;
+    if (getBridgeRow(app, id) === undefined) return reply.notFound();
+    // MuxConnection.close() closes every open channel on this connection
+    // AND its underlying WebSocket (see trackBridge's own comment, same
+    // module) — this route's own WS "close" handler below then removes the
+    // app.connectedBridges entry and calls reconfigureSshAgentFanout()
+    // itself once that fires. No explicit reconfigureSshAgentFanout() call
+    // needed here, UNLIKE routes/hosts.ts's own DELETE /api/hosts/:id:
+    // that route's explicit call is load-bearing because deleteHost()
+    // shrinks listHosts(), which reconcile() (ssh-agent-fanout.ts) reads
+    // directly — but reconcile()'s desired set never reads the `bridges`
+    // table at all, only app.connectedBridges.size (as a bare "is anything
+    // connected" gate) and listHosts(). deleteBridge() below changes
+    // neither of those, so a call right here would be a guaranteed no-op
+    // in both branches (bridge was connected / wasn't) — the close
+    // handler's own guarded call is the only one that actually needs to
+    // fire, once connectedBridges genuinely shrinks.
+    app.connectedBridges.get(id)?.mux.close();
+    deleteBridge(app, id);
+    return reply.code(204).send();
+  });
 
   app.get(
     "/ws/agent-bridge",
