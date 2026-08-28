@@ -37,6 +37,9 @@ const PROJECT = makeProject({ id: 1, name: "mullion", cwd: "/home/x/mullion" });
 let dockByProject: Record<number, unknown> = {};
 let checkUpdateByProject: Record<number, unknown> = {};
 let updateByProject: Record<number, unknown> = {};
+let rebuildByProject: Record<number, unknown> = {};
+let serviceActionResult: { success: boolean } = { success: true };
+let stackActionByProject: Record<number, unknown> = {};
 
 describe("Dock", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -46,6 +49,9 @@ describe("Dock", () => {
     dockByProject = {};
     checkUpdateByProject = {};
     updateByProject = {};
+    rebuildByProject = {};
+    serviceActionResult = { success: true };
+    stackActionByProject = {};
     ({ fetchMock } = mockFetch({
       "GET /api/projects/:id/github/prs": () => jsonResponse(204),
       "GET /api/projects/:id/dock": ({ params }) =>
@@ -55,6 +61,17 @@ describe("Dock", () => {
         jsonResponse(200, checkUpdateByProject[Number(params.id)] ?? {}),
       "POST /api/projects/:id/docker/update": ({ params }) =>
         jsonResponse(201, updateByProject[Number(params.id)] ?? {}),
+      "POST /api/projects/:id/docker/stack/rebuild": ({ params }) =>
+        jsonResponse(201, rebuildByProject[Number(params.id)] ?? {}),
+      "POST /api/projects/:id/docker/service/restart": () => jsonResponse(200, serviceActionResult),
+      "POST /api/projects/:id/docker/service/stop": () => jsonResponse(200, serviceActionResult),
+      "POST /api/projects/:id/docker/service/start": () => jsonResponse(200, serviceActionResult),
+      "POST /api/projects/:id/docker/stack/restart": ({ params }) =>
+        jsonResponse(201, stackActionByProject[Number(params.id)] ?? {}),
+      "POST /api/projects/:id/docker/stack/apply": ({ params }) =>
+        jsonResponse(201, stackActionByProject[Number(params.id)] ?? {}),
+      "POST /api/projects/:id/docker/stack/stop": ({ params }) =>
+        jsonResponse(201, stackActionByProject[Number(params.id)] ?? {}),
     }));
     vi.stubGlobal("fetch", fetchMock);
     resetStore({ projects: [PROJECT], sessions: [] });
@@ -171,6 +188,26 @@ describe("Dock", () => {
 
       expect(await screen.findByText("Check for update")).toBeInTheDocument();
       expect(createSession).not.toHaveBeenCalled();
+    });
+
+    // Previously uncovered (issue #73 follow-up plan) — every other test in
+    // this describe block exercises the kebab menu, never the header click
+    // that actually starts the log stream for a `source: "docker"` control.
+    it("clicking the header starts the log-stream session for a discovered Docker control", async () => {
+      dockByProject[1] = [dockerControl()];
+      const createSession = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], createSession });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      const header = await screen.findByText("web");
+      expect(screen.getByText("off")).toBeInTheDocument();
+      await user.click(header);
+
+      expect(createSession).toHaveBeenCalledWith(1, dockerControl().command, {
+        cwd: undefined,
+        kind: "dock",
+      });
     });
 
     it("'Check for update' calls the check-update endpoint and tints the image pill on an update", async () => {
@@ -290,7 +327,7 @@ describe("Dock", () => {
       expect(refreshSessions).toHaveBeenCalled();
     });
 
-    it("disables both kebab items for a build-only service", async () => {
+    it("a build-only service disables Check for update but offers an enabled Rebuild & restart, not a disabled Pull & restart", async () => {
       dockByProject[1] = [
         dockerControl({ docker: { ...dockerControl().docker, buildOnly: true } }),
       ];
@@ -302,9 +339,162 @@ describe("Dock", () => {
 
       await screen.findByText("Check for update");
       const checkBtn = screen.getByText("Check for update").closest("button");
-      const pullBtn = screen.getByText("Pull & restart stack").closest("button");
       expect(checkBtn).toBeDisabled();
-      expect(pullBtn).toBeDisabled();
+
+      // The bug this PR fixes: previously BOTH menu items were disabled for
+      // a build-only stack, leaving no lifecycle action reachable at all.
+      expect(screen.queryByText("Pull & restart stack")).not.toBeInTheDocument();
+      const rebuildBtn = screen.getByText("Rebuild & restart stack").closest("button");
+      expect(rebuildBtn).not.toBeDisabled();
+    });
+
+    it("'Rebuild & restart stack' requires arming before it fires the rebuild route", async () => {
+      dockByProject[1] = [
+        dockerControl({ docker: { ...dockerControl().docker, buildOnly: true } }),
+      ];
+      rebuildByProject[1] = {
+        sessionId: 43,
+        control: { id: "docker-rebuild:sanctuary", title: "Rebuild sanctuary", source: "docker" },
+      };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], refreshSessions });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Rebuild & restart stack"));
+
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/projects/1/docker/stack/rebuild",
+        expect.anything(),
+      );
+      await user.click(
+        await screen.findByText("Click again — rebuilds and restarts the whole stack"),
+      );
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/stack/rebuild",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+      expect(refreshSessions).toHaveBeenCalled();
+    });
+
+    it("service Restart/Start fire immediately (no arming) and Stop requires arming", async () => {
+      dockByProject[1] = [
+        dockerControl({ docker: { ...dockerControl().docker, state: "exited" } }),
+      ];
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+
+      await user.click(await screen.findByText("Restart service"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/service/restart",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      // state:"exited" (≠ running) — "Start service" must be offered.
+      await user.click(await screen.findByText("Start service"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/service/start",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Stop service"));
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/projects/1/docker/service/stop",
+        expect.anything(),
+      );
+      await user.click(await screen.findByText("Click again — stops this service"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/service/stop",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+    });
+
+    it("does not offer 'Start service' when the container is already running", async () => {
+      dockByProject[1] = [dockerControl()]; // default state: "running"
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      const user = userEvent.setup();
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+
+      await screen.findByText("Restart service");
+      expect(screen.queryByText("Start service")).not.toBeInTheDocument();
+    });
+
+    it("a failed service action shows a transient error status instead of silently no-op'ing", async () => {
+      dockByProject[1] = [dockerControl()];
+      serviceActionResult = { success: false };
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Restart service"));
+
+      const status = await screen.findByText("Restart failed");
+      expect(status).toHaveClass("dock-monitor-check-status", "error");
+    });
+
+    it("stack Restart/Apply fire immediately and Stop stack requires arming", async () => {
+      dockByProject[1] = [dockerControl()];
+      stackActionByProject[1] = {
+        sessionId: 44,
+        control: { id: "docker-restart:sanctuary", title: "Restart sanctuary", source: "docker" },
+      };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], refreshSessions });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Restart stack"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/stack/restart",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+      expect(refreshSessions).toHaveBeenCalled();
+
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Apply config"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/stack/apply",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Stop stack"));
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/projects/1/docker/stack/stop",
+        expect.anything(),
+      );
+      await user.click(await screen.findByText("Click again — stops the whole stack"));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/stack/stop",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
     });
 
     it("a manual dock.json control (no `docker` field) never renders a kebab", async () => {

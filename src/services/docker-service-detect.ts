@@ -75,6 +75,12 @@ export interface ComposeService {
    * explicit one (its own `.env` discovery still applies without this
    * flag). */
   envFile: string | null;
+  /** `com.docker.compose.config-hash` — the hash of this service's config
+   * AT THE TIME the running container was created. Compared against a
+   * freshly reconstructed `compose config --hash=<service>` by the
+   * recreate-precondition check (projects.ts) to tell a caller "this action
+   * will recreate the container" before it runs. */
+  configHash: string;
 }
 
 function warn(message: string, err?: unknown): void {
@@ -167,6 +173,7 @@ const PS_FORMAT = [
   '{{.Label "com.docker.compose.oneoff"}}',
   '{{.Label "com.docker.compose.project.config_files"}}',
   '{{.Label "com.docker.compose.project.environment_file"}}',
+  '{{.Label "com.docker.compose.config-hash"}}',
 ].join("\t");
 
 interface RawRow {
@@ -182,6 +189,7 @@ interface RawRow {
   oneoff: string;
   configFiles: string;
   envFile: string;
+  configHash: string;
 }
 
 function parsePsOutput(output: string): RawRow[] {
@@ -205,6 +213,7 @@ function parsePsOutput(output: string): RawRow[] {
       oneoff,
       configFiles,
       envFile,
+      configHash,
     ] = fields;
     if (!composeProject || !service || !workingDir) continue;
     rows.push({
@@ -220,6 +229,7 @@ function parsePsOutput(output: string): RawRow[] {
       oneoff: oneoff ?? "",
       configFiles: configFiles ?? "",
       envFile: envFile ?? "",
+      configHash: configHash ?? "",
     });
   }
   return rows;
@@ -318,6 +328,7 @@ function toComposeService(row: RawRow): ComposeService {
     composeResolvable: isComposeResolvable(configFiles, envFile),
     configFiles,
     envFile,
+    configHash: row.configHash,
   };
 }
 
@@ -416,6 +427,68 @@ export async function inspectImageId(imageRef: string): Promise<string | null> {
   if (output === null) return null;
   const trimmed = output.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+// restart/stop/start are ordinary, bounded compose operations — none of
+// them can run indefinitely the way `up -d` or a build can, so they get a
+// timeout well under PULL_TIMEOUT_MS rather than sharing it. Still an order
+// of magnitude above the 5s default DOCKER_TIMEOUT_MS used for cheap
+// `ps`/`inspect` probes, since restart/stop wait out the container's own
+// stop-grace-period (compose's default is 10s).
+const SERVICE_ACTION_TIMEOUT_MS = 20_000;
+
+/** Runs `docker compose <ctx> restart <service>` for one service — same
+ * argv-from-ComposeService-fields shape as pullComposeImageQuietly (never
+ * from a request body). Returns whether it succeeded; never throws. */
+export async function restartComposeService(service: ComposeService): Promise<boolean> {
+  const output = await runDocker(
+    ["compose", ...composeContextArgs(service), "restart", service.service],
+    SERVICE_ACTION_TIMEOUT_MS,
+  );
+  return output !== null;
+}
+
+/** Runs `docker compose <ctx> stop <service>` for one service. */
+export async function stopComposeService(service: ComposeService): Promise<boolean> {
+  const output = await runDocker(
+    ["compose", ...composeContextArgs(service), "stop", service.service],
+    SERVICE_ACTION_TIMEOUT_MS,
+  );
+  return output !== null;
+}
+
+/** Runs `docker compose <ctx> start <service>` for one service — for a
+ * stopped (`exited`) service; a no-op start on an already-running one is
+ * harmless but the caller (projects.ts) only offers this when state isn't
+ * already `running`. */
+export async function startComposeService(service: ComposeService): Promise<boolean> {
+  const output = await runDocker(
+    ["compose", ...composeContextArgs(service), "start", service.service],
+    SERVICE_ACTION_TIMEOUT_MS,
+  );
+  return output !== null;
+}
+
+/** `docker compose <ctx> config --hash=<service>` — recomputes the config
+ * hash for the service's definition AS IT STANDS ON DISK RIGHT NOW, for
+ * comparison against `ComposeService.configHash` (the hash recorded on the
+ * currently-running container, i.e. what it was `up`ed with). A mismatch
+ * means the compose file has changed since the container was created, so
+ * an action that can recreate (`up -d`, pull-restart, rebuild-restart)
+ * would replace it — see projects.ts's willRecreateOnApply(). Output is
+ * `"<service> <hash>"`; null on any failure (missing compose file, docker
+ * unreachable, …), same "can't tell" convention as inspectImageId. */
+export async function reconstructConfigHash(service: ComposeService): Promise<string | null> {
+  const output = await runDocker([
+    "compose",
+    ...composeContextArgs(service),
+    "config",
+    `--hash=${service.service}`,
+  ]);
+  if (output === null) return null;
+  const trimmed = output.trim();
+  const hash = trimmed.split(/\s+/).pop();
+  return hash && hash.length > 0 ? hash : null;
 }
 
 /**

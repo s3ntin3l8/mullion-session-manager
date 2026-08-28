@@ -85,6 +85,10 @@ import {
   composeContextFlags,
   pullComposeImageQuietly,
   inspectImageId,
+  restartComposeService,
+  stopComposeService,
+  startComposeService,
+  reconstructConfigHash,
   type ComposeService,
 } from "../services/docker-service-detect.js";
 import { createSessionRecord } from "../services/session-lifecycle.js";
@@ -1134,7 +1138,232 @@ export async function projectsRoute(app: FastifyInstance) {
           command,
           source: "docker" as const,
         },
+        willRecreate: await willRecreateOnApply(service),
       });
+    },
+  );
+
+  // Whether an action that runs `up -d` (this route's own pull-restart,
+  // plus stack/apply and stack/rebuild below) would RECREATE the
+  // container(s) — the on-disk compose config no longer matches what the
+  // running container was actually created from, so `up -d` would replace
+  // it rather than leave it untouched. Advisory only, never a guard: `null`
+  // ("couldn't tell" — compose file missing, docker unreachable, …) and
+  // `true` both let the caller proceed, just with different confirm-label
+  // wording on the frontend (issue #73 follow-up plan's "surface it in the
+  // arm-confirm label rather than blocking").
+  async function willRecreateOnApply(service: ComposeService): Promise<boolean | null> {
+    const currentHash = await reconstructConfigHash(service);
+    if (currentHash === null) return null;
+    return currentHash !== service.configHash;
+  }
+
+  // Shared by every stack-wide lifecycle route below (restart/apply/
+  // rebuild/stop) — same "spawn a kind:dock session, echo an ephemeral
+  // control" shape the docker/update route above established, so a
+  // multi-minute compose operation streams its own output instead of
+  // blocking the request or risking a reverse-proxy idle timeout.
+  async function startStackSession(
+    projectId: number,
+    service: ComposeService,
+    actionId: string,
+    title: string,
+    command: string,
+  ): Promise<
+    | {
+        ok: true;
+        sessionId: number;
+        control: { id: string; title: string; command: string; source: "docker" };
+      }
+    | { ok: false }
+  > {
+    const result = await createSessionRecord(app, {
+      projectId,
+      command,
+      kind: "dock",
+      name: title,
+    });
+    if (!result.ok) return { ok: false };
+    return {
+      ok: true,
+      sessionId: result.row.id,
+      control: {
+        id: `${actionId}:${service.composeProject}`,
+        title,
+        command,
+        source: "docker" as const,
+      },
+    };
+  }
+
+  // Per-service, inline lifecycle actions (restart/stop/start) — bounded
+  // compose operations (SERVICE_ACTION_TIMEOUT_MS in
+  // docker-service-detect.ts), so unlike the stack-wide actions below they
+  // run synchronously and return their own result rather than spawning a
+  // session. Force-refreshes the discovery cache on success so the very
+  // next `GET .../dock` poll reflects the new state instead of serving up
+  // to CACHE_TTL_MS of staleness.
+  const dockerServiceActionRoutes: Array<{
+    path: string;
+    run: (service: ComposeService) => Promise<boolean>;
+  }> = [
+    { path: "/api/projects/:id/docker/service/restart", run: restartComposeService },
+    { path: "/api/projects/:id/docker/service/stop", run: stopComposeService },
+    { path: "/api/projects/:id/docker/service/start", run: startComposeService },
+  ];
+  for (const { path, run } of dockerServiceActionRoutes) {
+    app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+      path,
+      { schema: dockerControlSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+      async (request, reply) => {
+        const projectId = Number(request.params.id);
+        if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        if (!project) return reply.notFound();
+        if (project.hostId !== LOCAL_HOST_ID) {
+          return reply.badRequest("Docker service management is only available for local projects");
+        }
+
+        const service = await resolveOwnedService(project, request.body.controlId);
+        if (!service) return reply.notFound();
+
+        const success = await run(service);
+        if (success) await getComposeServices(true);
+        return { success };
+      },
+    );
+  }
+
+  // Stack-wide lifecycle actions — each restarts/rebuilds/stops the WHOLE
+  // compose stack (not just the one service the controlId names), same
+  // "don't leave the stack internally inconsistent" reasoning as the
+  // existing pull-restart route above. Deliberately no `down`: it removes
+  // the containers entirely, so the service would drop out of `docker ps
+  // -a`, discovery would stop finding it, and the Dock control would
+  // vanish with no UI path back — `stop` below covers "I want this off"
+  // while leaving a way back on.
+  app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+    "/api/projects/:id/docker/stack/restart",
+    { schema: dockerControlSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.badRequest("Docker service management is only available for local projects");
+      }
+
+      const service = await resolveOwnedService(project, request.body.controlId);
+      if (!service) return reply.notFound();
+
+      const command = `docker compose ${composeContextFlags(service)} restart`;
+      const started = await startStackSession(
+        projectId,
+        service,
+        "docker-restart",
+        `Restart ${service.composeProject}`,
+        command,
+      );
+      if (!started.ok) return reply.badGateway("Failed to start the restart session");
+      return reply.code(201).send(started);
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+    "/api/projects/:id/docker/stack/apply",
+    { schema: dockerControlSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.badRequest("Docker service management is only available for local projects");
+      }
+
+      const service = await resolveOwnedService(project, request.body.controlId);
+      if (!service) return reply.notFound();
+
+      const command = `docker compose ${composeContextFlags(service)} up -d`;
+      const started = await startStackSession(
+        projectId,
+        service,
+        "docker-apply",
+        `Apply config ${service.composeProject}`,
+        command,
+      );
+      if (!started.ok) return reply.badGateway("Failed to start the apply session");
+      return reply.code(201).send({ ...started, willRecreate: await willRecreateOnApply(service) });
+    },
+  );
+
+  // The `build:`-only counterpart to the existing pull-restart route above
+  // — gated the mirror-opposite way (buildOnly must be TRUE here, not
+  // false), since a build-only service has no registry image for `pull` to
+  // do anything useful with.
+  app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+    "/api/projects/:id/docker/stack/rebuild",
+    { schema: dockerControlSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.badRequest("Docker service management is only available for local projects");
+      }
+
+      const service = await resolveOwnedService(project, request.body.controlId);
+      if (!service) return reply.notFound();
+      if (!service.buildOnly) {
+        return reply.badRequest("This service has a registry image — use Pull & restart instead");
+      }
+
+      const projectFlag = composeContextFlags(service);
+      const command = `docker compose ${projectFlag} build --pull && docker compose ${projectFlag} up -d`;
+      const started = await startStackSession(
+        projectId,
+        service,
+        "docker-rebuild",
+        `Rebuild ${service.composeProject}`,
+        command,
+      );
+      if (!started.ok) return reply.badGateway("Failed to start the rebuild session");
+      return reply.code(201).send({ ...started, willRecreate: await willRecreateOnApply(service) });
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+    "/api/projects/:id/docker/stack/stop",
+    { schema: dockerControlSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.badRequest("Docker service management is only available for local projects");
+      }
+
+      const service = await resolveOwnedService(project, request.body.controlId);
+      if (!service) return reply.notFound();
+
+      const command = `docker compose ${composeContextFlags(service)} stop`;
+      const started = await startStackSession(
+        projectId,
+        service,
+        "docker-stop",
+        `Stop ${service.composeProject}`,
+        command,
+      );
+      if (!started.ok) return reply.badGateway("Failed to start the stop session");
+      return reply.code(201).send(started);
     },
   );
 

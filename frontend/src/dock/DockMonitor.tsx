@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import type { DockControl, Session } from "../api/index.js";
-import { ContainerIcon, GlobeIcon, RefreshIcon } from "../ui/icons.js";
+import { ContainerIcon, GlobeIcon, RefreshIcon, KillIcon, PlayTriangleIcon } from "../ui/icons.js";
 import { TerminalPane } from "../TerminalPane.js";
 import { CustomSelect } from "../ui/CustomSelect.js";
 import type { CustomSelectOption } from "../ui/CustomSelect.js";
@@ -36,6 +36,13 @@ export function DockMonitor({
   onHeaderActivate,
   onCheckUpdate,
   onPullAndRestart,
+  onRebuildAndRestart,
+  onServiceRestart,
+  onServiceStop,
+  onServiceStart,
+  onStackRestart,
+  onStackApply,
+  onStackStop,
 }: {
   control: DockControl;
   running: Session | undefined;
@@ -54,6 +61,15 @@ export function DockMonitor({
   onHeaderActivate: () => void;
   onCheckUpdate: () => void;
   onPullAndRestart: () => void;
+  // build-only counterpart of onPullAndRestart — see DockColumn's own
+  // buildOnly branch for why exactly one of the two ever renders.
+  onRebuildAndRestart: () => void;
+  onServiceRestart: () => void;
+  onServiceStop: () => void;
+  onServiceStart: () => void;
+  onStackRestart: () => void;
+  onStackApply: () => void;
+  onStackStop: () => void;
 }) {
   return (
     <Fragment>
@@ -159,21 +175,94 @@ export function DockMonitor({
                 title={`${control.title} actions`}
                 items={[
                   {
+                    key: "service-restart",
+                    label: "Restart service",
+                    icon: <RefreshIcon size={12} />,
+                    section: "service",
+                    onClick: onServiceRestart,
+                  },
+                  {
+                    key: "service-stop",
+                    label: "Stop service",
+                    armLabel: "Click again — stops this service",
+                    icon: <KillIcon size={12} />,
+                    danger: true,
+                    confirm: true,
+                    section: "service",
+                    onClick: onServiceStop,
+                  },
+                  // "only offered when state ≠ running" (issue #73 follow-up
+                  // plan) — docker start on an already-running container is
+                  // a harmless no-op, but offering it reads as "this is off"
+                  // when the dot right next to it says otherwise.
+                  ...(control.docker.state !== "running"
+                    ? [
+                        {
+                          key: "service-start",
+                          label: "Start service",
+                          icon: <PlayTriangleIcon size={12} />,
+                          section: "service",
+                          onClick: onServiceStart,
+                        },
+                      ]
+                    : []),
+                  {
+                    key: "stack-restart",
+                    label: "Restart stack",
+                    icon: <RefreshIcon size={12} />,
+                    section: "stack",
+                    onClick: onStackRestart,
+                  },
+                  {
+                    key: "stack-apply",
+                    label: "Apply config",
+                    icon: <ContainerIcon size={12} />,
+                    section: "stack",
+                    onClick: onStackApply,
+                  },
+                  {
                     key: "check-update",
                     label: "Check for update",
                     icon: <RefreshIcon size={12} />,
                     disabled: control.docker.buildOnly,
+                    section: "stack",
                     onClick: onCheckUpdate,
                   },
+                  // Exactly one of pull-restart / rebuild-restart renders —
+                  // a build-only service (no registry image) gets the
+                  // rebuild variant instead of a permanently-disabled pull
+                  // action (the bug this PR fixes: previously BOTH menu
+                  // items were disabled for a build-only stack).
+                  control.docker.buildOnly
+                    ? {
+                        key: "stack-rebuild",
+                        label: "Rebuild & restart stack",
+                        armLabel: "Click again — rebuilds and restarts the whole stack",
+                        icon: <ContainerIcon size={12} />,
+                        danger: true,
+                        confirm: true,
+                        section: "stack",
+                        onClick: onRebuildAndRestart,
+                      }
+                    : {
+                        key: "stack-pull-restart",
+                        label: "Pull & restart stack",
+                        armLabel: "Click again — restarts the whole stack",
+                        icon: <ContainerIcon size={12} />,
+                        danger: true,
+                        confirm: true,
+                        section: "stack",
+                        onClick: onPullAndRestart,
+                      },
                   {
-                    key: "pull-restart",
-                    label: "Pull & restart stack",
-                    armLabel: "Click again — restarts the whole stack",
-                    icon: <ContainerIcon size={12} />,
+                    key: "stack-stop",
+                    label: "Stop stack",
+                    armLabel: "Click again — stops the whole stack",
+                    icon: <KillIcon size={12} />,
                     danger: true,
                     confirm: true,
-                    disabled: control.docker.buildOnly,
-                    onClick: onPullAndRestart,
+                    section: "stack",
+                    onClick: onStackStop,
                   },
                 ]}
               />
