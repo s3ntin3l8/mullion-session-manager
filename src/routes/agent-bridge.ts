@@ -7,6 +7,7 @@ import {
   touchBridgeLastSeen,
   verifyBridgeSession,
 } from "../services/bridge-registry.js";
+import { createMuxConnection } from "../services/ssh-agent-mux.js";
 
 // Issue #820 — the primary-side half of the SSH-agent bridge's laptop-
 // facing surface (see the design plan). Two routes:
@@ -27,11 +28,14 @@ import {
 // Primary-only (registered from src/app.ts's primary branch only — an
 // agent has no `bridges` table to pair a helper into).
 //
-// Scope note: this PR only gets a connection authenticated and tracked in
-// `app.connectedBridges` — it does not yet wire the connection into
-// ssh-agent-mux.ts's MuxConnection or fan out to any agent host. That's
-// the next PR in the same sequence. A successful handshake here leaves the
-// socket open and otherwise idle.
+// Scope note: as of PR5b, a successful handshake wraps the socket in a
+// ssh-agent-mux.ts MuxConnection and tracks it in `app.connectedBridges`
+// (see `ConnectedBridge`, plugins/agent-bridge.ts) — but nothing yet fans
+// a channel out to any agent host. That's PR5c: it's the first real
+// consumer of `.mux`, calling `.openChannel()` to pair an agent-side
+// SSH-client channel with one toward this bridge. Until then, an opened
+// channel would sit idle (a laptop's own filter never opens one
+// unprompted), same as this handshake being otherwise idle before it.
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 
@@ -89,23 +93,36 @@ function sendError(socket: NodeWebSocket, message: string): void {
   socket.close();
 }
 
-/** Records `socket` as the live connection for `bridgeId`, closing
- * whatever socket was PREVIOUSLY tracked there first (Hermes review, PR
- * #860). Without this, a reconnect (the "auth" path — a "pair" redeem
- * can't collide, since a pairing code always produces a brand-new
- * bridgeId) that lands before the OLD TCP connection has fired its own
- * "close" event (a flake or a silent network drop, not a clean
- * disconnect) would silently orphan that old socket: it stays OPEN, but
- * is no longer in the map, so its own close handler — which only deletes
- * the entry pointing at ITSELF — never runs the cleanup. Repeated
- * flapping would leak a growing number of live-but-untracked sockets
- * until TCP's own idle timeout eventually reaps them. Closing the
- * superseded socket here means there is only ever at most one tracked
- * (and one about-to-be-tracked) socket per bridge at any moment. */
+/** Records `socket` (wrapped in a `MuxConnection`) as the live connection
+ * for `bridgeId`, closing whatever connection was PREVIOUSLY tracked there
+ * first (Hermes review, PR #860). Without this, a reconnect (the "auth"
+ * path — a "pair" redeem can't collide, since a pairing code always
+ * produces a brand-new bridgeId) that lands before the OLD TCP connection
+ * has fired its own "close" event (a flake or a silent network drop, not a
+ * clean disconnect) would silently orphan that old connection: it stays
+ * OPEN, but is no longer in the map, so its own close handler — which only
+ * deletes the entry pointing at ITSELF — never runs the cleanup. Repeated
+ * flapping would leak a growing number of live-but-untracked sockets until
+ * TCP's own idle timeout eventually reaps them. Closing the superseded
+ * connection here means there is only ever at most one tracked (and one
+ * about-to-be-tracked) connection per bridge at any moment.
+ *
+ * `MuxConnection.close()` (ssh-agent-mux.ts) closes every open channel on
+ * the superseded connection AND its underlying WebSocket — a plain
+ * `socket.close()` alone would leave any channels PR5c later opens on it
+ * dangling with no `onClose` ever firing for their own local cleanup. */
 function trackBridge(app: FastifyInstance, bridgeId: string, socket: NodeWebSocket): void {
   const previous = app.connectedBridges.get(bridgeId);
-  if (previous && previous !== socket) previous.close();
-  app.connectedBridges.set(bridgeId, socket);
+  if (previous && previous.socket !== socket) previous.mux.close();
+  // Primary ACCEPTS this connection (the laptop helper dials out as the WS
+  // client) — "even" per ssh-agent-mux.ts's own dial-out/accept parity
+  // convention (`MuxConnectionOptions.channelIdParity`'s own doc), the
+  // same role split PR5b's agent-side `/internal/ws/ssh-agent` route uses
+  // for the identical reason (primary dials out there, so primary is
+  // "odd" on THAT connection — a different connection, no collision risk,
+  // but PR5c's fan-out logic must not confuse the two).
+  const mux = createMuxConnection(socket, { channelIdParity: "even" });
+  app.connectedBridges.set(bridgeId, { socket, mux });
 }
 
 export async function agentBridgeRoute(app: FastifyInstance) {
@@ -211,7 +228,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
       socket.on("close", () => {
         clearTimeout(handshakeTimeout);
         for (const [bridgeId, tracked] of app.connectedBridges) {
-          if (tracked === socket) app.connectedBridges.delete(bridgeId);
+          if (tracked.socket === socket) app.connectedBridges.delete(bridgeId);
         }
       });
     },

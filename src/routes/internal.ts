@@ -74,6 +74,7 @@ import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket } from "./events.js";
+import { createMuxConnection } from "../services/ssh-agent-mux.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -1859,6 +1860,62 @@ export async function internalRoutes(app: FastifyInstance) {
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
     (socket) => {
       attachLocalEventsSocket(app, socket);
+    },
+  );
+
+  // Issue #820 — the agent-side half of the SSH-agent bridge's fan-out
+  // leg: the primary dials THIS route (mirroring /internal/ws/attach and
+  // /internal/ws/events above — an agent never dials out for its own
+  // sake, the primary always dials in) to carry SSH-agent-protocol
+  // traffic for whatever local unix-socket connections this agent's own
+  // ssh-agent.sock (plugins/ssh-agent.ts, PR5a's materializeSshAgentSocket)
+  // accepts. Registered inside internalRoutes() like every other
+  // /internal/ws/* route specifically to inherit its bearer+signing
+  // onRequest gate (see this function's own top-of-file comment) — a
+  // route registered outside that scope would be unauthenticated.
+  //
+  // Load-bearing invariant for whatever primary-side code eventually dials
+  // this (PR5c): it must dial ONLY when a bridge is actually connected for
+  // THIS agent host, and must disconnect promptly when that bridge goes
+  // away. This route has no independent way to know whether a real laptop
+  // helper is reachable on the other end — the sole signal a locally
+  // materialized socket's `openChannel` callback (ssh-agent-socket.ts) has
+  // for "no bridge reachable, close immediately" is whether ANY primary
+  // connection is currently live here at all. Dialing in eagerly, for a
+  // health check, or before actually confirming a bridge is live would
+  // silently defeat that fail-fast behavior and hang a connecting `ssh`
+  // client instead.
+  app.get(
+    "/internal/ws/ssh-agent",
+    { websocket: true, config: INTERNAL_RATE_LIMIT.config },
+    (socket) => {
+      const holder = app.sshAgentBridgeConnection;
+      // Superseding, not accumulating — mirrors routes/agent-bridge.ts's
+      // own `trackBridge`: a reconnect landing before the OLD TCP
+      // connection has noticed it's dead (a flake, not a clean
+      // disconnect) must not leave that old connection's channels
+      // orphaned. MuxConnection.close() closes every one of its own open
+      // channels plus the underlying socket.
+      if (holder.current) holder.current.close();
+      // THIS side (the agent) accepts the connection — the primary dials
+      // out as the WS client to reach this route. Per ssh-agent-mux.ts's
+      // own dial-out/accept parity convention ("odd" for the dialer,
+      // "even" for the accepter), the agent is "even" here; whatever
+      // dials in (PR5c) must use "odd" to match. This is a DIFFERENT
+      // connection from routes/agent-bridge.ts's /ws/agent-bridge (where
+      // the LAPTOP dials out and the primary accepts, so primary is
+      // "even" THERE) — the two parity pairings are independent of each
+      // other, not mirror images to keep in sync.
+      const mux = createMuxConnection(socket, { channelIdParity: "even" });
+      holder.current = mux;
+      // Only clear `current` if it's STILL this same connection — a
+      // newer one may have already superseded it (the branch above) by
+      // the time this fires, in which case clearing would incorrectly
+      // drop the live replacement instead of the dead connection this
+      // listener is actually for.
+      mux.onClose(() => {
+        if (holder.current === mux) holder.current = null;
+      });
     },
   );
 

@@ -321,6 +321,36 @@ describe("agent-bridge routes (POST /api/bridges, GET /ws/agent-bridge, #820)", 
     });
   });
 
+  describe("MuxConnection wrapping (issue #820, PR5b)", () => {
+    it("wraps a successfully-paired socket in a usable MuxConnection — closing it tears down the underlying socket too", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+
+      const bridge = app.connectedBridges.get(reply.bridge_id!);
+      expect(bridge).toBeDefined();
+      expect(typeof bridge!.mux.openChannel).toBe("function");
+      expect(typeof bridge!.mux.onChannel).toBe("function");
+
+      // MuxConnection.close() closes every open channel AND the
+      // underlying WebSocket (ssh-agent-mux.ts) — proving `.mux` is a real,
+      // live wrapper around the SAME socket the client is holding, not an
+      // inert decoration, and that the route's own pre-existing "close"
+      // handler still fires (and cleans up connectedBridges) as a
+      // consequence, exactly as it would for a client-initiated close.
+      const closePromise = waitForClose(ws);
+      bridge!.mux.close();
+      await closePromise;
+      await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
+    });
+  });
+
   describe("auth gate exemption (issue #820)", () => {
     const TEST_TOKEN = "test-auth-token-0123456789"; // pragma: allowlist secret
     const TEST_SECRET = "test-session-secret-0123456789"; // pragma: allowlist secret
