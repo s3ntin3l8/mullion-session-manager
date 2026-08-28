@@ -21,6 +21,21 @@
 // decodeFrame — fixed-width header, fail-closed on anything malformed —
 // but is a distinct length-prefixed format (SSH agent protocol's own),
 // not this repo's mux frame format; the two must not be conflated.
+//
+// What this filter does NOT do (Hermes review, PR #856): allowing
+// SSH_AGENTC_SIGN_REQUEST through means a compromised or malicious primary
+// can still ask to sign arbitrary data with any loaded key — this module's
+// job is stopping MUTATION (add/remove/lock a key), not gating signing
+// itself. Per-signature authorization is the agent's own responsibility,
+// via whatever confirmation constraint the key was loaded with. Operators
+// who want a human-in-the-loop check on every signature, not just on key
+// load, should load keys with `ssh-add -c` (or 1Password's equivalent
+// per-use approval setting, see docs/ssh-agent.md) — loading a key WITHOUT
+// per-use confirmation means "list identities + sign" alone is enough for
+// a compromised primary to sign with it, unconfirmed, defeating a
+// confirm-on-add-only setup. This module cannot detect or enforce that
+// choice from here; it's a laptop-side agent configuration decision this
+// filter's existence doesn't change.
 
 const LENGTH_PREFIX_BYTES = 4;
 
@@ -188,7 +203,41 @@ export class SshAgentFrameTooLargeError extends Error {
  * unrelated byte streams.
  */
 export class SignOnlyFilter {
+  // `buffer` is a reused, over-allocated backing store — `length` tracks
+  // how many of its leading bytes are actually valid data; the rest is
+  // spare capacity. NOT a plain "concat the new chunk on every feed()"
+  // buffer (Hermes review, PR #856): that approach re-copies the ENTIRE
+  // accumulated buffer on every single call, since `Buffer.concat`
+  // produces a fresh, exactly-sized result each time — for a frame
+  // trickled in one byte at a time up to `MAX_FRAME_BYTES`, that's the
+  // classic repeated-concat pitfall, O(n²) total copying for n bytes of
+  // final size (a real, attacker-triggerable CPU-burn vector per
+  // connection, not just a style nitpick, even though bounded to one
+  // MAX_FRAME_BYTES-sized frame per instance). `append()` below instead
+  // grows capacity geometrically (double, like a standard dynamic array),
+  // so appends are amortized O(1) each — total work across reassembling
+  // one frame is O(frame size), not O(frame size²).
   private buffer: Buffer = Buffer.alloc(0);
+  private length = 0;
+
+  private append(chunk: Buffer): void {
+    const needed = this.length + chunk.length;
+    if (needed > this.buffer.length) {
+      const grown = Buffer.allocUnsafe(Math.max(needed, this.buffer.length * 2, 64));
+      this.buffer.copy(grown, 0, 0, this.length);
+      this.buffer = grown;
+    }
+    chunk.copy(this.buffer, this.length);
+    this.length += chunk.length;
+  }
+
+  /** Shifts whatever's left after extracting a frame down to the front of
+   * `buffer`, so the next `append()` keeps writing after genuinely-live
+   * data rather than stale bytes a prior frame already consumed. */
+  private consume(frameLength: number): void {
+    this.buffer.copy(this.buffer, 0, frameLength, this.length);
+    this.length -= frameLength;
+  }
 
   /**
    * Feed newly-arrived bytes from an untrusted requester. Returns however
@@ -207,21 +256,29 @@ export class SignOnlyFilter {
    * hitting the oversized frame, rather than discarding it.
    */
   feed(chunk: Buffer): FilterResult {
-    this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+    this.append(chunk);
     const forward: Buffer[] = [];
     const reject: Buffer[] = [];
 
     for (;;) {
-      if (this.buffer.length < LENGTH_PREFIX_BYTES) break;
+      if (this.length < LENGTH_PREFIX_BYTES) break;
       const bodyLength = this.buffer.readUInt32BE(0);
       if (bodyLength > MAX_FRAME_BYTES) {
         throw new SshAgentFrameTooLargeError(bodyLength, { forward, reject });
       }
       const frameLength = LENGTH_PREFIX_BYTES + bodyLength;
-      if (this.buffer.length < frameLength) break; // incomplete — wait for more bytes
+      if (this.length < frameLength) break; // incomplete — wait for more bytes
 
-      const frame = this.buffer.subarray(0, frameLength);
-      this.buffer = this.buffer.subarray(frameLength);
+      // Copied out, NOT a bare `subarray` view (unlike the previous,
+      // never-mutated-in-place version of this buffer): `this.buffer` is
+      // now a reused backing store that `append`/`consume` write into and
+      // shift in place, so a view into it would go stale — silently
+      // corrupted by whatever gets written there next — the moment a
+      // later `feed()` call runs. A returned frame must stay valid
+      // independently of this instance's own internal state forever
+      // after.
+      const frame = Buffer.from(this.buffer.subarray(0, frameLength));
+      this.consume(frameLength);
 
       // bodyLength === 0 is malformed (every real message has at least the
       // one type byte) — there's no type byte to read, so this can't be

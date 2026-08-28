@@ -118,6 +118,38 @@ describe("ssh-agent-filter", () => {
       expect(third.reject).toHaveLength(0);
     });
 
+    it("reassembles a frame trickled one byte at a time — the exact pathological case the growable-buffer rewrite targets (regression: Hermes review, PR #856 — the previous naive Buffer.concat-per-call approach re-copied the whole accumulated buffer on every single-byte feed())", () => {
+      const f = new SignOnlyFilter();
+      const input = frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("one-byte-at-a-time"));
+
+      let result;
+      for (let i = 0; i < input.length - 1; i++) {
+        result = f.feed(input.subarray(i, i + 1));
+        expect(result.forward).toHaveLength(0);
+        expect(result.reject).toHaveLength(0);
+      }
+      result = f.feed(input.subarray(input.length - 1));
+      expect(result.forward).toEqual([input]);
+    });
+
+    it("returned frames stay valid after later feed() calls — the reused internal buffer must not corrupt an already-returned frame (regression: switching from a fresh Buffer.concat per call to a reused, in-place-mutated backing buffer introduced exactly this risk if a returned frame were a bare view instead of a copy)", () => {
+      const f = new SignOnlyFilter();
+      const first = frame(SSH_AGENTC_REQUEST_IDENTITIES);
+      const firstResult = f.feed(first);
+      const returnedFrame = firstResult.forward[0];
+      const snapshot = Buffer.from(returnedFrame); // independent copy to compare against later
+
+      // Feed enough subsequent frames to force at least one capacity
+      // growth and one in-place shift in the internal buffer — the
+      // conditions under which a bare view (rather than a copy) would
+      // have gone stale.
+      for (let i = 0; i < 20; i++) {
+        f.feed(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.alloc(1000, i)));
+      }
+
+      expect(returnedFrame).toEqual(snapshot);
+    });
+
     it("classifies multiple frames delivered in a single chunk, preserving order", () => {
       const f = new SignOnlyFilter();
       const allowed1 = frame(SSH_AGENTC_REQUEST_IDENTITIES);
