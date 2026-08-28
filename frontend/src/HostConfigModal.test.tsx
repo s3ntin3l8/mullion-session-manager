@@ -88,3 +88,57 @@ describe("HostConfigModal — sshAuthSock diagnostics", () => {
     expect(await screen.findByText("unknown (agent predates this field)")).toBeInTheDocument();
   });
 });
+
+// Issue #820 PR7a/PR7c — `source` distinguishes WHY sshAuthSock has the
+// path it does, layered onto the three states above rather than a
+// standalone fifth branch. A build between PR5d and PR7a still reports
+// `{path, present}` with no `source` key at all (covered by the "live"
+// test above, which renders unchanged with no trailing label) — these
+// tests cover the three tagged cases plus that no-`source` passthrough.
+describe("HostConfigModal — sshAuthSock source label", () => {
+  const path = "/home/bjoern/.local/state/mullion-ssh-agent/agent.sock";
+
+  it("labels a configured (MULLION_SSH_AUTH_SOCK) source", async () => {
+    vi.mocked(api.getHostConfig).mockResolvedValue(
+      makeConfig({ sshAuthSock: { path, present: true, source: "configured" } }),
+    );
+    render(<HostConfigModal hostId="mgmt-id" hostName="mgmt" onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText(`${path} (present) — configured via MULLION_SSH_AUTH_SOCK`),
+    ).toBeInTheDocument();
+  });
+
+  it("labels an ambient source", async () => {
+    vi.mocked(api.getHostConfig).mockResolvedValue(
+      makeConfig({ sshAuthSock: { path, present: true, source: "ambient" } }),
+    );
+    render(<HostConfigModal hostId="mgmt-id" hostName="mgmt" onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText(
+        `${path} (present) — ambient (inherited on that host, not managed by Mullion)`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("labels a bridge-backed source", async () => {
+    vi.mocked(api.getHostConfig).mockResolvedValue(
+      makeConfig({ sshAuthSock: { path, present: true, source: "bridge" } }),
+    );
+    render(<HostConfigModal hostId="mgmt-id" hostName="mgmt" onClose={vi.fn()} />);
+
+    expect(
+      await screen.findByText(`${path} (present) — SSH agent bridge (Settings > Hosts)`),
+    ).toBeInTheDocument();
+  });
+
+  it("renders no trailing label when source is absent (agent predates PR7a's source tag)", async () => {
+    vi.mocked(api.getHostConfig).mockResolvedValue(
+      makeConfig({ sshAuthSock: { path, present: true } }),
+    );
+    render(<HostConfigModal hostId="mgmt-id" hostName="mgmt" onClose={vi.fn()} />);
+
+    expect(await screen.findByText(`${path} (present)`)).toBeInTheDocument();
+  });
+});

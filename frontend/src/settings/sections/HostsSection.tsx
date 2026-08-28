@@ -10,6 +10,7 @@ import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
 import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { BridgesSection } from "./BridgesSection.js";
 
 // Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
 // UPDATE_STATUS_POLL_MS (2000ms), which only gates the primary's own
@@ -391,6 +392,10 @@ export function HostsSection() {
           onClose={() => setViewingConfig(null)}
         />
       )}
+
+      <div style={{ marginTop: 28 }}>
+        <BridgesSection />
+      </div>
     </>
   );
 }

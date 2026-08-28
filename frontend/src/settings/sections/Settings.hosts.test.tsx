@@ -62,6 +62,11 @@ describe("Settings -> Hosts", () => {
       "GET /api/hosts": () => jsonResponse(200, hostsDb),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
+      // Issue #820 PR7c — HostsSection now always renders BridgesSection
+      // below the hosts list, which fetches this on mount regardless of
+      // what this file's own tests care about; not asserted on by any test
+      // here (see Settings.bridges.test.tsx for that).
+      "GET /api/bridges": () => jsonResponse(200, []),
       "DELETE /api/hosts/:id": ({ params, query }) => {
         const host = hostsDb.find((h) => h.id === params.id);
         if (!host) return jsonResponse(404, { message: "not found" });
