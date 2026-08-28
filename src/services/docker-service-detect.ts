@@ -434,8 +434,14 @@ export async function inspectImageId(imageRef: string): Promise<string | null> {
 // timeout well under PULL_TIMEOUT_MS rather than sharing it. Still an order
 // of magnitude above the 5s default DOCKER_TIMEOUT_MS used for cheap
 // `ps`/`inspect` probes, since restart/stop wait out the container's own
-// stop-grace-period (compose's default is 10s).
-const SERVICE_ACTION_TIMEOUT_MS = 20_000;
+// stop-grace-period — compose's own default is 10s, but a service can
+// override `stop_grace_period` well past that (Hermes review, PR #857: the
+// original 20s could time out and report `success:false` on a container
+// that was still gracefully stopping, not actually failing). 35s covers a
+// generous override while staying under PULL_TIMEOUT_MS and the ~60s
+// reverse-proxy idle default reasoned about above; docs/dock.md notes the
+// remaining edge case for an even longer override.
+const SERVICE_ACTION_TIMEOUT_MS = 35_000;
 
 /** Runs `docker compose <ctx> restart <service>` for one service — same
  * argv-from-ComposeService-fields shape as pullComposeImageQuietly (never

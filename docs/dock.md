@@ -280,6 +280,13 @@ starts or stops anything already running.
   no UI path back. **Stop stack**/**Stop service** cover "I want this off"
   while leaving an `exited` container that still shows up and can be
   started again.
+- **Restart/stop/start service run synchronously with a 35s timeout.** A
+  service with a `stop_grace_period` override longer than that (compose's
+  own default is 10s) can report a failed action even though the container
+  goes on to stop gracefully moments later — the request times out and
+  kills the client-side `docker compose` process, but the daemon-side stop
+  isn't cancelled by that. Rare in practice; a subsequent Dock poll shows
+  the container's real end state regardless of what the action reported.
 
 ## Dev server port detection
 
