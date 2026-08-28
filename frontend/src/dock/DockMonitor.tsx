@@ -6,6 +6,7 @@ import { CustomSelect } from "../ui/CustomSelect.js";
 import type { CustomSelectOption } from "../ui/CustomSelect.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
+import { isStartable } from "../dockerServiceStatus.js";
 import { imageTag } from "./dockHelpers.js";
 
 // A single dock monitor row (header + its live terminal body) — extracted
@@ -191,11 +192,12 @@ export function DockMonitor({
                     section: "service",
                     onClick: onServiceStop,
                   },
-                  // "only offered when state ≠ running" (issue #73 follow-up
-                  // plan) — docker start on an already-running container is
-                  // a harmless no-op, but offering it reads as "this is off"
-                  // when the dot right next to it says otherwise.
-                  ...(control.docker.state !== "running"
+                  // "only offered when startable" (issue #73 follow-up plan,
+                  // narrowed per Hermes review on PR #857) — `paused`/
+                  // `restarting` fail `docker compose start` outright, so
+                  // this checks the states start actually applies to rather
+                  // than just excluding `running`.
+                  ...(isStartable(control.docker.state)
                     ? [
                         {
                           key: "service-start",

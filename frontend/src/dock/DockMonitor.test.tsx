@@ -437,6 +437,21 @@ describe("Dock", () => {
       expect(screen.queryByText("Start service")).not.toBeInTheDocument();
     });
 
+    it.each(["paused", "restarting"])(
+      "does not offer 'Start service' for state:%s — docker compose start errors on it",
+      async (state) => {
+        dockByProject[1] = [dockerControl({ docker: { ...dockerControl().docker, state } })];
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const user = userEvent.setup();
+        await screen.findByText("web");
+        await user.click(document.querySelector(".kebab-trigger-btn")!);
+
+        await screen.findByText("Restart service");
+        expect(screen.queryByText("Start service")).not.toBeInTheDocument();
+      },
+    );
+
     it("a failed service action shows a transient error status instead of silently no-op'ing", async () => {
       dockByProject[1] = [dockerControl()];
       serviceActionResult = { success: false };

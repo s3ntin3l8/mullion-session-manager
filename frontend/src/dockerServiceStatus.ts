@@ -33,6 +33,16 @@ export function dockerServiceStatus(state: string): DockerStatusPresentation {
   return KNOWN_STATES[state] ?? { label: state, colorToken: "--dim" };
 }
 
+// Hermes review (PR #857) — `docker compose start` only succeeds from these
+// three states; offering it for `paused` (needs `unpause`, not `start`) or
+// `restarting` (already mid-transition) surfaces a button that reliably
+// errors.
+const STARTABLE_STATES = new Set(["created", "exited", "dead"]);
+
+export function isStartable(state: string): boolean {
+  return STARTABLE_STATES.has(state);
+}
+
 /**
  * Whether a "Check for update" result should still show as an update
  * available, given the CURRENT image id the control's own latest dock poll
