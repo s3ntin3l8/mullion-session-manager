@@ -159,6 +159,15 @@ export interface AppSettings {
      * it on by default doesn't change the dock's "never starts a monitor
      * without a click" invariant. */
     dockerServices: boolean;
+    /** Issue #73 follow-up (PR #857's plan) — whether a discovered Docker
+     * monitor with no matching session (control.docker.state === "running")
+     * has its log stream started automatically, instead of requiring a
+     * manual header click. Default false: unlike dockerServices above, this
+     * DOES change the "never starts a monitor without a click" invariant
+     * (deliberately, opt-in only) — and each auto-attached stream is one
+     * more PTY session per running container per visible column, a real
+     * resource cost the default shouldn't impose silently. */
+    autoAttachDockerLogs: boolean;
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -426,6 +435,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultWorktreeRefresh: false,
     autoDetectDevServer: "ask",
     dockerServices: true,
+    autoAttachDockerLogs: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

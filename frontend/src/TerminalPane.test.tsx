@@ -498,6 +498,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         defaultWorktreeRefresh: false,
         autoDetectDevServer: "ask",
         dockerServices: true,
+        autoAttachDockerLogs: false,
       },
       taskMaster: {
         autoClaimPaused: false,

@@ -190,6 +190,183 @@ describe("Dock", () => {
       expect(createSession).not.toHaveBeenCalled();
     });
 
+    describe("auto-attach Docker logs (PR3, settings.dock.autoAttachDockerLogs)", () => {
+      it("does not auto-attach a running container's logs when the setting is off (default)", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          createSession,
+          settings: { ...DEFAULT_SETTINGS, dock: { ...DEFAULT_SETTINGS.dock } },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        expect(createSession).not.toHaveBeenCalled();
+      });
+
+      it("auto-attaches a running container with no session when the setting is on", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await waitFor(() => {
+          expect(createSession).toHaveBeenCalledWith(1, dockerControl().command, {
+            kind: "dock",
+            name: "docker-logs:sanctuary-web",
+            nameLocked: true,
+          });
+        });
+      });
+
+      it("does not fight a manual stop — a poll that still shows the container running does not re-attach", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+        // Simulate the user manually stopping the log stream (deleteSession)
+        // — the session is gone, but the container itself (dockByProject)
+        // never stopped, so this is NOT a state transition.
+        useDashboardStore.setState({ sessions: [] });
+        dockByProject[1] = [dockerControl()]; // fresh array; state still "running"
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+        await screen.findByText("web");
+        // Flush the refetch's promise chain before asserting no wrongful
+        // second call landed.
+        await new Promise((r) => setTimeout(r, 0));
+        expect(createSession).toHaveBeenCalledTimes(1);
+      });
+
+      it("re-attaches after the container disappears from discovery entirely and comes back (compose down/up)", async () => {
+        // Hermes review — the eligibility map used to grow monotonically,
+        // never dropping an identity absent from the current poll. A plain
+        // container-state change ("running" -> "exited") is covered by the
+        // "does not fight a manual stop" test above, but `docker compose
+        // down` removes the container from `docker ps -a` entirely, so the
+        // control vanishes from discovery rather than merely changing
+        // state — without pruning, the stale `true` survived that gap and
+        // silently suppressed the re-attach edge once `up -d` recreated it.
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+        // "docker compose down" — the control disappears from discovery.
+        dockByProject[1] = [];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+        await waitFor(() => expect(screen.queryByText("web")).not.toBeInTheDocument());
+
+        // "docker compose up -d" — same identity, running again, no session.
+        dockByProject[1] = [dockerControl()];
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+      });
+
+      it("shows a transient status instead of an unhandled rejection when the auto-attach itself fails", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockRejectedValue(new Error("no free pty slots"));
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const status = await screen.findByText("Auto-attach failed");
+        expect(status).toHaveClass("dock-monitor-check-status", "error");
+      });
+
+      it("retries a failed auto-attach once the cooldown elapses, without waiting for a real eligibility edge", async () => {
+        // Hermes review, round 2 — recording `eligible: true` on a FAILED
+        // attempt (indistinguishable from a successful one) meant the
+        // false→true edge that's supposed to retry never fired again for
+        // that identity until the container itself cycled through
+        // non-running or the setting was toggled — a single transient
+        // failure permanently and silently lost auto-attach for a
+        // long-lived container. `Date.now()` is mocked (not real timers)
+        // so this doesn't need to actually wait 60s.
+        const T0 = 1_700_000_000_000;
+        const dateSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+        try {
+          dockByProject[1] = [dockerControl()];
+          const createSession = vi.fn().mockRejectedValueOnce(new Error("no free pty slots"));
+          useDashboardStore.setState({
+            projects: [PROJECT],
+            sessions: [],
+            sessionsLoaded: true,
+            createSession,
+            settings: {
+              ...DEFAULT_SETTINGS,
+              dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+            },
+          });
+          render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+          await screen.findByText("Auto-attach failed");
+          expect(createSession).toHaveBeenCalledTimes(1);
+
+          // Still within the cooldown — a poll must NOT retry yet.
+          createSession.mockResolvedValue({});
+          dockByProject[1] = [dockerControl()];
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+          await screen.findByText("web");
+          await new Promise((r) => setTimeout(r, 0));
+          expect(createSession).toHaveBeenCalledTimes(1);
+
+          // Cooldown elapsed — the next poll retries even with no state
+          // transition at all.
+          dateSpy.mockReturnValue(T0 + 61_000);
+          dockByProject[1] = [dockerControl()];
+          useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+          await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+        } finally {
+          dateSpy.mockRestore();
+        }
+      });
+    });
+
     // Previously uncovered (issue #73 follow-up plan) — every other test in
     // this describe block exercises the kebab menu, never the header click
     // that actually starts the log stream for a `source: "docker"` control.
@@ -201,12 +378,14 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       const header = await screen.findByText("web");
-      expect(screen.getByText("off")).toBeInTheDocument();
+      expect(screen.getByText("logs off")).toBeInTheDocument();
       await user.click(header);
 
       expect(createSession).toHaveBeenCalledWith(1, dockerControl().command, {
         cwd: undefined,
         kind: "dock",
+        name: "docker-logs:sanctuary-web",
+        nameLocked: true,
       });
     });
 
