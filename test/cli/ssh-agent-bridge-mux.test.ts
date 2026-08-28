@@ -1,8 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
-import net from "node:net";
+import net, { type Socket } from "node:net";
 import { WebSocketServer } from "ws";
 import { createMuxConnection, type MuxConnection } from "../../src/services/ssh-agent-mux.js";
-import { attachInboundMux, pipeNetSocketToChannel } from "../../src/cli/ssh-agent-bridge-mux.mjs";
+import {
+  attachInboundMux,
+  pipeNetSocketToChannel,
+  CHANNEL_WINDOW_BYTES,
+} from "../../src/cli/ssh-agent-bridge-mux.mjs";
 
 // Issue #820 (PR6) — the discriminating test for ssh-agent-bridge-mux.mjs:
 // a codec tested only against itself would happily pass while disagreeing
@@ -235,5 +239,101 @@ describe("ssh-agent-bridge-mux.mjs vs. the real ssh-agent-mux.ts", () => {
     const openFailCount = sent.filter((f) => f.readUInt8(0) === 3).length; // FrameType.OpenFail
     expect(openAckCount).toBe(256);
     expect(openFailCount).toBe(1);
+  });
+
+  // Issue #820 (PR6) — acknowledgeConsumed's own WINDOW_ADJUST-sending
+  // path (crossing WINDOW_ADJUST_THRESHOLD_BYTES) is otherwise untested by
+  // the small hello-world payloads the other tests here use. Sends enough
+  // data through pipeNetSocketToChannel in one direction to force a real
+  // WINDOW_ADJUST frame, and confirms it via the REAL server-side channel's
+  // own sendWindow actually growing back — that can only happen from a
+  // genuine WindowAdjust frame this file sent and ssh-agent-mux.ts
+  // processed, not from anything client-local.
+  it("acknowledgeConsumed sends a real WINDOW_ADJUST once drained data crosses the threshold", async () => {
+    const { wss, port } = await startServer();
+    cleanups.push(() => wss.close());
+
+    const serverMuxReady = new Promise<MuxConnection>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(createMuxConnection(socket, { channelIdParity: "even" }));
+      });
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => client.close());
+
+    const sink = net.createServer((socket) => socket.resume()); // discard, drain fast
+    await new Promise<void>((resolve) => sink.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => sink.close());
+    const sinkAddress = sink.address();
+    if (sinkAddress === null || typeof sinkAddress === "string") {
+      throw new Error("expected a real address");
+    }
+
+    attachInboundMux(client, {
+      onChannel(channel) {
+        const socket = net.connect({ port: sinkAddress.port, host: "127.0.0.1" });
+        pipeNetSocketToChannel(socket, channel);
+      },
+    });
+    await new Promise<void>((resolve) =>
+      client.addEventListener("open", () => resolve(), { once: true }),
+    );
+    const serverMux = await serverMuxReady;
+    const serverChannel = await serverMux.openChannel();
+
+    // Larger than WINDOW_ADJUST_THRESHOLD_BYTES (128 KiB) but within the
+    // 256 KiB channel window, so this is one legal send() call.
+    const windowAfterSend = CHANNEL_WINDOW_BYTES - 150_000;
+    serverChannel.send(Buffer.alloc(150_000, 1));
+    await waitUntil(() => serverChannel.sendWindow > windowAfterSend);
+  });
+
+  // Issue #820 (PR6) — eof()/close() and the receiving end's handleEof/
+  // closeLocally/teardown are otherwise only exercised implicitly, never
+  // asserted on directly. Confirms both propagate to the real local
+  // net.Socket pipeNetSocketToChannel wraps: eof() ends it (half-close),
+  // close() destroys it.
+  it("propagates eof() and close() through to the piped local net.Socket", async () => {
+    const { wss, port } = await startServer();
+    cleanups.push(() => wss.close());
+
+    const serverMuxReady = new Promise<MuxConnection>((resolve) => {
+      wss.once("connection", (socket) => {
+        resolve(createMuxConnection(socket, { channelIdParity: "even" }));
+      });
+    });
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => client.close());
+
+    const echo = net.createServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => echo.close());
+    const echoAddress = echo.address();
+    if (echoAddress === null || typeof echoAddress === "string") {
+      throw new Error("expected a real address");
+    }
+
+    let localSocket: Socket | undefined;
+    attachInboundMux(client, {
+      onChannel(channel) {
+        localSocket = net.connect({ port: echoAddress.port, host: "127.0.0.1" });
+        pipeNetSocketToChannel(localSocket, channel);
+      },
+    });
+    await new Promise<void>((resolve) =>
+      client.addEventListener("open", () => resolve(), { once: true }),
+    );
+    const serverMux = await serverMuxReady;
+    const serverChannel = await serverMux.openChannel();
+    await waitUntil(() => localSocket !== undefined);
+
+    const localEnded = new Promise<void>((resolve) => localSocket!.once("end", resolve));
+    serverChannel.eof();
+    await localEnded;
+
+    const localClosed = new Promise<void>((resolve) => localSocket!.once("close", resolve));
+    serverChannel.close();
+    await localClosed;
+    expect(localSocket!.destroyed).toBe(true);
   });
 });

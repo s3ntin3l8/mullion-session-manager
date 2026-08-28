@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket as NodeWebSocket } from "ws";
 import { buildTestApp } from "../helpers/app.js";
 import { decodePairingPayload, encodePairingPayload } from "../../src/services/bridge-registry.js";
 import { runHelper } from "../../src/cli/ssh-agent-helper.mjs";
@@ -215,6 +215,140 @@ describe("mullion helper (pair + run) against the real primary", () => {
     expect(fs.existsSync(path.join(stateDir, "ssh-agent-bridge.json"))).toBe(false);
 
     wss.close();
+  });
+});
+
+async function startFakeBridgeServer() {
+  const wss = new WebSocketServer({ port: 0 });
+  await new Promise<void>((resolve) => wss.once("listening", resolve));
+  const address = wss.address();
+  if (typeof address === "string" || address === null) throw new Error("expected a real address");
+  return { wss, baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+describe("handshake() failure modes (pair, against a fake bridge server)", () => {
+  // Issue #820 (PR6) — handshake()'s branches beyond the {type:"ready"} and
+  // {type:"error"} paths already exercised by the happy-path and
+  // invalid-session tests above: a peer that replies with garbage, a
+  // reply of the wrong shape, or one that drops the connection outright,
+  // each of which must reject with a clear message rather than hang or
+  // throw an unhandled error.
+  const scenarios: Array<{ name: string; act: (socket: NodeWebSocket) => void }> = [
+    {
+      name: "malformed JSON",
+      act: (socket) => socket.send("{not json"),
+    },
+    {
+      name: "well-formed JSON of the wrong shape",
+      act: (socket) =>
+        socket.send(JSON.stringify({ type: "ready" /* missing bridge_id/session_id */ })),
+    },
+    {
+      name: "an unrecognized message type",
+      act: (socket) => socket.send(JSON.stringify({ type: "surprise" })),
+    },
+    {
+      name: "the connection closing before any reply",
+      act: (socket) => socket.close(),
+    },
+  ];
+
+  for (const { name, act } of scenarios) {
+    it(`pair() fails cleanly on ${name}`, async () => {
+      const { wss, baseUrl } = await startFakeBridgeServer();
+      wss.once("connection", (socket) => {
+        socket.once("message", () => act(socket));
+      });
+
+      const payload = encodePairingPayload({ baseUrl, code: "irrelevant" });
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+      const io = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+      const code = await runHelper("pair", [payload], io);
+      expect(code).toBe(1);
+      expect(fs.existsSync(path.join(stateDir, "ssh-agent-bridge.json"))).toBe(false);
+
+      wss.close();
+    });
+  }
+
+  it("pair() fails cleanly when the socket errors before ever opening (unreachable host)", async () => {
+    // Port 1 on loopback: reserved, nothing ever listens there — a real,
+    // fast connection-refused, not a synthetic error.
+    const payload = encodePairingPayload({ baseUrl: "http://127.0.0.1:1", code: "irrelevant" });
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    const code = await runHelper("pair", [payload], io);
+    expect(code).toBe(1);
+  });
+});
+
+describe("mullion helper run()'s reconnect and dial-failure behavior", () => {
+  async function pairAndWaitForRunConnection(runIo: ReturnType<typeof fakeIo>) {
+    const { app, port } = await buildAndListen();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
+    const { pairing_payload } = (await pairRes.json()) as { pairing_payload: string };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const pairIo = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    await runHelper("pair", [pairing_payload, "--name", "test-laptop"], pairIo);
+    const credential = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "ssh-agent-bridge.json"), "utf8"),
+    );
+    await waitUntil(() => !app.connectedBridges.has(credential.bridgeId));
+
+    runIo.env.MULLION_HELPER_STATE_DIR = stateDir;
+    const runPromise = runHelper("run", [], runIo);
+    await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connected to")));
+    return { app, credential, runPromise };
+  }
+
+  // Issue #820 (PR6) — a channel the primary opens whose local dial target
+  // (SSH_AUTH_SOCK) doesn't exist must close the CHANNEL, not hang — the
+  // socket.on("error", () => channel.close()) branch in runRun's onChannel
+  // handler. Confirmed from the SERVER side: a channel the primary opened
+  // actually closes, rather than sitting open forever.
+  it("closes the channel (not just the local socket) when the local ssh-agent dial fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-nonexistent-"));
+    const runIo = fakeIo({ SSH_AUTH_SOCK: path.join(stateDir, "no-such-agent.sock") });
+    const { app, credential, runPromise } = await pairAndWaitForRunConnection(runIo);
+    const bridge = app.connectedBridges.get(credential.bridgeId)!;
+
+    const serverChannel = await bridge.mux.openChannel();
+    await waitUntil(() => serverChannel.closed);
+
+    runIo.triggerInterrupt();
+    bridge.mux.close();
+    expect(await runPromise).toBe(0);
+    await app.close();
+  });
+
+  // Issue #820 (PR6) — the reconnect-with-backoff path itself: a
+  // disconnect that ISN'T caused by the helper's own shutdown (stopped
+  // still false when mux.onClose fires) must log and loop back into a new
+  // connection attempt, not just exit. Confirmed by observing a SECOND
+  // "connected to" line after the primary drops the first connection out
+  // from under the client.
+  it("reconnects (not just exits) when the connection drops before the helper itself was asked to stop", async () => {
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    const { app, credential, runPromise } = await pairAndWaitForRunConnection(runIo);
+
+    // Drop the connection from the server side WITHOUT setting `stopped` —
+    // this is what a real network blip / laptop sleep looks like, as
+    // opposed to every other test's clean-shutdown ordering (interrupt
+    // first, then close).
+    app.connectedBridges.get(credential.bridgeId)!.mux.close();
+    // RECONNECT_DELAYS_MS[0] (1000ms) is a real, unmocked timer here — the
+    // reconnect loop backs off before its next attempt — so this needs
+    // more than the default 3000ms budget.
+    await waitUntil(
+      () => runIo.stderrLines.filter((line) => line.includes("connected to")).length >= 2,
+      8000,
+    );
+
+    runIo.triggerInterrupt();
+    app.connectedBridges.get(credential.bridgeId)!.mux.close();
+    expect(await runPromise).toBe(0);
+    await app.close();
   });
 });
 
