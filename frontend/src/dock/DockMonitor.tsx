@@ -122,15 +122,19 @@ export function DockMonitor({
                   : "var(--dim)",
               flexShrink: 0,
             }}
-            // Same "title carries the label a bare dot can't" — the
-            // dock-monitor-tag "on"/"off" text just below already
-            // labels the log-STREAM session; this dot instead
-            // reflects the CONTAINER's own state, which needs its
-            // own accessible label (sessionStatus.ts's "never color
-            // alone" rule) — same convention as dock/DockGithubRow.tsx's
-            // own CI dot (title="CI: ...").
+            // The dock-monitor-tag "logs on"/"logs off" text at the end of
+            // this header labels the log-STREAM session; this dot instead
+            // reflects the CONTAINER's own state, which needs its own
+            // accessible label (sessionStatus.ts's "never color alone"
+            // rule) — same convention as dock/DockGithubRow.tsx's own CI
+            // dot (title="CI: ..."). The title remains as a hover
+            // affordance on top of the always-visible text label below (PR3
+            // — a hover-only label was easy to miss entirely).
             title={dockerStatus ? `Container: ${dockerStatus.label}` : undefined}
           />
+          {dockerStatus && (
+            <span className="dock-monitor-container-state">{dockerStatus.label}</span>
+          )}
           <span className="dock-monitor-name">{control.title}</span>
           {showSelector && (
             <CustomSelect
@@ -278,7 +282,15 @@ export function DockMonitor({
             </span>
           )}
           <span className={`dock-monitor-tag${armed ? " armed" : ""}`}>
-            {armed ? "confirm?" : running ? "on" : "off"}
+            {armed
+              ? "confirm?"
+              : control.docker
+                ? running
+                  ? "logs on"
+                  : "logs off"
+                : running
+                  ? "on"
+                  : "off"}
           </span>
         </div>
         {running && (

@@ -38,7 +38,12 @@ describe("Settings -> Dock", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        dock: { defaultWorktreeRefresh: false, autoDetectDevServer: "ask", dockerServices: true },
+        dock: {
+          defaultWorktreeRefresh: false,
+          autoDetectDevServer: "ask",
+          dockerServices: true,
+          autoAttachDockerLogs: false,
+        },
       },
     });
   });
@@ -107,5 +112,25 @@ describe("Settings -> Dock", () => {
 
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(useDashboardStore.getState().settings.dock.dockerServices).toBe(false);
+  });
+
+  it("renders the auto-attach Docker logs toggle, defaulting to off", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    expect(await screen.findByText("Auto-attach Docker logs")).toBeInTheDocument();
+    expect(screen.getByTestId("dock-docker-autoattach-toggle")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("turns on auto-attach Docker logs", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    const toggle = await screen.findByTestId("dock-docker-autoattach-toggle");
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(useDashboardStore.getState().settings.dock.autoAttachDockerLogs).toBe(true);
   });
 });

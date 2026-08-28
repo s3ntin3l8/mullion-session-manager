@@ -1,4 +1,4 @@
-import type { Session } from "../api/index.js";
+import type { DockControl, Session } from "../api/index.js";
 
 // Pure helpers for Dock.tsx's monitor rendering — split out (Wave 5 / PR 28
 // of .claude/plans/can-we-do-a-warm-cocke.md) for the same
@@ -98,4 +98,42 @@ export function resolveSelectedValue(params: {
   }
 
   return mainCheckoutPath ?? controlCwd ?? "";
+}
+
+/**
+ * A stable session identity for a discovered Docker log-stream control,
+ * persisted as the session's own `name` (PR3 of
+ * .claude/plans/can-you-investigate-our-silly-lark.md). `control.command`
+ * is reconstructed fresh from live container labels on every discovery poll
+ * (composeContextFlags in docker-service-detect.ts) — it can change text
+ * between polls (a different config-file resolution, a fallback path
+ * kicking in) without the underlying service having changed at all, which
+ * would silently orphan a running log session if matched by command string
+ * alone. `containerName` is compose's own deterministic
+ * `<project>-<service>-<replica>` and survives a container recreation with
+ * the same service definition, so it's the stabler key. Returns `null` for
+ * a non-docker (dock.json) control, which has no such identity yet and
+ * keeps matching by command string (see `runningFor` below).
+ */
+export function dockerSessionIdentity(control: DockControl): string | null {
+  return control.docker ? `docker-logs:${control.docker.containerName}` : null;
+}
+
+/**
+ * Resolves the live session (if any) for a dock control. Prefers matching
+ * by `dockerSessionIdentity` for a docker-sourced control — stable across a
+ * re-synthesized `command` string — falling back to the original
+ * command-string match, which is still the only association a non-docker
+ * (dock.json) control has.
+ */
+export function runningSessionFor(
+  control: DockControl,
+  dockSessions: readonly Session[],
+): Session | undefined {
+  const identity = dockerSessionIdentity(control);
+  if (identity !== null) {
+    const byIdentity = dockSessions.find((s) => s.name === identity);
+    if (byIdentity) return byIdentity;
+  }
+  return dockSessions.find((s) => s.command === control.command);
 }

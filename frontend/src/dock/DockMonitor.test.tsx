@@ -190,6 +190,97 @@ describe("Dock", () => {
       expect(createSession).not.toHaveBeenCalled();
     });
 
+    describe("auto-attach Docker logs (PR3, settings.dock.autoAttachDockerLogs)", () => {
+      it("does not auto-attach a running container's logs when the setting is off (default)", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          createSession,
+          settings: { ...DEFAULT_SETTINGS, dock: { ...DEFAULT_SETTINGS.dock } },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await screen.findByText("web");
+        expect(createSession).not.toHaveBeenCalled();
+      });
+
+      it("auto-attaches a running container with no session when the setting is on", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await waitFor(() => {
+          expect(createSession).toHaveBeenCalledWith(1, dockerControl().command, {
+            kind: "dock",
+            name: "docker-logs:sanctuary-web",
+            nameLocked: true,
+          });
+        });
+      });
+
+      it("does not fight a manual stop — a poll that still shows the container running does not re-attach", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+        // Simulate the user manually stopping the log stream (deleteSession)
+        // — the session is gone, but the container itself (dockByProject)
+        // never stopped, so this is NOT a state transition.
+        useDashboardStore.setState({ sessions: [] });
+        dockByProject[1] = [dockerControl()]; // fresh array; state still "running"
+        useDashboardStore.getState().bumpDockConfigRefreshTrigger();
+
+        await screen.findByText("web");
+        // Flush the refetch's promise chain before asserting no wrongful
+        // second call landed.
+        await new Promise((r) => setTimeout(r, 0));
+        expect(createSession).toHaveBeenCalledTimes(1);
+      });
+
+      it("shows a transient status instead of an unhandled rejection when the auto-attach itself fails", async () => {
+        dockByProject[1] = [dockerControl()];
+        const createSession = vi.fn().mockRejectedValue(new Error("no free pty slots"));
+        useDashboardStore.setState({
+          projects: [PROJECT],
+          sessions: [],
+          sessionsLoaded: true,
+          createSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            dock: { ...DEFAULT_SETTINGS.dock, autoAttachDockerLogs: true },
+          },
+        });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const status = await screen.findByText("Auto-attach failed");
+        expect(status).toHaveClass("dock-monitor-check-status", "error");
+      });
+    });
+
     // Previously uncovered (issue #73 follow-up plan) — every other test in
     // this describe block exercises the kebab menu, never the header click
     // that actually starts the log stream for a `source: "docker"` control.
@@ -201,12 +292,14 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       const header = await screen.findByText("web");
-      expect(screen.getByText("off")).toBeInTheDocument();
+      expect(screen.getByText("logs off")).toBeInTheDocument();
       await user.click(header);
 
       expect(createSession).toHaveBeenCalledWith(1, dockerControl().command, {
         cwd: undefined,
         kind: "dock",
+        name: "docker-logs:sanctuary-web",
+        nameLocked: true,
       });
     });
 

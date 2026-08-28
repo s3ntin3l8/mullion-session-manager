@@ -53,6 +53,21 @@ export function DockSection() {
           onChange={(v) => updateSettings({ dock: { dockerServices: v } })}
         />
       </Row>
+      <Row
+        label="Auto-attach Docker logs"
+        desc={
+          "Start a running Docker service's log stream automatically instead" +
+          " of waiting for a click on its header. Costs one terminal" +
+          " session per running container per visible column, so it's off" +
+          " by default."
+        }
+      >
+        <Toggle
+          testId="dock-docker-autoattach-toggle"
+          on={d.autoAttachDockerLogs}
+          onChange={(v) => updateSettings({ dock: { autoAttachDockerLogs: v } })}
+        />
+      </Row>
     </>
   );
 }

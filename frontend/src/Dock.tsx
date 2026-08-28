@@ -17,7 +17,13 @@ import {
   writeJSON,
   writeNumber,
 } from "./lib/persistedState.js";
-import { clamp, isDockPreviewPath, resolveSelectedValue } from "./dock/dockHelpers.js";
+import {
+  clamp,
+  dockerSessionIdentity,
+  isDockPreviewPath,
+  resolveSelectedValue,
+  runningSessionFor,
+} from "./dock/dockHelpers.js";
 import { useDockGithubStatus } from "./dock/useDockGithubStatus.js";
 import { DockGithubRow } from "./dock/DockGithubRow.js";
 import { useArmedKill } from "./dock/useArmedKill.js";
@@ -323,6 +329,7 @@ function DockColumn({
   const {
     projects,
     sessions,
+    sessionsLoaded,
     gitBranchesByProject,
     settings,
     dockConfigRefreshTrigger,
@@ -331,6 +338,7 @@ function DockColumn({
     useShallow((s) => ({
       projects: s.projects,
       sessions: s.sessions,
+      sessionsLoaded: s.sessionsLoaded,
       gitBranchesByProject: s.gitBranchesByProject,
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
@@ -456,11 +464,14 @@ function DockColumn({
   const allOptions = [...worktreeOptions, ...branchOptions];
   const showSelector = allOptions.length > 1;
 
-  // Match by command alone within a project — the session might have been
-  // created with a worktree-specific cwd override (see worktree selector
-  // below), which would mismatch the old (control.cwd ?? project.cwd) check.
-  const runningFor = (control: DockControl) =>
-    dockSessions.find((s) => s.command === control.command);
+  // PR3 (issue #73 follow-up) — delegates to dockHelpers.ts's
+  // runningSessionFor, which matches a docker-sourced control by its stable
+  // dockerSessionIdentity (containerName) rather than the reconstructed
+  // `command` string alone; a non-docker control still matches by command
+  // (the session might have been created with a worktree-specific cwd
+  // override — see worktree selector below — which would mismatch the old
+  // (control.cwd ?? project.cwd) check).
+  const runningFor = (control: DockControl) => runningSessionFor(control, dockSessions);
 
   // Issue #73 — only an ephemeral control whose spawned session is STILL
   // active gets rendered; a finished/killed update run just disappears from
@@ -472,6 +483,58 @@ function DockColumn({
   const configuredControls = controls.filter((c) => c.source !== "docker");
   const discoveredControls = controls.filter((c) => c.source === "docker");
   const dockerGroupControls = [...liveEphemeralControls, ...discoveredControls];
+
+  // PR3 (issue #73 follow-up) — settings.dock.autoAttachDockerLogs. Tracks
+  // per-container whether it was "eligible" (setting on AND
+  // docker.state === "running") the last time this ran, keyed by the same
+  // dockerSessionIdentity used for matching above; a container's identity
+  // outlives a single poll's `controls` array, so this lives in a ref, not
+  // component state. Fires only on a false→true edge of eligibility — never
+  // on eligibility simply *holding* true — which is what makes both halves
+  // of the spec true at once: toggling the setting on (or a stopped service
+  // coming back up) is an edge and attaches; a user manually stopping the
+  // log stream while the container keeps running is NOT an edge (fills the
+  // same "eligible" box before and after) and is left alone. `runningFor`
+  // is still checked at the edge itself, so a session that's already
+  // attached (manual click, or a still-live stream that survived a plain
+  // `docker restart`) is never double-attached.
+  const autoAttachEligibleRef = useRef<Map<string, boolean>>(new Map());
+  useEffect(() => {
+    // `sessions` loads asynchronously (refreshSessions(), racing this
+    // column's own `immediate: true` dock poll on first mount) — without
+    // this gate, a poll that commits before sessions have ever loaded would
+    // see `dockSessions` as `[]`, read every already-attached container as
+    // "no session yet," and attach a duplicate that never gets cleaned up
+    // (this effect doesn't re-run just because `sessions` arrives later).
+    if (!sessionsLoaded) return;
+    const autoAttachOn = settings.dock.autoAttachDockerLogs;
+    for (const control of discoveredControls) {
+      const identity = dockerSessionIdentity(control);
+      if (identity === null) continue;
+      const eligible = autoAttachOn && control.docker?.state === "running";
+      const wasEligible = autoAttachEligibleRef.current.get(identity) ?? false;
+      if (eligible && !wasEligible && !runningFor(control)) {
+        // Left `eligible` (true) below either way on failure — a dead host
+        // or a bad config retrying every 15s would be spammy; the same
+        // false→true edge that got suppressed here re-arms exactly like a
+        // manual-stop suppression does, once the container cycles.
+        useDashboardStore
+          .getState()
+          .createSession(projectId, control.command, {
+            kind: "dock",
+            name: identity,
+            nameLocked: true,
+            ...(control.env ? { env: control.env } : {}),
+          })
+          .catch(() => {
+            console.warn("[dock] auto-attach docker logs failed", control.id);
+            showCheckStatus(control.id, "Auto-attach failed", true);
+          });
+      }
+      autoAttachEligibleRef.current.set(identity, eligible);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runningFor/discoveredControls are recomputed fresh from `controls`/`sessions` every render; depending on `controls` (what actually changes on a poll) avoids re-running this effect on every unrelated re-render of a large, frequently-updated component.
+  }, [controls, sessionsLoaded, settings.dock.autoAttachDockerLogs, projectId]);
 
   const handleCheckUpdate = async (control: DockControl) => {
     try {
@@ -637,6 +700,13 @@ function DockColumn({
           // relaunch instead of it disappearing into an unhandled rejection
           // — the exact P9 class of bug, previously sitting inside the very
           // restart path U5 fixes.
+          // PR3 — a docker-sourced control's session is named with its
+          // stable dockerSessionIdentity (and locked) so a manual header
+          // click matches the same way an auto-attached session does; see
+          // dockHelpers.ts's own doc comment for why command-string
+          // matching alone isn't reliable for these.
+          const dockIdentity = dockerSessionIdentity(control);
+          const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
           const launchForValue = (value: string) => {
             const effectiveCwd = value.length > 0 ? value : control.cwd;
             if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
@@ -645,12 +715,14 @@ function DockColumn({
                 kind: "dock",
                 worktree: { branch: branchName },
                 worktreeRefresh: effectiveWorktreeRefresh,
+                ...identityOpts,
                 ...(control.env ? { env: control.env } : {}),
               });
             }
             return useDashboardStore.getState().createSession(projectId, control.command, {
               ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
               kind: "dock",
+              ...identityOpts,
               ...(control.env ? { env: control.env } : {}),
             });
           };
