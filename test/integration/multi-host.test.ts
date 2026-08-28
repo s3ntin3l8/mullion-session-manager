@@ -191,11 +191,17 @@ describe("multi-host proxy (issue #26)", () => {
   // to either call) would otherwise leak in from whatever the actual
   // process env happens to be — save/restore explicitly instead.
   let prevSshAuthSock: string | undefined;
+  // Issue #820 PR5d — resolveSshAuthSock's ambient tier reads this
+  // process's own SSH_AUTH_SOCK too; same leak risk and same save/restore
+  // treatment as MULLION_SSH_AUTH_SOCK above.
+  let prevAmbientSshAuthSock: string | undefined;
 
   beforeAll(async () => {
     fs.rmSync(primaryDb, { force: true });
     prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
     delete process.env.MULLION_SSH_AUTH_SOCK;
+    prevAmbientSshAuthSock = process.env.SSH_AUTH_SOCK;
+    delete process.env.SSH_AUTH_SOCK;
 
     agent = await buildAndListen({
       MULLION_ROLE: "agent",
@@ -229,6 +235,8 @@ describe("multi-host proxy (issue #26)", () => {
     fs.rmSync(primaryDb, { force: true });
     if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
     else process.env.MULLION_SSH_AUTH_SOCK = prevSshAuthSock;
+    if (prevAmbientSshAuthSock === undefined) delete process.env.SSH_AUTH_SOCK;
+    else process.env.SSH_AUTH_SOCK = prevAmbientSshAuthSock;
   });
 
   it("discovers, spawns, lists as alive, attaches, and streams bytes through the proxy", async () => {
@@ -333,22 +341,27 @@ describe("multi-host proxy (issue #26)", () => {
   // that it works identically for this static-token host today and, once
   // #245 lands, a self-registered one; nothing here is registration-mode
   // specific.
+  // Issue #820 PR5d — the agent fixture no longer reports null here: with
+  // MULLION_SSH_AUTH_SOCK and ambient SSH_AUTH_SOCK both unset (this
+  // describe block's own beforeAll), the agent role falls back to its
+  // bridge-materialized socket (resolveSshAuthSock's tier 3), which
+  // sshAgentPlugin has genuinely bound by the time this request runs.
   it("pulls this agent's own effective config through the primary's proxy", async () => {
     const res = await primary.app.inject({
       method: "GET",
       url: `/api/hosts/${hostId}/config`,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
+    const body = res.json();
+    expect(body).toMatchObject({
       role: "agent",
       projectsRoots: [os.tmpdir()],
-      // #819/#822 SSH-agent follow-up — neither fixture sets
-      // MULLION_SSH_AUTH_SOCK, so both a real proxied agent and the local
-      // primary must report the same "not configured" null, not an
-      // agent-only default that would silently diverge from local's.
-      sshAuthSock: null,
     });
-    expect(typeof res.json().version).toBe("string");
+    expect(body.sshAuthSock).toEqual({
+      path: path.join(path.dirname(agent.app.pty.hookSocketPath), "ssh-agent.sock"),
+      present: true,
+    });
+    expect(typeof body.version).toBe("string");
   });
 
   it("resolves the local host's own config directly, with no proxying", async () => {

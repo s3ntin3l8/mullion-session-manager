@@ -8,7 +8,7 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
-import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
+import { resolveSshAuthSock, materializesBridgeSocket } from "../services/ssh-agent-socket.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 
@@ -156,16 +156,16 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // at boot: PtyManager freezes this into every Session it spawns for the
   // life of this process (see pty-manager.ts's own sshAuthSock field
   // comments), so there is no later point where re-reading it would matter.
-  // materializesBridgeSocket mirrors app.ts's own sshAgentPlugin
-  // registration condition below (agent-role-only today; a primary-local
-  // bridge socket is a later PR) — this can't read app.sshAgentBridgeConnection
-  // directly instead, since sshAgentPlugin registers after ptyPlugin.
+  // materializesBridgeSocket(...) can't read app.sshAgentBridgeConnection
+  // directly instead, since sshAgentPlugin registers after ptyPlugin — see
+  // that function's own comment for why this is a shared predicate rather
+  // than an inline role check repeated at every call site.
   const manager = new PtyManager({
     sessionsDir,
     sshAuthSock: resolveSshAuthSock({
       configured: app.config.MULLION_SSH_AUTH_SOCK,
       ambient: process.env.SSH_AUTH_SOCK,
-      materializesBridgeSocket: app.config.MULLION_ROLE === "agent",
+      materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
       sessionsDir,
     }),
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,

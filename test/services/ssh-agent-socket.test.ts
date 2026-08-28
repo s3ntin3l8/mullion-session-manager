@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   materializeSshAgentSocket,
+  materializesBridgeSocket,
   resolveSshAuthSock,
   sshAgentSocketPath,
 } from "../../src/services/ssh-agent-socket.js";
@@ -176,6 +177,16 @@ describe("sshAgentSocketPath", () => {
     expect(sshAgentSocketPath("/var/lib/mullion/sessions")).toBe(
       "/var/lib/mullion/sessions/ssh-agent.sock",
     );
+  });
+});
+
+describe("materializesBridgeSocket", () => {
+  it("is true for the agent role — the only role sshAgentPlugin registers for", () => {
+    expect(materializesBridgeSocket("agent")).toBe(true);
+  });
+
+  it("is false for the primary role", () => {
+    expect(materializesBridgeSocket("primary")).toBe(false);
   });
 });
 

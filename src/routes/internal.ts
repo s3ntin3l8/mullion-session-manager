@@ -75,7 +75,7 @@ import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket } from "./events.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
-import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
+import { resolveSshAuthSock, materializesBridgeSocket } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -413,7 +413,13 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // the raw MULLION_SSH_AUTH_SOCK value. Before this, buildAgentConfig was
   // a second, independent producer of this fact that PtyManager's own
   // resolution could silently drift from (e.g. reporting "not configured"
-  // while sessions were actually getting the bridge socket).
+  // while sessions were actually getting the bridge socket). Note that
+  // "not configured" (`sshAuthSock: null` below) still covers the ambient
+  // tier: when MULLION_SSH_AUTH_SOCK is unset but this process already
+  // inherits a real SSH_AUTH_SOCK, resolveSshAuthSock deliberately returns
+  // "" (see its own doc comment) — a session genuinely receives that
+  // inherited value, this just means *Mullion* isn't the one supplying it,
+  // so there's nothing Mullion-owned to report a path for.
   // path.dirname(app.pty.hookSocketPath), not app.config.SESSIONS_DIR:
   // ptyPlugin's own ensureSessionsDir() can redirect a too-long sessionsDir
   // to a short /tmp/ fallback, and hookSocketPath already reflects whichever
@@ -422,7 +428,7 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   const rawSshAuthSock = resolveSshAuthSock({
     configured: app.config.MULLION_SSH_AUTH_SOCK,
     ambient: process.env.SSH_AUTH_SOCK,
-    materializesBridgeSocket: app.config.MULLION_ROLE === "agent",
+    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
     sessionsDir: path.dirname(app.pty.hookSocketPath),
   });
   // Resolved the same way PtyManager's own constructor resolves this same

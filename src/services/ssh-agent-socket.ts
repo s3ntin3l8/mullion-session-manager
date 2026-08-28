@@ -84,6 +84,19 @@ export function sshAgentSocketPath(sessionsDir: string): string {
   return path.join(sessionsDir, "ssh-agent.sock");
 }
 
+// Issue #820 (Hermes review, PR #865) — mirrors sshAgentPlugin's own
+// registration predicate (src/app.ts's `MULLION_ROLE === "agent"` branch,
+// the only place that registers it): true exactly when this process will
+// materialize a bridge socket (plugins/ssh-agent.ts). plugins/pty.ts and
+// routes/internal.ts's buildAgentConfig both need this same answer for the
+// same reason resolveSshAuthSock exists at all — call this instead of each
+// keeping its own `=== "agent"` copy, so a PR5e primary-local bridge socket
+// only has to change this one function, not hunt down every call site that
+// silently assumed "agent-only" and risk missing one.
+export function materializesBridgeSocket(role: string): boolean {
+  return role === "agent";
+}
+
 /**
  * Issue #820 PR5d — what a spawned session's SSH_AUTH_SOCK should resolve
  * to, given the three things that can supply it. Precedence:
