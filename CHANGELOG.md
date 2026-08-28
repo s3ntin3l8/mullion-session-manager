@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.2](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.1...v0.3.2) (2026-08-28)
+
+
+### Features
+
+* **dock:** add Docker Compose service and stack lifecycle actions ([#857](https://github.com/s3ntin3l8/mullion-session-manager/issues/857)) ([3d691bd](https://github.com/s3ntin3l8/mullion-session-manager/commit/3d691bd30834fb39de750230f0c980e9b3f99cfe))
+* **dock:** auto-attach Docker logs, id-based session matching, visible container-state label ([#858](https://github.com/s3ntin3l8/mullion-session-manager/issues/858)) ([cc1bd3a](https://github.com/s3ntin3l8/mullion-session-manager/commit/cc1bd3a8874765ced2c1551394f2acc6d5795680))
+* **ssh-agent:** add /ws/agent-bridge route with pairing/session handshake ([#860](https://github.com/s3ntin3l8/mullion-session-manager/issues/860)) ([f9e3262](https://github.com/s3ntin3l8/mullion-session-manager/commit/f9e3262a4500f651b0325240ae996b671640ffc6))
+* **ssh-agent:** add agent-side /internal/ws/ssh-agent route, wrap bridge connections in MuxConnection ([#863](https://github.com/s3ntin3l8/mullion-session-manager/issues/863)) ([d2c9af9](https://github.com/s3ntin3l8/mullion-session-manager/commit/d2c9af942368a52f95abd22a8977e24ef8b07d74))
+* **ssh-agent:** add bridge credential model (pairing + rotating session) ([#859](https://github.com/s3ntin3l8/mullion-session-manager/issues/859)) ([df0993a](https://github.com/s3ntin3l8/mullion-session-manager/commit/df0993a9494dee004d4d613eebe3953108a5fd30))
+* **ssh-agent:** add credit-based WS channel multiplexer ([#853](https://github.com/s3ntin3l8/mullion-session-manager/issues/853)) ([86b7205](https://github.com/s3ntin3l8/mullion-session-manager/commit/86b72056949ac7e3d7a1fdfd0645b8276c53570e))
+* **ssh-agent:** add filtered channel relay and agent-side socket materialization ([#862](https://github.com/s3ntin3l8/mullion-session-manager/issues/862)) ([7da5550](https://github.com/s3ntin3l8/mullion-session-manager/commit/7da5550d76116bb6a19e5e515e3f48a803b797a6))
+* **ssh-agent:** add GET/DELETE /api/bridges (list + revoke) ([#868](https://github.com/s3ntin3l8/mullion-session-manager/issues/868)) ([caf6daf](https://github.com/s3ntin3l8/mullion-session-manager/commit/caf6dafc8bff4012ca3749ec204f13031af8be5c))
+* **ssh-agent:** add mullion helper CLI — pair + run ([#866](https://github.com/s3ntin3l8/mullion-session-manager/issues/866)) ([771f314](https://github.com/s3ntin3l8/mullion-session-manager/commit/771f31425eba5e5c9fb79b93afb25c035c75a78f))
+* **ssh-agent:** add mullion helper install/uninstall (macOS + Linux) ([#872](https://github.com/s3ntin3l8/mullion-session-manager/issues/872)) ([905966f](https://github.com/s3ntin3l8/mullion-session-manager/commit/905966f48fbd95cef91dee70ea99de84ce126f3a))
+* **ssh-agent:** add primary-side subscriber fanning out agent&lt;-&gt;bridge channels ([#864](https://github.com/s3ntin3l8/mullion-session-manager/issues/864)) ([d0456a3](https://github.com/s3ntin3l8/mullion-session-manager/commit/d0456a327a266c8c322033984a4a8c1145a41e3b))
+* **ssh-agent:** add sign-only protocol filter for the agent bridge ([#856](https://github.com/s3ntin3l8/mullion-session-manager/issues/856)) ([51f810e](https://github.com/s3ntin3l8/mullion-session-manager/commit/51f810eec712fecc1adec5e9ad11f9e2140f432d))
+* **ssh-agent:** frontend pairing UI + host status source label ([#869](https://github.com/s3ntin3l8/mullion-session-manager/issues/869)) ([b504a7c](https://github.com/s3ntin3l8/mullion-session-manager/commit/b504a7ccd399d3d8544e012ac0100cb1d58bf453))
+* **ssh-agent:** resolve SSH_AUTH_SOCK precedence for bridge sessions ([#865](https://github.com/s3ntin3l8/mullion-session-manager/issues/865)) ([3d8afeb](https://github.com/s3ntin3l8/mullion-session-manager/commit/3d8afebe333d84dff2616c46a9e6861cf7305daf))
+* **ssh-agent:** tag sshAuthSock's resolved source (configured/ambient/bridge/none) ([#867](https://github.com/s3ntin3l8/mullion-session-manager/issues/867)) ([fedbdf4](https://github.com/s3ntin3l8/mullion-session-manager/commit/fedbdf43b2a0acfc7a120e9b61d643f4653ec8a6))
+
+
+### Bug Fixes
+
+* **dock:** reconstruct docker compose's own -f/--env-file context ([#854](https://github.com/s3ntin3l8/mullion-session-manager/issues/854)) ([a1d31b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/a1d31b9fc32595ff38f4d3fea6eacf687ac65a18))
+* **hooks:** stop dev worktrees from dangling agy/Codex's host-global hook path ([#861](https://github.com/s3ntin3l8/mullion-session-manager/issues/861)) ([6203b0e](https://github.com/s3ntin3l8/mullion-session-manager/commit/6203b0e8f48577a84ecf50fd49f746519e68495f))
+
 ## [0.3.1](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.0...v0.3.1) (2026-08-27)
 
 
