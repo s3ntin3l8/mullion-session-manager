@@ -105,20 +105,36 @@ export function issuePairingCode(app: FastifyInstance): PairingCode {
   return { bridgeId: id, code, expiresAt };
 }
 
-function issueSession(app: FastifyInstance, bridgeId: string): BridgeSession {
+// Split out from issueSession() so redeemPairingCode() below can generate
+// and encrypt a session's fields WITHOUT writing to the DB itself — it
+// writes them as part of the same transaction that clears the pairing
+// code, rather than issueSession()'s own separate, self-contained update.
+// Pure (no DB access), so it's safe to call from inside or outside a
+// transaction either way.
+function buildSession(
+  app: FastifyInstance,
+  bridgeId: string,
+): {
+  session: BridgeSession;
+  row: Pick<BridgeRow, "sessionIdEnc" | "sessionSecretEnc" | "sessionExpiresAt">;
+} {
   const sessionId = crypto.randomBytes(32).toString("hex");
   const sessionSecret = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  app.db
-    .update(bridges)
-    .set({
+  return {
+    session: { bridgeId, sessionId, sessionSecret, expiresAt },
+    row: {
       sessionIdEnc: app.encryption.encryptString(sessionId),
       sessionSecretEnc: app.encryption.encryptString(sessionSecret),
       sessionExpiresAt: expiresAt,
-    })
-    .where(eq(bridges.id, bridgeId))
-    .run();
-  return { bridgeId, sessionId, sessionSecret, expiresAt };
+    },
+  };
+}
+
+function issueSession(app: FastifyInstance, bridgeId: string): BridgeSession {
+  const { session, row } = buildSession(app, bridgeId);
+  app.db.update(bridges).set(row).where(eq(bridges.id, bridgeId)).run();
+  return session;
 }
 
 export interface RedeemPairingInput {
@@ -143,6 +159,16 @@ export interface RedeemPairingInput {
  * row that fails to decrypt is logged and treated as a non-match, not
  * re-thrown, for the identical reason claimHost does: a single corrupt row
  * must never deny every legitimate pairing attempt.
+ *
+ * The pairing-clear and the session-issue below run inside ONE transaction
+ * (Hermes review, PR #859), not as two independent updates — this table's
+ * pairing code is genuinely single-use with no idempotent-retry path (see
+ * above), so a crash between "clear the code" and "issue the session"
+ * would otherwise burn the code permanently with no session ever created,
+ * leaving the row unrecoverable without deleting and re-pairing from
+ * scratch. `better-sqlite3`'s driver is synchronous, so this transaction
+ * has no await inside it and can't interleave with another call the way an
+ * async driver's could.
  */
 export function redeemPairingCode(
   app: FastifyInstance,
@@ -169,18 +195,22 @@ export function redeemPairingCode(
     if (isMatch && matchedRow === undefined) matchedRow = row;
   }
   if (matchedRow === undefined) return null;
-  app.db
-    .update(bridges)
-    .set({
-      name: input.name?.trim() || null,
-      platform: input.platform ?? null,
-      pairingSecretEnc: null,
-      pairingExpiresAt: null,
-      lastSeenAt: new Date(),
-    })
-    .where(eq(bridges.id, matchedRow.id))
-    .run();
-  return issueSession(app, matchedRow.id);
+  const bridgeId = matchedRow.id;
+  const { session, row: sessionRow } = buildSession(app, bridgeId);
+  app.db.transaction((tx) => {
+    tx.update(bridges)
+      .set({
+        name: input.name?.trim() || null,
+        platform: input.platform ?? null,
+        pairingSecretEnc: null,
+        pairingExpiresAt: null,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(bridges.id, bridgeId))
+      .run();
+    tx.update(bridges).set(sessionRow).where(eq(bridges.id, bridgeId)).run();
+  });
+  return session;
 }
 
 // Shared by rotateBridgeSession and verifyBridgeSession — the read-only
