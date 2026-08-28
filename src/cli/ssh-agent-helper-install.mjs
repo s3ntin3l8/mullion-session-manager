@@ -59,10 +59,15 @@ function xmlEscape(value) {
 
 /** Only quotes a systemd ExecStart token when it actually needs it (unit
  * files are otherwise more readable unquoted) — systemd's own quoting rules
- * (man systemd.syntax): double-quote, backslash-escape embedded `"`/`\`. */
+ * (man systemd.syntax): double-quote, backslash-escape embedded `"`/`\`.
+ * `%` is escaped as `%%` unconditionally, quoted or not — systemd expands
+ * `%`-specifiers (%h, %u, %n, ...) in ExecStart even inside double quotes,
+ * so a literal `%` in a path (execPath, or an unlucky SSH_AUTH_SOCK) would
+ * otherwise be silently mangled rather than passed through. */
 function systemdQuote(token) {
-  if (!/[\s"\\]/.test(token)) return token;
-  return `"${token.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const escaped = token.replace(/%/g, "%%");
+  if (!/[\s"\\]/.test(escaped)) return escaped;
+  return `"${escaped.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /** XML forbids a literal `--` inside a comment body (would break
@@ -147,6 +152,18 @@ function resolveSshAuthSock(flags, io) {
         "the generated unit at install time, not re-read from the environment later.",
     );
   }
+  // Warn-only, not a hard block: a dangling socket is the expected state
+  // whenever the actual agent app isn't running yet (same philosophy as
+  // the manual tunnel's own "present: false" diagnostic in
+  // docs/ssh-agent.md) — the path can be perfectly correct and just not
+  // live yet at install time.
+  const stat = (io.statSync ?? fs.statSync)(value, { throwIfNoEntry: false });
+  if (!stat) {
+    io.stderr.write(
+      `note: ${value} doesn't exist right now — that's fine if the agent app just isn't ` +
+        "running yet, but double-check the path if this is unexpected.\n",
+    );
+  }
   return value;
 }
 
@@ -176,6 +193,13 @@ function installLaunchd(io, { execPath, scriptPath, sshAuthSock }) {
   fs.writeFileSync(plistPath, buildLaunchdPlist({ execPath, scriptPath, sshAuthSock, logPath }));
   const result = runSpawnSync(io, "launchctl", ["bootstrap", `gui/${uid}`, plistPath]);
   if (result.status !== 0) {
+    // Roll back the just-written file on a failed bootstrap — otherwise
+    // uninstall later finds a plist on disk for a job that was NEVER
+    // actually loaded, runs bootout against it, gets launchd's "could not
+    // find service" non-zero exit, treats that as a genuine teardown
+    // failure (see uninstallLaunchd's own reasoning), and refuses to clean
+    // up — wedging the user until they `rm` it by hand (Hermes review).
+    fs.rmSync(plistPath, { force: true });
     io.stderr.write(
       `launchctl bootstrap failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
     );
@@ -200,6 +224,12 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
   runSpawnSync(io, "systemctl", ["--user", "daemon-reload"]);
   const result = runSpawnSync(io, "systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT_NAME]);
   if (result.status !== 0) {
+    // Same rollback reasoning as installLaunchd's own bootstrap-failure
+    // branch — systemd's `disable` is idempotent on a not-enabled unit
+    // (unlike launchd's bootout), so this is more of a symmetry/defense-
+    // in-depth measure than a confirmed-necessary fix on this platform.
+    fs.rmSync(unitPath, { force: true });
+    runSpawnSync(io, "systemctl", ["--user", "daemon-reload"]);
     io.stderr.write(
       `systemctl enable failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
     );

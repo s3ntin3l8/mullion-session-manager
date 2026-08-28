@@ -137,6 +137,16 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain('"C:\\\\weird \\"path\\"\\\\agent.sock"');
   });
 
+  it("escapes a literal % so systemd doesn't expand it as a specifier", () => {
+    const unit = buildSystemdUnit({
+      execPath: "/usr/bin/node",
+      scriptPath: "/opt/mullion/dist/cli/mullion.mjs",
+      sshAuthSock: "/tmp/100%-sure/agent.sock",
+    });
+    expect(unit).toContain("/tmp/100%%-sure/agent.sock");
+    expect(unit).not.toContain("/tmp/100%-sure/agent.sock");
+  });
+
   it("sets Restart=always with a calm (non-tight-loop) RestartSec", () => {
     const unit = buildSystemdUnit({
       execPath: "/usr/bin/node",
@@ -278,6 +288,21 @@ describe("runInstall / runUninstall", () => {
     const code = await runInstall([], io);
     expect(code).toBe(1);
     expect(stderrLines.join("")).toMatch(/systemctl enable failed/);
+
+    // Rollback: a failed install must not leave an orphaned unit file
+    // behind — otherwise uninstall later finds a file for a job that was
+    // never actually enabled, runs disable against it, and (depending on
+    // platform) can get wedged (Hermes review).
+    const unitPath = systemdUnitPath(io);
+    expect(existsSync(unitPath)).toBe(false);
+    const postRollbackCalls: string[][] = [];
+    io.spawnSync = (cmd: string, args: string[]) => {
+      postRollbackCalls.push([cmd, ...args]);
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const uninstallCode = await runUninstall([], io);
+    expect(uninstallCode).toBe(0);
+    expect(postRollbackCalls).toEqual([]);
   });
 
   it("darwin: writes a launchd plist under LaunchAgents and bootstraps it", async () => {
@@ -306,6 +331,18 @@ describe("runInstall / runUninstall", () => {
     const code = await runInstall([], io);
     expect(code).toBe(1);
     expect(stderrLines.join("")).toMatch(/launchctl bootstrap failed/);
+
+    // Rollback: this is the exact scenario Hermes flagged — without it, a
+    // subsequent uninstall would find the orphaned plist, run bootout
+    // against a job that was never bootstrapped, get launchd's "could not
+    // find service" non-zero exit, and refuse to clean up.
+    const plistPath = launchdPlistPath(io);
+    expect(existsSync(plistPath)).toBe(false);
+    io.spawnSync = () => {
+      throw new Error("uninstall should have nothing to tear down and must not shell out");
+    };
+    const uninstallCode = await runUninstall([], io);
+    expect(uninstallCode).toBe(0);
   });
 
   it("win32: refuses cleanly, no files written", async () => {
@@ -352,6 +389,32 @@ describe("runInstall / runUninstall", () => {
     const code = await runInstall([], io);
     expect(code).toBe(0);
     expect(stderrLines.join("")).not.toMatch(/not paired yet/);
+  });
+
+  it("warns (but doesn't fail) when --ssh-auth-sock doesn't exist on disk yet", async () => {
+    // baseIo's default SSH_AUTH_SOCK ("/tmp/agent.sock") is itself a
+    // nonexistent path, same as most other tests in this file — this test
+    // just makes that existing default's warning behavior explicit.
+    const { io, dir: d } = baseIo({ platform: "linux" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    expect(stderrLines.join("")).toMatch(/doesn't exist right now/);
+  });
+
+  it("does not warn about a --ssh-auth-sock that does exist on disk", async () => {
+    const { io, dir: d } = baseIo({ platform: "linux" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const realSockPath = path.join(d, "real.sock");
+    writeFileSync(realSockPath, "");
+    io.env = { ...(io.env as Record<string, string>), SSH_AUTH_SOCK: realSockPath };
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    expect(stderrLines.join("")).not.toMatch(/doesn't exist right now/);
   });
 
   it("linux: uninstall removes the unit and disables it; a no-op is not an error", async () => {
