@@ -438,6 +438,9 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // instead — it's a real path this process inherited and sessions actually
   // get it — so Settings > Hosts can show *something* other than "unknown"
   // for the one tier resolveSshAuthSock deliberately returns empty for.
+  // `?? ""` is defensive, not reachable: resolveSshAuthSock only ever
+  // returns source "ambient" when it saw `ambientSshAuthSock` truthy (see
+  // its own precedence — that's the whole point of this substitution).
   const rawSshAuthSock = resolved.source === "ambient" ? (ambientSshAuthSock ?? "") : resolved.path;
   // For `configured`/`bridge`, resolved the same way PtyManager's own
   // constructor resolves this same value (pty-manager.ts) — a relative path
@@ -470,10 +473,10 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     // function's two callers (this route, and hosts.ts's `local` branch)
     // needs to change shape. A dangling socket is expected, not an error
     // (see AgentConfig's own comment); this is read-only visibility only.
-    // `source` is omitted only when sshAuthSockPath === "" (the "none"
-    // tier, reported as `null` below — same as before PR7a); it's always
-    // present alongside a path so the frontend never has to guess which
-    // tier produced a given path.
+    // `source` is present on every non-null case below; the only case with
+    // no `source` to report is sshAuthSockPath === "" (the "none" tier),
+    // which reports `null` for the whole field below — same as before
+    // PR7a — rather than an object with nothing useful in it.
     sshAuthSock:
       sshAuthSockPath === ""
         ? null
