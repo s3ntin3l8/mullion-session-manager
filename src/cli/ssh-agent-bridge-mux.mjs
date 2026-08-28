@@ -48,6 +48,19 @@ export const FrameType = Object.freeze({
 export const CHANNEL_WINDOW_BYTES = 256 * 1024;
 const WINDOW_ADJUST_THRESHOLD_BYTES = CHANNEL_WINDOW_BYTES / 2;
 
+// Mirrors DEFAULT_MAX_CHANNELS in src/services/ssh-agent-mux.ts (Hermes
+// review, PR #866) — that module refuses (OpenFail) a peer Open once its
+// tracked channel count reaches this cap, citing it as load-bearing
+// memory-hardening against a peer that opens and abandons channels
+// without limit. This port accepted every inbound Open unconditionally
+// until this fix, with no bound on `channels` — reachability is narrow
+// (the only peer here is the user's own paired primary, itself capped at
+// the same 256), but this file otherwise deliberately mirrors every one
+// of the source's hardening invariants (handleWindowAdjust's clamp,
+// decodeFrame never throwing), so this cap belongs here for the same
+// reason those do.
+const DEFAULT_MAX_CHANNELS = 256;
+
 export function encodeHeader(type, channelId) {
   const buf = Buffer.allocUnsafe(HEADER_BYTES);
   buf.writeUInt8(type, 0);
@@ -244,7 +257,7 @@ export function attachInboundMux(ws, opts) {
     if (frame.type === FrameType.Pong) return; // this side never pings first
 
     if (frame.type === FrameType.Open) {
-      if (channels.has(frame.channelId)) {
+      if (channels.has(frame.channelId) || channels.size >= DEFAULT_MAX_CHANNELS) {
         sendFrame(encodeHeader(FrameType.OpenFail, frame.channelId));
         return;
       }

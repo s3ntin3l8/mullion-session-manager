@@ -176,4 +176,64 @@ describe("ssh-agent-bridge-mux.mjs vs. the real ssh-agent-mux.ts", () => {
     await waitUntil(() => received.length > 0);
     expect(Buffer.concat(received).toString()).toBe("echo:ping");
   });
+
+  // Issue #820 (Hermes review, PR #866) — ssh-agent-mux.ts refuses (OpenFail)
+  // a peer Open once its own tracked channel count reaches
+  // DEFAULT_MAX_CHANNELS, citing that as load-bearing memory-hardening
+  // against a peer that opens and abandons channels without limit.
+  // attachInboundMux ported every other invariant from that module but
+  // initially missed this one — accepted every inbound Open unconditionally,
+  // with no bound on its own `channels` Map — this is the discriminating
+  // test for the fix.
+  //
+  // Deliberately NOT driven through a real server-side openChannel() loop:
+  // createMuxConnection's OWN openChannel() enforces the identical cap
+  // locally, on the SERVER side, before ever sending the 257th Open frame
+  // — a test built that way would silently verify the SERVER's cap and
+  // never actually exercise this file's Open handler at 256+1 at all
+  // (confirmed: an earlier version of this test kept passing even with the
+  // fix under test fully reverted). Feeding raw Open frames directly into
+  // attachInboundMux's own message handler, the same fake-but-precise
+  // WHATWG-shaped socket approach as the Ping/Pong test above, is what
+  // actually isolates this file's own cap from the server's.
+  it("refuses an inbound Open once DEFAULT_MAX_CHANNELS (256) tracked channels are already open", () => {
+    const sent: Buffer[] = [];
+    const listeners = new Map<string, Array<(event: unknown) => void>>();
+    const fakeWs = {
+      readyState: 1,
+      binaryType: "blob",
+      addEventListener(event: string, listener: (event: unknown) => void) {
+        const arr = listeners.get(event) ?? [];
+        arr.push(listener);
+        listeners.set(event, arr);
+      },
+      send(frame: Buffer) {
+        sent.push(frame);
+      },
+      close() {},
+    };
+    // @ts-expect-error — fake only implements the subset attachInboundMux uses
+    attachInboundMux(fakeWs, { onChannel: () => {} });
+
+    function openFrame(channelId: number): ArrayBuffer {
+      const buf = Buffer.alloc(5);
+      buf.writeUInt8(1, 0); // FrameType.Open
+      buf.writeUInt32BE(channelId, 1);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
+
+    const messageListeners = listeners.get("message") ?? [];
+    for (let i = 0; i < 257; i++) {
+      // channel ids 2,4,6,... — even, matching what a real primary
+      // (channelIdParity: "even") would allocate; the exact values don't
+      // matter to this file's own logic (it has no allocator of its own),
+      // only that each is unique.
+      for (const listener of messageListeners) listener({ data: openFrame((i + 1) * 2) });
+    }
+
+    const openAckCount = sent.filter((f) => f.readUInt8(0) === 2).length; // FrameType.OpenAck
+    const openFailCount = sent.filter((f) => f.readUInt8(0) === 3).length; // FrameType.OpenFail
+    expect(openAckCount).toBe(256);
+    expect(openFailCount).toBe(1);
+  });
 });

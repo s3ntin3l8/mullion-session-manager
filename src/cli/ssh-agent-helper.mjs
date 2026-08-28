@@ -68,75 +68,129 @@ function sleep(ms) {
 function handshake(ws, message) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let replyTimer = null;
+
+    // {once:true} already keeps each of these from firing twice, but does
+    // NOT remove a listener that never fired at all — e.g. "error"/"close"
+    // stay registered on `ws` for the rest of its lifetime after a normal
+    // successful resolve (Hermes review, PR #866). Harmless (they no-op on
+    // `settled`), but `ws` is reused afterward for the long-lived mux
+    // connection in `run`'s reconnect loop, so cleaning up every listener
+    // once settled — not just the one that actually fired — avoids
+    // accumulating one extra closure pinned to it per reconnect attempt.
+    function cleanup() {
+      clearTimeout(connectTimer);
+      if (replyTimer !== null) clearTimeout(replyTimer);
+      ws.removeEventListener("open", onOpen);
+      ws.removeEventListener("message", onMessage);
+      ws.removeEventListener("error", onError);
+      ws.removeEventListener("close", onClose);
+    }
+
     const connectTimer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      cleanup();
       ws.close();
       reject(new Error(`timed out connecting within ${CONNECT_TIMEOUT_MS}ms`));
     }, CONNECT_TIMEOUT_MS);
 
-    ws.addEventListener(
-      "open",
-      () => {
-        clearTimeout(connectTimer);
-        ws.send(JSON.stringify(message));
-        const replyTimer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          ws.close();
-          reject(new Error(`no handshake reply within ${HANDSHAKE_TIMEOUT_MS}ms`));
-        }, HANDSHAKE_TIMEOUT_MS);
-
-        ws.addEventListener(
-          "message",
-          (event) => {
-            clearTimeout(replyTimer);
-            if (settled) return;
-            settled = true;
-            let parsed;
-            try {
-              parsed = JSON.parse(typeof event.data === "string" ? event.data : "");
-            } catch {
-              reject(new Error("malformed handshake reply"));
-              return;
-            }
-            if (parsed?.type === "error") {
-              reject(new HandshakeRejectedError(parsed.message || "handshake rejected"));
-              return;
-            }
-            if (parsed?.type !== "ready") {
-              reject(new Error(`unexpected handshake reply: ${JSON.stringify(parsed)}`));
-              return;
-            }
-            resolve(parsed);
-          },
-          { once: true },
-        );
-      },
-      { once: true },
-    );
-
-    ws.addEventListener(
-      "error",
-      () => {
+    function onOpen() {
+      clearTimeout(connectTimer);
+      ws.send(JSON.stringify(message));
+      replyTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        clearTimeout(connectTimer);
-        reject(new Error("connection error"));
-      },
-      { once: true },
-    );
-    ws.addEventListener(
-      "close",
-      () => {
-        if (settled) return;
+        cleanup();
+        ws.close();
+        reject(new Error(`no handshake reply within ${HANDSHAKE_TIMEOUT_MS}ms`));
+      }, HANDSHAKE_TIMEOUT_MS);
+    }
+
+    function onMessage(event) {
+      if (settled) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(typeof event.data === "string" ? event.data : "");
+      } catch {
         settled = true;
-        clearTimeout(connectTimer);
-        reject(new Error("connection closed before completing handshake"));
-      },
-      { once: true },
-    );
+        cleanup();
+        reject(new Error("malformed handshake reply"));
+        return;
+      }
+      if (parsed?.type === "error") {
+        settled = true;
+        cleanup();
+        reject(new HandshakeRejectedError(parsed.message || "handshake rejected"));
+        return;
+      }
+      if (parsed?.type !== "ready") {
+        settled = true;
+        cleanup();
+        reject(new Error(`unexpected handshake reply: ${JSON.stringify(parsed)}`));
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(parsed);
+    }
+
+    function onError() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("connection error"));
+    }
+
+    function onClose() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("connection closed before completing handshake"));
+    }
+
+    ws.addEventListener("open", onOpen, { once: true });
+    ws.addEventListener("message", onMessage);
+    ws.addEventListener("error", onError, { once: true });
+    ws.addEventListener("close", onClose, { once: true });
   });
+}
+
+// Issue #820 (PR6) — CodeQL flagged both directions of this credential's
+// flow (js/http-to-file-access: the server's handshake reply reaching
+// fs.writeFileSync in saveCredential; js/file-access-to-http: the
+// credential file's own contents reaching `new WebSocket(...)`/the auth
+// handshake in runRun). Both are real code-shape matches for those
+// queries' generic "arbitrary network payload written to disk" /
+// "arbitrary file content exfiltrated over the network" heuristics, even
+// though the actual risk here is bounded (the "server" is whatever
+// baseUrl the operator's own pairing payload named, and the "file" is a
+// credential this same tool wrote for itself) — validating the exact
+// shape every one of these fields is generated in (bridge-registry.ts:
+// crypto.randomUUID() for bridgeId, crypto.randomBytes(32).toString("hex")
+// for sessionId/sessionSecret) before it crosses either boundary is both
+// a genuine hardening (a misbehaving primary or a hand-edited credential
+// file is rejected outright, not blindly trusted) and the sanitizing gate
+// these queries are designed to recognize.
+const BRIDGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_TOKEN_RE = /^[0-9a-f]{64}$/i;
+
+function isValidBridgeId(value) {
+  return typeof value === "string" && BRIDGE_ID_RE.test(value);
+}
+
+function isValidSessionToken(value) {
+  return typeof value === "string" && SESSION_TOKEN_RE.test(value);
+}
+
+function isValidHttpBaseUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function stateDir(io) {
@@ -167,9 +221,9 @@ function loadCredential(io) {
   }
   const { baseUrl, bridgeId, sessionId } = parsed ?? {};
   if (
-    typeof baseUrl !== "string" ||
-    typeof bridgeId !== "string" ||
-    typeof sessionId !== "string"
+    !isValidHttpBaseUrl(baseUrl) ||
+    !isValidBridgeId(bridgeId) ||
+    !isValidSessionToken(sessionId)
   ) {
     return null;
   }
@@ -215,6 +269,15 @@ async function runPair(args, io) {
     });
   } finally {
     ws.close();
+  }
+  if (
+    !isValidBridgeId(ready.bridge_id) ||
+    !isValidSessionToken(ready.session_id) ||
+    !isValidSessionToken(ready.session_secret)
+  ) {
+    throw new Error(
+      `unexpected handshake reply shape from ${decoded.baseUrl} — refusing to persist it`,
+    );
   }
 
   saveCredential(io, {
