@@ -110,8 +110,8 @@ const TOP_LEVEL_ALIASES = {
 // instead — `history` has no noun/verb split at all, just flags, the same
 // shape `notify`/`config` already have.
 const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history"]);
-// "helper" is a NOUNS entry (requires a verb: pair|run — see
-// ssh-agent-helper.mjs), but is dispatched by mullion.mjs BEFORE
+// "helper" is a NOUNS entry (requires a verb: pair|run|install|uninstall —
+// see ssh-agent-helper.mjs), but is dispatched by mullion.mjs BEFORE
 // runCommand/COMMANDS below, the same way "mcp" already is — it never
 // touches the control socket, so it has no entry in COMMANDS either.
 const NOUNS = new Set(["session", "browser", "project", "preview", "dock", "events", "helper"]);
@@ -1002,7 +1002,8 @@ Commands:
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
           [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
-  helper pair <payload> [--name <name>] | run [--ssh-auth-sock <path>]
+  helper pair <payload> [--name <name>] | run [--ssh-auth-sock <path>] |
+         install [--ssh-auth-sock <path>] | uninstall
   mcp
   config
 

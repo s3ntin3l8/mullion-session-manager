@@ -51,7 +51,7 @@ mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
 mullion mcp
-mullion helper pair|run
+mullion helper pair|run|install|uninstall
 mullion config
 ```
 
@@ -282,6 +282,16 @@ socket-wide posture from `docs/socket-api.md`.
   the credential `pair` persisted. `--ssh-auth-sock` overrides this
   process's own `SSH_AUTH_SOCK` env var — required under a supervisor that
   doesn't set one (see below).
+- `mullion helper install [--ssh-auth-sock <path>]` — generates and
+  registers a launchd job (macOS) or systemd `--user` unit (Linux) that
+  supervises `run`, so you don't have to hand-write one. Re-running it
+  replaces a previous install (new `--ssh-auth-sock`, moved checkout, ...).
+  Not supported on Windows yet ([issue
+  #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)) —
+  `run` it under a supervisor manually there.
+- `mullion helper uninstall` — stops and removes whatever `install` set up,
+  on whichever of the two supported platforms this is. A no-op, not an
+  error, if nothing is installed.
 
 The one subcommand meant to run on a machine with **no local Mullion server
 and no control socket at all** — a laptop holding the SSH agent that a
