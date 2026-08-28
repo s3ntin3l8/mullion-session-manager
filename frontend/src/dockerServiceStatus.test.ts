@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStatus.js";
+import { dockerServiceStatus, isStartable, isUpdateStillAvailable } from "./dockerServiceStatus.js";
 
 describe("dockerServiceStatus", () => {
   it("maps running to a green dot", () => {
@@ -29,6 +29,31 @@ describe("dockerServiceStatus", () => {
       label: "some-future-state",
       colorToken: "--dim",
     });
+  });
+});
+
+describe("isStartable", () => {
+  it("is true for created/exited — the states docker compose start actually applies to", () => {
+    for (const state of ["created", "exited"]) {
+      expect(isStartable(state)).toBe(true);
+    }
+  });
+
+  it("is false for paused — needs unpause, not start", () => {
+    expect(isStartable("paused")).toBe(false);
+  });
+
+  it("is false for restarting — already mid-transition", () => {
+    expect(isStartable("restarting")).toBe(false);
+  });
+
+  it("is false for dead — a terminal removal-failure state start can't recover", () => {
+    expect(isStartable("dead")).toBe(false);
+  });
+
+  it("is false for running and removing", () => {
+    expect(isStartable("running")).toBe(false);
+    expect(isStartable("removing")).toBe(false);
   });
 });
 

@@ -770,6 +770,24 @@ export interface DockerUpdateResult {
    * its own control list so the new session renders through the ordinary
    * monitor body; it drops out again once the session is no longer active. */
   control: DockControl;
+  /** Only present on an action that can recreate the container(s) (this
+   * route's own pull-restart, plus stack/apply and stack/rebuild) — whether
+   * the on-disk compose config no longer matches what's actually running.
+   * `null` means "couldn't tell" (missing compose file, docker
+   * unreachable, …); advisory only, never blocks the action. */
+  willRecreate?: boolean | null;
+}
+
+/** Shared response shape for every stack-wide lifecycle action
+ * (restart/apply/rebuild/stop) — same ephemeral-control-plus-session
+ * envelope as the update route's own DockerUpdateResult. */
+export type DockerStackActionResult = DockerUpdateResult;
+
+/** Response for a per-service, inline lifecycle action (restart/stop/start)
+ * — these run synchronously (no session spawned), so there's nothing to
+ * echo back beyond whether it succeeded. */
+export interface DockerServiceActionResult {
+  success: boolean;
 }
 
 // Mirrors src/services/preview-registry.ts's PreviewSummary 1:1 (issue #28).

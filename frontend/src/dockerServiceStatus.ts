@@ -33,6 +33,19 @@ export function dockerServiceStatus(state: string): DockerStatusPresentation {
   return KNOWN_STATES[state] ?? { label: state, colorToken: "--dim" };
 }
 
+// Hermes review (PR #857) — offering "Start service" for `paused` (needs
+// `unpause`, not `start`) or `restarting` (already mid-transition) surfaces
+// a button that reliably errors. `dead` is excluded too, matching Hermes's
+// originally-suggested set rather than the broader one first tried here:
+// it's the state a container lands in when Docker fails to remove it
+// (driver/storage error), which isn't a state `start` is documented to
+// recover from.
+const STARTABLE_STATES = new Set(["created", "exited"]);
+
+export function isStartable(state: string): boolean {
+  return STARTABLE_STATES.has(state);
+}
+
 /**
  * Whether a "Check for update" result should still show as an update
  * available, given the CURRENT image id the control's own latest dock poll
