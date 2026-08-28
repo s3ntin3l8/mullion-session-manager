@@ -216,6 +216,31 @@ describe("ssh-agent-mux", () => {
         /exceeds channel/,
       );
     });
+
+    it("contains a throwing consumer listener to just that dispatch — does not propagate out of handleData and crash the process (regression: Hermes review, PR #853, round 3)", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+      let serverChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => (serverChannel = ch));
+      const clientChannel = await connA.openChannel();
+
+      serverChannel!.onData(() => {
+        throw new Error("consumer bug");
+      });
+      const secondListenerCalls: Buffer[] = [];
+      serverChannel!.onData((chunk) => secondListenerCalls.push(chunk));
+
+      // The throwing listener must not prevent a LATER listener on the
+      // same event from still running, and must not throw out of send()
+      // itself (which is what would happen if the dispatch propagated the
+      // consumer's error all the way back through the WS "message"
+      // handler).
+      expect(() => clientChannel.send(Buffer.from("hello"))).not.toThrow();
+      expect(secondListenerCalls[0]?.toString()).toBe("hello");
+    });
   });
 
   describe("window-based flow control", () => {
@@ -301,6 +326,76 @@ describe("ssh-agent-mux", () => {
       const sentBefore = a.sent.length;
       await expect(connA.openChannel()).rejects.toThrow(/local channel cap/);
       expect(a.sent.length).toBe(sentBefore); // no Open frame was even sent
+    });
+
+    it("counts pendingOpens toward the accept-side maxChannels check too, not just channels.size (regression: Hermes review, PR #853, round 3 — asymmetric with openChannel()'s own local check, which already counted both)", () => {
+      const b = new FakeSocket(); // no real peer wired up — nothing ever acks this side's own open
+      const connB = createMuxConnection(b as never, { maxChannels: 1, channelIdParity: "even" });
+
+      const neverResolves = connB.openChannel(); // one outstanding LOCAL pending open (id 2, even parity)
+      void neverResolves.catch(() => {});
+      expect(b.sent).toHaveLength(1); // just that outbound Open frame so far
+
+      // channels.size(0) + pendingOpens.size(1) already equals
+      // maxChannels(1) — a peer-initiated Open must be refused even
+      // though channels.size ALONE is still 0.
+      b.receive(Buffer.from([1, 0, 0, 0, 99])); // simulated peer Open, arbitrary distinct id
+      expect(b.sent).toHaveLength(2);
+      expect(frameType(b.sent[1])).toBe(3); // OpenFail
+    });
+
+    it("rejects a peer-initiated OPEN whose id collides with an already-accepted channel — does not silently overwrite it (regression: Hermes review, PR #853, round 3 — channelIdParity only prevents collisions between two HONEST allocators, not an arbitrary id a dishonest peer chooses)", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      const connB = createMuxConnection(b as never, { channelIdParity: "even" });
+      let firstServerChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => {
+        firstServerChannel ??= ch;
+      });
+      const clientChannel = await connA.openChannel();
+      expect(firstServerChannel).not.toBeNull();
+
+      const dataOnFirst: Buffer[] = [];
+      firstServerChannel!.onData((chunk) => dataOnFirst.push(chunk));
+
+      const bSentBefore = b.sent.length;
+      // A duplicate/malicious raw Open frame reusing the SAME id,
+      // delivered directly — bypasses connA's own honest allocator
+      // (which would never reuse a still-open id) to simulate a
+      // dishonest peer choosing an arbitrary id.
+      a.send(Buffer.from([1, 0, 0, 0, clientChannel.id]));
+      expect(b.sent.length).toBe(bSentBefore + 1);
+      expect(frameType(b.sent[b.sent.length - 1])).toBe(3); // OpenFail
+
+      // The ORIGINAL channel must still be the live one on connB's side —
+      // not silently replaced by a second ChannelImpl for the same id.
+      clientChannel.send(Buffer.from("still-works"));
+      expect(dataOnFirst[0]?.toString()).toBe("still-works");
+    });
+
+    it("rejects a peer-initiated OPEN whose id collides with this side's own outstanding pending open", async () => {
+      const a = new FakeSocket();
+      const connA = createMuxConnection(a as never, { channelIdParity: "odd" });
+      let resolved = false;
+      void connA
+        .openChannel()
+        .then(() => {
+          resolved = true;
+        })
+        .catch(() => {});
+
+      const sentBefore = a.sent.length;
+      // Colliding Open, reusing the same id connA is currently awaiting
+      // its own OpenAck for (its first allocation, id 1 under odd parity).
+      a.receive(Buffer.from([1, 0, 0, 0, 1]));
+      expect(a.sent.length).toBe(sentBefore + 1);
+      expect(frameType(a.sent[a.sent.length - 1])).toBe(3); // OpenFail
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(resolved).toBe(false); // the pending local open must be untouched, not corrupted
     });
 
     it("defaults to DEFAULT_MAX_CHANNELS when maxChannels is unspecified", async () => {

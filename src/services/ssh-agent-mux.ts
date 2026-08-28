@@ -241,6 +241,35 @@ export interface MuxConnection {
   close(): void;
 }
 
+/**
+ * Invokes a consumer-supplied listener (`onData`/`onEof`/`onClose`/
+ * `onDrain`/`onChannel`), swallowing any throw. Every one of those
+ * listener arrays is invoked synchronously from inside a WS `"message"`
+ * event dispatch — an uncaught throw from consumer code there would
+ * propagate straight out of that handler and crash the whole process,
+ * taking every OTHER multiplexed channel/connection down with it (Hermes
+ * review, PR #853, round 3), exactly the outcome `decodeFrame`'s own
+ * "never throw from inside an event handler" rule elsewhere in this file
+ * exists to prevent — that rule had only ever been applied to this
+ * module's OWN parsing code, not to dispatch into caller-supplied
+ * callbacks. Swallowed here, not re-thrown or logged: this module has no
+ * logger dependency by design (pure primitive, no routes/auth wired up
+ * yet — see the header comment), and a listener that throws is a bug in
+ * the CALLER, which is responsible for noticing via its own
+ * `close()`/`onClose` if that's the appropriate reaction — not something
+ * this module can diagnose or recover from on the caller's behalf.
+ */
+function invokeListener<Args extends unknown[]>(
+  listener: (...args: Args) => void,
+  ...args: Args
+): void {
+  try {
+    listener(...args);
+  } catch {
+    // intentionally swallowed — see doc comment above
+  }
+}
+
 class ChannelImpl implements MuxChannel {
   closed = false;
   private sendWindowBytes: number;
@@ -303,7 +332,7 @@ class ChannelImpl implements MuxChannel {
     this.closed = true;
     this.sendFrame(encodeHeader(FrameType.Close, this.id));
     this.onLocalClose(this.id);
-    for (const listener of this.closeListeners) listener();
+    for (const listener of this.closeListeners) invokeListener(listener);
   }
 
   /** Local-close on peer/connection teardown — does NOT send a Close frame
@@ -313,7 +342,7 @@ class ChannelImpl implements MuxChannel {
   closeLocally(): void {
     if (this.closed) return;
     this.closed = true;
-    for (const listener of this.closeListeners) listener();
+    for (const listener of this.closeListeners) invokeListener(listener);
   }
 
   onData(listener: (chunk: Buffer) => void): void {
@@ -334,12 +363,12 @@ class ChannelImpl implements MuxChannel {
 
   /** @internal — dispatch from `MuxConnectionImpl`'s frame handler only. */
   handleData(chunk: Buffer): void {
-    for (const listener of this.dataListeners) listener(chunk);
+    for (const listener of this.dataListeners) invokeListener(listener, chunk);
   }
 
   /** @internal */
   handleEof(): void {
-    for (const listener of this.eofListeners) listener();
+    for (const listener of this.eofListeners) invokeListener(listener);
   }
 
   /** @internal */
@@ -365,7 +394,7 @@ class ChannelImpl implements MuxChannel {
     // `wasExhausted` branch, making the condition always true. Harmless
     // (`pipeNetSocketToChannel`'s `flushPending` already no-ops when
     // there's nothing queued), just not doing what it visually claimed to.
-    for (const listener of this.drainListeners) listener();
+    for (const listener of this.drainListeners) invokeListener(listener);
   }
 
   /** Called by the receiving side once `chunk` has actually been drained
@@ -442,7 +471,7 @@ export function createMuxConnection(
     pendingOpens.clear();
     for (const channel of channels.values()) channel.closeLocally();
     channels.clear();
-    for (const listener of closeListeners) listener();
+    for (const listener of closeListeners) invokeListener(listener);
   }
 
   // Removes a locally-closed channel from `channels` — see `ChannelImpl`'s
@@ -509,7 +538,29 @@ export function createMuxConnection(
     }
 
     if (frame.type === FrameType.Open) {
-      if (channels.size >= maxChannels) {
+      // Combined with pendingOpens, not channels.size alone (Hermes
+      // review, PR #853, round 3) — symmetric with openChannel()'s own
+      // local check just below, which already counts both. Without this,
+      // a peer-initiated Open could push channels.size to maxChannels
+      // while this side ALSO has outstanding local opens pending,
+      // exceeding the connection's true combined budget until those
+      // resolve.
+      if (channels.size + pendingOpens.size >= maxChannels) {
+        sendFrame(encodeHeader(FrameType.OpenFail, frame.channelId));
+        return;
+      }
+      // `channelIdParity` only prevents id collisions between two HONEST
+      // peers' own allocators — it says nothing about what id a peer
+      // actually puts in an Open frame, which is entirely peer-chosen and
+      // unvalidated (Hermes review, PR #853, round 3). A malformed or
+      // malicious peer can pick any id, including one already used by an
+      // existing accepted channel or one this side has an outbound open
+      // pending on — without this guard, `channels.set()` below would
+      // silently overwrite that entry, orphaning its consumer and
+      // misrouting subsequent Data frames onto the new channel, the exact
+      // failure class the parity split was introduced to prevent (just
+      // reachable here via a dishonest peer instead of an honest race).
+      if (channels.has(frame.channelId) || pendingOpens.has(frame.channelId)) {
         sendFrame(encodeHeader(FrameType.OpenFail, frame.channelId));
         return;
       }
@@ -521,7 +572,7 @@ export function createMuxConnection(
       );
       channels.set(frame.channelId, channel);
       sendFrame(encodeHeader(FrameType.OpenAck, frame.channelId));
-      for (const listener of channelListeners) listener(channel);
+      for (const listener of channelListeners) invokeListener(listener, channel);
       return;
     }
 
