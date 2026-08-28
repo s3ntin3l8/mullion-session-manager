@@ -92,6 +92,18 @@ class FakeNetSocket {
   }
 
   emit(event: string, ...args: unknown[]): void {
+    // A real `net.Socket` never emits "data" while paused — enforced here
+    // (rather than left as an unchecked assumption) so a regression in
+    // `pipeNetSocketToChannel`'s pause/resume handling would show up as a
+    // test failure instead of silently passing, per review: this fake
+    // previously let a test call `emit("data", ...)` regardless of
+    // `paused`, which meant it could not have caught the exact
+    // dropped-chunk bug this module exists to avoid.
+    if (event === "data" && this.paused) {
+      throw new Error(
+        'FakeNetSocket: "data" emitted while paused — violates net.Socket\'s contract',
+      );
+    }
     for (const listener of this.listeners.get(event) ?? []) {
       (listener as (...a: unknown[]) => void)(...args);
     }
@@ -267,8 +279,41 @@ describe("ssh-agent-mux", () => {
       expect(a.sent.length).toBe(sentBefore); // no Open frame was even sent
     });
 
-    it("defaults to DEFAULT_MAX_CHANNELS when unspecified", () => {
-      expect(DEFAULT_MAX_CHANNELS).toBeGreaterThan(0);
+    it("defaults to DEFAULT_MAX_CHANNELS when maxChannels is unspecified", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never); // no explicit maxChannels
+      createMuxConnection(b as never); // also default — must accept all of them as peer opens
+
+      for (let i = 0; i < DEFAULT_MAX_CHANNELS; i++) {
+        await connA.openChannel();
+      }
+      await expect(connA.openChannel()).rejects.toThrow(
+        new RegExp(`local channel cap \\(${DEFAULT_MAX_CHANNELS}\\) reached`),
+      );
+    });
+
+    it("frees its slot back up when a channel is closed locally, so the connection doesn't permanently exhaust maxChannels through ordinary use (regression: an earlier version never removed a locally-closed channel from the connection's tracking map)", async () => {
+      const a = new FakeSocket();
+      const b = new FakeSocket();
+      link(a, b);
+      const connA = createMuxConnection(a as never, { maxChannels: 3 });
+      createMuxConnection(b as never, { maxChannels: 3 });
+
+      // Open-and-close, one at a time, well under the cap each time — the
+      // ordinary lifecycle every real `ssh`/`ssh-add`/ansible-fork
+      // connection goes through via `pipeNetSocketToChannel`'s own
+      // net.Socket "close" handler.
+      for (let i = 0; i < 10; i++) {
+        const channel = await connA.openChannel();
+        channel.close();
+      }
+
+      // If closed channels were never freed, the 4th cumulative open would
+      // already have failed — this proves the budget doesn't deplete.
+      const stillOpen = await connA.openChannel();
+      expect(stillOpen.closed).toBe(false);
     });
   });
 
@@ -419,6 +464,39 @@ describe("ssh-agent-mux", () => {
 
       netB.emit("data", Buffer.from("response"));
       expect(netA.written[0].toString()).toBe("response");
+    });
+
+    it("acknowledges consumption via the real net.Socket.write() completion callback, not merely on receipt — driving an actual WINDOW_ADJUST end to end through the pipe, with no manual acknowledgeConsumed() call", async () => {
+      const wsA = new FakeSocket();
+      const wsB = new FakeSocket();
+      link(wsA, wsB);
+      const connA = createMuxConnection(wsA as never);
+      const connB = createMuxConnection(wsB as never);
+      let serverChannel: MuxChannel | null = null;
+      connB.onChannel((ch) => (serverChannel = ch));
+      const clientChannel = await connA.openChannel();
+
+      const netA = new FakeNetSocket();
+      const netB = new FakeNetSocket();
+      pipeNetSocketToChannel(netA as never, clientChannel);
+      pipeNetSocketToChannel(netB as never, serverChannel!);
+
+      // Push a full window's worth of data through the real pipe (no
+      // direct channel.send() or acknowledgeConsumed() calls anywhere in
+      // this test). FakeNetSocket.write() invokes its completion callback
+      // synchronously (mirroring a real net.Socket write that completes
+      // without backpressure), so the entire round trip — send, receive,
+      // write-to-netB, acknowledgeConsumed, WINDOW_ADJUST, replenish A's
+      // window — happens within this single emit() call; there is no
+      // separately observable "window is exactly 0" moment to assert on.
+      netA.emit("data", Buffer.alloc(CHANNEL_WINDOW_BYTES));
+      expect(netB.written[0].length).toBe(CHANNEL_WINDOW_BYTES);
+
+      // If the ack wiring were missing (e.g. acknowledging on receipt
+      // instead of on write-drain, or not wired at all), A's window would
+      // have stayed at 0 and no WINDOW_ADJUST would have been sent.
+      expect(frameType(wsB.sent[wsB.sent.length - 1])).toBe(5); // WindowAdjust
+      expect(clientChannel.sendWindow).toBeGreaterThan(0);
     });
 
     it("propagates net.Socket end/close/error to the channel (eof/close), and channel eof/close back to the net.Socket (end/destroy)", async () => {

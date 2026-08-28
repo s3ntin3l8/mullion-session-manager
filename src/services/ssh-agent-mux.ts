@@ -35,11 +35,16 @@ import type { WebSocket as NodeWebSocket, RawData } from "ws";
 // channel whose peer has exhausted its window is paused at the true
 // source (the accepted `net.Socket`/named pipe), not silently dropped.
 
-/** Initial and replenishment-threshold channel window, in bytes. Matched to
- * `WS_BACKPRESSURE_MAX_BUFFERED_BYTES` (ws-pipe.ts) — large enough that a
- * single `ssh-add -l` round trip never blocks on a window refill, small
- * enough that one stalled channel can't buffer unbounded memory while
- * waiting for its peer. */
+/** Initial and replenishment-threshold channel window, in bytes. Chosen
+ * independently of, and much smaller than, `WS_BACKPRESSURE_MAX_BUFFERED_
+ * BYTES` (4 MiB, ws-pipe.ts) — that constant bounds ONE WebSocket's total
+ * buffered bytes across every multiplexed channel, whereas this bounds ONE
+ * channel's own window, so the two aren't meant to match: large enough
+ * that a single `ssh-add -l` round trip never blocks on a window refill,
+ * small enough that one stalled channel can't buffer unbounded memory
+ * while waiting for its peer, and small enough that many concurrent
+ * channels (an `ansible --forks=N` fan-out) can each hold a full window
+ * without collectively approaching the WS-level buffer cap. */
 export const CHANNEL_WINDOW_BYTES = 256 * 1024;
 
 /** A WINDOW_ADJUST is sent as soon as the consumed-since-last-adjust total
@@ -148,7 +153,10 @@ export interface MuxChannel {
    * exhausted. Send-side flow control: check before `send()`, or use the
    * `"drain"` event to resume once it's replenished. */
   readonly sendWindow: number;
-  /** `true` once EOF or CLOSE has been sent or received on this channel. */
+  /** `true` once CLOSE has been sent or received on this channel — NOT set
+   * by EOF. EOF is a half-close: `eof()`/`onEof` fire independently of
+   * `closed`, and nothing here forces a channel closed just because one
+   * side has EOF'd; only an explicit CLOSE does. */
   readonly closed: boolean;
   /** Sends raw bytes on this channel. Caller is responsible for respecting
    * `sendWindow`/`"drain"` — unlike `pipeWsFrames`, this module never
@@ -187,7 +195,21 @@ export interface MuxConnection {
   /** Opens a new channel and resolves once the peer OpenAcks it. Rejects on
    * OpenFail (peer at its own channel cap, or otherwise refusing), on
    * connection close/error while pending, or if this side has hit
-   * `maxChannels` locally without asking the peer at all. */
+   * `maxChannels` locally without asking the peer at all.
+   *
+   * IMPORTANT — currently safe only under a single-opener convention: each
+   * side allocates channel ids independently (`allocateChannelId`, starting
+   * at 1) into ONE shared wire-level `channelId` namespace, unlike the RFC
+   * 4254 channel protocol this module's flow control otherwise mirrors,
+   * which uses distinct sender/recipient channel numbers specifically to
+   * avoid this. If both peers on the same `MuxConnection` ever call
+   * `openChannel()` concurrently, self-chosen ids CAN collide and silently
+   * corrupt `channels` map entries on one side. Every intended caller of
+   * this module (the side that accepts real local `net.Socket`/named-pipe
+   * connections calls `openChannel()`; the side fronting the real SSH
+   * agent only ever responds via `onChannel()`) satisfies this by
+   * construction, but nothing in this module enforces it — flagged for
+   * whoever wires up the next caller, not fixed here. */
   openChannel(): Promise<MuxChannel>;
   /** Fired for every peer-initiated channel this side accepts (i.e. did not
    * already reject for being at `maxChannels`) — the OpenAck has already
@@ -216,6 +238,20 @@ class ChannelImpl implements MuxChannel {
     readonly id: number,
     initialSendWindow: number,
     private readonly sendFrame: (frame: Buffer) => void,
+    // Called exactly once, from `close()` only (never from
+    // `closeLocally()`, which fires when the connection is already tearing
+    // every channel down and clearing `channels` wholesale itself) — lets
+    // the owning `createMuxConnection` prune this channel from its
+    // `channels` map. Without this, a channel closed locally (the ORDINARY
+    // way a channel ends: `pipeNetSocketToChannel`'s own `net.Socket`
+    // "close" handler calls `channel.close()` on every normal client
+    // disconnect) would stay in the map forever, permanently shrinking the
+    // connection's remaining channel budget until `maxChannels` is
+    // exhausted and every further open — local or peer-initiated — is
+    // refused, even with zero channels genuinely open. Caught in review
+    // before this PR was allowed to be the foundation for the routes/auth
+    // work that build on it.
+    private readonly onLocalClose: (id: number) => void,
   ) {
     this.sendWindowBytes = initialSendWindow;
   }
@@ -245,6 +281,7 @@ class ChannelImpl implements MuxChannel {
     if (this.closed) return;
     this.closed = true;
     this.sendFrame(encodeHeader(FrameType.Close, this.id));
+    this.onLocalClose(this.id);
     for (const listener of this.closeListeners) listener();
   }
 
@@ -361,17 +398,32 @@ export function createMuxConnection(
     for (const listener of closeListeners) listener();
   }
 
+  // Removes a locally-closed channel from `channels` — see `ChannelImpl`'s
+  // constructor doc for why this must exist at all (without it, every
+  // ordinary, locally-initiated channel close permanently shrinks the
+  // connection's remaining budget instead of freeing it back up).
+  function removeChannel(id: number): void {
+    channels.delete(id);
+  }
+
   function allocateChannelId(): number {
     // Wraps at 2**32 rather than growing unbounded — fine even for an
     // extremely long-lived connection, since a wrapped id can only collide
     // with a still-open channel if over 4 billion channels were opened
     // without ever fully draining `channels`, which `maxChannels` (at most
     // a few hundred concurrently) makes unreachable in practice.
+    //
+    // Checks the candidate BEFORE advancing, not after — an earlier version
+    // of this loop advanced unconditionally on every iteration including
+    // the first, so the very first id `nextChannelId` (1) was never
+    // actually used and every allocation skipped one value. Caught in
+    // review; verified the fix with five sequential allocations producing
+    // 1, 2, 3, 4, 5 rather than 2, 4, 6, 8, 10.
     let id = nextChannelId;
-    do {
+    while (channels.has(id) || pendingOpens.has(id)) {
       id = (id % 0xffffffff) + 1;
-    } while (channels.has(id) || pendingOpens.has(id));
-    nextChannelId = id + 1;
+    }
+    nextChannelId = (id % 0xffffffff) + 1;
     return id;
   }
 
@@ -409,7 +461,12 @@ export function createMuxConnection(
         sendFrame(encodeHeader(FrameType.OpenFail, frame.channelId));
         return;
       }
-      const channel = new ChannelImpl(frame.channelId, CHANNEL_WINDOW_BYTES, sendFrame);
+      const channel = new ChannelImpl(
+        frame.channelId,
+        CHANNEL_WINDOW_BYTES,
+        sendFrame,
+        removeChannel,
+      );
       channels.set(frame.channelId, channel);
       sendFrame(encodeHeader(FrameType.OpenAck, frame.channelId));
       for (const listener of channelListeners) listener(channel);
@@ -420,7 +477,12 @@ export function createMuxConnection(
       const pending = pendingOpens.get(frame.channelId);
       if (pending === undefined) return; // unknown/already-resolved id — ignore, don't throw
       pendingOpens.delete(frame.channelId);
-      const channel = new ChannelImpl(frame.channelId, CHANNEL_WINDOW_BYTES, sendFrame);
+      const channel = new ChannelImpl(
+        frame.channelId,
+        CHANNEL_WINDOW_BYTES,
+        sendFrame,
+        removeChannel,
+      );
       channels.set(frame.channelId, channel);
       pending.resolve(channel);
       return;
@@ -533,6 +595,14 @@ export function pipeNetSocketToChannel(socket: net.Socket, channel: MuxChannel):
   // listener per overflow episode and never removed it — each one kept
   // firing forever, including re-`send()`ing an already-sent chunk on a
   // later, unrelated window adjustment. Caught in review before merge.)
+  //
+  // A single queued chunk larger than `CHANNEL_WINDOW_BYTES` would never
+  // become sendable even at a fully-replenished window, permanently
+  // stalling this channel. Not reachable with a real `net.Socket`, whose
+  // own internal read buffering caps a single `"data"` chunk well under
+  // that (default `highWaterMark` is 64 KiB, `CHANNEL_WINDOW_BYTES` is
+  // 256 KiB) — flagged here rather than defended against in code, since a
+  // source that violates that would need a change to this function anyway.
   let pendingChunk: Buffer | null = null;
 
   function flushPending(): void {
@@ -551,6 +621,20 @@ export function pipeNetSocketToChannel(socket: net.Socket, channel: MuxChannel):
 
   socket.on("data", (chunk: Buffer) => {
     if (channel.closed) return;
+    // `socket.pause()` (below) is supposed to make this event impossible
+    // while a chunk is already queued — a real `net.Socket` guarantees it.
+    // Thrown, not silently overwritten: overwriting `pendingChunk` here
+    // would silently drop the bytes already queued, which is exactly the
+    // per-connection frame-dropping failure mode (see this file's header
+    // comment) this module exists to avoid. A source that can violate
+    // `pause()`'s contract is a bug in that source, not something to paper
+    // over quietly.
+    if (pendingChunk !== null) {
+      throw new Error(
+        'ssh-agent-mux: pipeNetSocketToChannel received a "data" event while a chunk was ' +
+          "already queued waiting on window — socket.pause() should have prevented this",
+      );
+    }
     if (chunk.length > channel.sendWindow) {
       socket.pause();
       pendingChunk = chunk;
