@@ -8,6 +8,11 @@ import { WebSocketServer, type WebSocket as NodeWebSocket } from "ws";
 import { buildTestApp } from "../helpers/app.js";
 import { decodePairingPayload, encodePairingPayload } from "../../src/services/bridge-registry.js";
 import { runHelper, stateDir } from "../../src/cli/ssh-agent-helper.mjs";
+import {
+  SSH_AGENTC_SIGN_REQUEST,
+  SSH_AGENTC_ADD_IDENTITY,
+  SSH_AGENT_FAILURE_FRAME,
+} from "../../src/cli/ssh-agent-filter.mjs";
 
 // Issue #820 (PR6) — end-to-end: the real primary route
 // (routes/agent-bridge.ts) issuing a pairing code, `mullion helper pair`
@@ -17,6 +22,22 @@ import { runHelper, stateDir } from "../../src/cli/ssh-agent-helper.mjs";
 // credential, then `mullion helper run` re-authenticating with it and
 // forwarding real bytes from a server-opened channel through to a fake
 // local "ssh-agent" unix socket standing in for SSH_AUTH_SOCK.
+
+/** Same length-prefixed agent-protocol frame builder used throughout the
+ * ssh-agent-filter test suites — round 4 (issue #820) made this test's own
+ * previous raw-ASCII payload ("ssh-add -l" with no framing) invalid input:
+ * ssh-agent-helper.mjs's runRun now runs everything on this path through
+ * SignOnlyFilter, which fails closed (SshAgentFrameTooLargeError) on a
+ * length prefix that doesn't describe a real frame. Real traffic through
+ * this path is always real SSH-agent-protocol frames in production, so a
+ * well-formed one here is a correctness fix, not a workaround. */
+function frame(type: number, body: Buffer = Buffer.alloc(0)): Buffer {
+  const out = Buffer.alloc(4 + 1 + body.length);
+  out.writeUInt32BE(1 + body.length, 0);
+  out.writeUInt8(type, 4);
+  body.copy(out, 5);
+  return out;
+}
 
 function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -173,9 +194,24 @@ describe("mullion helper (pair + run) against the real primary", () => {
     const serverChannel = await bridge.mux.openChannel();
     const received: Buffer[] = [];
     serverChannel.onData((chunk) => received.push(chunk));
-    serverChannel.send(Buffer.from("ssh-add -l"));
+    const allowedRequest = frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("ssh-add -l"));
+    serverChannel.send(allowedRequest);
     await waitUntil(() => received.length > 0);
-    expect(Buffer.concat(received).toString()).toBe("agent-reply:ssh-add -l");
+    expect(Buffer.concat(received)).toEqual(
+      Buffer.concat([Buffer.from("agent-reply:"), allowedRequest]),
+    );
+
+    // Round 4 (issue #820) — the same real stack (real primary, real mux,
+    // real fake-agent unix socket) but for a BLOCKED request: proves
+    // SignOnlyFilter is genuinely wired into runRun's own channel handler
+    // end to end, not just correct in isolated unit tests. Reuses
+    // `received` from above (already has the allowed reply in it) to also
+    // confirm the fake agent never sees this one at all.
+    const blockedRequest = frame(SSH_AGENTC_ADD_IDENTITY, Buffer.from("private-key-material"));
+    serverChannel.send(blockedRequest);
+    await waitUntil(() => received.length > 1);
+    expect(received[1]).toEqual(SSH_AGENT_FAILURE_FRAME);
+    expect(Buffer.concat(received).includes("private-key-material")).toBe(false);
 
     // Clean shutdown: mark the helper's own loop as stopped, then close
     // from the server side so its blocked `await mux.onClose` resolves and

@@ -1,10 +1,17 @@
 // Issue #820 — the sign-only filter: a compromised or malicious primary
 // (or a bug anywhere in the mux/routes wiring between it and the laptop)
 // must not be able to mutate the laptop's SSH agent — only ask it to list
-// identities or produce a signature. Enforced HERE, on the laptop side,
-// which is authoritative (this module runs on whichever end owns the real
-// agent socket); a second instance running primary-side is defense in
-// depth, not the security boundary itself.
+// identities or produce a signature. THIS instance (wired in by
+// ssh-agent-relay.ts) is the primary-side leg, defense in depth — it runs
+// on the end that does NOT own the real agent socket. The authoritative
+// enforcement point (round 4 PR2) is src/cli/ssh-agent-filter.mjs, a
+// separate, hand-maintained implementation for the laptop-side `mullion
+// helper run` process, which is what actually owns the real agent socket
+// and is where a bypass would matter. Both copies must classify identically
+// — test/fixtures/ssh-agent-filter-vectors.json (generated FROM this file's
+// own SSH_AGENT_REQUEST_TYPE_VECTORS) is the shared source of truth both
+// implementations' test suites validate against, so they can't silently
+// drift apart.
 //
 // This module only ever classifies REQUESTS (the client->agent direction,
 // SSH_AGENTC_* below) — the real agent's own REPLIES (SSH_AGENT_* success/
@@ -81,11 +88,15 @@ export const SSH_AGENT_FAILURE = 5;
  * The conformance table: every known `SSH_AGENTC_*` request type mapped to
  * its allow/block decision and a human name. Exported as plain,
  * JSON-serializable data — not just baked into `SIGN_ONLY_ALLOWLIST` below
- * — specifically so a second implementation (the laptop tray app, in a
- * separate repo per the design plan, likely not TypeScript) can test
- * itself against this exact table rather than re-deriving the allowlist
- * from prose. This is the single source of truth; `SIGN_ONLY_ALLOWLIST` is
- * derived from it, not maintained separately, so the two can't drift.
+ * — specifically so a second implementation can test itself against this
+ * exact table rather than re-deriving the allowlist from prose. That
+ * second implementation is now real: src/cli/ssh-agent-filter.mjs (round 4
+ * PR2, the laptop-side `mullion helper run` process) and — via
+ * scripts/generate-ssh-agent-filter-vectors.ts — the checked-in
+ * test/fixtures/ssh-agent-filter-vectors.json a future separate tray repo
+ * can import without needing this TypeScript source at all. This is the
+ * single source of truth; `SIGN_ONLY_ALLOWLIST` is derived from it, not
+ * maintained separately, so the two can't drift.
  *
  * Only `SSH_AGENTC_REQUEST_IDENTITIES` and `SSH_AGENTC_SIGN_REQUEST` are
  * allowed — everything else (in particular every ADD_IDENTITY, REMOVE_*,

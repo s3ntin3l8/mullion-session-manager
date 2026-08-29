@@ -322,7 +322,19 @@ export function attachInboundMux(ws, opts) {
  * protects (never buffer unboundedly, never silently drop a chunk) matter
  * exactly as much on this end of the wire as the other.
  */
-export function pipeNetSocketToChannel(socket, channel) {
+/**
+ * The socket->channel half of `pipeNetSocketToChannel` below — the real
+ * agent's own REPLIES flowing back out. Split out (round 4 PR2, issue
+ * #820) so `ssh-agent-filtered-relay.mjs` can compose this UNFILTERED half
+ * unchanged with its own filtered request-direction half — replies are
+ * never filtered (see ssh-agent-filter.mjs's own header comment on why).
+ * Kept in this file, not the relay module: this is still pure mux-frame
+ * plumbing, no agent-protocol awareness, matching this file's own role as
+ * transport only (mirrors src/services/ssh-agent-mux.ts's own
+ * pipeChannelDirection/pipeNetSocketToChannel split, which
+ * src/services/ssh-agent-relay.ts composes from the same way).
+ */
+export function pipeSocketRepliesToChannel(socket, channel) {
   let socketEnded = false;
   let pendingChunk = null;
 
@@ -365,7 +377,21 @@ export function pipeNetSocketToChannel(socket, channel) {
   socket.on("error", () => {
     if (!channel.closed) channel.close();
   });
+}
 
+/**
+ * The channel->socket half of `pipeNetSocketToChannel` below — REQUESTS
+ * flowing in toward the real agent, unfiltered. Split out for the same
+ * reason as `pipeSocketRepliesToChannel` above; unlike that half, this one
+ * is NOT reused unfiltered by `ssh-agent-filtered-relay.mjs` — that module
+ * reimplements this direction itself with `SignOnlyFilter` inserted, since
+ * the two need different framing (filtered request handling has to
+ * classify each agent-protocol frame, not just forward raw byte chunks).
+ * Kept here anyway, alongside its sibling, as the reference for what
+ * "unfiltered" looks like and for any future direct (non-agent, e.g. a
+ * test double) caller that genuinely wants a raw pipe.
+ */
+export function pipeChannelRequestsToSocket(socket, channel) {
   channel.onData((chunk) => {
     if (socket.destroyed) return;
     const byteLength = chunk.length;
@@ -377,4 +403,9 @@ export function pipeNetSocketToChannel(socket, channel) {
   channel.onClose(() => {
     if (!socket.destroyed) socket.destroy();
   });
+}
+
+export function pipeNetSocketToChannel(socket, channel) {
+  pipeSocketRepliesToChannel(socket, channel);
+  pipeChannelRequestsToSocket(socket, channel);
 }
