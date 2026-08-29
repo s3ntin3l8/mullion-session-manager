@@ -22,7 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:all": "concurrently -n backend,frontend -c blue,green \"npm:test\" \"npm --prefix frontend run test\"",
-    "lint": "eslint . && npm run check:env-docs && npm run check:briefing-sync",
+    "lint": "eslint . && npm run check:env-docs && npm run check:briefing-sync && npm run check:ssh-agent-filter-vectors",
     "lint:all": "concurrently -n backend,frontend -c blue,green \"npm:lint\" \"npm --prefix frontend run lint\"",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "concurrently -n backend,frontend -c blue,green \"npm:typecheck\" \"npm --prefix frontend run typecheck\"",
@@ -33,6 +33,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "check:env-docs": "node scripts/check-env-docs.mjs",
     "check:briefing-sync": "node scripts/check-briefing-sync.mjs",
+    "check:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts --check",
+    "generate:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts",
     "build:helper-sea": "node scripts/build-helper-sea.mjs"
   },
   "dependencies": {
