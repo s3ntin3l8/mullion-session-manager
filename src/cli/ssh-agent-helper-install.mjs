@@ -196,11 +196,20 @@ WantedBy=default.target
 // uninstaller) can actually read, not an opaque one-liner. Element-by-
 // element mapping to the other two platforms' equivalents:
 //   - LogonTrigger                    <-> launchd RunAtLoad / systemd WantedBy=default.target
-//   - RestartOnFailure (PT1M, x9999)  <-> launchd KeepAlive+ThrottleInterval / systemd Restart=always+RestartSec
+//   - RestartOnFailure (PT1M, x999)   <-> launchd KeepAlive+ThrottleInterval / systemd Restart=always+RestartSec
 //     — 1-minute floor is Task Scheduler's own minimum granularity for this
 //     element (Microsoft's schema docs), which happens to land in the same
 //     "calm, not tight" territory EXPIRY_COMMENT_LINES above explains the
-//     other two platforms' own interval choices with.
+//     other two platforms' own interval choices with. Count capped at 999,
+//     not an arbitrarily larger number: two independent reviews (self-
+//     review and Hermes, PR #879) flagged that Task Scheduler's own
+//     RestartCount element is documented with a 999 upper bound elsewhere
+//     in Microsoft's schema docs, and this environment can't confirm the
+//     exact figure against a real `schtasks /Create` — 999 restarts at a
+//     1-minute floor is already ~16.6 hours of retrying, comfortably more
+//     than enough headroom for the 24h credential-expiry cycle
+//     EXPIRY_COMMENT_LINES describes, so staying at or under any plausible
+//     cap costs nothing here.
 //   - ExecutionTimeLimit PT0S (unlimited) — the default is PT72H (3 days),
 //     which would silently kill this long-running foreground process out
 //     from under itself; every other platform's job here runs indefinitely
@@ -252,7 +261,7 @@ export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
     <StartWhenAvailable>true</StartWhenAvailable>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
-      <Count>9999</Count>
+      <Count>999</Count>
     </RestartOnFailure>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
   </Settings>
