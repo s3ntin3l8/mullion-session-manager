@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import net from "node:net";
 import path from "node:path";
+import { mkdirSync } from "node:fs";
 import { buildTestApp } from "../helpers/app.js";
 import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
 import { sshAgentSocketPath } from "../../src/services/ssh-agent-socket.js";
@@ -141,12 +142,31 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
     // SESSIONS_DIR happens to be short enough that the fallback never
     // triggers today, but that's incidental, not guaranteed by this test).
     const socketPath = sshAgentSocketPath(process.env.SESSIONS_DIR!);
+    // Explicit, not relying on an earlier test in this file having already
+    // caused ptyPlugin to create it via its own buildTestApp() call — this
+    // test must pass in isolation too (e.g. `vitest run -t "..."`), not
+    // just as part of the full suite.
+    mkdirSync(process.env.SESSIONS_DIR!, { recursive: true });
 
     const foreignListener = net.createServer();
     await new Promise<void>((resolve, reject) => {
       foreignListener.once("error", reject);
       foreignListener.listen(socketPath, () => resolve());
     });
+
+    // Hermes review, PR #877 — MULLION_SSH_AUTH_SOCK/ambient SSH_AUTH_SOCK
+    // both unset for this test specifically (same save/restore shape as
+    // hosts.test.ts's own "reports sshAuthSock as..." tests): with either
+    // set, `resolved.source` would land on `configured`/`ambient` regardless
+    // of whether buildAgentConfig's bridge-tier suppression bug (below) was
+    // actually fixed — the assertion would pass for the wrong reason. Only
+    // with both unset does `source` genuinely depend on whether
+    // buildAgentConfig used the preflight-adjusted `sshAuthSockBridgeExpected`
+    // or re-derived a stale `true` from the raw role.
+    const prevConfigured = process.env.MULLION_SSH_AUTH_SOCK;
+    delete process.env.MULLION_SSH_AUTH_SOCK;
+    const prevAmbient = process.env.SSH_AUTH_SOCK;
+    delete process.env.SSH_AUTH_SOCK;
 
     try {
       // Must not throw — the whole point of the #873 PR-B fix. Before it,
@@ -165,10 +185,23 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
       // defense, not the crash-worthy race (see
       // shouldCrashOnBridgeSocketBindFailure's own unit tests below for
       // that case).
+      //
+      // This also covers buildAgentConfig (routes/internal.ts, reached here
+      // via /api/hosts/local/config's "local" branch): before Hermes's
+      // review on this PR, it re-derived materializesBridgeSocket from the
+      // raw MULLION_ROLE instead of reading the same
+      // app.sshAuthSockBridgeExpected pty.ts computed, so it would have
+      // still reported source:"bridge" here — a diagnostic drift pointing
+      // Settings at a path this host doesn't actually control, contradicting
+      // what PtyManager really froze.
       const config = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
       expect(config.json().sshAuthSock?.source).not.toBe("bridge");
     } finally {
       await new Promise<void>((resolve) => foreignListener.close(() => resolve()));
+      if (prevConfigured === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
+      else process.env.MULLION_SSH_AUTH_SOCK = prevConfigured;
+      if (prevAmbient === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = prevAmbient;
     }
   });
 });
