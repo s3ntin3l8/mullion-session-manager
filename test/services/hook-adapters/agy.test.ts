@@ -588,6 +588,17 @@ describe("agyAdapter.prepareLaunch — Mullion tooling bundle install (issue: ma
     expect(existsSync(userSkillPath)).toBe(true);
   });
 
+  it("never removes a user's own mullion-prefixed skill — ownership marker, not just the prefix, decides", async () => {
+    const skillsDir = resolveAgyGlobalSkillsDir();
+    const lookalikePath = path.join(skillsDir, "mullion-helper", "SKILL.md");
+    mkdirSync(path.dirname(lookalikePath), { recursive: true });
+    writeFileSync(lookalikePath, "not mine to touch");
+
+    await agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
+
+    expect(existsSync(lookalikePath)).toBe(true);
+  });
+
   it("runs the bundle-skills step AFTER mergeAgyTrustedWorkspace, but a bundle-install failure never skips the other steps", async () => {
     // A file where the skills dir needs to be makes mkdirSync inside
     // installBundleSkills throw ENOTDIR — the per-step try/catch (this

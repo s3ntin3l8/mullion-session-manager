@@ -110,6 +110,30 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
     expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(false);
   });
 
+  // Hermes review, PR #891 — the prefix alone is a naming convention, not
+  // proof of ownership: a user could plausibly have their own skill named
+  // e.g. `mullion-helper`, parallel to Mullion's own `mullion-host`. Only a
+  // directory carrying the ownership marker installBundleSkills writes may
+  // ever be removed.
+  it("uninstall never removes a mullion-prefixed directory that isn't Mullion's own — no ownership marker, no delete", () => {
+    const lookalikeDir = path.join(destRoot, "mullion-helper");
+    mkdirSync(lookalikeDir, { recursive: true });
+    writeFileSync(path.join(lookalikeDir, "SKILL.md"), "not mine to touch");
+    installBundleSkills(destRoot);
+
+    uninstallBundleSkills(destRoot);
+
+    expect(existsSync(path.join(lookalikeDir, "SKILL.md"))).toBe(true);
+    // The real install is still removed correctly — this isn't uninstall
+    // going inert, just correctly discriminating.
+    expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(false);
+  });
+
+  it("installs a marker file inside each installed skill directory", () => {
+    installBundleSkills(destRoot);
+    expect(existsSync(path.join(destRoot, "mullion-mullion-host", ".mullion-managed"))).toBe(true);
+  });
+
   it("uninstall never touches a directory without the mullion- prefix", () => {
     const userSkillDir = path.join(destRoot, "my-own-skill");
     mkdirSync(userSkillDir, { recursive: true });

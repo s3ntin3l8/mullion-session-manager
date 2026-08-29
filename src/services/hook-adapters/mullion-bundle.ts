@@ -61,10 +61,20 @@ export function resolveMullionBundleDir(): string | null {
 }
 
 // Every directory this module ever writes under a destRoot carries this
-// prefix — installBundleSkills only ever creates `mullion-`-prefixed dirs,
-// and uninstallBundleSkills only ever removes them, so neither can ever
-// touch a skill a user or another tool placed there themselves.
+// prefix, but the prefix ALONE is a namespace convention, not an ownership
+// marker — a user could name their own skill `mullion-helper` (a plausible
+// parallel to Mullion's own `mullion-host`), and a prefix-only uninstall
+// would silently rmSync it (Hermes review, PR #891). INSTALLED_MARKER_NAME
+// is the actual ownership record: installBundleSkills writes one inside
+// every directory it creates, and uninstallBundleSkills only ever removes a
+// `mullion-`-prefixed directory that carries it — never a same-prefixed
+// directory a user or another tool created themselves, marker or not.
 const INSTALLED_SKILL_PREFIX = "mullion-";
+const INSTALLED_MARKER_NAME = ".mullion-managed";
+const INSTALLED_MARKER_CONTENT =
+  "This directory is managed by Mullion (installBundleSkills, hook-adapters/mullion-bundle.ts).\n" +
+  "Safe to delete by hand; it will be recreated on the next matching session launch\n" +
+  "while sessions.injectMullionBundle is on, and removed automatically once it's off.\n";
 
 /** Recursively syncs `sourceDir`'s files into `destDir`, creating `destDir`
  * (and any subdirectories) as needed, and skipping any file whose content
@@ -97,6 +107,15 @@ function syncSkillDir(sourceDir: string, destDir: string): void {
   }
 }
 
+/** Whether `dir` carries the ownership marker installBundleSkills writes —
+ * the actual "did Mullion install this" test, not just the `mullion-`
+ * prefix on its name. Used both to decide whether install needs to
+ * (re)write the marker and, more importantly, by uninstallBundleSkills to
+ * decide whether it's safe to delete. */
+function isCurrentMullionManagedDir(dir: string): boolean {
+  return existsSync(path.join(dir, INSTALLED_MARKER_NAME));
+}
+
 /**
  * Installs every skill in the shipped bundle (src/bundle/skills/<name>/)
  * into `destRoot/mullion-<name>/` — the zero-repo-change delivery vehicle
@@ -124,24 +143,36 @@ export function installBundleSkills(destRoot: string): void {
     return;
   }
   for (const name of skillNames) {
-    syncSkillDir(
-      path.join(skillsDir, name),
-      path.join(destRoot, `${INSTALLED_SKILL_PREFIX}${name}`),
-    );
+    const destDir = path.join(destRoot, `${INSTALLED_SKILL_PREFIX}${name}`);
+    syncSkillDir(path.join(skillsDir, name), destDir);
+    // Same content-compare-then-skip posture as syncSkillDir's own files —
+    // checked (not written unconditionally) so an already-marked directory
+    // doesn't get its mtime touched on every matching launch. Self-heals a
+    // marker a user deleted by hand while leaving the skill files in place.
+    const markerPath = path.join(destDir, INSTALLED_MARKER_NAME);
+    if (!isCurrentMullionManagedDir(destDir)) {
+      writeFileSync(markerPath, INSTALLED_MARKER_CONTENT);
+    }
   }
 }
 
 /**
- * Removes every `mullion-`-prefixed directory this module has ever
- * installed under `destRoot` — the reversal of installBundleSkills, called
- * on every matching launch when `sessions.injectMullionBundle` is off, so a
- * managed install left behind by an earlier session with the setting on
- * doesn't linger forever once an operator turns it off (codex-trust.ts is
- * the precedent for a Mullion-owned host-level change staying reversible).
- * Only ever removes entries carrying the prefix — never enumerates or
- * touches anything else in `destRoot`, the same containment
- * installBundleSkills itself relies on. A no-op when `destRoot` doesn't
- * exist yet (nothing was ever installed).
+ * Removes every directory under `destRoot` this module has actually
+ * installed — the reversal of installBundleSkills, called on every matching
+ * launch when `sessions.injectMullionBundle` is off, so a managed install
+ * left behind by an earlier session with the setting on doesn't linger
+ * forever once an operator turns it off (codex-trust.ts is the precedent
+ * for a Mullion-owned host-level change staying reversible).
+ *
+ * Deletes a `mullion-`-prefixed entry ONLY when it also carries the
+ * ownership marker (isCurrentMullionManagedDir) — the prefix alone is a
+ * naming convention, not proof of ownership: a user could plausibly have
+ * their own skill named e.g. `mullion-helper`, parallel to Mullion's own
+ * `mullion-host`, and a prefix-only match would silently delete it (Hermes
+ * review, PR #891). A same-prefixed directory with no marker — user-owned,
+ * or installed by some future release that changes this scheme — is left
+ * completely untouched. A no-op when `destRoot` doesn't exist yet (nothing
+ * was ever installed).
  */
 export function uninstallBundleSkills(destRoot: string): void {
   let entries: Dirent[];
@@ -151,8 +182,10 @@ export function uninstallBundleSkills(destRoot: string): void {
     return;
   }
   for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith(INSTALLED_SKILL_PREFIX)) {
-      rmSync(path.join(destRoot, entry.name), { recursive: true, force: true });
+    if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
+    const dir = path.join(destRoot, entry.name);
+    if (isCurrentMullionManagedDir(dir)) {
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 }

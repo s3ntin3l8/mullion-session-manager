@@ -310,6 +310,17 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(existsSync(userSkillPath)).toBe(true);
   });
 
+  it("never removes a user's own mullion-prefixed skill — ownership marker, not just the prefix, decides", async () => {
+    const skillsDir = resolveCodexAgentsSkillsDir();
+    const lookalikePath = path.join(skillsDir, "mullion-helper", "SKILL.md");
+    mkdirSync(path.dirname(lookalikePath), { recursive: true });
+    writeFileSync(lookalikePath, "not mine to touch");
+
+    await codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
+
+    expect(existsSync(lookalikePath)).toBe(true);
+  });
+
   it("a bundle-skill install failure never skips mergeCodexHooks — the step that actually matters", async () => {
     // A file where the skills dir needs to be makes mkdirSync inside
     // installBundleSkills throw ENOTDIR — the per-step try/catch (same
