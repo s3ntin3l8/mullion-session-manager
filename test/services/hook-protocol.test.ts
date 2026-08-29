@@ -185,6 +185,26 @@ describe("parseHookMessage", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "review_gate", state: "waiting" }));
       expect(result.ok).toBe(false);
     });
+
+    it("passes through an optional gateId when present (concurrent-gates correlation)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "x", gateId: "g-1" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "review_gate", state: "waiting", prompt: "x", gateId: "g-1" },
+      });
+    });
+
+    it("accepts a payload with no gateId at all (older forwarder build)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "x" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "review_gate", state: "waiting", prompt: "x" },
+      });
+    });
   });
 
   // Phase 5 planning found these were dead: declared, validated, but never

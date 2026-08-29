@@ -989,6 +989,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       attentionAt: null,
       lastTitle: null,
       gateState: "idle",
+      gates: [],
       gatePrompt: null,
       promoteState: "idle",
       promoteSummary: null,

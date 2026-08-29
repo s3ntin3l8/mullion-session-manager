@@ -142,6 +142,7 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         properties: {
           decision: { type: "string", enum: ["approved", "denied"] },
           reason: { type: "string" },
+          gateId: { type: "string" },
         },
       },
     });

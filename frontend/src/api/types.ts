@@ -409,6 +409,14 @@ export interface Session {
   // native prompt rather than being denied. Distinct from a human "denied".
   gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed";
   gatePrompt: string | null;
+  // Issue: correlate concurrent permission gates — the full list of
+  // currently-waiting gates, oldest first, each independently resolvable.
+  // gateState/gatePrompt above stay as a derived single-gate summary for
+  // every OTHER consumer (session status pill, push notifications); this
+  // is what NotificationBell.tsx's GateActions actually renders from, and
+  // what correlates a specific `review_gate` event row to whether ITS gate
+  // (not just "some" gate) is still waiting.
+  gates: Array<{ gateId: string; prompt: string; at: number }>;
   // Hook signal states (issue #259) — live in-memory fields mirroring
   // PtyManager's per-session hook state, same fallback-to-defaults posture.
   permissionState: "idle" | "pending";

@@ -83,6 +83,7 @@ const BASE_SESSION_FIELDS = {
   attentionAt: null,
   lastTitle: null,
   gateState: "idle" as const,
+  gates: [],
   gatePrompt: null,
   promoteState: "idle" as const,
   promoteSummary: null,

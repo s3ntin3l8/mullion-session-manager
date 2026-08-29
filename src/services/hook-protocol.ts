@@ -64,6 +64,19 @@ export interface ReviewGateHookMessage {
   kind: "review_gate";
   state: "waiting" | "approved" | "denied";
   prompt: string;
+  /** Issue: correlate concurrent permission gates — the forwarder-generated
+   * id this gate is tracked under, both in hooks.ts's per-session
+   * `pendingGates` map and in pty-manager.ts's `Session.pendingGates`. Lets
+   * two `PermissionRequest` hooks firing concurrently for the same session
+   * be held and resolved independently instead of the older single-gate
+   * model, where a second concurrent one fell through to the agent's own
+   * native prompt (see hooks.ts's now-removed duplicate-fallthrough
+   * branch). Optional on the wire, not required: an older forwarder build
+   * (pre-this-issue) sends a `review_gate` with no `gateId` at all — see
+   * hook-handlers.ts's "review_gate" case for the synthesized fallback id
+   * that keeps that payload working exactly as the old single-gate model
+   * did, just no longer independently correlatable. */
+  gateId?: string;
 }
 
 /** Issue #271, option 2 — a model-invoked "start work" request (sent by the
@@ -611,7 +624,13 @@ function validateReviewGate(payload: Record<string, unknown>): ParseHookMessageR
   if (!isString(payload.prompt)) {
     return { ok: false, error: "review_gate requires a string 'prompt' field" };
   }
-  return { ok: true, message: { kind: "review_gate", state, prompt: payload.prompt } };
+  // Optional, not required (ReviewGateHookMessage's own doc comment) — an
+  // older forwarder build predating gate correlation sends none at all.
+  const gateId = isString(payload.gateId) ? payload.gateId : undefined;
+  return {
+    ok: true,
+    message: { kind: "review_gate", state, prompt: payload.prompt, ...(gateId ? { gateId } : {}) },
+  };
 }
 
 function validatePromoteRequest(payload: Record<string, unknown>): ParseHookMessageResult {

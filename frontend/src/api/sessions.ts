@@ -105,10 +105,22 @@ export const sessionsApi = {
 
   // Minimal review gate (issue #178) — delivers a human's Approve/Deny
   // decision (NotificationBell.tsx) for a session's pending `review_gate`.
-  resolveReviewGate: (id: number, decision: "approved" | "denied", reason?: string) =>
+  // `gateId` (issue: correlate concurrent permission gates) resolves that
+  // SPECIFIC gate; omitted (undefined), the backend resolves the oldest
+  // still-pending one — the pre-correlation, one-gate-per-session contract.
+  resolveReviewGate: (
+    id: number,
+    gateId: string | undefined,
+    decision: "approved" | "denied",
+    reason?: string,
+  ) =>
     request<void>(`/api/sessions/${id}/review-gate`, {
       method: "POST",
-      body: JSON.stringify({ decision, ...(reason !== undefined ? { reason } : {}) }),
+      body: JSON.stringify({
+        decision,
+        ...(reason !== undefined ? { reason } : {}),
+        ...(gateId !== undefined ? { gateId } : {}),
+      }),
     }),
 
   // Issue #404 — accepts a plain session's detected dev-server offer: wires

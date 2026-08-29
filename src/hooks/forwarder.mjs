@@ -40,6 +40,7 @@
 // strictly additive.
 
 import net from "node:net";
+import { randomUUID } from "node:crypto";
 import {
   buildForwarderMessage,
   formatGateDecision,
@@ -170,6 +171,16 @@ async function forward() {
   // exactly this reason (see mapClaudeCodeEvent's own ordering comment).
   const gateMessage = messages.find((m) => m.kind === "review_gate" && m.state === "waiting");
   if (gateMessage) {
+    // Issue: correlate concurrent permission gates — generated HERE, not in
+    // forwarder-core.mjs's dialect mappers, to keep those pure/synchronous
+    // and unit-testable with a synthetic payload (their own existing
+    // design intent — see forwarder-core.mjs's file header). One id per
+    // BLOCKED PROCESS, not per reply: runGate below still settles on the
+    // first reply line on its own connection (one gate per connection,
+    // unchanged) — the id's only job is letting hooks.ts's `pendingGates`
+    // map hold more than one waiting gate per session, and letting POST
+    // /api/sessions/:id/review-gate say WHICH one a decision is for.
+    gateMessage.gateId = randomUUID();
     const siblings = siblingsFor(messages, gateMessage);
     // Deliberately wrapped: a synchronous throw from inside runGate's
     // executor (e.g. net.createConnection on a malformed socketPath) would

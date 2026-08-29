@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import net from "node:net";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
 import type { ReviewGateHookMessage, BrowserActionHookMessage } from "../services/hook-protocol.js";
@@ -66,25 +67,34 @@ const MAX_LINE_BYTES = 64 * 1024;
 // forwarder-core.mjs's mapClaudeCodePermissionRequest for why). A
 // `review_gate {state: "waiting"}` message keeps its connection open (see
 // handleConnection below) instead of the fire-and-forget notify-then-close
-// every other hook kind uses; this map tracks that open connection per
+// every other hook kind uses; this map tracks those open connections per
 // session so a later decision (POST /api/sessions/:id/review-gate, routed
 // here via app.resolveHookGate) knows which socket to write the reply to.
 //
-// One gate at a time per session, by design: Claude Code (and any future
-// gating agent) can in principle fire two PermissionRequest hooks
-// concurrently for the same session (parallel tool calls), which would
-// otherwise silently overwrite this map's entry — the human's decision
-// would then only ever reach whichever connection registered *second*,
-// leaving the first wedged until its own hook-level timeout. Rather than
-// thread a correlation id through the wire protocol for a "minimal" slice, a
-// second concurrent waiting gate for an already-pending session resolves
-// immediately (see handleConnection) to "no_response" — falling through to
-// the agent's own native prompt for that specific tool call, same as any
-// other "nobody decided" outcome (Hermes review, PR #839) — and the first
-// gate's own pending state is left completely undisturbed.
+// Correlated by gateId (issue: correlate concurrent permission gates),
+// NOT one-slot-per-session anymore. The one-gate-per-session model this
+// replaces (PR #839) resolved a second concurrent PermissionRequest
+// immediately to "no_response" — falling through to the agent's own native
+// prompt for that specific tool call — while leaving the first gate's
+// pending state "completely undisturbed". Live evidence from a stuck
+// Codex session (branchDAM, session 566) showed what "undisturbed" meant
+// in practice: the first gate had NO affordance in the terminal at all
+// (Codex was already rendering the SECOND, fallen-through prompt), so a
+// user who answered what was actually in front of them had no way to know
+// a different tool call was still parked, unanswerable except from the
+// Mullion UI, for up to GATE_TIMEOUT_MS. Both turns aborted. Threading a
+// gateId through the wire protocol (forwarder.mjs generates one per
+// blocked hook process — see its own comment) removes the need for that
+// "undisturbed" tradeoff entirely: every concurrent gate for a session is
+// now held and independently resolvable via its own `PendingGate` entry
+// in the nested map below, keyed session -> gateId.
 interface PendingGate {
   socket: net.Socket;
   timer: NodeJS.Timeout;
+  /** The prompt this gate was registered with — kept here (not just on
+   * Session.pendingGates) so a resolution log line can identify which gate
+   * resolved without a second lookup. */
+  prompt: string;
 }
 
 // Must stay comfortably below every gating adapter's own hook-level
@@ -212,41 +222,46 @@ function resolvePendingPromote(
 /** Writes a decision back to a still-open gate connection and clears its
  * bookkeeping — shared by the server-side timeout above and
  * app.resolveHookGate (called from POST /api/sessions/:id/review-gate).
- * Returns false, touching nothing, if no gate is currently pending for this
- * session (already resolved, timed out, or the connection died — see the
- * `close` handler below) so the caller can report "nothing to resolve"
- * rather than silently no-op.
+ * Returns false, touching nothing, if no gate matching `gateId` is currently
+ * pending for this session (already resolved, timed out, or the connection
+ * died — see the `close` handler below) so the caller can report "nothing to
+ * resolve" rather than silently no-op.
+ *
+ * `gateId`, not just `sessionId` (issue: correlate concurrent permission
+ * gates): a session can now have more than one entry in `pendingGates` at
+ * once, so resolving one must never touch another still-waiting gate for
+ * the same session — see PendingGate's own doc comment for why this
+ * replaced the older one-slot-per-session model.
  *
  * `decision` accepts a third value, "no_response" (issue #264 rescope), used
  * by the server-side timeout below and by hooksPlugin's graceful-shutdown
  * onClose handler — a real human decision from POST
- * /api/sessions/:id/review-gate is always "approved"/"denied". (The
- * duplicate-concurrent-gate branch above this function ALSO falls through to
- * "no_response" on the wire, for the same reason, but writes it straight to
- * that connection's socket without ever calling this function — the first
- * gate is still the one truly pending, so its own gateState/timeline record
- * is untouched; see that branch's own comment.) "no_response" is written to
- * the socket verbatim here (the forwarder's formatGateDecision maps it to a
- * bare `{}`, falling through to the agent's own native prompt rather than
- * denying the tool call outright), and reported to app.pty.resolveGate/
- * SessionInfo.gateState as "lapsed" (issue #840/#844) — a distinct fourth
- * state from "denied", since nobody actually decided anything; the agent
- * fell through to its own prompt instead. */
+ * /api/sessions/:id/review-gate is always "approved"/"denied". "no_response"
+ * is written to the socket verbatim here (the forwarder's
+ * formatGateDecision maps it to a bare `{}`, falling through to the agent's
+ * own native prompt rather than denying the tool call outright), and
+ * reported to app.pty.resolveGate/SessionInfo.gateState as "lapsed" (issue
+ * #840/#844) — a distinct fourth state from "denied", since nobody actually
+ * decided anything; the agent fell through to its own prompt instead. */
 function resolvePendingGate(
   app: FastifyInstance,
-  pendingGates: Map<string, PendingGate>,
+  pendingGates: Map<string, Map<string, PendingGate>>,
   sessionId: string,
+  gateId: string,
   decision: { decision: "approved" | "denied" | "no_response"; reason?: string },
 ): boolean {
-  const pending = pendingGates.get(sessionId);
-  if (!pending) return false;
+  const forSession = pendingGates.get(sessionId);
+  const pending = forSession?.get(gateId);
+  if (!forSession || !pending) return false;
   clearTimeout(pending.timer);
-  pendingGates.delete(sessionId);
+  forSession.delete(gateId);
+  if (forSession.size === 0) pendingGates.delete(sessionId);
   if (pending.socket.writable) {
     pending.socket.write(`${JSON.stringify(decision)}\n`);
   }
   app.pty.resolveGate(
     sessionId,
+    gateId,
     decision.decision === "no_response" ? "lapsed" : decision.decision,
     decision.reason,
   );
@@ -256,7 +271,7 @@ function resolvePendingGate(
 function handleConnection(
   app: FastifyInstance,
   socket: net.Socket,
-  pendingGates: Map<string, PendingGate>,
+  pendingGates: Map<string, Map<string, PendingGate>>,
   pendingPromotes: Map<string, PendingPromote>,
 ): void {
   let buffer = "";
@@ -265,6 +280,14 @@ function handleConnection(
   // that never completes a valid handshake never gets to send anything else
   // (see the `continue`/`return` shape below).
   let sessionId: string | null = null;
+  // Issue: correlate concurrent permission gates — set the moment THIS
+  // connection registers a gate (at most one per connection: a single
+  // forwarder process sends at most one `review_gate` message). Captured
+  // here, at `handleConnection`'s own scope, rather than re-derived by
+  // searching `pendingGates` for `.socket === socket` in the `close`
+  // handler below — this connection already knows its own gateId the
+  // moment it registers one.
+  let gateIdOnThisConnection: string | null = null;
 
   socket.on("data", async (chunk: Buffer) => {
     socket.pause();
@@ -341,9 +364,11 @@ function handleConnection(
         // Issue #178 — a blocking gate is the one message kind that keeps its
         // connection open rather than fire-and-forget (see forwarder.mjs's
         // runGate): register it so a later decision knows where to reply.
-        // See PendingGate's doc comment above for why a second concurrent
-        // waiting gate for the same session is denied immediately instead of
-        // silently overwriting the first's pending state.
+        // Issue: correlate concurrent permission gates — a second concurrent
+        // waiting gate for the same session used to be denied immediately
+        // (PR #839) rather than overwriting the first's pending state; it
+        // now gets its OWN entry, keyed by gateId, instead. See PendingGate's
+        // doc comment above for why that changed.
         // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
         // (not a literal) plus a `[key: string]: unknown` index signature, so
         // TS can't discriminate `result.message` down to just
@@ -362,46 +387,42 @@ function handleConnection(
           // doesn't carry the `sessionId !== null` narrowing established
           // above across that boundary for a mutable `let`.
           const sid: string = sessionId;
-          if (pendingGates.has(sid)) {
-            // Resolved immediately, on THIS connection only, as no_response —
-            // NOT a denial (Hermes review, PR #839): a second concurrent tool
-            // call genuinely has nobody deciding FOR IT specifically (the
-            // human is answering the first, unrelated one), so it falls
-            // through to the agent's own native prompt for that one, same as
-            // every other "nobody answered" outcome — consistent with issue
-            // #264's fall-through philosophy rather than an ambiguity-driven
-            // exception to it. Deliberately does NOT reach
-            // app.pty.emitHookEvent below: the first gate is still the one
-            // truly pending, and routing this duplicate through emitHookEvent
-            // would overwrite SessionInfo.gateState/gatePrompt with this
-            // second prompt, even though pendingGates still points at the
-            // first connection's socket. See PendingGate's doc comment above
-            // for the full "why resolve immediately, not queue" reasoning.
-            app.log.warn(
-              { sessionId: sid },
-              "a review gate is already pending for this session, falling through the newest one immediately",
-            );
-            if (socket.writable) {
-              socket.write(
-                `${JSON.stringify({
-                  decision: "no_response",
-                  reason: "another review is already pending for this session",
-                })}\n`,
-              );
-            }
-            continue;
-          }
+          const gateMessage = result.message as ReviewGateHookMessage;
+          // Falls back to a freshly generated id only for a payload that
+          // somehow arrives with none at all (an older forwarder build
+          // predating gate correlation, or a malformed/hand-crafted
+          // message) — forwarder.mjs's own build always sets one. A
+          // synthesized id here is never independently resolvable by a
+          // client that doesn't know it, but it still gets its own
+          // PendingGate entry rather than colliding with anything else.
+          const gid: string = gateMessage.gateId ?? randomUUID();
+          // Mutates the SAME object `result.message` below still points at
+          // (this cast is a narrowing, not a copy) so a synthesized
+          // fallback id becomes canonical on the message BEFORE
+          // app.pty.emitHookEvent(sessionId, result.message) runs further
+          // down — otherwise pty-manager.ts's Session would independently
+          // synthesize a DIFFERENT id for its own per-gate bookkeeping, and
+          // the two "the same gate" ids would silently diverge.
+          gateMessage.gateId = gid;
+          // Same "const capture for the setTimeout closure" reasoning as
+          // `sid` above.
           const timer = setTimeout(() => {
             app.log.warn(
-              { sessionId: sid },
+              { sessionId: sid, gateId: gid },
               "review gate timed out waiting for a decision — falling through to the agent's own prompt",
             );
-            resolvePendingGate(app, pendingGates, sid, {
+            resolvePendingGate(app, pendingGates, sid, gid, {
               decision: "no_response",
               reason: "timed out waiting for a decision",
             });
           }, GATE_TIMEOUT_MS);
-          pendingGates.set(sid, { socket, timer });
+          let forSession = pendingGates.get(sid);
+          if (!forSession) {
+            forSession = new Map<string, PendingGate>();
+            pendingGates.set(sid, forSession);
+          }
+          forSession.set(gid, { socket, timer, prompt: gateMessage.prompt });
+          gateIdOnThisConnection = gid;
         }
 
         // Issue #271 — a `session_start` message is answered immediately, on
@@ -594,12 +615,14 @@ function handleConnection(
   // A gate connection that closes WITHOUT a decision ever being written
   // (the forwarder process crashed, or something severed the connection)
   // must still resolve the gate rather than leave gateState stuck on
-  // "waiting" forever. Guarded on `pendingGates.get(sessionId)?.socket ===
-  // socket` (not just `.has(sessionId)`) so this never clobbers a
-  // *different*, newer pending gate for the same session id —
-  // resolvePendingGate() already deletes the map entry as part of writing a
-  // real decision, so the ordinary resolved-then-closed path is already a
-  // no-op by the time this fires.
+  // "waiting" forever. Uses `gateIdOnThisConnection`, captured at
+  // registration time (issue: correlate concurrent permission gates), so
+  // this only ever resolves the ONE gate THIS connection registered — never
+  // a different, concurrent gate for the same session sitting in the
+  // nested `pendingGates` map alongside it. resolvePendingGate() already
+  // deletes the map entry as part of writing a real decision, so the
+  // ordinary resolved-then-closed path is already a no-op by the time this
+  // fires (it looks the gateId up again and finds nothing).
   //
   // "no_response", NOT "denied" (concurrent-gates investigation, live
   // session 566 on branchDAM): nobody actually decided anything here either
@@ -612,8 +635,8 @@ function handleConnection(
   // latched on a decision no human ever made.
   socket.on("close", () => {
     if (sessionId === null) return;
-    if (pendingGates.get(sessionId)?.socket === socket) {
-      resolvePendingGate(app, pendingGates, sessionId, {
+    if (gateIdOnThisConnection !== null) {
+      resolvePendingGate(app, pendingGates, sessionId, gateIdOnThisConnection, {
         decision: "no_response",
         reason: "hook connection closed before a decision was made",
       });
@@ -652,7 +675,7 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // One Map per app instance (not module-level) — see PendingGate's doc
   // comment above. Shared by every connection this server ever accepts, and
   // by app.resolveHookGate below.
-  const pendingGates = new Map<string, PendingGate>();
+  const pendingGates = new Map<string, Map<string, PendingGate>>();
   const pendingPromotes = new Map<string, PendingPromote>();
 
   const openSockets = new Set<net.Socket>();
@@ -686,8 +709,26 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // false success.
   app.decorate(
     "resolveHookGate",
-    (sessionId: string, decision: "approved" | "denied", reason?: string): boolean =>
-      resolvePendingGate(app, pendingGates, sessionId, { decision, reason }),
+    (
+      sessionId: string,
+      gateId: string | undefined,
+      decision: "approved" | "denied",
+      reason?: string,
+    ): boolean => {
+      // Issue: correlate concurrent permission gates — an explicit gateId
+      // resolves THAT gate; omitting it (the pre-correlation route contract
+      // — see routes/sessions.ts's reviewGateSchema) resolves the OLDEST
+      // still-pending gate for the session, same "first come, first
+      // answered" ordering the single-gate model had by construction (there
+      // was only ever one). Map iteration order is insertion order, so
+      // `.keys().next().value` is the oldest.
+      const resolvedGateId = gateId ?? pendingGates.get(sessionId)?.keys().next().value;
+      if (resolvedGateId === undefined) return false;
+      return resolvePendingGate(app, pendingGates, sessionId, resolvedGateId, {
+        decision,
+        reason,
+      });
+    },
   );
 
   // Issue #271 — the seam POST /api/sessions/:id/promote and
@@ -716,11 +757,16 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
     // connection, wrong here: Mullion closed the socket on purpose). Getting
     // this right matters more than it looks — a "denied" persisted here is
     // what a restored session would boot back up showing, misrepresenting a
-    // graceful restart as a real human denial. Snapshot the ids first:
-    // resolvePendingGate() deletes from `pendingGates` as it resolves each
-    // one, so iterating the live map while mutating it would skip entries.
-    for (const sessionId of [...pendingGates.keys()]) {
-      resolvePendingGate(app, pendingGates, sessionId, {
+    // graceful restart as a real human denial. Snapshot the (sessionId,
+    // gateId) pairs first: resolvePendingGate() deletes from `pendingGates`
+    // (and its per-session sub-map) as it resolves each one, so iterating
+    // the live nested map while mutating it would skip entries.
+    const pendingGatePairs: Array<[string, string]> = [];
+    for (const [sid, forSession] of pendingGates) {
+      for (const gid of forSession.keys()) pendingGatePairs.push([sid, gid]);
+    }
+    for (const [sid, gid] of pendingGatePairs) {
+      resolvePendingGate(app, pendingGates, sid, gid, {
         decision: "no_response",
         reason: "Mullion is shutting down",
       });
@@ -735,7 +781,9 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
     // real inside a single long-lived test run — see hooks.test.ts). Gates
     // are already resolved and removed by the loop above; this remains for
     // promotes (untouched by issue #844) and as a defensive no-op for gates.
-    for (const pending of pendingGates.values()) clearTimeout(pending.timer);
+    for (const forSession of pendingGates.values()) {
+      for (const pending of forSession.values()) clearTimeout(pending.timer);
+    }
     pendingGates.clear();
     for (const pending of pendingPromotes.values()) clearTimeout(pending.timer);
     pendingPromotes.clear();
@@ -752,6 +800,7 @@ declare module "fastify" {
     hookServer: net.Server;
     resolveHookGate: (
       sessionId: string,
+      gateId: string | undefined,
       decision: "approved" | "denied",
       reason?: string,
     ) => boolean;

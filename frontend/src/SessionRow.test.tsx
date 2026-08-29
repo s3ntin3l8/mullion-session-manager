@@ -138,6 +138,7 @@ const SESSION: Session = {
   attentionAt: null,
   lastTitle: null,
   gateState: "idle",
+  gates: [],
   gatePrompt: null,
   promoteState: "idle",
   promoteSummary: null,

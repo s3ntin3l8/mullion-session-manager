@@ -969,6 +969,7 @@ export class RemoteHostClient {
    */
   async resolveReviewGate(
     id: string,
+    gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
   ): Promise<boolean> {
@@ -977,7 +978,7 @@ export class RemoteHostClient {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision, reason }),
+        body: JSON.stringify({ decision, reason, gateId }),
       },
     );
     return result.ok;

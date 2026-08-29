@@ -64,6 +64,7 @@ import type {
 import type { AttentionSignalKind } from "./attention-detect.js";
 import type { NotificationEvent } from "../shared/types.js";
 import { isPathGitIgnoredCached } from "./git-ignore.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * Narrow view of `Session` that the hook handlers below operate over — see
@@ -193,6 +194,19 @@ export interface SessionHookContext {
   bumpSubagentActivity(agentId: string, kind: "file_change" | "tool_failure"): void;
   recordSubagentStart(agentId: string, agentType: string | null, now: number): void;
   recordSubagentStop(agentId: string, summary: string | null, now: number): void;
+  /** Issue: correlate concurrent permission gates — see
+   * Session.registerPendingGate/resolveGate's own doc comments. Exposed
+   * here so the "review_gate" case below can register a newly-waiting gate
+   * and resolve an anomalous approved/denied one arriving directly over the
+   * hook channel (no shipped forwarder does this; see that case's own
+   * comment) without duplicating either method's bookkeeping. */
+  registerPendingGate(gateId: string, prompt: string): void;
+  resolveGate(gateId: string, decision: "approved" | "denied" | "lapsed", reason?: string): void;
+  /** The ids of every currently-waiting gate, oldest first — used by the
+   * "review_gate" case's anomalous approved/denied-over-the-wire branch to
+   * fall back to "the oldest one" when the message carries no gateId of
+   * its own. */
+  pendingGateIds(): string[];
 }
 
 export type HookHandler = (ctx: SessionHookContext, message: HookMessage) => void;
@@ -431,22 +445,40 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // a real ReviewGateHookMessage for this kind, never
       // UnknownHookMessage.
       const gate = message as ReviewGateHookMessage;
-      ctx.gateState = gate.state;
-      ctx.gatePrompt = gate.state === "waiting" ? gate.prompt : null;
-      ctx.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
       if (gate.state === "waiting") {
-        ctx.gateAt = Date.now();
+        // gateId always present for a real forwarder-originated waiting
+        // gate (forwarder.mjs generates one per blocked hook process — see
+        // its own comment) — falls back to a freshly generated id only for
+        // a payload that somehow arrives with none at all (an older
+        // forwarder build predating gate correlation, or a
+        // malformed/hand-crafted message). A synthesized id here is never
+        // independently resolvable by a client that doesn't know it, but
+        // it still gets its own registerPendingGate entry rather than
+        // colliding with anything else.
+        const gateId =
+          typeof gate.gateId === "string" && gate.gateId.length > 0 ? gate.gateId : randomUUID();
+        ctx.registerPendingGate(gateId, gate.prompt);
+        ctx.emitEvent("review_gate", { state: "waiting", prompt: gate.prompt, gateId });
         ctx.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
       } else {
-        // Follow-up to #275 (gap #3): a resolved state arriving over the
-        // hook channel itself is as authoritative as resolveGate() below —
-        // see this method's doc comment for why a superseding resolution is
-        // now required at all (an OUTPUT_IMMUNE_KINDS-confirmed reviewGate
-        // no longer clears on the tool call's own PTY output). Gated on
-        // confirmedKind so a newer, unrelated confirmed flag isn't
-        // dismissed by a stale gate resolution.
-        ctx.gateAt = null;
-        ctx.clearIfConfirmedKind("reviewGate");
+        // An "approved"/"denied" state ARRIVING OVER THE HOOK CHANNEL
+        // itself — as opposed to via ctx.resolveGate() below, which is
+        // Mullion's own authoritative decision path reached from
+        // hooks.ts's resolvePendingGate once POST
+        // /api/sessions/:id/review-gate or the server-side timeout
+        // delivers a real outcome — is an anomalous, defensive wire case:
+        // no shipped forwarder ever sends this (see
+        // Session.resolveGate's own doc comment: the forwarder that
+        // receives a decision prints it to the agent's stdout and exits,
+        // it never sends a follow-up review_gate line). Delegates to the
+        // SAME resolveGate() rather than duplicating its bookkeeping
+        // (badge-clearing, derived-scalar update) here. Resolves the
+        // gateId if given, else the oldest still-pending gate — same
+        // "no id means the oldest" fallback POST
+        // /api/sessions/:id/review-gate itself uses (routes/sessions.ts's
+        // reviewGateSchema).
+        const gateId = gate.gateId ?? ctx.pendingGateIds()[0];
+        if (gateId !== undefined) ctx.resolveGate(gateId, gate.state);
       }
     },
   ],

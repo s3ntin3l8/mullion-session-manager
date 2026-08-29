@@ -245,29 +245,52 @@ export interface SessionInfo {
    * agent CLIs that self-report their status in the title. */
   lastTitle: string | null;
   /** Minimal review gate (Phase 2, issue #178; rescoped to remote permission
-   * approval in issue #264). "waiting" while a hook's `review_gate` message
-   * is blocked on a real decision (see Session.emitHookEvent/resolveGate
-   * below); "approved"/"denied" once a human answered (via POST
-   * /api/sessions/:id/review-gate); "lapsed" once nobody ever did — the
-   * server-side timeout, a dropped forwarder connection, a duplicate
-   * concurrent gate, or a graceful shutdown while one was pending all fall
-   * through to the agent's own native prompt rather than being denied (issue
-   * #264), and "lapsed" is what records that on this end; "idle" if no gate
-   * has ever fired. Despite the comment this replaced saying otherwise, this
-   * field is NOT in-memory only — it's in `StoredStateFields` below and
-   * persisted to the per-session state file (issue #323), restored on both
-   * `readStateFile()` and `spawn()`'s reattach path. A `"waiting"` value
-   * restored from disk is known-stale (its `pendingGates` socket cannot have
-   * survived a restart) and is resolved to `"lapsed"` at reattach — see
-   * `spawn()`'s savedState handling — rather than left as a live-looking gate
-   * with dead Approve/Deny buttons. */
+   * approval in issue #264). "waiting" while at least one hook `review_gate`
+   * message is blocked on a real decision (see Session.emitHookEvent/
+   * registerPendingGate/resolveGate below); "approved"/"denied" once a
+   * human answered the LAST one (via POST /api/sessions/:id/review-gate);
+   * "lapsed" once nobody ever did — the server-side timeout, a dropped
+   * forwarder connection, or a graceful shutdown while one was pending all
+   * fall through to the agent's own native prompt rather than being denied
+   * (issue #264), and "lapsed" is what records that on this end; "idle" if
+   * no gate has ever fired. Despite the comment this replaced saying
+   * otherwise, this field is NOT in-memory only — it's in
+   * `StoredStateFields` below and persisted to the per-session state file
+   * (issue #323), restored on both `readStateFile()` and `spawn()`'s
+   * reattach path. A `"waiting"` value restored from disk is known-stale
+   * (no live gate connection can have survived a restart) and is resolved
+   * to `"lapsed"` at reattach — see `spawn()`'s savedState handling —
+   * rather than left as a live-looking gate with dead Approve/Deny
+   * buttons.
+   *
+   * Issue: correlate concurrent permission gates — this field (and
+   * `gatePrompt`/`gateAt` below) is now a DERIVED SUMMARY over the live,
+   * in-memory `gates` list below, not the source of truth: `"waiting"`
+   * means "at least one gate in `gates` is waiting", not "exactly one is".
+   * Kept as a scalar (rather than removed) because session-status.ts,
+   * session-live-info.ts, push-delivery.ts, and the persisted state file
+   * all only ever needed a single representative summary, and still do —
+   * see Session.registerPendingGate/resolveGate's own doc comments for
+   * exactly how the summary tracks the underlying list. */
   gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed";
-  /** The most recent `review_gate` prompt while gateState is "waiting", else
-   * null (cleared on resolution — see Session.resolveGate). */
+  /** The prompt of the OLDEST still-waiting gate while gateState is
+   * "waiting" (see gateState's own doc comment on why this is now a
+   * summary, not the whole picture), else null (cleared once the LAST gate
+   * resolves — see Session.resolveGate). */
   gatePrompt: string | null;
-  /** Issue #320 — ms-epoch this session's gateState was last set to
-   * "waiting", or null while idle. */
+  /** Issue #320 — ms-epoch the OLDEST still-waiting gate was registered, or
+   * null while idle. */
   gateAt: number | null;
+  /** Issue: correlate concurrent permission gates — the full list of
+   * currently-waiting gates, oldest first, each independently resolvable
+   * via `POST /api/sessions/:id/review-gate`'s optional `gateId` body
+   * field. In-memory only (see Session.pendingGates's own doc comment for
+   * why this deliberately does NOT survive a restart) — always `[]` right
+   * after a reattach, even if `gateState` briefly shows the stale
+   * `"waiting"` a beat before the reattach path resolves it to `"lapsed"`.
+   * `NotificationBell.tsx`'s `GateActions` renders one Approve/Deny row per
+   * entry here rather than assuming there's ever just one. */
+  gates: Array<{ gateId: string; prompt: string; at: number }>;
   /** Issue #271, option 2 — "pending" while a model-invoked
    * `promote_request` is blocked waiting for a human decision (see
    * Session.emitHookEvent/resolvePromote below); "accepted"/"declined" once
@@ -1131,9 +1154,36 @@ export class Session {
   // Minimal review gate (Phase 2, issue #178) — see SessionInfo.gateState's
   // doc comment for the state meanings. Set from emitHookEvent's
   // "review_gate" case and from resolveGate() below; read by toInfo().
+  //
+  // `gateState`/`gatePrompt`/`gateAt` are DERIVED SUMMARIES, not the source
+  // of truth, since issue: correlate concurrent permission gates. The real,
+  // live set of currently-waiting gates is `pendingGates` below — an
+  // in-memory-only map (NOT part of StoredStateFields; deliberately not
+  // persisted, unlike the scalar summary fields). A restart drops it by
+  // construction, same as it always dropped hooks.ts's own `pendingGates`
+  // socket/timer map — there is no live connection left to correlate a
+  // restored gate against regardless of how many were pending, so
+  // persisting the per-gate list would add real complexity (a state-file
+  // shape migration, a back-compat read path) for zero behavioral gain:
+  // `spawn()`'s savedState reattach path below still only ever needs to
+  // know "was something waiting?" to resolve it to "lapsed" — see that
+  // code's own comment. `gateState` reflects whether `pendingGates.size >
+  // 0` (`"waiting"`) or the last resolved outcome; `gatePrompt`/`gateAt`
+  // mirror the OLDEST still-waiting gate (or null once none remain) for
+  // every consumer that only ever needed a single representative gate
+  // (session-status.ts, session-live-info.ts, push-delivery.ts, the
+  // persisted state file). `SessionInfo.gates` (see its own doc comment)
+  // is the real, full list a multi-gate-aware UI (NotificationBell.tsx)
+  // renders from.
   private gateState: "idle" | "waiting" | "approved" | "denied" | "lapsed" = "idle";
   private gatePrompt: string | null = null;
   private gateAt: number | null = null;
+  /** The live, currently-waiting gates for this session, keyed by the
+   * forwarder-generated gateId (hook-protocol.ts's ReviewGateHookMessage/
+   * pty-manager.ts's resolveGate). In-memory only — see gateState's own
+   * doc comment for why this deliberately does NOT join
+   * StoredStateFields. */
+  private pendingGates: Map<string, { prompt: string; at: number }> = new Map();
 
   // Issue #271, option 2 — see SessionInfo.promoteState's doc comment. Set
   // from emitHookEvent's "promote_request" case and from resolvePromote()
@@ -1714,22 +1764,39 @@ export class Session {
       this.errorAt = savedState.errorAt;
       this.errorDetail = savedState.errorDetail;
       // Issue #844 — a "waiting" gate restored from the state file is known
-      // stale: the `pendingGates` socket/timer it depended on lived only in
-      // the PREVIOUS process's memory and cannot have survived (the
-      // hooksPlugin onClose fix resolves a graceful shutdown's pending gates
-      // to "lapsed" before this ever runs, but a hard crash/kill -9 skips
-      // onClose entirely — this is the path that actually catches that
-      // case). Route through resolveGate() rather than assigning the field
-      // directly: a bare assignment would stop `NotificationBell.tsx` from
-      // rendering live-looking Approve/Deny buttons (its isPendingGate check
-      // requires gateState === "waiting"), but would silently skip emitting
-      // a `review_gate` event for the timeline and clearing the "reviewGate"
-      // attention badge — resolveGate() does both, and this call site is
-      // deliberately AFTER construction/onEvent subscription (unlike
-      // readStateFile(), which runs mid-constructor, before getOrCreate has
-      // wired this session's events into PtyManager's fan-out).
+      // stale: the hooks.ts `pendingGates` socket/timer(s) it depended on
+      // lived only in the PREVIOUS process's memory and cannot have
+      // survived (the hooksPlugin onClose fix resolves a graceful
+      // shutdown's pending gates to "lapsed" before this ever runs, but a
+      // hard crash/kill -9 skips onClose entirely — this is the path that
+      // actually catches that case). This Session's own `pendingGates` (in
+      // memory, per-gate — issue: correlate concurrent permission gates)
+      // is likewise guaranteed empty at this point: it's a brand-new
+      // instance, and that map is deliberately NOT part of
+      // StoredStateFields (see its own doc comment) — so there is no
+      // per-gate id to resolve individually even if the restored session
+      // had more than one gate waiting when it last wrote state. Resolves
+      // the derived scalar summary directly instead of going through
+      // resolveGate(gateId, ...) (which would no-op: nothing in the fresh
+      // `pendingGates` map matches any gateId). A bare field assignment
+      // instead of this full three-step resolution would stop
+      // `NotificationBell.tsx` from rendering live-looking Approve/Deny
+      // buttons (its isPendingGate check requires gateState === "waiting"),
+      // but would silently skip emitting a `review_gate` event for the
+      // timeline and clearing the "reviewGate" attention badge. This call
+      // site is deliberately AFTER construction/onEvent subscription
+      // (unlike readStateFile(), which runs mid-constructor, before
+      // getOrCreate has wired this session's events into PtyManager's
+      // fan-out).
       if (savedState.gateState === "waiting") {
-        this.resolveGate("lapsed", "Mullion restarted while this request was pending");
+        this.gateState = "lapsed";
+        this.gatePrompt = null;
+        this.gateAt = null;
+        this.emitEvent("review_gate", {
+          state: "lapsed",
+          reason: "Mullion restarted while this request was pending",
+        });
+        this.attention.clearIfConfirmedKind("reviewGate");
       } else {
         this.gateState = savedState.gateState;
         this.gatePrompt = savedState.gatePrompt;
@@ -2518,6 +2585,9 @@ export class Session {
       recordSubagentStart: (agentId, agentType, now) =>
         self.recordSubagentStart(agentId, agentType, now),
       recordSubagentStop: (agentId, summary, now) => self.recordSubagentStop(agentId, summary, now),
+      registerPendingGate: (gateId, prompt) => self.registerPendingGate(gateId, prompt),
+      resolveGate: (gateId, decision, reason) => self.resolveGate(gateId, decision, reason),
+      pendingGateIds: () => self.pendingGateIds(),
     };
   }
 
@@ -2564,39 +2634,104 @@ export class Session {
   }
 
   /**
-   * Resolves a pending review gate (issue #178) — called from
-   * PtyManager.resolveGate, itself called from hooks.ts once a real decision
-   * exists (either POST /api/sessions/:id/review-gate, or hooks.ts's own
-   * server-side gate timeout). Deliberately NOT driven by another incoming
-   * hook message: the forwarder that receives this decision prints it
-   * straight to the agent's stdout and exits — it never sends a follow-up
-   * `review_gate` line of its own — so this is the one place gateState
-   * transitions out of "waiting". Emits a `review_gate` event carrying the
-   * resolved state (and `reason` for a denial) so the event feed/timeline
-   * shows the outcome, not just the original prompt. Follow-up to #275 (gap
-   * #3): DOES force-clear the attention state machine now, via
-   * clearIfConfirmedKind — a confirmed `reviewGate` is output-immune, so
-   * unlike before this hardening pass, the tool call's own PTY output no
-   * longer clears it on its own; a decision made through this web-UI path
-   * produces no terminal keystroke for write()'s "userInput" clear to catch
-   * either, so this is the only remaining path that resolves it.
+   * Registers a newly-waiting gate (issue: correlate concurrent permission
+   * gates) — called from emitHookEvent's "review_gate" case for a `state:
+   * "waiting"` message. Adds `gateId` to the live `pendingGates` map and
+   * updates the derived scalar summary (`gateState`/`gatePrompt`/`gateAt`
+   * — see their own doc comment) to reflect it: `gateState` becomes
+   * `"waiting"` on the FIRST gate to arrive and stays `"waiting"` for every
+   * subsequent one, while `gatePrompt`/`gateAt` always track the most
+   * RECENTLY arrived gate (matching this session's single-gate-model
+   * behavior exactly when there's only ever one). Does not, itself, raise
+   * the `reviewGate` attention signal — the caller does that (same as
+   * before this issue), since a repeat raise while a gate is already
+   * confirmed is a harmless no-op (`moreAuthoritativeKind`'s existing
+   * idempotence) but keeping the raise at the call site keeps this method
+   * a pure "record the gate" operation.
+   */
+  registerPendingGate(gateId: string, prompt: string): void {
+    const at = Date.now();
+    this.pendingGates.set(gateId, { prompt, at });
+    this.gateState = "waiting";
+    this.gatePrompt = prompt;
+    this.gateAt = at;
+  }
+
+  /** The ids of every currently-waiting gate, oldest first (Map iteration
+   * order is insertion order) — see SessionHookContext.pendingGateIds's
+   * own doc comment for its one caller. */
+  pendingGateIds(): string[] {
+    return [...this.pendingGates.keys()];
+  }
+
+  /**
+   * Resolves ONE specific pending gate, by id (issue: correlate concurrent
+   * permission gates — replaces the older single-scalar-gate version of
+   * this method) — called from PtyManager.resolveGate, itself called from
+   * hooks.ts once a real decision exists (either POST
+   * /api/sessions/:id/review-gate, or hooks.ts's own server-side gate
+   * timeout). Deliberately NOT driven by another incoming hook message: the
+   * forwarder that receives this decision prints it straight to the
+   * agent's stdout and exits — it never sends a follow-up `review_gate`
+   * line of its own — so this is the one place a gate transitions out of
+   * "waiting". Unknown/already-resolved `gateId` is a silent no-op — same
+   * "duplicate/late resolution is harmless" posture PtyManager.resolveGate
+   * (and resolvePromote) already document for an unknown session id, now
+   * scoped one level deeper to the gate itself.
+   *
+   * Emits a `review_gate` event carrying the resolved state, the gateId,
+   * and the ORIGINAL prompt (so the timeline/event feed can show which
+   * gate resolved, not just that "a" gate did — needed now that more than
+   * one can be waiting at once) plus `reason` for a denial.
+   *
+   * The derived scalar summary and the attention badge only update to
+   * reflect a FULLY resolved session: if another gate is still waiting
+   * after this one resolves, `gateState` stays `"waiting"` (now
+   * representing the oldest still-pending gate) and the `reviewGate`
+   * attention badge is left untouched — resolving gate A must never clear
+   * the pointer to gate B, the write-side half of the same invariant
+   * PR 2's `Session.write()` guard protects from the keystroke-clearing
+   * angle. Only once `pendingGates` is empty does this force-clear the
+   * attention state machine via clearIfConfirmedKind (follow-up to #275
+   * gap #3: a confirmed `reviewGate` is output-immune, so a decision made
+   * through this web-UI path — no terminal keystroke involved — needs an
+   * explicit clear here) and reset the scalar summary to the terminal
+   * decision.
    *
    * `decision` also accepts `"lapsed"` (issue #264/#840/#844) — the
    * server-generated "nobody ever answered" outcome, distinct from a real
    * human `"denied"`. Callers: hooks.ts's `resolvePendingGate` for the
-   * `GATE_TIMEOUT_MS` timeout, a duplicate concurrent gate, and (issue #844)
-   * a gate still pending at graceful shutdown; and this class's own
-   * `spawn()` reattach path for a `"waiting"` gate restored from a state
-   * file whose `pendingGates` socket cannot have survived the restart.
-   * `POST /api/sessions/:id/review-gate`'s own body schema is unchanged
-   * (`approved`/`denied` only) — a human decision is never `"lapsed"`.
+   * `GATE_TIMEOUT_MS` timeout and (issue #844) a gate still pending at
+   * graceful shutdown; and this class's own `spawn()` reattach path, which
+   * resolves the derived scalar directly rather than through this method —
+   * see that call site's own comment for why (no per-gate id survives a
+   * restart to resolve individually). `POST /api/sessions/:id/review-gate`'s
+   * own body schema is unchanged (`approved`/`denied` only) — a human
+   * decision is never `"lapsed"`.
    */
-  resolveGate(decision: "approved" | "denied" | "lapsed", reason?: string): void {
-    this.gateState = decision;
-    this.gatePrompt = null;
-    this.gateAt = null;
-    this.emitEvent("review_gate", { state: decision, ...(reason !== undefined ? { reason } : {}) });
-    this.attention.clearIfConfirmedKind("reviewGate");
+  resolveGate(gateId: string, decision: "approved" | "denied" | "lapsed", reason?: string): void {
+    const pending = this.pendingGates.get(gateId);
+    if (!pending) return;
+    this.pendingGates.delete(gateId);
+    this.emitEvent("review_gate", {
+      state: decision,
+      gateId,
+      prompt: pending.prompt,
+      ...(reason !== undefined ? { reason } : {}),
+    });
+    if (this.pendingGates.size === 0) {
+      this.gateState = decision;
+      this.gatePrompt = null;
+      this.gateAt = null;
+      this.attention.clearIfConfirmedKind("reviewGate");
+    } else {
+      // At least one other gate is still waiting — the derived scalar
+      // summary now represents the OLDEST of those (Map iteration order is
+      // insertion order), not the one that just resolved.
+      const [, oldest] = [...this.pendingGates.entries()][0];
+      this.gatePrompt = oldest.prompt;
+      this.gateAt = oldest.at;
+    }
   }
 
   /**
@@ -3392,6 +3527,7 @@ export class Session {
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
       gateAt: this.gateAt,
+      gates: [...this.pendingGates].map(([gateId, g]) => ({ gateId, prompt: g.prompt, at: g.at })),
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
@@ -3733,9 +3869,17 @@ export class PtyManager {
   /** Issue #178 — see Session.resolveGate's doc comment. A no-op (never
    * throws) if `id` isn't tracked, same "unknown id is quietly ignored"
    * posture as emitHookEvent above (hooks.ts only ever calls this with an id
-   * resolveToken() itself returned, so in practice it's always tracked). */
-  resolveGate(id: string, decision: "approved" | "denied" | "lapsed", reason?: string): void {
-    this.sessions.get(id)?.resolveGate(decision, reason);
+   * resolveToken() itself returned, so in practice it's always tracked).
+   * `gateId` added (issue: correlate concurrent permission gates) — a
+   * no-op, same posture, if this specific gate isn't tracked either
+   * (already resolved, or unknown). */
+  resolveGate(
+    id: string,
+    gateId: string,
+    decision: "approved" | "denied" | "lapsed",
+    reason?: string,
+  ): void {
+    this.sessions.get(id)?.resolveGate(gateId, decision, reason);
   }
 
   /** Issue #271 — see Session.resolvePromote's doc comment. Same "unknown id
