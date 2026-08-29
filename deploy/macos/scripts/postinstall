@@ -21,32 +21,27 @@ set -u
 
 EXE="/usr/local/bin/mullion-helper"
 
-# Hermes review, PR #918 — whether installer(8) actually propagates
-# $SUDO_USER from a `sudo installer -pkg ...` invocation into the postinstall
-# process's own environment at all was an open, unverified question (unlike
-# /dev/console's own ownership, this isn't documented anywhere in installer(8)'s
-# own man page). Logged unconditionally, before the branch below ever reads
-# it, so a real CI run settles the question empirically instead of by
-# inference — see this script's own diff history for the confirmed answer.
-echo "mullion-helper: debug — \$SUDO_USER=${SUDO_USER:-<unset>}"
-
-# /dev/console's owner is the real interactive user for the normal
-# Finder-double-click install this script primarily exists for. That
-# assumption doesn't hold for a scripted `sudo installer -pkg ... -target /`
-# (exactly how CI's own test-macos job — and an enterprise provisioning
-# tool — installs this .pkg): sudo(8) still sets $SUDO_USER to the invoking
-# non-root account there even though /dev/console may be unowned/root on a
-# headless runner, so that's the fallback, not the primary source.
+# Hermes review, PR #918, round 2 — this used to also fall back to
+# $SUDO_USER for a scripted `sudo installer -pkg ...` invocation, on the
+# theory that sudo(8) sets it for the invoking non-root account even when
+# /dev/console has no real console session. A debug line logging its raw
+# value settled that empirically on a real macos-latest runner: installer(8)
+# does NOT propagate $SUDO_USER (or any other trace of the invoking sudo
+# session) into a package script's own environment — it came back <unset>
+# even though the surrounding `sudo installer` command genuinely had it set.
+# Removed rather than left in as a fallback that would never actually fire:
+# shipping dead code that LOOKS like it handles the headless-install case
+# is worse than admitting installer(8) gives this script no reliable way to
+# identify a target user when there's no real console session at all. In
+# practice this rarely matters — GitHub's own macos-latest runners (and any
+# machine with someone actually logged in, which is the normal case a .pkg
+# is installed on) have a real console session, so /dev/console alone
+# already covers CI and the ordinary end-user flow; only a genuinely
+# headless provisioning box (no GUI login ever) hits the branch below.
 CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
   echo "mullion-helper: resolved console user via /dev/console: $CONSOLE_USER"
 else
-  CONSOLE_USER="${SUDO_USER:-}"
-  if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
-    echo "mullion-helper: resolved console user via \$SUDO_USER fallback: $CONSOLE_USER"
-  fi
-fi
-if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
   echo "mullion-helper: could not determine the logged-in console user — skipping 'helper install'."
   echo "Run it yourself once logged in: $EXE helper install --ssh-auth-sock <path>"
   exit 0

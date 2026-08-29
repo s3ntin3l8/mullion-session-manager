@@ -388,21 +388,15 @@ jobs:
 
           # installer(8) does not stream a package script's own stdout back
           # to the invoking shell — it only reaches /var/log/install.log —
-          # so this is the only way to confirm WHICH console-user-detection
-          # branch postinstall actually took, not just that registration
-          # happened to succeed (self-review, PR #918: a green run here
-          # previously couldn't distinguish the two).
+          # so this is the only way to confirm postinstall's own
+          # console-user detection actually fired, not just that
+          # registration happened to succeed for some other reason
+          # (self-review, PR #918).
           if ! sudo grep -q "mullion-helper: resolved console user" /var/log/install.log; then
             echo "postinstall's console-user-detection marker not found in /var/log/install.log"
             exit 1
           fi
           sudo grep "mullion-helper: resolved console user" /var/log/install.log
-          # Hermes review, PR #918 — surfaces postinstall's own unconditional
-          # $SUDO_USER debug line, settling empirically whether installer(8)
-          # actually propagates it from `sudo installer -pkg ...` into the
-          # package script's environment at all (previously an open
-          # question, not just "which branch fired").
-          sudo grep "mullion-helper: debug" /var/log/install.log
 
           LABEL="gui/$(id -u)/de.s3ntin3l8.mullion-helper"
           if ! launchctl print "$LABEL" >/dev/null 2>&1; then
