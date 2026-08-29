@@ -622,26 +622,53 @@ describe("runInstall / runUninstall", () => {
     expect(argsMatch![1]).toBe('"helper" "run" "--ssh-auth-sock" "/tmp/agent.sock"');
   });
 
+  // Round 4 (issue #820, macOS SEA support) — buildLaunchdPlist now has the
+  // same scriptPath-optional handling buildWindowsTaskXml already had.
+  // Adapted from the win32 SEA test above: `execPath` IS the whole program
+  // under a SEA, no sibling `mullion.mjs` to point a scriptPath at.
+  it("darwin SEA: omits the script path and never falls back to defaultScriptPath()", async () => {
+    const { io, dir: d } = baseIo({ platform: "darwin", uid: 501 });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    (io as { isSea?: boolean }).isSea = true;
+    delete (io as { scriptPath?: string }).scriptPath;
+    io.execPath = "/Users/me/Library/Application Support/Mullion/mullion-helper";
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    const plistPath = launchdPlistPath(io);
+    const contents = readFileSync(plistPath, "utf8");
+    expect(contents).not.toContain("mullion.mjs");
+    const argsBlock = contents.slice(contents.indexOf("<array>"), contents.indexOf("</array>"));
+    const strings = [...argsBlock.matchAll(/<string>(.*?)<\/string>/g)].map((m) => m[1]);
+    expect(strings).toEqual([
+      "/Users/me/Library/Application Support/Mullion/mullion-helper",
+      "helper",
+      "run",
+      "--ssh-auth-sock",
+      "/tmp/agent.sock",
+    ]);
+  });
+
   // Self-review — found by actually building and running a Linux SEA smoke
   // binary: `isSea` on any platform OTHER than win32 used to fall through
   // to `scriptPath: null`, which `buildLaunchdPlist`/`buildSystemdUnit`
-  // (unlike buildWindowsTaskXml) have no null-handling for at all —
+  // (unlike buildWindowsTaskXml) had no null-handling for at all —
   // `systemdQuote(null)` threw "Cannot read properties of null" rather
-  // than a clear error. This round ships a Windows SEA exclusively, so a
-  // SEA on any other platform must refuse cleanly instead.
-  for (const platform of ["darwin", "linux"] as const) {
-    it(`${platform} SEA: refuses cleanly instead of crashing (this round ships a Windows SEA only)`, async () => {
-      const { io, dir: d } = baseIo({ platform });
-      (io as { homedir?: string }).homedir = path.join(d, "home");
-      (io as { isSea?: boolean }).isSea = true;
-      delete (io as { scriptPath?: string }).scriptPath;
-      const stderrLines: string[] = [];
-      io.stderr = { write: (s: string) => stderrLines.push(s) };
-      const code = await runInstall([], io);
-      expect(code).toBe(1);
-      expect(stderrLines.join("")).toMatch(/only supported on win32/);
-    });
-  }
+  // than a clear error. Round 4 fixed buildLaunchdPlist and lifted the
+  // refusal for darwin (test above); buildSystemdUnit still has no
+  // null-handling, and no SEA is ever built for Linux
+  // (scripts/build-helper-sea.mjs targets win32/darwin only), so Linux
+  // alone stays refused.
+  it("linux SEA: refuses cleanly instead of crashing (no Linux SEA is ever built)", async () => {
+    const { io, dir: d } = baseIo({ platform: "linux" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    (io as { isSea?: boolean }).isSea = true;
+    delete (io as { scriptPath?: string }).scriptPath;
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(1);
+    expect(stderrLines.join("")).toMatch(/not supported on 'linux'/);
+  });
 
   // Hermes review, PR #879 — /Create only registers the task; its
   // LogonTrigger won't fire until the next interactive logon, unlike

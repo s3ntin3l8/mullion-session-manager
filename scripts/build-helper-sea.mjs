@@ -5,9 +5,10 @@
 // pair|run|install|uninstall` with no Node install of its own. `npm run
 // build:helper-sea`; CI wires this into `.github/workflows/release-please.yml`
 // (a `windows-latest` job, gated on `release_created`, mirroring
-// `build-tarball`'s own shape) and into `ci-cd.yml` (a `windows-latest`
-// smoke-test job, `test-windows`, that builds and probes the SAME bundle on
-// every PR — see that job's own comment for what it verifies).
+// `build-tarball`'s own shape — release ARTIFACTS are Windows-only for now,
+// see that job's own comment) and into `ci-cd.yml` (`test-windows` +
+// round 4's `test-macos`, both building and probing the SAME bundle on
+// every PR — see each job's own comment for what it verifies).
 //
 // Node SEA is still explicitly experimental upstream, and `postject`
 // (https://www.npmjs.com/package/postject) is still `1.0.0-alpha.6` as of
@@ -155,11 +156,15 @@ function injectBlob() {
     process.platform === "win32" ? "postject.cmd" : "postject",
   );
   const args = [exePath, "NODE_SEA_BLOB", blobPath, "--sentinel-fuse", SEA_FUSE];
-  // macOS would also need --macho-segment-name NODE_SEA — not reachable
-  // from this Windows-only build (process.platform is the actual OS this
-  // script runs ON, which for the shipping artifact is always win32 per
-  // the windows-latest CI job — see that job's own comment), so left
-  // unimplemented rather than guessed at.
+  // Round 4 (issue #820, macOS SEA support) — macOS needs
+  // --macho-segment-name NODE_SEA (postject's own docs: without it, the
+  // blob isn't injected into a Mach-O segment node:sea's runtime looks for
+  // it in). This flag was coded speculatively in round 3 but never
+  // exercised anywhere — no macOS CI job existed, and it can only run on
+  // real macOS hardware (postject operates on the actual binary format of
+  // whatever `copyNodeBinary()` just copied; there's no cross-build path).
+  // `.github/workflows/ci-cd.yml`'s `test-macos` job is the first real
+  // exercise of this branch.
   if (process.platform === "darwin") {
     args.push("--macho-segment-name", "NODE_SEA");
   }
@@ -186,8 +191,9 @@ async function main() {
   log(`built ${path.relative(repoRoot, exePath)}`);
   // Deliberately no smoke test here — a build script's job is producing
   // the artifact, not verifying it. The CI workflows that invoke this
-  // (ci-cd.yml's test-windows job, release-please.yml's build-helper-exe
-  // job — both windows-latest) run their own explicit probe steps against
+  // (ci-cd.yml's test-windows and test-macos jobs, release-please.yml's
+  // windows-latest-only build-helper-exe job) run their own explicit
+  // probe steps against
   // ${exePath} afterward, so a failure shows up as its own named CI step,
   // not buried inside "build the exe."
 }
