@@ -266,6 +266,20 @@ export interface ProjectToolingContent {
   reviewerAgent?: string;
 }
 
+// Hermes review, PR #894 round 2 — a valid Claude Code plugin needs SOME
+// `.claude-plugin/plugin.json`; when this install/checkout hasn't shipped
+// one at all (resolveMullionBundleDir() returns null — a stripped-down
+// fixture, or a pre-this-feature release tarball), composeClaudeSessionBundle
+// below still needs a structurally valid manifest to compose the PROJECT's
+// own content under. Byte-identical to src/bundle/.claude-plugin/plugin.json
+// itself, by hand — this is a fallback for when that file genuinely isn't
+// present to copy, not a second source of truth for it.
+const FALLBACK_PLUGIN_MANIFEST = {
+  name: "mullion",
+  description: "Mullion's own agent-facing tooling, delivered into every session it hosts.",
+  author: { name: "Mullion" },
+};
+
 /**
  * Materializes a per-session Claude Code plugin directory at `destDir`: the
  * shipped bundle's own tree (verbatim) PLUS the project's own skill (under
@@ -274,9 +288,19 @@ export interface ProjectToolingContent {
  * entries for the caller (claude-code.ts's prepareLaunch) to include
  * alongside its own `--settings`/`--mcp-config` writes — same "pure,
  * caller does the actual I/O" contract as prepareLaunch itself (types.ts).
- * `null` when this install/checkout hasn't shipped a bundle at all
- * (resolveMullionBundleDir() returns null) — same soft-failure posture as
- * every other entry point in this file.
+ *
+ * When this install/checkout hasn't shipped a bundle at all
+ * (resolveMullionBundleDir() returns null), the project's OWN content is
+ * still composed under a synthesized manifest (FALLBACK_PLUGIN_MANIFEST)
+ * rather than dropped — Hermes review, PR #894 round 2: the shipped
+ * bundle being absent has nothing to do with whether a project's own,
+ * separately-authored skill/reviewer should reach the session, and
+ * returning `null` unconditionally here silently discarded them. `null`
+ * only when there is truly nothing to compose at all: no shipped bundle
+ * AND no project content that survived `deriveContentName` (e.g. both
+ * fields absent, or both had unparseable/unsafe frontmatter) — same
+ * "never emit a flag pointing at nothing meaningful" posture as
+ * resolveMullionBundleDir()'s own soft-failure contract.
  *
  * Unlike installBundleSkills' persistent, content-compare-then-skip writes
  * into a REAL global skill directory (codex/agy), this directory is
@@ -291,22 +315,36 @@ export function composeClaudeSessionBundle(
   content: ProjectToolingContent,
 ): Array<{ path: string; contents: string }> | null {
   const bundleDir = resolveMullionBundleDir();
-  if (!bundleDir) return null;
-  const files: Array<{ path: string; contents: string }> = collectBundleFiles(bundleDir).map(
-    ({ relPath, contents }) => ({ path: path.join(destDir, relPath), contents }),
-  );
+  const files: Array<{ path: string; contents: string }> = bundleDir
+    ? collectBundleFiles(bundleDir).map(({ relPath, contents }) => ({
+        path: path.join(destDir, relPath),
+        contents,
+      }))
+    : [];
+  let addedProjectContent = false;
   if (content.skill) {
     const name = deriveContentName(content.skill);
-    if (name)
+    if (name) {
       files.push({ path: path.join(destDir, "skills", name, "SKILL.md"), contents: content.skill });
+      addedProjectContent = true;
+    }
   }
   if (content.reviewerAgent) {
     const name = deriveContentName(content.reviewerAgent);
-    if (name)
+    if (name) {
       files.push({
         path: path.join(destDir, "agents", `${name}.md`),
         contents: content.reviewerAgent,
       });
+      addedProjectContent = true;
+    }
+  }
+  if (!bundleDir) {
+    if (!addedProjectContent) return null;
+    files.unshift({
+      path: path.join(destDir, ".claude-plugin", "plugin.json"),
+      contents: JSON.stringify(FALLBACK_PLUGIN_MANIFEST, null, 2) + "\n",
+    });
   }
   return files;
 }

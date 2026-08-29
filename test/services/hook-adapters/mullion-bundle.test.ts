@@ -283,11 +283,39 @@ describe("composeClaudeSessionBundle", () => {
     expect(withTraversalSkill!.every((f) => !f.path.includes(".."))).toBe(true);
   });
 
-  it("returns null when MULLION_HOME points at a location shipping no bundle", () => {
+  it("returns null when MULLION_HOME points at a location shipping no bundle and there is no project content either", () => {
     const originalMullionHome = process.env.MULLION_HOME;
     process.env.MULLION_HOME = "/nonexistent/mullion/home";
     try {
       expect(composeClaudeSessionBundle("/session/123.mullion-bundle", {})).toBeNull();
+    } finally {
+      if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
+      else process.env.MULLION_HOME = originalMullionHome;
+    }
+  });
+
+  // Hermes review, PR #894 round 2 — the shipped bundle being absent has
+  // nothing to do with whether a project's own, separately-authored content
+  // should still reach the session; the earlier behavior dropped it
+  // entirely just because the unrelated shipped bundle was missing.
+  it("still composes the project's own content under a synthesized manifest when no bundle is shipped", () => {
+    const originalMullionHome = process.env.MULLION_HOME;
+    process.env.MULLION_HOME = "/nonexistent/mullion/home";
+    try {
+      const files = composeClaudeSessionBundle("/session/123.mullion-bundle", {
+        skill: VALID_SKILL,
+      });
+      expect(files).not.toBeNull();
+      const manifestFile = files!.find((f) =>
+        f.path.endsWith(path.join(".claude-plugin", "plugin.json")),
+      );
+      expect(manifestFile).toBeDefined();
+      expect(JSON.parse(manifestFile!.contents)).toMatchObject({ name: "mullion" });
+      const skillFile = files!.find((f) =>
+        f.path.endsWith(path.join("skills", "my-project-skill", "SKILL.md")),
+      );
+      expect(skillFile).toBeDefined();
+      expect(skillFile!.contents).toBe(VALID_SKILL);
     } finally {
       if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
       else process.env.MULLION_HOME = originalMullionHome;
