@@ -201,6 +201,23 @@ describe("ProjectBriefingPanel", () => {
     expect(screen.getByDisplayValue("base more")).toBeInTheDocument();
   });
 
+  // Hermes review, PR #893 — the byte cap used to be invisible until Save
+  // 400s with a byte count.
+  it("shows a live byte-count hint and disables Save once the draft exceeds the byte cap", async () => {
+    vi.stubGlobal("fetch", mockFetch({ get: () => jsonResponse(200, { briefing: null }) }));
+    const user = userEvent.setup();
+    render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+    const textarea = await screen.findByPlaceholderText(/No Mullion briefing set/);
+    await user.type(textarea, "short");
+    expect(screen.getByText(/5 \/ 8,192 bytes/)).toBeInTheDocument();
+    expect(screen.getByText("Save")).not.toBeDisabled();
+
+    await user.paste("a".repeat(8193));
+    expect(await screen.findByText(/over the limit/)).toBeInTheDocument();
+    expect(screen.getByText("Save")).toBeDisabled();
+  });
+
   it("Discard restores the last-saved value and disables itself", async () => {
     vi.stubGlobal("fetch", mockFetch({ get: () => jsonResponse(200, { briefing: "base" }) }));
     const user = userEvent.setup();

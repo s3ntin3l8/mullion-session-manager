@@ -158,4 +158,42 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
 
     await app.close();
   });
+
+  // Hermes review, PR #893 — an empty-string DB row is a real, reachable
+  // state (select-all-delete in the UI, then Save) and is NOT the same as
+  // deleting the row: `??` only falls through on null/undefined, so an
+  // empty string still wins over the committed region — the exact
+  // distinction deleteProjectBriefing's own doc comment (project-tooling.ts)
+  // documents as the reason DELETE exists as a separate action from a blank
+  // PUT. This pins that documented behavior down end to end rather than
+  // just asserting it in a comment.
+  it("an empty-string DB row still overrides the committed region — it is not the same as no row at all", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithCommittedBriefing(app);
+
+    const putRes = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${projectId}/tooling`,
+      payload: { briefing: "" },
+    });
+    expect(putRes.statusCode).toBe(200);
+    expect(putRes.json()).toEqual({ briefing: "" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    expect(res.statusCode).toBe(201);
+    const sessionId = res.json().id as number;
+    await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
+
+    const written = fs.readFileSync(
+      sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)),
+      "utf8",
+    );
+    expect(written).not.toContain("committed repo instructions");
+
+    await app.close();
+  });
 });

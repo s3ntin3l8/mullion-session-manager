@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import { FileTextIcon } from "./ui/icons.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
@@ -7,6 +7,15 @@ import { EmptyStateNote } from "./ui/EmptyState.js";
 export interface ProjectBriefingPanelParams {
   projectId: number;
 }
+
+// Hermes review, PR #893 — kept in sync BY HAND with
+// src/services/project-tooling.ts's MAX_PROJECT_BRIEFING_BYTES (which is
+// itself kept in sync by hand with internal-schemas.ts's spawnSessionSchema
+// briefingOverride maxLength) — the frontend has no access to backend
+// source, so this is a third copy of the same number, same posture as that
+// file's own header comment. Only used here to show a live hint before Save
+// — the backend's own check is still the actual enforcement.
+const MAX_PROJECT_BRIEFING_BYTES = 8192;
 
 // A dockview panel (opened from the CommandPalette's Integrations section,
 // same "project-scoped panel kind" shape AgentRulesPanel/DockConfigPanel/
@@ -37,6 +46,14 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  // Hermes review, PR #893 — the byte cap was previously invisible until
+  // Save 400s with a byte count. UTF-8 byte length, not character length,
+  // to match writeProjectBriefing's own Buffer.byteLength check exactly —
+  // a multi-byte character could otherwise read as "under the cap" here
+  // while still failing server-side.
+  const draftByteLength = useMemo(() => new TextEncoder().encode(draft).length, [draft]);
+  const overCap = draftByteLength > MAX_PROJECT_BRIEFING_BYTES;
 
   const fetchBriefing = useCallback(
     async (cancelledRef?: { current: boolean }) => {
@@ -150,7 +167,7 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
             <button
               className="git-panel-fetch-btn"
               onClick={handleSave}
-              disabled={!dirty || saving}
+              disabled={!dirty || saving || overCap}
             >
               {saving ? "Saving…" : "Save"}
             </button>
@@ -173,6 +190,10 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
           placeholder="No Mullion briefing set for this project yet — start typing to create one."
           spellCheck={false}
         />
+        <div className={`agent-rules-panel-row-meta${overCap ? " error" : ""}`}>
+          {draftByteLength.toLocaleString()} / {MAX_PROJECT_BRIEFING_BYTES.toLocaleString()} bytes
+          {overCap && " — over the limit, trim before saving"}
+        </div>
       </div>
     </div>
   );
