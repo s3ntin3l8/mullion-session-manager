@@ -401,7 +401,7 @@ describe("hosts route (issue #26)", () => {
   // directly rather than proxying, so this exercises the actual route (not
   // just the builder) the way Hermes review flagged for #822: a schema or
   // route-level omission wouldn't show up in a unit test of the builder alone.
-  it("reports sshAuthSock as null on the local host by default (unconfigured)", async () => {
+  it("reports sshAuthSock as the primary's own materialized bridge socket by default (unconfigured) — #873 PR-B", async () => {
     // Hermes review, PR #828 — don't trust ambient absence of
     // MULLION_SSH_AUTH_SOCK; a shell that actually has this feature
     // configured (e.g. on mgmt) would otherwise make this assertion fail.
@@ -412,6 +412,14 @@ describe("hosts route (issue #26)", () => {
     // "ambient"`, a shell with a real ambient agent (e.g. this one, under
     // Mullion) makes this assertion fail without the same save/restore
     // internal.test.ts and multi-host.test.ts already do for it.
+    //
+    // #873 PR-B — this used to assert `sshAuthSock: null` here: before
+    // PR-B, materializesBridgeSocket() was agent-role-only, so an
+    // unconfigured, no-ambient primary fell all the way through to `none`.
+    // Now the primary materializes its own bridge socket too
+    // (plugins/ssh-agent.ts), so the same unconfigured/no-ambient state
+    // resolves to the `bridge` tier instead — this is the intended point
+    // of PR-B, not a regression.
     const prevSshAuthSock = process.env.MULLION_SSH_AUTH_SOCK;
     delete process.env.MULLION_SSH_AUTH_SOCK;
     const prevAmbientSshAuthSock = process.env.SSH_AUTH_SOCK;
@@ -420,7 +428,14 @@ describe("hosts route (issue #26)", () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
+      expect(res.json()).toMatchObject({
+        role: "primary",
+        sshAuthSock: {
+          path: path.join(path.dirname(app.pty.hookSocketPath), "ssh-agent.sock"),
+          present: true,
+          source: "bridge",
+        },
+      });
       await app.close();
     } finally {
       if (prevSshAuthSock === undefined) delete process.env.MULLION_SSH_AUTH_SOCK;
