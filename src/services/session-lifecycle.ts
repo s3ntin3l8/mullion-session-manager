@@ -15,6 +15,7 @@ import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
+import { readProjectBriefing } from "./project-tooling.js";
 
 // Issue #822 — bounds shared between routes/sessions.ts's `env` schema
 // property, routes/internal-schemas.ts's duplicate for the agent-side
@@ -494,6 +495,18 @@ export async function createSessionRecord(
     }
   }
 
+  // Issue: per-project Mullion briefing authored from the UI — resolved
+  // HERE, on the primary (where the DB lives), not by whichever host
+  // actually spawns. `params.briefingOverride` (an explicit caller-supplied
+  // value, currently unused by any caller) wins if ever set; otherwise this
+  // project's own DB row (project-tooling.ts) wins over its committed
+  // AGENTS.md/CLAUDE.md region — see that module's own doc comment for why.
+  // `null`/absent DB row falls through to `undefined`, letting
+  // writeSessionBriefing's existing resolveProjectBriefing(cwd) fallback
+  // apply exactly as it always has.
+  const resolvedBriefingOverride =
+    briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
+
   let spawnResult: { initialPromptApplied?: boolean };
   try {
     spawnResult = await resolveBackend(app, project.hostId).spawn({
@@ -507,8 +520,8 @@ export async function createSessionRecord(
       seedPrompt,
       resumeAgentSessionId,
       projectId,
+      briefingOverride: resolvedBriefingOverride,
       env,
-      briefingOverride,
     });
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):

@@ -918,6 +918,40 @@ export const projectUrls = sqliteTable("project_urls", {
     .$defaultFn(() => new Date()),
 });
 
+// Issue: per-project Mullion briefing, authored from the UI rather than a
+// committed file — the DB-backed producer for the spawn-time
+// briefingOverride channel PR #892 wired through (see
+// CreateSessionOptions.briefingOverride's own doc comment, pty-manager.ts).
+// One row per project, upserted via PUT /api/projects/:id/tooling.
+// Precedence (session-lifecycle.ts's createSessionRecord, the producer):
+// this row wins over a project's own committed AGENTS.md/CLAUDE.md briefing
+// region — it's the more recently and deliberately authored artifact, and
+// deleting the row (DELETE, not just clearing the text — see
+// project-tooling.ts) restores the committed file's region, if any. Same
+// autoincrement-id + unique-index-on-project_id shape as
+// webhookRegistrations above, not projectId-as-primary-key, for consistency
+// with the rest of this file's per-project 1:1 tables.
+export const projectTooling = sqliteTable(
+  "project_tooling",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    // Capped at MAX_PROJECT_BRIEFING_BYTES (project-tooling.ts) — kept in
+    // sync with internal-schemas.ts's spawnSessionSchema `briefingOverride`
+    // maxLength (8192) by hand, the same "duplicated rather than imported
+    // across a DB-schema/DB-less-agent-schema boundary" posture
+    // internal-schemas.ts's own header comment documents for
+    // MAX_SESSION_ENV_ENTRIES/MAX_SESSION_ENV_VALUE_LENGTH.
+    briefing: text("briefing").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [uniqueIndex("project_tooling_project_id_unique").on(table.projectId)],
+);
+
 // A collapsible named sidebar section that workspaces can optionally belong
 // to — vision item #4 (cmux workspace groups). Deliberately simpler than
 // cmux's own model: no "anchor workspace" owning the group header, just a

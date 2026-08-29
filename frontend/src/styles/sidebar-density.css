@@ -79,6 +79,13 @@
   font-size: 11px;
   white-space: nowrap;
 }
+/* ProjectBriefingPanel.tsx's live byte-count hint (Hermes review, PR #893)
+   reuses .agent-rules-panel-row-meta's own styling below the textarea, not
+   just next to a list row — same red-on-error convention as
+   .agent-rules-panel-notice.error. */
+.agent-rules-panel-row-meta.error {
+  color: var(--r);
+}
 .agent-rules-panel-editor {
   flex: 1;
   display: flex;

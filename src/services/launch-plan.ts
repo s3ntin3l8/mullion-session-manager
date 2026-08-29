@@ -271,12 +271,20 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // this session's cwd (project-briefing.ts's own doc comment) — a project
   // briefing can disappear between spawns in a way the shipped guide never
   // does.
+  // Hermes review, PR #893 — this MUST be a nullish check, not a truthy
+  // one: an empty-string override (select-all-delete in the UI, then Save)
+  // is a real, reachable, and DELIBERATELY DIFFERENT state from no row at
+  // all — see project-tooling.ts's deleteProjectBriefing doc comment for
+  // why "" still overrides with a blank briefing while DELETE restores the
+  // committed region. A truthy check here would silently treat both the
+  // same, undoing that entire distinction. Caught by
+  // session-lifecycle-briefing.test.ts's own empty-string-override case.
   writeSessionBriefing(
     path.dirname(session.hookSocketPath),
     session.id,
     session.cwd,
     console,
-    session.briefingOverride
+    session.briefingOverride !== undefined
       ? { body: session.briefingOverride, sourceLabel: "Mullion's per-project settings" }
       : undefined,
   );

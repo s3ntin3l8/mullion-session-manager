@@ -38,6 +38,11 @@ const AGENT_RULES_CONFIG: ProjectPanelKindConfig = {
   titleLabel: "Agent Rules",
   applyDesktopPositioning: true,
 };
+const PROJECT_BRIEFING_CONFIG: ProjectPanelKindConfig = {
+  kind: "project-briefing",
+  titleLabel: "Mullion Briefing",
+  applyDesktopPositioning: true,
+};
 const DOCK_CONFIG_CONFIG: ProjectPanelKindConfig = {
   kind: "dock-config",
   titleLabel: "Dock",
@@ -117,6 +122,8 @@ export interface UsePanelOpenerResult {
   onOpenGit: (projectId: number) => void;
   // Opens (or focuses) a project's agent-rules editor (issue #431).
   onOpenAgentRules: (projectId: number) => void;
+  // Opens (or focuses) a project's DB-backed Mullion briefing editor.
+  onOpenProjectBriefing: (projectId: number) => void;
   // U4 — opens (or focuses) a project's dock-config editor.
   onOpenDockConfig: (projectId: number) => void;
   // Opens (or focuses) a project's (read-only) skills panel (issue #432).
@@ -267,6 +274,16 @@ export function usePanelOpener({
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
+  const onOpenProjectBriefing = useCallback(
+    (projectId: number) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, PROJECT_BRIEFING_CONFIG);
+      setSidebarOpen(false);
+    },
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+  );
+
   const onOpenDockConfig = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
@@ -345,6 +362,7 @@ export function usePanelOpener({
     onOpenGitHub,
     onOpenGit,
     onOpenAgentRules,
+    onOpenProjectBriefing,
     onOpenDockConfig,
     onOpenSkills,
     onOpenBrowser,

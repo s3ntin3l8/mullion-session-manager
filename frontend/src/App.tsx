@@ -800,6 +800,7 @@ export function App() {
     onOpenGitHub,
     onOpenGit,
     onOpenAgentRules,
+    onOpenProjectBriefing,
     onOpenDockConfig,
     onOpenSkills,
     onOpenBrowser,
@@ -1666,6 +1667,7 @@ export function App() {
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
           onOpenAgentRules={onOpenAgentRules}
+          onOpenProjectBriefing={onOpenProjectBriefing}
           onOpenDockConfig={onOpenDockConfig}
           onOpenSkills={onOpenSkills}
           onOpenBrowser={onOpenBrowser}
