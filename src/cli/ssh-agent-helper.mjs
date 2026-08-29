@@ -296,7 +296,11 @@ export function stateDir(io) {
   return path.join(base, "mullion");
 }
 
-function credentialPath(io) {
+// Exported for ssh-agent-helper-install.mjs's runUninstall, which needs to
+// name this exact file to delete it — the filename is a fact this module
+// owns; the install module must never re-derive
+// path.join(stateDir(io), "ssh-agent-bridge.json") itself (issue #904).
+export function credentialPath(io) {
   return path.join(stateDir(io), "ssh-agent-bridge.json");
 }
 

@@ -232,6 +232,14 @@ jobs:
 
           schtasks /Query /TN MullionHelper /V /FO LIST
           if ($LASTEXITCODE -ne 0) { throw "installer did not register the MullionHelper Scheduled Task" }
+
+          # Issue #904 — no pairing payload was supplied above, so nothing
+          # real got written here; drop a dummy credential file in the same
+          # spot `helper pair` would (stateDir() IS {app} on Windows, PR3's
+          # own DisableDirPage comment) so the uninstall step below can prove
+          # the real installer's [UninstallRun] -> `helper uninstall` really
+          # forgets it, not just the unit-tested runUninstall() in isolation.
+          "{}" | Out-File -Encoding ascii -NoNewline "$env:LOCALAPPDATA\Mullion\ssh-agent-bridge.json"
       # Inno Setup's generated uninstaller copies ITSELF to a temp location
       # and re-executes before doing the actual work, specifically so it
       # can delete its own original exe — the parent process this step
@@ -243,6 +251,7 @@ jobs:
         shell: pwsh
         run: |
           $exePath = "$env:LOCALAPPDATA\Mullion\mullion-helper.exe"
+          $credPath = "$env:LOCALAPPDATA\Mullion\ssh-agent-bridge.json"
           $uninstaller = "$env:LOCALAPPDATA\Mullion\unins000.exe"
           if (-not (Test-Path $uninstaller)) { throw "no uninstaller found at $uninstaller" }
           & $uninstaller /VERYSILENT /SUPPRESSMSGBOXES
@@ -250,6 +259,12 @@ jobs:
           $deadline = (Get-Date).AddSeconds(30)
           while ((Test-Path $exePath) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Milliseconds 500 }
           if (Test-Path $exePath) { throw "mullion-helper.exe still present after uninstall (timed out waiting)" }
+          # Issue #904 — [UninstallRun] runs `helper uninstall` BEFORE
+          # [Files] removal (Inno Setup's own documented ordering, see that
+          # section's comment), so this doesn't need the same disappearance
+          # poll above: by the time the exe itself is gone, `helper
+          # uninstall` already ran to completion.
+          if (Test-Path $credPath) { throw "ssh-agent-bridge.json still present after uninstall" }
 
           schtasks /Query /TN MullionHelper 2>$null
           if ($LASTEXITCODE -eq 0) { throw "MullionHelper task still registered after uninstall" }

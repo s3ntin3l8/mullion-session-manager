@@ -24,7 +24,12 @@ import path from "node:path";
 import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { isSea as nodeIsSea } from "node:sea";
 import { extractFlags, CliUsageError } from "./core.mjs";
-import { stateDir, loadCredential, WINDOWS_DEFAULT_SSH_AUTH_SOCK } from "./ssh-agent-helper.mjs";
+import {
+  stateDir,
+  loadCredential,
+  credentialPath,
+  WINDOWS_DEFAULT_SSH_AUTH_SOCK,
+} from "./ssh-agent-helper.mjs";
 
 // One instance total, not one per host — unlike the manual ssh -R tunnel
 // (docs/ssh-agent.md), a single bridge connection already serves every
@@ -655,11 +660,64 @@ function uninstallWindows(io) {
   return 0;
 }
 
+// Issue #904 — deletes the local pairing credential (and any stray
+// write-to-temp-then-rename sibling saveCredential's own comment describes,
+// ssh-agent-helper.mjs: a process killed mid-write can leave
+// `ssh-agent-bridge.json.<pid>.tmp` behind holding the same session_id —
+// the same bearer credential under a different name, so it needs the same
+// treatment). This is the ONE thing common to all three platforms, so it
+// lives here once rather than being triplicated into
+// uninstallWindows/uninstallLaunchd/uninstallSystemd: doing it inside those
+// functions would miss a laptop that ran `helper pair` but never `helper
+// install` (or whose supervisor artifact is already gone some other way) —
+// all three of those return 0 from their own "nothing installed" gate
+// before touching anything, and a paired-but-never-installed credential
+// still needs to go.
+function removeCredential(io) {
+  const file = credentialPath(io);
+  const dir = stateDir(io);
+  const base = path.basename(file);
+  let removedAny = false;
+
+  if (fs.existsSync(file)) {
+    fs.rmSync(file, { force: true });
+    removedAny = true;
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (entry.startsWith(`${base}.`) && entry.endsWith(".tmp")) {
+      fs.rmSync(path.join(dir, entry), { force: true });
+      removedAny = true;
+    }
+  }
+
+  if (removedAny) io.stdout.write(`removed ${file}\n`);
+}
+
 export async function runUninstall(_args, io) {
   const platform = io.platform ?? process.platform;
-  if (platform === "darwin") return uninstallLaunchd(io);
-  if (platform === "linux") return uninstallSystemd(io);
-  if (platform === "win32") return uninstallWindows(io);
-  io.stderr.write(`mullion helper uninstall isn't supported on '${platform}'.\n`);
-  return 1;
+  let code;
+  if (platform === "darwin") code = uninstallLaunchd(io);
+  else if (platform === "linux") code = uninstallSystemd(io);
+  else if (platform === "win32") code = uninstallWindows(io);
+  else {
+    io.stderr.write(`mullion helper uninstall isn't supported on '${platform}'.\n`);
+    return 1;
+  }
+  // Only on a SUCCESSFUL teardown: a genuine teardown failure (schtasks
+  // /Delete, systemctl disable, launchctl bootout all returning nonzero)
+  // means the platform function's own stderr message already warns
+  // "'mullion helper run' may still be active" — deleting the credential
+  // out from under a still-running, still-supervised process would strand
+  // it mid-session with no way to reconnect. That failure path returns
+  // early above (uninstallWindows etc. `return 1`), so `code === 0` here
+  // already means the supervisor artifact really is gone.
+  if (code === 0) removeCredential(io);
+  return code;
 }
