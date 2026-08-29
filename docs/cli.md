@@ -283,14 +283,15 @@ socket-wide posture from `docs/socket-api.md`.
   process's own `SSH_AUTH_SOCK` env var — required under a supervisor that
   doesn't set one (see below).
 - `mullion helper install [--ssh-auth-sock <path>]` — generates and
-  registers a launchd job (macOS) or systemd `--user` unit (Linux) that
-  supervises `run`, so you don't have to hand-write one. Re-running it
-  replaces a previous install (new `--ssh-auth-sock`, moved checkout, ...).
-  Not supported on Windows yet ([issue
+  registers a launchd job (macOS), systemd `--user` unit (Linux), or
+  Windows Scheduled Task that supervises `run`, so you don't have to
+  hand-write one. Re-running it replaces a previous install (new
+  `--ssh-auth-sock`, moved checkout, ...). No local verification path for
+  the Windows generator yet ([issue
   #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)) —
-  `run` it under a supervisor manually there.
+  see [`ssh-agent.md`](ssh-agent.md#keeping-it-running) for status.
 - `mullion helper uninstall` — stops and removes whatever `install` set up,
-  on whichever of the two supported platforms this is. A no-op, not an
+  on whichever of the three supported platforms this is. A no-op, not an
   error, if nothing is installed.
 
 The one subcommand meant to run on a machine with **no local Mullion server
