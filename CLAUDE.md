@@ -146,6 +146,13 @@ Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 - **Issue & PR Blueprints:** All issues and PRs must follow the formatting templates:
   - Issue Template: [.github/ISSUE_TEMPLATE/issue-blueprint.md](.github/ISSUE_TEMPLATE/issue-blueprint.md)
   - PR Template: [.github/pull_request_template.md](.github/pull_request_template.md)
+- **File an issue for every deferred, blocked, or descoped item.** When a
+  plan (yours or a reviewer's) defers something out of scope, marks it
+  blocked, or explicitly decides not to do it, open a GitHub issue for it
+  _before_ implementing the rest — one issue per item, Issue Blueprint
+  format, linked from the PR body. A plan doc or PR description is not a
+  durable record; an issue is searchable and won't be re-litigated by the
+  next person who hits the same edge.
 
 ### Addressing Review Feedback (Hermes or Human)
 
