@@ -594,23 +594,38 @@ function handleConnection(
   // A gate connection that closes WITHOUT a decision ever being written
   // (the forwarder process crashed, or something severed the connection)
   // must still resolve the gate rather than leave gateState stuck on
-  // "waiting" forever — fail closed, same as the timeout above. Guarded on
-  // `pendingGates.get(sessionId)?.socket === socket` (not just
-  // `.has(sessionId)`) so this never clobbers a *different*, newer pending
-  // gate for the same session id — resolvePendingGate() already deletes the
-  // map entry as part of writing a real decision, so the ordinary
-  // resolved-then-closed path is already a no-op by the time this fires.
+  // "waiting" forever. Guarded on `pendingGates.get(sessionId)?.socket ===
+  // socket` (not just `.has(sessionId)`) so this never clobbers a
+  // *different*, newer pending gate for the same session id —
+  // resolvePendingGate() already deletes the map entry as part of writing a
+  // real decision, so the ordinary resolved-then-closed path is already a
+  // no-op by the time this fires.
+  //
+  // "no_response", NOT "denied" (concurrent-gates investigation, live
+  // session 566 on branchDAM): nobody actually decided anything here either
+  // — same as the GATE_TIMEOUT_MS branch above, which already uses
+  // "no_response" — so this must resolve to gateState "lapsed", not a
+  // human-looking "denied". Using "denied" previously contradicted this
+  // very comment's own "same as the timeout above" claim: the timeout path
+  // maps to "lapsed" via resolvePendingGate's "no_response" → "lapsed"
+  // translation, but "denied" here bypassed it and left session state files
+  // latched on a decision no human ever made.
   socket.on("close", () => {
     if (sessionId === null) return;
     if (pendingGates.get(sessionId)?.socket === socket) {
       resolvePendingGate(app, pendingGates, sessionId, {
-        decision: "denied",
+        decision: "no_response",
         reason: "hook connection closed before a decision was made",
       });
     }
-    // Same fail-closed reasoning as the review-gate case above, guarded the
-    // same way (by socket identity, not just session id) so this never
-    // clobbers a different, newer pending promote for the same session.
+    // Deliberately still "declined" here, NOT the review-gate reasoning
+    // above: promoteState has no "lapsed"-equivalent value at all
+    // ("idle" | "pending" | "accepted" | "declined" — pty-manager.ts) — a
+    // promote request that nobody answers is meant to fail closed, unlike a
+    // permission gate which is meant to fall through to the agent's own
+    // prompt. Guarded the same way (by socket identity, not just session
+    // id) so this never clobbers a different, newer pending promote for the
+    // same session.
     if (pendingPromotes.get(sessionId)?.socket === socket) {
       resolvePendingPromote(app, pendingPromotes, sessionId, {
         decision: "declined",

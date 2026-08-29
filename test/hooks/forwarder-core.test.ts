@@ -1835,7 +1835,22 @@ describe("mapCodexEvent", () => {
         tool_name: "Bash",
         tool_input: { command: "npm test" },
       }),
-    ).toEqual({ kind: "review_gate", state: "waiting", prompt: "npm test" });
+      // Prefixed with the tool name and length-bounded via summarizeToolCall
+      // (concurrent-gates investigation), same shape as the Claude Code
+      // path — see the "unbounded gatePrompt" test below for the truncation
+      // case this previously missed.
+    ).toEqual({ kind: "review_gate", state: "waiting", prompt: "Bash: npm test" });
+  });
+
+  it("truncates a long Codex command the same way the Claude Code path does (concurrent-gates investigation)", () => {
+    const longCommand = "x".repeat(250);
+    const result = mapCodexEvent("PermissionRequest", {
+      tool_name: "Bash",
+      tool_input: { command: longCommand },
+    });
+    expect(result.kind).toBe("review_gate");
+    expect(result.state).toBe("waiting");
+    expect(result.prompt).toBe(`Bash: ${"x".repeat(200)}…`);
   });
 
   it("dispatches UserPromptSubmit to turn_start (issue: extend surfaced session statuses — previously a generic notification)", () => {

@@ -512,7 +512,7 @@ describe("hooksPlugin (issue #172)", () => {
       second.destroy();
     });
 
-    it("resolves to denied when the gate connection closes before a decision arrives (fail closed)", async () => {
+    it("resolves to lapsed, not denied, when the gate connection closes before a decision arrives (concurrent-gates investigation)", async () => {
       app = await buildApp();
       await app.ready();
       const { session, socket } = await openPendingGate(app, "1", "some command");
@@ -522,7 +522,12 @@ describe("hooksPlugin (issue #172)", () => {
       for (let i = 0; i < 50 && session.toInfo().gateState === "waiting"; i++) {
         await new Promise((resolve) => setImmediate(resolve));
       }
-      expect(session.toInfo().gateState).toBe("denied");
+      // "lapsed", NOT "denied": nobody actually decided anything here —
+      // same as the GATE_TIMEOUT_MS path below, which already resolves to
+      // "lapsed". A live stuck session (branchDAM, session 566) showed this
+      // previously latching a human-looking "denied" onto the persisted
+      // session state for a connection drop nobody caused.
+      expect(session.toInfo().gateState).toBe("lapsed");
     });
 
     it("resolves to no_response on the server-side gate timeout — falls through, not a denial (issue #264)", async () => {

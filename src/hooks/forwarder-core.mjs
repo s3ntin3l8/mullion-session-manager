@@ -800,17 +800,16 @@ export function mapCodexSessionEnd(payload) {
 // Code, Codex has no ExitPlanMode-equivalent tool to exempt, so every
 // PermissionRequest becomes a review_gate — there's no observational
 // permission_request fallback left for this agent at all.
+//
+// Reuses summarizeToolCall (concurrent-gates investigation) rather than
+// building its own `${toolName}: ${detail}` shape: this previously neither
+// prefixed the tool name nor truncated, unlike the Claude Code path above,
+// so a long Codex command (e.g. a chained `git worktree add … && …`) landed
+// unbounded in gatePrompt and was persisted verbatim into the session state
+// file. summarizeToolCall already gives both for free and is exercised by
+// the Claude Code tests above.
 export function mapCodexPermissionRequest(payload) {
-  const toolName = typeof payload?.tool_name === "string" ? payload.tool_name : "a tool";
-  const input = payload?.tool_input;
-  const detail =
-    typeof input?.command === "string"
-      ? input.command
-      : typeof input?.file_path === "string"
-        ? input.file_path
-        : null;
-  const prompt = detail && detail.length > 0 ? detail : toolName;
-  return { kind: "review_gate", state: "waiting", prompt };
+  return { kind: "review_gate", state: "waiting", prompt: summarizeToolCall(payload) };
 }
 
 // Issue: extend surfaced session statuses — was previously mapped to a
