@@ -2946,14 +2946,22 @@ export class Session {
       // waiting on a real decision for. That gate's badge (and the "Action
       // Required" title) may only clear via resolveGate() — a real
       // approve/deny, a timeout, a lapse, or the stale sweep — never via a
-      // stray keystroke. gateState is checked directly here rather than
-      // confirmedKind === "reviewGate": they're set together in
-      // hook-handlers.ts's "review_gate" case and there is currently at
-      // most one gate per session, so they can't disagree. Every OTHER
-      // side effect of a genuine keystroke below (lastTurnEndedAt,
-      // backgroundTasks, errorState) is unrelated to the gate and still
-      // applies unconditionally.
-      if (this.gateState !== "waiting") {
+      // stray keystroke.
+      //
+      // Hermes review, PR #910 — ALSO requires confirmedKind ===
+      // "reviewGate", not just gateState === "waiting": those two are set
+      // together when a gate first raises the badge, but a LATER, more
+      // authoritative immune kind (e.g. promoteRequest) can supersede
+      // confirmedKind via moreAuthoritativeKind while gateState stays
+      // "waiting" underneath it (the gate itself hasn't resolved, it's
+      // just no longer what's confirmed). Without this, a keystroke
+      // genuinely answering that NEWER prompt would be wrongly blocked
+      // from clearing its own badge just because an unrelated gate is
+      // still pending somewhere in the background. Every OTHER side effect
+      // of a genuine keystroke below (lastTurnEndedAt, backgroundTasks,
+      // errorState) is unrelated to either and still applies
+      // unconditionally.
+      if (!(this.gateState === "waiting" && this.attention.state.confirmedKind === "reviewGate")) {
         this.attention.applyAttentionTransition(
           advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
         );

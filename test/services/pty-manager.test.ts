@@ -5688,7 +5688,40 @@ describe("PtyManager", () => {
 
       // A real decision is still the thing that clears it.
       session.resolveGate("approved");
-      expect(session.toInfo()).toMatchObject({ gateState: "approved", attention: false });
+    });
+
+    it("a genuine keystroke DOES clear the badge when a newer immune kind has superseded reviewGate as confirmedKind, even though gateState still reads 'waiting' underneath it (Hermes review, PR #910)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "x" });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", attentionKind: "reviewGate" });
+
+      // A promote_request is a second, unrelated immune kind — it
+      // supersedes reviewGate as the currently-CONFIRMED kind (both settle
+      // at 0ms, same as reviewGate), while gateState stays "waiting"
+      // underneath it: the original gate hasn't been resolved, it's simply
+      // no longer what's confirmed.
+      session.emitHookEvent({ kind: "promote_request", summary: "start work" });
+      expect(session.toInfo()).toMatchObject({
+        gateState: "waiting",
+        attentionKind: "promoteRequest",
+      });
+
+      // A genuine keystroke here is answering the PROMOTE prompt, not the
+      // stale gate — must clear its badge, not be blocked by the unrelated
+      // gate still pending in the background.
+      session.write("y");
+      expect(session.toInfo().attention).toBe(false);
+      // The gate itself is untouched by this keystroke — still genuinely
+      // waiting, just no longer the confirmed badge.
+      expect(session.toInfo().gateState).toBe("waiting");
     });
 
     it("permission_request state clears on progress:done", async () => {
