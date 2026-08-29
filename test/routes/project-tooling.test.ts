@@ -238,6 +238,24 @@ describe("project-tooling route", () => {
       await app.close();
     });
 
+    // Hermes review, PR #894 — a traversal-shaped frontmatter name must be
+    // rejected here, at write time, not merely skipped later at spawn time.
+    it("rejects a path-traversal frontmatter name", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/tooling/skill`,
+        payload: {
+          skill: "---\nname: ../../etc/passwd\ndescription: nope\n---\nbody",
+        },
+      });
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
     it("DELETE clears only the skill field, leaving briefing intact", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);

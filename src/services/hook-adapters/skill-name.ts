@@ -35,6 +35,24 @@
 export const DANGEROUS_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 // eslint-disable-next-line no-control-regex -- deliberately matching C0 controls + DEL
 export const CONTROL_CHARACTER_RE = /[\x00-\x1f\x7f]/;
+// Hermes review, PR #894 — this guard's ORIGINAL two checks above assumed
+// `name` was only ever used as an OBJECT KEY (opencode-skills.ts's
+// `skill[name] = ...`) or a fixed-depth DIRECTORY NAME under an
+// already-fully-resolved parent (codex.ts/agy.ts's installBundleSkills,
+// TOGGLE callers matched against an already-discovered skill on disk).
+// PR-894 added a THIRD kind of caller (mullion-bundle.ts's
+// composeClaudeSessionBundle, opencode.ts's project-skill wiring) that
+// derives `name` from a project's own, arbitrary, HTTP-body-authored
+// frontmatter and joins it straight into a path:
+// `path.join(destDir, "skills", name, "SKILL.md")`. Neither prior check
+// rejects `/`, `\`, or `..` — a frontmatter `name: ../../x` sailed through
+// write-time validation and, at spawn time (on remote hosts too, since this
+// content rides the ordinary spawn body), resolved OUTSIDE the intended
+// per-session directory entirely. `/` and `\` cover POSIX and Windows
+// separators alike (this repo's release story includes both); `.`/`..`
+// are rejected explicitly since a single traversal segment contains no
+// separator by itself.
+const PATH_SEPARATOR_RE = /[/\\]/;
 
 export class InvalidSkillNameError extends Error {
   constructor(name: string) {
@@ -44,7 +62,13 @@ export class InvalidSkillNameError extends Error {
 }
 
 export function isDangerousSkillName(name: string): boolean {
-  return DANGEROUS_PROPERTY_NAMES.has(name) || CONTROL_CHARACTER_RE.test(name);
+  return (
+    DANGEROUS_PROPERTY_NAMES.has(name) ||
+    CONTROL_CHARACTER_RE.test(name) ||
+    PATH_SEPARATOR_RE.test(name) ||
+    name === "." ||
+    name === ".."
+  );
 }
 
 /** Kept for the toggleSkillEnabled entry point (skills.ts), which isn't

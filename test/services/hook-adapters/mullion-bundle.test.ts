@@ -215,6 +215,19 @@ describe("deriveContentName", () => {
   it("returns null for a dangerous frontmatter name", () => {
     expect(deriveContentName("---\nname: __proto__\ndescription: nope\n---\nbody")).toBeNull();
   });
+
+  // Hermes review, PR #894 — a frontmatter name is joined straight into a
+  // path (composeClaudeSessionBundle below, opencode.ts's project-skill
+  // wiring); a traversal segment must never survive this far.
+  it("returns null for a path-traversal frontmatter name", () => {
+    expect(
+      deriveContentName("---\nname: ../../etc/passwd\ndescription: nope\n---\nbody"),
+    ).toBeNull();
+    expect(deriveContentName("---\nname: a/b\ndescription: nope\n---\nbody")).toBeNull();
+    expect(deriveContentName("---\nname: a\\b\ndescription: nope\n---\nbody")).toBeNull();
+    expect(deriveContentName("---\nname: ..\ndescription: nope\n---\nbody")).toBeNull();
+    expect(deriveContentName("---\nname: .\ndescription: nope\n---\nbody")).toBeNull();
+  });
 });
 
 // composeClaudeSessionBundle — PR-5's per-session --plugin-dir composition:
@@ -257,6 +270,17 @@ describe("composeClaudeSessionBundle", () => {
       skill: "not a skill",
     });
     expect(withUnparseableSkill).toEqual(withoutProjectContent);
+  });
+
+  // Hermes review, PR #894 — never join a traversal-shaped frontmatter name
+  // into the composed dir's own path.
+  it("skips a path-traversal frontmatter name rather than escaping destDir", () => {
+    const withoutProjectContent = composeClaudeSessionBundle("/session/123.mullion-bundle", {});
+    const withTraversalSkill = composeClaudeSessionBundle("/session/123.mullion-bundle", {
+      skill: "---\nname: ../../etc/passwd\ndescription: d\n---\nbody",
+    });
+    expect(withTraversalSkill).toEqual(withoutProjectContent);
+    expect(withTraversalSkill!.every((f) => !f.path.includes(".."))).toBe(true);
   });
 
   it("returns null when MULLION_HOME points at a location shipping no bundle", () => {
