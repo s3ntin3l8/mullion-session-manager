@@ -853,11 +853,30 @@ describe("runInstall / runUninstall", () => {
     const code = await runUninstall([], io);
     expect(code).toBe(0);
     expect(existsSync(xmlPath)).toBe(false);
-    expect(calls.map((c) => c.join(" "))).toEqual([`schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`]);
+    expect(calls.map((c) => c.join(" "))).toEqual([
+      `schtasks /End /TN ${WINDOWS_TASK_NAME}`,
+      `schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`,
+    ]);
 
     // Uninstalling again (nothing installed) must not throw or fail.
     const second = await runUninstall([], io);
     expect(second).toBe(0);
+  });
+
+  it("win32: a failed schtasks /End (task wasn't running) does not block uninstall — /Delete still runs and succeeds", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    const xmlPath = windowsTaskXmlPath(io);
+
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("/End"))
+        return { status: 1, stdout: "", stderr: "ERROR: The task is not currently running." };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(xmlPath)).toBe(false);
   });
 
   it("win32: a failed schtasks /Delete is surfaced, not swallowed — the task XML is left in place", async () => {

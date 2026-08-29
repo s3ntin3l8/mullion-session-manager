@@ -193,3 +193,64 @@ jobs:
           # $LASTEXITCODE is non-zero on the success path and would
           # otherwise fail this step despite every assertion having passed.
           exit 0
+
+      # Round 3 (PR3, Windows installer) — builds deploy/windows/mullion-
+      # helper.iss with the SAME mullion-helper.exe built above, then
+      # actually RUNS the produced installer and its own auto-generated
+      # uninstaller, silently. Inno Setup 6.7.1 is preinstalled on
+      # windows-latest (confirmed via the runner-images tool inventory) and
+      # on PATH as `iscc`.
+      - name: Build Windows installer
+        shell: pwsh
+        run: iscc deploy\windows\mullion-helper.iss
+      # `/VERYSILENT /SUPPRESSMSGBOXES` — not just for CI: this is also the
+      # documented way anyone (an enterprise provisioning script, this job)
+      # runs an Inno Setup installer fully unattended. Every ShowMsg() call
+      # in the .iss's own [Code] additionally checks WizardSilent() and
+      # skips the dialog entirely rather than relying on /SUPPRESSMSGBOXES
+      # alone (which auto-answers a MsgBox rather than truly suppressing
+      # it) — see that procedure's own comment for why the distinction
+      # matters. No pairing payload is supplied here, so this exercises the
+      # "installed but not yet paired" branch of CurStepChanged.
+      - name: Run the installer silently and verify it actually installed
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "build\installer\mullion-helper-setup-*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "no installer output found under build\installer" }
+          # Setup.exe is a GUI-subsystem executable, unlike mullion-helper.exe
+          # (console) above — $LASTEXITCODE via the `&` call operator is
+          # documented as unreliable for GUI processes (came back $null on
+          # this job's first real run, not even a nonzero code). Start-Process
+          # -Wait -PassThru is the robust way to actually wait on a GUI
+          # process and read its real exit code.
+          $logPath = Join-Path $env:RUNNER_TEMP "install.log"
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=$logPath") -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "installer exited $($proc.ExitCode)" }
+
+          $exePath = "$env:LOCALAPPDATA\Mullion\mullion-helper.exe"
+          if (-not (Test-Path $exePath)) { throw "mullion-helper.exe was not installed to $exePath" }
+
+          schtasks /Query /TN MullionHelper /V /FO LIST
+          if ($LASTEXITCODE -ne 0) { throw "installer did not register the MullionHelper Scheduled Task" }
+      # Inno Setup's generated uninstaller copies ITSELF to a temp location
+      # and re-executes before doing the actual work, specifically so it
+      # can delete its own original exe — the parent process this step
+      # launches can return well before that child finishes. Polling for
+      # the exe to actually disappear (rather than trusting the launch
+      # call's own exit) is what makes this a real assertion instead of a
+      # race that happens to pass.
+      - name: Run the auto-generated uninstaller and verify cleanup
+        shell: pwsh
+        run: |
+          $exePath = "$env:LOCALAPPDATA\Mullion\mullion-helper.exe"
+          $uninstaller = "$env:LOCALAPPDATA\Mullion\unins000.exe"
+          if (-not (Test-Path $uninstaller)) { throw "no uninstaller found at $uninstaller" }
+          & $uninstaller /VERYSILENT /SUPPRESSMSGBOXES
+
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Test-Path $exePath) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path $exePath) { throw "mullion-helper.exe still present after uninstall (timed out waiting)" }
+
+          schtasks /Query /TN MullionHelper 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "MullionHelper task still registered after uninstall" }
+          exit 0
