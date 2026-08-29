@@ -129,6 +129,24 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
     expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(false);
   });
 
+  // Hermes review, PR #891 round 2 — install was asymmetric with uninstall:
+  // uninstall correctly refuses an unmarked mullion-prefixed dir, but
+  // install would happily sync files into one (and then claim it by
+  // writing the marker), silently absorbing a colliding user-owned
+  // directory. Names the double-prefixed collision explicitly
+  // (`mullion-mullion-host`, this bundle's actual install target) rather
+  // than a name that would never collide in practice.
+  it("install never overwrites or claims a pre-existing directory at its own target path that has no ownership marker", () => {
+    const collisionDir = path.join(destRoot, "mullion-mullion-host");
+    mkdirSync(collisionDir, { recursive: true });
+    writeFileSync(path.join(collisionDir, "SKILL.md"), "not mine to overwrite");
+
+    installBundleSkills(destRoot);
+
+    expect(readFileSync(path.join(collisionDir, "SKILL.md"), "utf8")).toBe("not mine to overwrite");
+    expect(existsSync(path.join(collisionDir, ".mullion-managed"))).toBe(false);
+  });
+
   it("installs a marker file inside each installed skill directory", () => {
     installBundleSkills(destRoot);
     expect(existsSync(path.join(destRoot, "mullion-mullion-host", ".mullion-managed"))).toBe(true);

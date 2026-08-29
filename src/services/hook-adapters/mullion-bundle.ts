@@ -144,14 +144,22 @@ export function installBundleSkills(destRoot: string): void {
   }
   for (const name of skillNames) {
     const destDir = path.join(destRoot, `${INSTALLED_SKILL_PREFIX}${name}`);
+    // Hermes review, PR #891 round 2 — install was asymmetric with
+    // uninstall: uninstall correctly refuses to touch an unmarked
+    // `mullion-`-prefixed dir, but install would happily sync files INTO
+    // one and then claim it by writing the marker, silently absorbing
+    // whatever a user had put there under a colliding name. Skip entirely
+    // rather than overwrite when destDir already exists without the
+    // marker — the same "no marker, not ours" rule uninstall already
+    // applies, just checked one step earlier.
+    if (existsSync(destDir) && !isCurrentMullionManagedDir(destDir)) continue;
     syncSkillDir(path.join(skillsDir, name), destDir);
     // Same content-compare-then-skip posture as syncSkillDir's own files —
     // checked (not written unconditionally) so an already-marked directory
     // doesn't get its mtime touched on every matching launch. Self-heals a
     // marker a user deleted by hand while leaving the skill files in place.
-    const markerPath = path.join(destDir, INSTALLED_MARKER_NAME);
     if (!isCurrentMullionManagedDir(destDir)) {
-      writeFileSync(markerPath, INSTALLED_MARKER_CONTENT);
+      writeFileSync(path.join(destDir, INSTALLED_MARKER_NAME), INSTALLED_MARKER_CONTENT);
     }
   }
 }
