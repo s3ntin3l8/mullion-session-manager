@@ -77,6 +77,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     env: {},
     injectAgentGuide: true,
     injectProjectBriefing: true,
+    injectMullionBundle: true,
     skipPermissions: false,
     initialPrompt: undefined,
     ...overrides,
@@ -372,6 +373,7 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         controlSocketPath: "/tmp/sessions/mullion.sock",
         injectAgentGuide: false,
         injectProjectBriefing: false,
+        injectMullionBundle: false,
         skipPermissions: true,
       }),
     );
@@ -387,9 +389,26 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         forwarderPath: "/fake/forwarder.mjs",
         injectAgentGuide: false,
         injectProjectBriefing: false,
+        injectMullionBundle: false,
         cwd: "/tmp/project",
         skipPermissions: true,
       }),
+    );
+  });
+
+  it("threads injectMullionBundle through to the HookAdapterContext independently of injectAgentGuide/injectProjectBriefing", () => {
+    buildLaunchPlan(
+      baseSession({
+        command: "claude",
+        injectAgentGuide: false,
+        injectProjectBriefing: false,
+        injectMullionBundle: true,
+      }),
+    );
+
+    expect(mockApplyHookAdapters).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ injectMullionBundle: true }),
     );
   });
 

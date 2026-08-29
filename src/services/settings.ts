@@ -256,6 +256,19 @@ export interface AppSettings {
     // injectAgentGuide: the per-session copy is always written at spawn
     // time regardless of this setting.
     injectProjectBriefing: boolean;
+    // Issue: Mullion's own agent-facing tooling only reached an agent when
+    // the session's cwd happened to be Mullion's own checkout. Gates
+    // whether Claude Code's launch command gets `--plugin-dir` pointed at
+    // the shipped bundle (src/bundle/ — see hook-adapters/mullion-bundle.ts
+    // and claude-code.ts's commandTransform), independently of
+    // injectAgentGuide/injectProjectBriefing above: this gates the WHOLE
+    // delivery mechanism for a fundamentally different kind of content
+    // (Mullion-owned skills/subagents/commands via a CLI flag), not a
+    // SessionStart text injection. Default true, same "cheap and the point
+    // is discovery" reasoning as injectAgentGuide. A plugin-sourced Claude
+    // Code skill has no per-skill toggle of its own (see types.ts's
+    // `injectMullionBundle` doc comment) — this setting IS the toggle.
+    injectMullionBundle: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the
     // sessions.spawn_child control-socket op. Enforced in
@@ -463,6 +476,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     eventRetentionPerSession: 0,
     injectAgentGuide: true,
     injectProjectBriefing: true,
+    injectMullionBundle: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

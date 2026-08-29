@@ -1276,6 +1276,12 @@ export interface AppSettings {
     // independently of injectAgentGuide above. Surfaced in Settings.tsx's
     // Sessions section.
     injectProjectBriefing: boolean;
+    // Issue — mirrors src/services/settings.ts 1:1. Gates whether Claude
+    // Code's launch command gets --plugin-dir pointed at Mullion's own
+    // tooling bundle, independently of injectAgentGuide/injectProjectBriefing
+    // above (a different mechanism entirely, not a SessionStart injection).
+    // Surfaced in Settings.tsx's Sessions section.
+    injectMullionBundle: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
     // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
     // per parent").

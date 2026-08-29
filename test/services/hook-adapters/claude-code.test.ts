@@ -1,14 +1,20 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import {
+import type { HookAdapterContext } from "../../../src/services/hook-adapters/types.js";
+
+const mockResolveMullionBundleDir = vi.fn((): string | null => "/opt/mullion/dist/bundle");
+vi.mock("../../../src/services/hook-adapters/mullion-bundle.js", () => ({
+  resolveMullionBundleDir: () => mockResolveMullionBundleDir(),
+}));
+
+const {
   buildClaudeHookSettings,
   claudeCodeAdapter,
   resolveClaudeConfigDir,
   resolveClaudePluginCacheDir,
-} from "../../../src/services/hook-adapters/claude-code.js";
-import type { HookAdapterContext } from "../../../src/services/hook-adapters/types.js";
+} = await import("../../../src/services/hook-adapters/claude-code.js");
 
 describe("claudeCodeAdapter.matches (issue #174)", () => {
   it("matches a bare claude invocation", () => {
@@ -129,6 +135,7 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     injectAgentGuide: false,
+    injectMullionBundle: false,
   };
 
   it("writes a per-session settings file and MCP config file under sessionsDir (issue #271)", () => {
@@ -169,6 +176,44 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     expect(plan.envAdditions).toBeUndefined();
     expect(plan.managedInstall).toBeUndefined();
+  });
+});
+
+describe("claudeCodeAdapter.prepareLaunch — Mullion tooling bundle (--plugin-dir)", () => {
+  const ctx: HookAdapterContext = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+    injectMullionBundle: true,
+  };
+
+  beforeEach(() => {
+    mockResolveMullionBundleDir.mockClear();
+    mockResolveMullionBundleDir.mockReturnValue("/opt/mullion/dist/bundle");
+  });
+
+  it("appends --plugin-dir <bundleDir> after --settings/--mcp-config when injectMullionBundle is on and the bundle exists", () => {
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).toBe(
+      'claude --settings "/tmp/mullion-sessions/42.hooks.json" --mcp-config "/tmp/mullion-sessions/42.mcp.json" --plugin-dir "/opt/mullion/dist/bundle"',
+    );
+  });
+
+  it("omits --plugin-dir when injectMullionBundle is false, without even resolving the bundle dir", () => {
+    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: false });
+    expect(plan.commandTransform?.("claude")).not.toContain("--plugin-dir");
+    expect(mockResolveMullionBundleDir).not.toHaveBeenCalled();
+  });
+
+  it("omits --plugin-dir when the bundle isn't shipped on this install, even though injectMullionBundle is on", () => {
+    mockResolveMullionBundleDir.mockReturnValue(null);
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).not.toContain("--plugin-dir");
   });
 });
 

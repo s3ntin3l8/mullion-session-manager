@@ -230,6 +230,23 @@ export function SessionsSection() {
         />
       </Row>
       <Row
+        label="Inject Mullion tooling bundle"
+        desc={
+          "Ship Mullion's own agent-facing skill into every Claude Code" +
+          " session via --plugin-dir, in any project — not just this repo's" +
+          " own checkout. Adds no files to the project itself; the skill is" +
+          " loaded for that session only. Not currently toggleable per-skill" +
+          " in the Skills Manager below (it's delivered as a session-scoped" +
+          " plugin, invisible to Claude Code's own skill-override mechanism)" +
+          " — this setting is the toggle."
+        }
+      >
+        <Toggle
+          on={s.injectMullionBundle}
+          onChange={(v) => updateSettings({ sessions: { injectMullionBundle: v } })}
+        />
+      </Row>
+      <Row
         label="Auto-open child session panels"
         desc={
           "When an agent spawns a child session (Phase 5, issue #193), open" +

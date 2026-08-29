@@ -389,6 +389,57 @@ describe("Settings -> Sessions -> Inject agent guide", () => {
   });
 });
 
+// Same Toggle-row pattern as "Inject agent guide" above — sessions
+// .injectMullionBundle gates whether Claude Code's launch command gets
+// --plugin-dir pointed at Mullion's own tooling bundle.
+describe("Settings -> Sessions -> Inject Mullion tooling bundle", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current (default-on) toggle state", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Inject Mullion tooling bundle");
+    const toggle = row.closest(".settings-row")?.querySelector("button");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles the setting and PATCHes /api/settings", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Inject Mullion tooling bundle");
+    const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
+
+    await user.click(toggle);
+
+    expect(useDashboardStore.getState().settings.sessions.injectMullionBundle).toBe(false);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { injectMullionBundle: false } }),
+        }),
+      ),
+    );
+  });
+});
+
 // agent-briefing follow-up to #405 — "Inject project briefing" surfaces the
 // independent sessions.injectProjectBriefing toggle. Same pattern as the
 // guide toggle above, deliberately duplicated rather than parameterized:
