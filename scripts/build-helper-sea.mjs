@@ -163,7 +163,17 @@ function injectBlob() {
   if (process.platform === "darwin") {
     args.push("--macho-segment-name", "NODE_SEA");
   }
-  execFileSync(postjectBin, args, { stdio: "inherit" });
+  // `shell: true` on win32 ONLY (confirmed necessary against the real
+  // windows-latest CI runner, not guessed): npm's own `.bin/` wrapper for
+  // a package's bin entry is a `.cmd` shim on Windows, not a real PE
+  // executable, and Node's `spawnSync`/`execFileSync` cannot invoke a
+  // `.cmd`/`.bat` file directly without a shell in between — it fails with
+  // EINVAL (this exact error, on this exact line, is what CI surfaced
+  // before this fix). POSIX's `postject` bin is a real file with a `#!`
+  // shebang, which spawns directly just fine — `shell: true` there would
+  // be an unnecessary (if likely harmless) behavior change, so this stays
+  // platform-scoped rather than unconditional.
+  execFileSync(postjectBin, args, { stdio: "inherit", shell: process.platform === "win32" });
 }
 
 async function main() {
