@@ -168,3 +168,25 @@ jobs:
           "$hash  $exeName" | Out-File -Encoding ascii -NoNewline "$exeName.sha256"
 
           gh release upload "${{ needs.release-please.outputs.tag_name }}" $exeName "$exeName.sha256"
+
+      # Round 3 (PR3) — the installer (deploy/windows/mullion-helper.iss)
+      # wraps the SAME mullion-helper.exe just built and uploaded above;
+      # built as its own release asset the same way, checksummed and
+      # uploaded identically. AppVersion is passed explicitly rather than
+      # relying on the .iss's own dev-mode fallback, so the installer's
+      # own Add/Remove Programs entry and OutputBaseFilename carry the
+      # real release version.
+      - name: Build and upload the Windows installer
+        shell: pwsh
+        run: |
+          $version = $env:VERSION -replace '^v', ''
+          iscc "/DAppVersion=$version" deploy\windows\mullion-helper.iss
+
+          $installerName = "mullion-helper-setup-$version.exe"
+          $installerPath = "build\installer\$installerName"
+          if (-not (Test-Path $installerPath)) { throw "expected installer at $installerPath" }
+
+          $hash = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToLower()
+          "$hash  $installerName" | Out-File -Encoding ascii -NoNewline "$installerName.sha256"
+
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" $installerPath "$installerName.sha256"

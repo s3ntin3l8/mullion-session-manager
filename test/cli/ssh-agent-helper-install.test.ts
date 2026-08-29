@@ -17,7 +17,7 @@ import {
 // Dispatched through runHelper, not called directly — matches how
 // mullion.mjs actually invokes install/uninstall, and (like pair/run)
 // CliUsageError is only caught at this layer, not inside runInstall itself.
-import { runHelper } from "../../src/cli/ssh-agent-helper.mjs";
+import { runHelper, credentialPath } from "../../src/cli/ssh-agent-helper.mjs";
 
 function runInstall(args: string[], io: Record<string, unknown>) {
   return runHelper("install", args, io);
@@ -417,6 +417,25 @@ describe("runInstall / runUninstall", () => {
     return { io, calls, dir };
   }
 
+  // Same fixture shape as "does not warn when a valid credential is already
+  // present" below — a minimal but real credential JSON, written straight
+  // to credentialPath(io) rather than via runPair, since these tests are
+  // exercising install/uninstall, not pairing itself.
+  function writeCredential(io: Record<string, unknown>) {
+    const file = credentialPath(io);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        baseUrl: "https://mullion.example.com",
+        bridgeId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        sessionId: "b".repeat(64),
+        sessionSecret: "c".repeat(64),
+      }),
+    );
+    return file;
+  }
+
   it("refuses to install without SSH_AUTH_SOCK (flag or ambient)", async () => {
     const { io } = baseIo({ env: { MULLION_HELPER_STATE_DIR: "/irrelevant" }, platform: "linux" });
     const stderrLines: string[] = [];
@@ -812,6 +831,9 @@ describe("runInstall / runUninstall", () => {
   it("linux: uninstall removes the unit and disables it; a no-op is not an error", async () => {
     const { io, calls, dir: d } = baseIo({ platform: "linux" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
+    // Issue #904 — a real steady-state laptop is paired AND installed;
+    // uninstall should forget both, not just the unit.
+    const credFile = writeCredential(io);
     await runInstall([], io);
     const unitPath = systemdUnitPath(io);
     expect(existsSync(unitPath)).toBe(true);
@@ -820,6 +842,7 @@ describe("runInstall / runUninstall", () => {
     const code = await runUninstall([], io);
     expect(code).toBe(0);
     expect(existsSync(unitPath)).toBe(false);
+    expect(existsSync(credFile)).toBe(false);
     expect(calls.map((c) => c.join(" "))).toEqual([
       "systemctl --user disable --now mullion-helper.service",
       "systemctl --user daemon-reload",
@@ -833,6 +856,7 @@ describe("runInstall / runUninstall", () => {
   it("darwin: uninstall removes the plist and boots it out", async () => {
     const { io, dir: d } = baseIo({ platform: "darwin", uid: 501 });
     (io as { homedir?: string }).homedir = path.join(d, "home");
+    const credFile = writeCredential(io);
     await runInstall([], io);
     const plistPath = launchdPlistPath(io);
     expect(existsSync(plistPath)).toBe(true);
@@ -840,11 +864,13 @@ describe("runInstall / runUninstall", () => {
     const code = await runUninstall([], io);
     expect(code).toBe(0);
     expect(existsSync(plistPath)).toBe(false);
+    expect(existsSync(credFile)).toBe(false);
   });
 
   it("win32: uninstall removes the task XML and deletes it via schtasks; a no-op is not an error", async () => {
     const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
+    const credFile = writeCredential(io);
     await runInstall([], io);
     const xmlPath = windowsTaskXmlPath(io);
     expect(existsSync(xmlPath)).toBe(true);
@@ -853,16 +879,137 @@ describe("runInstall / runUninstall", () => {
     const code = await runUninstall([], io);
     expect(code).toBe(0);
     expect(existsSync(xmlPath)).toBe(false);
-    expect(calls.map((c) => c.join(" "))).toEqual([`schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`]);
+    expect(existsSync(credFile)).toBe(false);
+    expect(calls.map((c) => c.join(" "))).toEqual([
+      `schtasks /End /TN ${WINDOWS_TASK_NAME}`,
+      `schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`,
+    ]);
 
     // Uninstalling again (nothing installed) must not throw or fail.
     const second = await runUninstall([], io);
     expect(second).toBe(0);
   });
 
+  // Issue #904 — installWindows/runInstall never triggers this path (it
+  // always pairs before saving, atomically), but a process killed between
+  // saveCredential's own writeFileSync and renameSync (ssh-agent-helper.mjs)
+  // leaves a `ssh-agent-bridge.json.<pid>.tmp` sibling holding the same
+  // session_id — the same bearer credential under a different name, so
+  // uninstall needs to sweep it too, not just the canonical filename.
+  it("win32: uninstall also removes a stray write-to-temp-then-rename credential sibling", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const credFile = writeCredential(io);
+    const staleTmp = `${credFile}.48291.tmp`;
+    writeFileSync(staleTmp, "{}");
+    await runInstall([], io);
+
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(credFile)).toBe(false);
+    expect(existsSync(staleTmp)).toBe(false);
+  });
+
+  // Issue #904 (self-review, PR #911) — a process killed before ITS OWN
+  // renameSync ever ran (the canonical file was never created, only the
+  // temp file it was about to become) must not print "removed
+  // <canonical path>" — that path never existed. The message must name
+  // whatever was actually removed.
+  it("win32: uninstall reports the stray tmp path, not the canonical filename, when the main credential never existed", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const stateDir = path.join(d, "state");
+    mkdirSync(stateDir, { recursive: true });
+    const staleTmp = path.join(stateDir, "ssh-agent-bridge.json.48291.tmp");
+    writeFileSync(staleTmp, "{}");
+    await runInstall([], io);
+
+    const stdoutLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(staleTmp)).toBe(false);
+    const output = stdoutLines.join("");
+    expect(output).toMatch(/removed .*ssh-agent-bridge\.json\.48291\.tmp/);
+    expect(output).not.toMatch(/removed .*[/\\]ssh-agent-bridge\.json\n/);
+  });
+
+  // Issue #904 (self-review, PR #911) — a failed delete (a real, non-exotic
+  // occurrence on Windows: {app} IS stateDir(), and this runs from the
+  // installer's own [UninstallRun], where a transient AV/indexer lock on a
+  // just-renamed JSON file is ordinary) must be best-effort, like
+  // saveCredential's own cleanup — reported to stderr, not thrown. An
+  // uncaught throw here would turn an already-successful supervisor
+  // teardown (the task really is gone, already reported below) into a hard
+  // crash for a problem that isn't the teardown's fault. A directory where
+  // the credential file should be is a real, portable, deterministic way to
+  // force fs.rmSync to fail (EISDIR) without relying on OS permission
+  // semantics that can behave differently across CI runners.
+  it("win32: a failed credential delete is reported, not thrown — the successful task teardown still counts", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    const xmlPath = windowsTaskXmlPath(io);
+    mkdirSync(credentialPath(io), { recursive: true });
+
+    const stdoutLines: string[] = [];
+    const stderrLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    // The task teardown itself still succeeded and is still reported...
+    expect(existsSync(xmlPath)).toBe(false);
+    expect(stdoutLines.join("")).toMatch(/removed .*mullion-helper-task\.xml/);
+    // ...but the credential delete failure is reported as a warning, not a
+    // "removed" claim, and definitely not an uncaught throw.
+    expect(stderrLines.join("")).toMatch(/could not remove pairing credential/);
+    expect(stdoutLines.join("")).not.toMatch(/removed .*ssh-agent-bridge\.json/);
+  });
+
+  // Issue #904 — the case per-platform placement would miss: a laptop that
+  // ran `helper pair` but never `helper install` still needs uninstall to
+  // forget the credential, even though every platform's own teardown
+  // function early-returns 0 from its "nothing installed" gate before
+  // touching anything.
+  it("linux: uninstall removes a paired-but-never-installed credential without erroring", async () => {
+    const { io } = baseIo({ platform: "linux" });
+    const credFile = writeCredential(io);
+
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(credFile)).toBe(false);
+  });
+
+  it("uninstall with no credential file present prints no 'removed' line", async () => {
+    const { io } = baseIo({ platform: "linux" });
+    const stdoutLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(stdoutLines.join("")).not.toMatch(/removed/);
+  });
+
+  it("win32: a failed schtasks /End (task wasn't running) does not block uninstall — /Delete still runs and succeeds", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    const xmlPath = windowsTaskXmlPath(io);
+
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("/End"))
+        return { status: 1, stdout: "", stderr: "ERROR: The task is not currently running." };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(xmlPath)).toBe(false);
+  });
+
   it("win32: a failed schtasks /Delete is surfaced, not swallowed — the task XML is left in place", async () => {
     const { io, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
+    const credFile = writeCredential(io);
     await runInstall([], io);
     const xmlPath = windowsTaskXmlPath(io);
 
@@ -877,11 +1024,15 @@ describe("runInstall / runUninstall", () => {
     expect(code).toBe(1);
     expect(stderrLines.join("")).toMatch(/schtasks \/Delete failed/);
     expect(existsSync(xmlPath)).toBe(true);
+    // Issue #904 — a failed teardown must NOT delete the credential either:
+    // a still-running, still-supervised `run` needs it to reconnect.
+    expect(existsSync(credFile)).toBe(true);
   });
 
   it("linux: a failed systemctl disable is surfaced, not swallowed — the unit file is left in place", async () => {
     const { io, dir: d } = baseIo({ platform: "linux" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
+    const credFile = writeCredential(io);
     await runInstall([], io);
     const unitPath = systemdUnitPath(io);
 
@@ -898,11 +1049,14 @@ describe("runInstall / runUninstall", () => {
     // Must NOT silently claim success and delete the unit while the
     // supervised process could still be running.
     expect(existsSync(unitPath)).toBe(true);
+    // Issue #904 — nor the credential it'd need to reconnect with.
+    expect(existsSync(credFile)).toBe(true);
   });
 
   it("darwin: a failed launchctl bootout is surfaced, not swallowed — the plist is left in place", async () => {
     const { io, dir: d } = baseIo({ platform: "darwin", uid: 501 });
     (io as { homedir?: string }).homedir = path.join(d, "home");
+    const credFile = writeCredential(io);
     await runInstall([], io);
     const plistPath = launchdPlistPath(io);
 
@@ -917,6 +1071,8 @@ describe("runInstall / runUninstall", () => {
     expect(code).toBe(1);
     expect(stderrLines.join("")).toMatch(/launchctl bootout failed/);
     expect(existsSync(plistPath)).toBe(true);
+    // Issue #904 — nor the credential it'd need to reconnect with.
+    expect(existsSync(credFile)).toBe(true);
   });
 
   it("uninstall without ever installing calls neither launchctl nor systemctl", async () => {

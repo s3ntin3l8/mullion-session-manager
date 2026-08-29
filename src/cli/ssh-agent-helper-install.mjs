@@ -24,7 +24,12 @@ import path from "node:path";
 import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { isSea as nodeIsSea } from "node:sea";
 import { extractFlags, CliUsageError } from "./core.mjs";
-import { stateDir, loadCredential, WINDOWS_DEFAULT_SSH_AUTH_SOCK } from "./ssh-agent-helper.mjs";
+import {
+  stateDir,
+  loadCredential,
+  credentialPath,
+  WINDOWS_DEFAULT_SSH_AUTH_SOCK,
+} from "./ssh-agent-helper.mjs";
 
 // One instance total, not one per host — unlike the manual ssh -R tunnel
 // (docs/ssh-agent.md), a single bridge connection already serves every
@@ -628,6 +633,19 @@ function uninstallWindows(io) {
     io.stdout.write("nothing installed.\n");
     return 0;
   }
+  // Unlike uninstallLaunchd's `bootout` and uninstallSystemd's `--now`, which
+  // both stop the running job as part of unregistering it, `schtasks /Delete`
+  // only removes the task's registration — a currently-running instance of
+  // mullion-helper.exe (the steady state on a real, already-paired laptop:
+  // installWindows's own `/Run` starts it immediately) keeps running and
+  // keeps the exe file open. Left alone, that file lock makes the installer's
+  // own [Files] removal (which runs after [UninstallRun]) fail or defer on a
+  // real machine — Hermes review, PR #905, caught this: CI's uninstall step
+  // never sees it because a non-interactive runner's `/Run` degrades to a
+  // warning rather than actually starting a persistent process. `/End`'s own
+  // failure (e.g. the task was already stopped) is not fatal — only
+  // `/Delete` failing means uninstall genuinely didn't happen.
+  runSpawnSync(io, "schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
   const result = runSpawnSync(io, "schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
   if (result.status !== 0) {
     io.stderr.write(
@@ -642,11 +660,107 @@ function uninstallWindows(io) {
   return 0;
 }
 
+// Issue #904 — deletes the local pairing credential (and any stray
+// write-to-temp-then-rename sibling saveCredential's own comment describes,
+// ssh-agent-helper.mjs: a process killed mid-write can leave
+// `ssh-agent-bridge.json.<pid>.tmp` behind holding the same session_id —
+// the same bearer credential under a different name, so it needs the same
+// treatment). This is the ONE thing common to all three platforms, so it
+// lives here once rather than being triplicated into
+// uninstallWindows/uninstallLaunchd/uninstallSystemd: doing it inside those
+// functions would miss a laptop that ran `helper pair` but never `helper
+// install` (or whose supervisor artifact is already gone some other way) —
+// all three of those return 0 from their own "nothing installed" gate
+// before touching anything, and a paired-but-never-installed credential
+// still needs to go.
+//
+// Best-effort per file, like saveCredential's own cleanup (same module,
+// helper.mjs): {app} on Windows IS stateDir() (PR3's own DisableDirPage
+// comment), and this runs from the installer's own [UninstallRun] — a
+// transient AV/indexer lock (EPERM/EBUSY) on a just-renamed JSON file there
+// is an ordinary occurrence, not exotic, and `{ force: true }` alone only
+// suppresses ENOENT. A failed delete is reported, not thrown — it must not
+// turn an already-successful supervisor teardown into a hard crash. Only
+// paths that actually get removed are reported, not the canonical filename
+// unconditionally — a run that only finds a stray .tmp sibling (the main
+// file never existed) must not claim it removed a file that was never
+// there. (Hermes/self-review, PR #911.)
+function removeCredential(io) {
+  const file = credentialPath(io);
+  const dir = stateDir(io);
+  const base = path.basename(file);
+  const removed = [];
+
+  if (fs.existsSync(file)) {
+    try {
+      fs.rmSync(file, { force: true });
+      removed.push(file);
+    } catch (err) {
+      io.stderr.write(
+        `warning: could not remove pairing credential ${file}: ${err.message} — remove it by hand if you want it fully forgotten.\n`,
+      );
+    }
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (entry.startsWith(`${base}.`) && entry.endsWith(".tmp")) {
+      const tmpPath = path.join(dir, entry);
+      try {
+        fs.rmSync(tmpPath, { force: true });
+        removed.push(tmpPath);
+      } catch (err) {
+        io.stderr.write(
+          `warning: could not remove stale credential file ${tmpPath}: ${err.message}\n`,
+        );
+      }
+    }
+  }
+
+  for (const removedPath of removed) io.stdout.write(`removed ${removedPath}\n`);
+}
+
 export async function runUninstall(_args, io) {
   const platform = io.platform ?? process.platform;
-  if (platform === "darwin") return uninstallLaunchd(io);
-  if (platform === "linux") return uninstallSystemd(io);
-  if (platform === "win32") return uninstallWindows(io);
-  io.stderr.write(`mullion helper uninstall isn't supported on '${platform}'.\n`);
-  return 1;
+  let code;
+  if (platform === "darwin") code = uninstallLaunchd(io);
+  else if (platform === "linux") code = uninstallSystemd(io);
+  else if (platform === "win32") code = uninstallWindows(io);
+  else {
+    io.stderr.write(`mullion helper uninstall isn't supported on '${platform}'.\n`);
+    return 1;
+  }
+  // Only on a SUCCESSFUL teardown: a genuine teardown failure (schtasks
+  // /Delete, systemctl disable, launchctl bootout all returning nonzero)
+  // means the platform function's own stderr message already warns
+  // "'mullion helper run' may still be active" — deleting the credential
+  // out from under a still-running, still-supervised process would leave it
+  // unable to reconnect on its next restart. That failure path returns
+  // early above (uninstallWindows etc. `return 1`), so `code === 0` here
+  // means the supervisor's OWN registration is genuinely gone.
+  //
+  // Windows-only residual gap, not fully closed by that: uninstallWindows's
+  // own `code` comes from `/Delete` alone — a `/End` failure is swallowed
+  // there by design (its own comment: "e.g. the task was already stopped"
+  // is the common, benign case, and distinguishing it from a genuine
+  // termination failure would mean parsing schtasks' own locale-dependent
+  // error text). So `code === 0` on win32 does NOT guarantee the actual
+  // mullion-helper.exe process has exited, only that its Scheduled Task
+  // registration has. If it's still alive and renewing when this runs, the
+  // narrow way it could notice is removeCredential's own tmp-sibling sweep
+  // below racing that SAME process's own in-flight saveCredential call
+  // (ssh-agent-helper.mjs) — deleting its just-written `<pid>.tmp` out from
+  // under it before its own renameSync runs. That renameSync's ENOENT
+  // lands in renewSession's generic catch, which treats ANY save failure as
+  // transient and retries on its own backoff — not a crash, not a stranded
+  // session, just one missed renewal cycle before either a later renewal
+  // succeeds or the process eventually exits on "credential file missing".
+  // Not worth chasing further given that self-healing (self-review, PR #911).
+  if (code === 0) removeCredential(io);
+  return code;
 }
