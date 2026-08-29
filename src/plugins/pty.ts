@@ -206,6 +206,20 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       );
     }
   }
+  // Self-review (mullion-reviewer, PR #877) — sshAgentPlugin (registered
+  // after this one) needs to know whether THIS decision actually committed
+  // sessions to the bridge tier, to tell apart two very different bind
+  // failures it might hit moments later at the same path: (a) the preflight
+  // above already excluded the bridge tier, so nothing depends on that
+  // socket working — any failure there is harmless and safe to degrade; (b)
+  // the preflight found the path genuinely dead and PtyManager (below) is
+  // about to freeze "bridge" as the winning source for every session on
+  // this host, so a *subsequent* collision (something racing in during the
+  // narrow window between this probe and sshAgentPlugin's own bind) means
+  // those already-frozen sessions would be pointed at a process this host
+  // doesn't own — sshAgentPlugin must crash rather than silently degrade in
+  // that specific case. See that plugin's own comment for how it uses this.
+  app.decorate("sshAuthSockBridgeExpected", willMaterializeBridgeSocket);
   // Captured once so the shadow-warning log below describes the exact same
   // inputs that produced `resolvedSshAuthSock`, rather than re-reading
   // process.env.SSH_AUTH_SOCK a second time (Hermes review, PR #875) — the
@@ -428,5 +442,12 @@ declare module "fastify" {
   interface FastifyInstance {
     pty: PtyManager;
     reconfigureReconciler: (intervalSeconds: number) => void;
+    /** Whether this boot's `resolveSshAuthSock` resolution (above) actually
+     * committed every session on this host to the bridge tier — see the
+     * decoration site's own comment. Read by `sshAgentPlugin`
+     * (plugins/ssh-agent.ts) to decide whether a bind failure at the same
+     * path is harmless (this is `false`) or a genuine race requiring a
+     * crash rather than a silent degrade (this is `true`). */
+    sshAuthSockBridgeExpected: boolean;
   }
 }

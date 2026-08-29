@@ -3,6 +3,9 @@ import net from "node:net";
 import path from "node:path";
 import { buildTestApp } from "../helpers/app.js";
 import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
+import { sshAgentSocketPath } from "../../src/services/ssh-agent-socket.js";
+import { SocketAlreadyListeningError } from "../../src/services/unix-socket.js";
+import { shouldCrashOnBridgeSocketBindFailure } from "../../src/plugins/ssh-agent.js";
 
 // Post-ship audit follow-up (#873, PR-B) — the primary role now materializes
 // its own local ssh-agent bridge socket too (src/plugins/ssh-agent.ts),
@@ -130,12 +133,14 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
     client.destroy();
   });
 
-  it("degrades instead of crashing boot when the bridge socket path is already a live listener", async () => {
-    // Precompute the path the same way ptyPlugin/sshAgentPlugin do — this
-    // file's SESSIONS_DIR is fixed per test file (test/setup.ts), so it's
-    // known before any app in this test exists.
-    const sessionsDir = process.env.SESSIONS_DIR!;
-    const socketPath = path.join(sessionsDir, "ssh-agent.sock");
+  it("degrades instead of crashing boot when the bridge socket path is already a live listener from before boot", async () => {
+    // sshAgentSocketPath, not a hand-derived join — reuses the exact same
+    // helper ptyPlugin/sshAgentPlugin call, rather than bypassing
+    // ensureSessionsDir's 108-byte sun_path fallback logic the way a plain
+    // path.join would (mullion-reviewer, PR #877 self-review: this file's
+    // SESSIONS_DIR happens to be short enough that the fallback never
+    // triggers today, but that's incidental, not guaranteed by this test).
+    const socketPath = sshAgentSocketPath(process.env.SESSIONS_DIR!);
 
     const foreignListener = net.createServer();
     await new Promise<void>((resolve, reject) => {
@@ -148,13 +153,62 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
       // this reached reclaimSocketPath's SocketAlreadyListeningError
       // unguarded and crashed the entire app boot.
       const app = await buildTestApp();
-      // The preflight in ptyPlugin should have suppressed the bridge tier
-      // before PtyManager was ever constructed, given a live foreign
-      // listener already occupies this exact path.
       const res = await app.inject({ method: "GET", url: "/health" });
       expect(res.statusCode).toBe(200);
+
+      // Not just "didn't crash" — the actual security property: no session
+      // on this host was frozen with the bridge tier pointing at the
+      // foreign listener. Because the listener was already there BEFORE
+      // buildTestApp() ran, ptyPlugin's own preflight probe (which runs
+      // before PtyManager freezes anything) sees it first and excludes the
+      // bridge tier entirely — this is the "safe" branch of the two-layer
+      // defense, not the crash-worthy race (see
+      // shouldCrashOnBridgeSocketBindFailure's own unit tests below for
+      // that case).
+      const config = await app.inject({ method: "GET", url: "/api/hosts/local/config" });
+      expect(config.json().sshAuthSock?.source).not.toBe("bridge");
     } finally {
       await new Promise<void>((resolve) => foreignListener.close(() => resolve()));
     }
+  });
+});
+
+describe("shouldCrashOnBridgeSocketBindFailure (#873 PR-B, mullion-reviewer self-review)", () => {
+  // Pulled out of the plugin body specifically so the actually-dangerous
+  // case — a race between ptyPlugin's preflight and sshAgentPlugin's own
+  // bind, which the app-boot tests above can't deterministically reproduce
+  // (it requires something to bind in a microseconds-wide window between two
+  // async steps within the same plugin registration) — is directly testable
+  // against fake errors instead.
+  it("crashes (returns true) on a collision when the bridge tier was already frozen into every session", () => {
+    expect(
+      shouldCrashOnBridgeSocketBindFailure(
+        new SocketAlreadyListeningError("/tmp/x.sock", "live"),
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("crashes on an EADDRINUSE race during server.listen() too, not just reclaimSocketPath's own error type", () => {
+    const err = Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" });
+    expect(shouldCrashOnBridgeSocketBindFailure(err, true)).toBe(true);
+  });
+
+  it("degrades (returns false) on the exact same collision when the preflight already excluded the bridge tier — nothing depends on this bind succeeding", () => {
+    expect(
+      shouldCrashOnBridgeSocketBindFailure(
+        new SocketAlreadyListeningError("/tmp/x.sock", "live"),
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it("degrades on a non-collision failure (e.g. EACCES) even when the bridge tier was frozen — nothing is actually listening there", () => {
+    const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    expect(shouldCrashOnBridgeSocketBindFailure(err, true)).toBe(false);
+  });
+
+  it("degrades on a non-Error thrown value regardless of the flag", () => {
+    expect(shouldCrashOnBridgeSocketBindFailure("not an error", true)).toBe(false);
   });
 });

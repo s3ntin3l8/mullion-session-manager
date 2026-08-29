@@ -36,18 +36,25 @@ pairing serves **every** enrolled agent host — there's no per-host tunnel to
 set up or keep alive, and enrolling a new agent host later needs no laptop-
 side change at all.
 
-Only two request types are ever relayed: listing loaded identities
-(`SSH_AGENTC_REQUEST_IDENTITIES` — what `ssh-add -l` sends) and signing
-(`SSH_AGENTC_SIGN_REQUEST`). Everything else — adding, removing, or locking
-keys — is dropped before it reaches your laptop's agent. A compromised or
-malicious primary can therefore see which keys are loaded and ask them to
-sign, exactly like `ssh -A` already permits, but cannot mutate the agent or
-extract private key material.
+For sessions on an **agent host**, only two request types are ever relayed
+onward: listing loaded identities (`SSH_AGENTC_REQUEST_IDENTITIES` — what
+`ssh-add -l` sends) and signing (`SSH_AGENTC_SIGN_REQUEST`). Everything else
+— adding, removing, or locking keys — is dropped before it reaches your
+laptop's agent. A compromised or malicious primary can therefore see which
+keys are loaded and ask them to sign, exactly like `ssh -A` already permits,
+but cannot mutate the agent or extract private key material this way.
 
-Today the bridge supplies `SSH_AUTH_SOCK` to sessions on **agent hosts**
-only. A session running directly on the primary host itself doesn't get a
-bridge-backed socket yet — use the manual tunnel below for that case, or the
-primary's own ambient `SSH_AUTH_SOCK` if it has one.
+**Sessions on the primary itself are not filtered this way** — the sign-only
+check happens as traffic crosses from an agent host's different trust domain
+onto the primary; a session on the primary already runs as the primary, so
+there's no boundary left to enforce there. This is not a new capability: it's
+the same access a manual `ssh -R` tunnel already grants a primary-local
+session today (every message type, unfiltered). If you want the mutating
+request types blocked for primary-local sessions specifically, that's not
+built yet — see [issue #873](https://github.com/s3ntin3l8/mullion-session-manager/issues/873).
+
+The bridge supplies `SSH_AUTH_SOCK` to sessions on **both** agent hosts and
+the primary itself — each materializes its own local bridge socket.
 
 ### Pairing
 
@@ -73,8 +80,8 @@ primary's own ambient `SSH_AUTH_SOCK` if it has one.
    This is a long-running foreground process — supervise it the same way you
    would the manual tunnel's `ssh -R` (see [Keeping it
    running](#keeping-it-running) below). Once it's up, Settings shows the
-   bridge as `connected`, and any session on any enrolled agent host has a
-   working `SSH_AUTH_SOCK` from that point on.
+   bridge as `connected`, and any session on any enrolled agent host — or on
+   the primary itself — has a working `SSH_AUTH_SOCK` from that point on.
 
 ### Getting `mullion helper` onto your laptop
 
@@ -190,7 +197,7 @@ it hasn't expired yet.
 
 | Settings shows...      | Meaning                                                                                                                                                                                                                                                                                                                               |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connected`            | The helper's `run` process is currently connected. Sessions on any enrolled agent host can sign.                                                                                                                                                                                                                                      |
+| `connected`            | The helper's `run` process is currently connected. Sessions on any enrolled agent host, or on the primary itself, can sign.                                                                                                                                                                                                           |
 | `pairing pending`      | A pairing code was issued but `mullion helper pair` hasn't redeemed it yet — or it already expired (10 minutes) and needs a fresh one.                                                                                                                                                                                                |
 | `session expired`      | The 24h credential from pairing has hit its fixed deadline (see [Credential storage](#credential-storage) — reconnecting doesn't extend it), or `run` simply isn't running / can't reach the primary within that window. Re-pair with a fresh payload from Settings; restarting `run` alone won't fix an actually-expired credential. |
 | `last seen <time> ago` | Paired, not currently connected, still within the 24h window. Restart `mullion helper run` if it's not running — no re-pair needed yet.                                                                                                                                                                                               |
@@ -495,14 +502,18 @@ very differently:
 
 ## Security notes
 
-- **Bridge**: only listing loaded identities and signing are relayed — the
-  primary and any agent host can ask your laptop's agent which keys are
-  loaded and to sign with them, but never to add, remove, lock, or export
-  keys. A live bridge is reachable by every enrolled agent host's sessions
-  for as long as it's connected, same exposure shape as the manual tunnel
-  below. **Revoking a bridge from Settings takes effect immediately** — the
-  live connection is closed as part of the same request, not on next
-  reconnect.
+- **Bridge**: for traffic relayed from an **agent host**, only listing
+  loaded identities and signing cross onto the primary — never add, remove,
+  lock, or export. For a session running **on the primary itself**, that
+  filter doesn't apply: the primary is already the trust boundary the filter
+  exists to protect, so there's nothing left to enforce against its own
+  traffic, and it can reach every request type — the same access a manual
+  `ssh -R` tunnel already grants a primary-local session today, not a new
+  capability. A live bridge is reachable by every enrolled agent host's
+  sessions, and the primary's own, for as long as it's connected, same
+  exposure shape as the manual tunnel below. **Revoking a bridge from
+  Settings takes effect immediately** — the live connection is closed as
+  part of the same request, not on next reconnect.
 - **Manual tunnel**: the forwarded socket is a **remote signing oracle** for
   as long as it's connected: anything that can open it can authenticate as
   you to every host your key trusts. The socket itself is created mode

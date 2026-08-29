@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { materializeSshAgentSocket, sshAgentSocketPath } from "../services/ssh-agent-socket.js";
 import { pickBridge } from "../services/ssh-agent-fanout.js";
+import { SocketAlreadyListeningError } from "../services/unix-socket.js";
 import type { MuxConnection, MuxChannel } from "../services/ssh-agent-mux.js";
 
 // Issue #820 — the agent-host half of the bridge: materializes the local
@@ -32,6 +33,29 @@ import type { MuxConnection, MuxChannel } from "../services/ssh-agent-mux.js";
 // doesn't need agentBridgePlugin to have registered first (src/app.ts's
 // own ordering comment for agentBridgePlugin covers routes that read it
 // eagerly; this isn't one).
+/**
+ * Self-review (mullion-reviewer, PR #877) — the crash-vs-degrade decision
+ * for a bridge-socket bind failure, pulled out of the plugin body so it's
+ * directly unit-testable against fake errors and both flag values, without
+ * needing a real socket race (which the plugin itself can't deterministically
+ * reproduce in a test). See the plugin body's own call site for the full
+ * reasoning; short version: `sshAuthSockBridgeExpected` (plugins/pty.ts) is
+ * `true` only when PtyManager already froze "bridge" into every session's
+ * `SSH_AUTH_SOCK` for this boot — a *collision*-type failure at that point
+ * (something else is genuinely listening, or raced into `EADDRINUSE`) would
+ * hand those sessions to a process this host doesn't own, so it must crash
+ * rather than degrade. Any other combination is safe to degrade.
+ */
+export function shouldCrashOnBridgeSocketBindFailure(
+  err: unknown,
+  sshAuthSockBridgeExpected: boolean,
+): boolean {
+  const isCollision =
+    err instanceof SocketAlreadyListeningError ||
+    (err as NodeJS.ErrnoException | undefined)?.code === "EADDRINUSE";
+  return isCollision && sshAuthSockBridgeExpected;
+}
+
 export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   const isAgent = app.config.MULLION_ROLE === "agent";
 
@@ -77,23 +101,46 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   // throw out of plugin registration and crash the whole process at boot,
   // with no bridge-specific log line identifying the cause. The bridge
   // socket is an optional convenience layer (unlike hooks.sock/mullion.sock,
-  // which are load-bearing and correctly crash-on-collision) — degrade
-  // instead: log loudly, boot without a bridge-backed SSH_AUTH_SOCK on this
-  // host. `resolveSshAuthSock`'s own consumer (plugins/pty.ts) runs a
-  // preflight probe at the SAME path before this plugin registers, so the
-  // common case (a live foreign listener already there) is already
-  // reflected in what got frozen into PtyManager; this catch handles the
-  // residual cases the preflight can't fully close (a race between the
-  // preflight and this bind, or a non-listener failure like EACCES).
+  // which are load-bearing and correctly crash-on-collision), so most bind
+  // failures here should degrade rather than crash. But NOT all of them —
+  // see the mullion-reviewer finding on PR #877 this comment documents the
+  // fix for.
+  //
+  // `plugins/pty.ts`'s own preflight probe runs at this exact path moments
+  // earlier, BEFORE PtyManager freezes its per-session sshAuthSock. If that
+  // probe already found the path occupied, it already excluded the bridge
+  // tier (`app.sshAuthSockBridgeExpected === false`) — nothing depends on
+  // this bind succeeding, so ANY failure here (including hitting the exact
+  // same occupant again) is harmless and safe to degrade-log.
+  //
+  // But if the preflight found the path genuinely dead
+  // (`sshAuthSockBridgeExpected === true`), PtyManager has ALREADY frozen
+  // "bridge" + this exact path into every session on this host — a
+  // decision that can't be un-frozen from here. If THIS bind then hits a
+  // live occupant (`SocketAlreadyListeningError`, or `EADDRINUSE` racing in
+  // during `server.listen()` itself), something grabbed the path in the
+  // narrow window between the preflight and this call — every already-
+  // frozen session would be handed to a process this host doesn't own: a
+  // signing-oracle handoff, strictly worse than the crash this replaces.
+  // Re-throw in that specific case — this crash is correct, safe behavior
+  // (identical to what ran before this PR), not a regression to eliminate.
+  // A non-collision failure (EACCES on an unlink, resource exhaustion, ...)
+  // still degrades even when `sshAuthSockBridgeExpected` is true: nothing
+  // is actually LIVE at the path in that case, so a frozen "bridge" session
+  // just fails safely as `Connection refused`, same as the documented
+  // "dangling socket" behavior everywhere else in this feature.
   let handle: Awaited<ReturnType<typeof materializeSshAgentSocket>> | null = null;
   try {
     handle = await materializeSshAgentSocket({ socketPath, openChannel });
   } catch (err) {
+    if (shouldCrashOnBridgeSocketBindFailure(err, app.sshAuthSockBridgeExpected)) {
+      throw err;
+    }
     app.log.error(
-      { err, socketPath },
-      "failed to materialize the local ssh-agent bridge socket — this process will boot " +
-        "without a bridge-backed SSH_AUTH_SOCK; sessions here fall through to any lower-" +
-        "precedence source (see resolveSshAuthSock)",
+      { err, socketPath, sshAuthSockBridgeExpected: app.sshAuthSockBridgeExpected },
+      "failed to materialize the local ssh-agent bridge socket — nothing is listening at " +
+        "this path, so sessions here fail safely as a dangling socket (Connection refused) " +
+        "rather than reaching any live process",
     );
   }
 
