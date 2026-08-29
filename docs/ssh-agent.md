@@ -85,11 +85,35 @@ the primary itself — each materializes its own local bridge socket.
 
 ### Getting `mullion helper` onto your laptop
 
-`mullion helper` is one of the `mullion` CLI's subcommands (see
-[`cli.md`](cli.md#helper)), but it's specifically designed to need no local
-Mullion install and no npm — it only touches Node builtins and a handful of
-small sibling files, nothing from `node_modules`. Two ways to get it
-running:
+**On Windows**, download `mullion-helper-setup-<version>.exe` from the
+latest [GitHub release](https://github.com/s3ntin3l8/mullion-session-manager/releases)
+and run it — no Node install, no terminal. The installer:
+
+- runs entirely as your own user (no admin prompt — it deliberately never
+  asks for elevation; see [Keeping it running](#keeping-it-running) below
+  for why that matters);
+- asks for your pairing payload on one wizard page (paste it from
+  **Settings → Hosts → SSH agent bridges**, or leave it blank and pair
+  later — see [Pairing](#pairing) above for where the payload comes from);
+- installs to `%LOCALAPPDATA%\Mullion\mullion-helper.exe` and registers the
+  Scheduled Task for you, both in the same step — there is no separate
+  `install` command to run afterward.
+
+The download is currently **unsigned** — Windows SmartScreen will show
+"Windows protected your PC"; click **More info → Run anyway**. A
+code-signing certificate is planned as part of the future native tray app,
+not this reference installer. If you'd rather run the bare `.exe` yourself
+(no installer, no Scheduled Task), or automate an install without the
+wizard (`mullion-helper-setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`,
+the same invocation CI itself uses to verify every release), see
+[`cli.md`](cli.md#helper) for the raw `mullion helper <verb>` commands the
+installer runs on your behalf.
+
+**On macOS or Linux**, `mullion helper` is one of the `mullion` CLI's
+subcommands (see [`cli.md`](cli.md#helper)), specifically designed to need
+no local Mullion install and no npm — it only touches Node builtins and a
+handful of small sibling files, nothing from `node_modules`. Two ways to
+get it running:
 
 - **From a release tarball** (typical for a laptop with no Mullion checkout).
   Every GitHub release publishes `mullion-<version>.tgz` plus a
@@ -124,6 +148,11 @@ for you on **macOS, Linux, and Windows**:
 mullion helper install --ssh-auth-sock "$SSH_AUTH_SOCK"
 ```
 
+(On Windows, the [installer](#getting-mullion-helper-onto-your-laptop)
+already runs this step for you — `--ssh-auth-sock` isn't even needed there,
+since it defaults to the real pipe path; this command is for macOS/Linux, or
+for running the bare `mullion-helper.exe` yourself without the installer.)
+
 This generates and registers a launchd job (`~/Library/LaunchAgents/de.s3ntin3l8.mullion-helper.plist`),
 a systemd `--user` unit (`~/.config/systemd/user/mullion-helper.service`), or
 a Windows Scheduled Task (`MullionHelper`, registered from a generated
@@ -133,22 +162,34 @@ install (new `--ssh-auth-sock`, moved checkout, ...) rather than erroring
 over an already-loaded job — `schtasks /Create /F` is unconditionally
 idempotent, so Windows doesn't even need the explicit pre-teardown step the
 other two platforms do. `mullion helper uninstall` stops and removes it
-again — a no-op, not an error, if nothing is installed. On Linux, also run
-`loginctl enable-linger $(whoami)` so the unit survives logout, the same
-requirement the manual tunnel's own [systemd
+again — a no-op, not an error, if nothing is installed (the installer's own
+uninstaller, from **Settings → Apps** or `unins000.exe` in the install
+folder, runs this for you first, before removing the exe itself). On Linux,
+also run `loginctl enable-linger $(whoami)` so the unit survives logout, the
+same requirement the manual tunnel's own [systemd
 section](#linux-systemd---user) below has.
 
-**Windows note:** `install`/`uninstall` are implemented but have no local
-verification path (no way to run `schtasks.exe` from Linux-only CI/dev) —
-same caveat the macOS/Linux generators carried before their own first
-real-machine test; tracked at [issue
-#871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
+**Windows verification status:** every release's `install`/`uninstall` path
+and the installer itself are exercised for real in CI on a `windows-latest`
+runner (`.github/workflows/ci-cd.yml`'s `test-windows` job) — a genuine
+`schtasks.exe` round trip, and the installer's own silent install/uninstall
+(`/VERYSILENT /SUPPRESSMSGBOXES`), confirming the exe lands, the Scheduled
+Task registers, and both remove the exe and the task again on uninstall.
+**Uninstalling does not remove your last pairing credential** — it's left
+at `%LOCALAPPDATA%\Mullion\ssh-agent-bridge.json`, the same as `mullion
+helper uninstall` alone does on every platform (tracked at [issue
+#904](https://github.com/s3ntin3l8/mullion-session-manager/issues/904));
+revoke the bridge from Settings if you want that credential invalidated
+rather than just idle.
 1Password's Windows named pipe accepting the mux's concurrent-channel shape
-is confirmed working ([issue
-#874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874),
+is confirmed working too
+([issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874),
 closed): 8 and 16 simultaneous connections each round-tripped correctly.
 `--ssh-auth-sock` defaults to `\\.\pipe\openssh-ssh-agent` on Windows if not
-given explicitly — pass it only to override.
+given explicitly — pass it only to override. What CI _can't_ cover — a real
+interactive logon actually firing the Scheduled Task, and a real signature
+flowing end to end through a live 1Password agent — is tracked at [issue
+#871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
 
 **Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
 above. Neither `launchd`, `systemd --user`, nor a Windows Scheduled Task
