@@ -150,9 +150,12 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
       }
       app.log.error(
         { err, socketPath },
-        "failed to materialize the local ssh-agent bridge socket — nothing is listening at " +
-          "this path, so sessions here fail safely as a dangling socket (Connection refused) " +
-          "rather than reaching any live process",
+        "failed to materialize the local ssh-agent bridge socket — plugins/pty.ts's own " +
+          "preflight probe found this path clear moments earlier (sessions on this host are " +
+          "already frozen to the bridge tier at this exact path), so this is a genuine, " +
+          "non-collision bind failure, not a race; nothing is listening at this path, so " +
+          "sessions here fail safely as a dangling socket (Connection refused) rather than " +
+          "reaching any live process",
       );
     }
   }
