@@ -194,6 +194,17 @@ function handshake(ws, message) {
 // a genuine hardening (a misbehaving primary or a hand-edited credential
 // file is rejected outright, not blindly trusted) and the sanitizing gate
 // these queries are designed to recognize.
+//
+// Round 3 (session renewal) adds two more instances of these SAME two
+// flows, not new ones: renewSession's own fetch() call sends
+// credential.bridgeId/sessionId (loaded from disk, or persisted from an
+// earlier successful handshake) in an outbound request — the js/file-
+// access-to-http shape, identical reasoning to runRun's handshake below —
+// and saveCredential's own writeFileSync is now also reached from
+// renewSession's rotated session_id/expires_at and runRun's synced
+// ready.expires_at, both validated with the SAME isValidSessionToken/
+// isValidExpiresAt gates before ever reaching this function — the js/
+// http-to-file-access shape, identical reasoning to runPair's call below.
 const BRIDGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_TOKEN_RE = /^[0-9a-f]{64}$/i;
 
@@ -278,8 +289,8 @@ export function loadCredential(io) {
 // for the life of a long-running `run`, the same risk compounds enough to
 // be worth the two extra syscalls. `fs.renameSync` within the SAME
 // directory is atomic on every platform this ships for (POSIX rename(2);
-// Windows MoveFileEx without COPY_ALLOWED, which NTFS/ReFS honor for a
-// same-volume rename) — a reader (this same process's own next
+// Windows MoveFileExW with MOVEFILE_REPLACE_EXISTING for a same-volume
+// rename) — a reader (this same process's own next
 // loadCredential, or a human `cat`-ing the file) always sees either the
 // old, fully-written credential or the new one, never a partial write.
 function saveCredential(io, credential) {
@@ -288,6 +299,9 @@ function saveCredential(io, credential) {
   const file = credentialPath(io);
   const tmpFile = `${file}.${process.pid}.tmp`;
   try {
+    // CodeQL js/http-to-file-access — see the "Accepted risk" comment near
+    // loadCredential above; every caller (runPair, runRun, renewSession)
+    // validates the server-derived fields it passes here first.
     fs.writeFileSync(tmpFile, `${JSON.stringify(credential, null, 2)}\n`, { mode: 0o600 });
     fs.chmodSync(tmpFile, 0o600);
     fs.renameSync(tmpFile, file);
@@ -491,6 +505,9 @@ async function runRun(args, io) {
     if (stopped) return;
     const current = credential;
     try {
+      // CodeQL js/file-access-to-http — see the "Accepted risk" comment
+      // near loadCredential above; same shape, same reasoning as runRun's
+      // own handshake call below.
       const res = await fetch(toHttpUrl(current.baseUrl, "/api/bridges/renew"), {
         method: "POST",
         headers: { "content-type": "application/json" },

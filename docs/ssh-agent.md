@@ -210,6 +210,16 @@ for a revoke) stops being valid, and only a fresh `mullion helper pair`
 payload from Settings fixes that — restarting `run` alone won't revive an
 actually-dead credential.
 
+**The security boundary this creates**: `session_id` is the sole bearer
+credential both to reconnect (`auth`) and to renew (`POST
+/api/bridges/renew`) — there's no second factor, and renewal is precisely
+what makes automatic re-pairing unnecessary. A leaked `session_id` therefore
+stays usable indefinitely as long as _something_ keeps renewing it before
+each 24h deadline, not just for the TTL it was issued with. Treat the
+credential file the same way you'd treat any other long-lived bearer token
+(`~/.ssh/id_*`, an API key) — if you suspect it's been exposed, revoke the
+bridge from Settings rather than waiting for it to expire on its own.
+
 ### Revoking
 
 Settings → Hosts → SSH agent bridges → **Revoke** on a bridge's row closes
