@@ -662,6 +662,13 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
     }, 5000);
     expect(app.connectedBridges.has(credential.bridgeId)).toBe(true);
     expect(runIo.stderrLines.join("")).not.toContain("session no longer valid");
+    // Round 4 (issue #820) — without --json-events, stdout must stay
+    // completely untouched, even though this run genuinely connects (which
+    // would emit a `connected` event under the flag): a supervisor that
+    // treats `run`'s stdout as always-empty today must not start seeing
+    // surprise NDJSON mixed in just because a later refactor accidentally
+    // inverted or dropped the --json-events guard.
+    expect(runIo.stdoutLines).toEqual([]);
 
     runIo.triggerInterrupt();
     app.connectedBridges.get(credential.bridgeId)!.mux.close();
