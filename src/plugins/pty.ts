@@ -8,7 +8,11 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
-import { resolveSshAuthSock, materializesBridgeSocket } from "../services/ssh-agent-socket.js";
+import {
+  resolveSshAuthSock,
+  materializesBridgeSocket,
+  describeBridgeShadowing,
+} from "../services/ssh-agent-socket.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 
@@ -160,14 +164,53 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // directly instead, since sshAgentPlugin registers after ptyPlugin — see
   // that function's own comment for why this is a shared predicate rather
   // than an inline role check repeated at every call site.
+  // Computed once and threaded through both calls below — resolveSshAuthSock
+  // and describeBridgeShadowing must agree on this exact value, since the
+  // latter's `null`-vs-shadow branching assumes it matches what actually
+  // produced `resolvedSshAuthSock` (mullion-reviewer, PR #875 self-review).
+  const willMaterializeBridgeSocket = materializesBridgeSocket(app.config.MULLION_ROLE);
+  // Captured once so the shadow-warning log below describes the exact same
+  // inputs that produced `resolvedSshAuthSock`, rather than re-reading
+  // process.env.SSH_AUTH_SOCK a second time (Hermes review, PR #875) — the
+  // two calls are otherwise a hair's-width apart in time, but "describes
+  // what actually happened" shouldn't depend on that gap staying empty.
+  const ambientSshAuthSock = process.env.SSH_AUTH_SOCK;
+  const resolvedSshAuthSock = resolveSshAuthSock({
+    configured: app.config.MULLION_SSH_AUTH_SOCK,
+    ambient: ambientSshAuthSock,
+    materializesBridgeSocket: willMaterializeBridgeSocket,
+    sessionsDir,
+  });
+  // Post-ship audit follow-up (#873) — the missing breadcrumb: without this,
+  // a paired bridge can sit shadowed by `configured`/`ambient` with nothing
+  // anywhere saying so. See describeBridgeShadowing's own doc comment.
+  const shadowing = describeBridgeShadowing(resolvedSshAuthSock, {
+    materializesBridgeSocket: willMaterializeBridgeSocket,
+    sessionsDir,
+  });
+  if (shadowing) {
+    // `resolvedSshAuthSock.path` is "" in the `ambient` case by design
+    // (resolveSshAuthSock's own doc comment: "" means "don't touch it," a
+    // correct *injection* decision) — but this is a *diagnostic*, and an
+    // operator debugging "why isn't my paired bridge used" needs the actual
+    // winning path, not a placeholder. Reuse the exact `ambientSshAuthSock`
+    // value already passed as `resolveSshAuthSock`'s `ambient` argument
+    // above, rather than re-reading process.env; nothing sensitive here that
+    // buildAgentConfig's own Settings diagnostic doesn't already surface
+    // unredacted.
+    const winningPath =
+      shadowing.shadowedBy === "ambient"
+        ? (ambientSshAuthSock ?? "(unset)")
+        : resolvedSshAuthSock.path;
+    app.log.warn(
+      { shadowedBy: shadowing.shadowedBy, bridgePath: shadowing.bridgePath, winningPath },
+      "this host materializes an ssh-agent bridge socket, but SSH_AUTH_SOCK resolves via a higher-precedence source — a paired bridge will not be used by sessions here until that source is removed",
+    );
+  }
+
   const manager = new PtyManager({
     sessionsDir,
-    sshAuthSock: resolveSshAuthSock({
-      configured: app.config.MULLION_SSH_AUTH_SOCK,
-      ambient: process.env.SSH_AUTH_SOCK,
-      materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
-      sessionsDir,
-    }).path,
+    sshAuthSock: resolvedSshAuthSock.path,
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),

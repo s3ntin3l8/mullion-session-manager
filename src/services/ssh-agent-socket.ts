@@ -154,6 +154,53 @@ export function resolveSshAuthSock(opts: {
   return { path: "", source: "none" };
 }
 
+/**
+ * Issue #820 follow-up (post-ship audit) — `resolveSshAuthSock`'s precedence
+ * (configured > ambient > bridge) is deliberate and correct (see that
+ * function's own doc comment / PR #865), but it means a host that
+ * materializes a bridge socket can have `source` land on `configured` or
+ * `ambient` with nothing anywhere saying so: Settings can show a paired
+ * bridge as reachable while every session on this host actually uses a
+ * different agent, and there is no breadcrumb connecting the two. This is
+ * the missing breadcrumb — a pure description of the shadowing, so the
+ * caller (plugins/pty.ts) can log it once at boot without this module
+ * needing to know anything about `app.log`.
+ *
+ * Returns `null` when nothing is shadowed: either this process doesn't
+ * materialize a bridge socket at all, or `resolved.source` is already
+ * `"bridge"`. Note `resolved.source` can never be `"none"` when
+ * `materializesBridgeSocket` is true (see `resolveSshAuthSock`), so the two
+ * remaining cases are exactly `"configured"` and `"ambient"`.
+ */
+export function describeBridgeShadowing(
+  resolved: { path: string; source: SshAuthSockSource },
+  opts: { materializesBridgeSocket: boolean; sessionsDir: string },
+): { bridgePath: string; shadowedBy: "configured" | "ambient" } | null {
+  if (!opts.materializesBridgeSocket) return null;
+  // Checked switch rather than an `as` cast on `resolved.source` (Hermes
+  // review, PR #875) — `resolved` and `opts.materializesBridgeSocket` are
+  // two independent arguments a caller could in principle pass out of sync
+  // (e.g. `resolved` computed with `materializesBridgeSocket: false`, then
+  // this function called with `true`), which would make `"none"` reach here
+  // despite the doc comment's invariant. A cast would silently mislabel that
+  // as `shadowedBy: "none"` cast to a narrower type; this throws instead, so
+  // a future 5th `SshAuthSockSource` variant (or a caller bug) fails loudly
+  // rather than producing a bogus warning.
+  switch (resolved.source) {
+    case "bridge":
+      return null;
+    case "configured":
+    case "ambient":
+      return { bridgePath: sshAgentSocketPath(opts.sessionsDir), shadowedBy: resolved.source };
+    case "none":
+      throw new Error(
+        'describeBridgeShadowing: resolved.source is "none" but materializesBridgeSocket ' +
+          "is true — resolved and opts are out of sync (see resolveSshAuthSock's own " +
+          "invariant: this combination should be unreachable).",
+      );
+  }
+}
+
 async function handleConnection(
   socket: net.Socket,
   openChannel: () => Promise<MuxChannel | null>,
