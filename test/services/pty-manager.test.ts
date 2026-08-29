@@ -5658,6 +5658,39 @@ describe("PtyManager", () => {
       expect(session.toInfo()).toMatchObject({ gateState: "approved", gatePrompt: null });
     });
 
+    it("a genuine keystroke does NOT clear a waiting review_gate's attention badge, unlike hookNotification (concurrent-gates investigation)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "review_gate",
+        state: "waiting",
+        prompt: "git worktree add …",
+      });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", attention: true });
+
+      // Simulates the user answering a DIFFERENT, concurrently fallen-
+      // through native prompt in the terminal (issue: two PermissionRequest
+      // hooks fire for the same session; hooks.ts's single-gate-per-session
+      // bookkeeping lets only one become a Mullion gate, the other falls
+      // through to the agent's own dialog). That keystroke is genuine user
+      // input, but it did not answer THIS gate — gateState must stay
+      // "waiting" and the badge must stay raised until a real
+      // resolveGate() (approve/deny/timeout/lapse/stale-sweep).
+      session.write("y");
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", attention: true });
+
+      // A real decision is still the thing that clears it.
+      session.resolveGate("approved");
+      expect(session.toInfo()).toMatchObject({ gateState: "approved", attention: false });
+    });
+
     it("permission_request state clears on progress:done", async () => {
       const session = manager.getOrCreate({
         id: "1",
