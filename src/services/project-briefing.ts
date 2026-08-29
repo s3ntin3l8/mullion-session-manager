@@ -183,6 +183,23 @@ export function buildSessionBriefingContent(body: string, sourcePath: string): s
  * otherwise the opencode adapter's existsSync check would keep pointing at
  * last week's briefing.
  *
+ * `override`, when present, WINS over `resolveProjectBriefing(cwd)` —
+ * repo-authored wins by default; a caller that wants a project's own
+ * `AGENTS.md`/`CLAUDE.md` region to keep taking precedence simply never
+ * passes one. The clamp, header, 0600 write, and stale-copy unlink below
+ * are unchanged either way; only which body/sourcePath feeds them differs.
+ * `CANDIDATES`/`resolveProjectBriefing`'s own file-only, first-match-wins
+ * contract (and its `O_NOFOLLOW`/realpath containment) is not touched by
+ * this at all — an override is caller-supplied text, not a file this
+ * function reads off disk, so none of those disk-read guards apply to it or
+ * need to. Exists so a future producer (a DB-backed per-project briefing,
+ * resolved on the primary where the DB lives) has a channel that also
+ * works on a multi-host **agent**-role process, which has no DB of its own
+ * — see `src/plugins/hooks.ts`'s `app.db ? ... : DEFAULT_SETTINGS` comment
+ * for the same constraint on `injectAgentGuide`. This PR wires the channel
+ * only; nothing produces an override yet — see this plan's own PR-4 for the
+ * per-project storage and UI that will.
+ *
  * Every failure logged-and-swallowed: this must never block a spawn.
  */
 export function writeSessionBriefing(
@@ -190,9 +207,12 @@ export function writeSessionBriefing(
   sessionId: string,
   cwd: string,
   log: { error: (obj: unknown, msg: string) => void } = console,
+  override?: { body: string; sourceLabel: string },
 ): void {
   const destPath = sessionBriefingPath(sessionsDir, sessionId);
-  const resolved = resolveProjectBriefing(cwd);
+  const resolved = override
+    ? { sourcePath: override.sourceLabel, body: override.body }
+    : resolveProjectBriefing(cwd);
   if (!resolved) {
     try {
       unlinkSync(destPath);

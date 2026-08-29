@@ -77,6 +77,7 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
             maxProperties: 16,
             additionalProperties: { type: "string", maxLength: 256 },
           },
+          briefingOverride: { type: "string", maxLength: 8192 },
         },
       },
     });

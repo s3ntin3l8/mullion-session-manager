@@ -1600,6 +1600,7 @@ export async function internalRoutes(app: FastifyInstance) {
         seedPrompt,
         projectId,
         env,
+        briefingOverride,
       } = request.body;
       app.pty.getOrCreate({
         id,
@@ -1612,6 +1613,7 @@ export async function internalRoutes(app: FastifyInstance) {
         seedPrompt,
         projectId,
         env,
+        briefingOverride,
       });
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's

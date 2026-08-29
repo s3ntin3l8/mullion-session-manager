@@ -60,6 +60,11 @@ export interface SessionBackend {
     // (session-lifecycle.ts). Forwarded to a remote host verbatim
     // (RemoteBackend.spawn below), unlike resumeAgentSessionId.
     env?: Record<string, string>;
+    // Issue: per-project briefing storage (a follow-up PR) — see
+    // CreateSessionOptions.briefingOverride's own doc comment
+    // (pty-manager.ts). Forwarded to a remote host verbatim
+    // (RemoteBackend.spawn below), same as seedPrompt/env.
+    briefingOverride?: string;
   }): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
@@ -251,6 +256,7 @@ class LocalBackend implements SessionBackend {
     resumeAgentSessionId?: string;
     projectId?: number;
     env?: Record<string, string>;
+    briefingOverride?: string;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
     // throw synchronously (getOrCreate() is sync by design; a spawn failure
@@ -447,6 +453,7 @@ class RemoteBackend implements SessionBackend {
     resumeAgentSessionId?: string;
     projectId?: number;
     env?: Record<string, string>;
+    briefingOverride?: string;
   }): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment

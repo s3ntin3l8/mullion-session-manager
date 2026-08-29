@@ -194,6 +194,11 @@ export interface SessionTarget {
   // "meaningless for openAttach" posture as initialPrompt above — attaching
   // never re-spawns, so there's nothing to inject context into here).
   seedPrompt?: string;
+  // Issue: per-project briefing storage (a follow-up PR) — for spawn() only,
+  // same "meaningless for openAttach" posture as seedPrompt immediately
+  // above. See CreateSessionOptions.briefingOverride's own doc comment
+  // (pty-manager.ts) for the full multi-host reasoning this exists for.
+  briefingOverride?: string;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
