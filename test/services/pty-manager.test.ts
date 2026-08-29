@@ -5658,6 +5658,72 @@ describe("PtyManager", () => {
       expect(session.toInfo()).toMatchObject({ gateState: "approved", gatePrompt: null });
     });
 
+    it("a genuine keystroke does NOT clear a waiting review_gate's attention badge, unlike hookNotification (concurrent-gates investigation)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "review_gate",
+        state: "waiting",
+        prompt: "git worktree add …",
+      });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", attention: true });
+
+      // Simulates the user answering a DIFFERENT, concurrently fallen-
+      // through native prompt in the terminal (issue: two PermissionRequest
+      // hooks fire for the same session; hooks.ts's single-gate-per-session
+      // bookkeeping lets only one become a Mullion gate, the other falls
+      // through to the agent's own dialog). That keystroke is genuine user
+      // input, but it did not answer THIS gate — gateState must stay
+      // "waiting" and the badge must stay raised until a real
+      // resolveGate() (approve/deny/timeout/lapse/stale-sweep).
+      session.write("y");
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", attention: true });
+
+      // A real decision is still the thing that clears it.
+      session.resolveGate("approved");
+    });
+
+    it("a genuine keystroke DOES clear the badge when a newer immune kind has superseded reviewGate as confirmedKind, even though gateState still reads 'waiting' underneath it (Hermes review, PR #910)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "x" });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", attentionKind: "reviewGate" });
+
+      // A promote_request is a second, unrelated immune kind — it
+      // supersedes reviewGate as the currently-CONFIRMED kind (both settle
+      // at 0ms, same as reviewGate), while gateState stays "waiting"
+      // underneath it: the original gate hasn't been resolved, it's simply
+      // no longer what's confirmed.
+      session.emitHookEvent({ kind: "promote_request", summary: "start work" });
+      expect(session.toInfo()).toMatchObject({
+        gateState: "waiting",
+        attentionKind: "promoteRequest",
+      });
+
+      // A genuine keystroke here is answering the PROMOTE prompt, not the
+      // stale gate — must clear its badge, not be blocked by the unrelated
+      // gate still pending in the background.
+      session.write("y");
+      expect(session.toInfo().attention).toBe(false);
+      // The gate itself is untouched by this keystroke — still genuinely
+      // waiting, just no longer the confirmed badge.
+      expect(session.toInfo().gateState).toBe("waiting");
+    });
+
     it("permission_request state clears on progress:done", async () => {
       const session = manager.getOrCreate({
         id: "1",

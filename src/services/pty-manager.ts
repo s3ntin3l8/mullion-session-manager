@@ -2931,10 +2931,41 @@ export class Session {
     // strictly than, lastUserInputAt above. A no-op for every other
     // confirmedKind and for idle/pending states (advanceAttention's
     // "userInput" cases).
+    //
     if (isGenuineUserInput(data)) {
-      this.attention.applyAttentionTransition(
-        advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
-      );
+      // EXCEPT the attention-clearing itself while gateState === "waiting"
+      // (concurrent-gates investigation, live session 566 on branchDAM): a
+      // genuine keystroke here is only "authoritative" for THIS gate if
+      // it's actually answering the prompt Mullion is holding. When
+      // Codex/Claude Code fire a second concurrent PermissionRequest,
+      // hooks.ts's single-gate-per-session bookkeeping lets the second one
+      // fall through to the agent's own native prompt while this one stays
+      // parked — a keystroke answering that fallen-through prompt is
+      // genuine user input, but it answers a DIFFERENT tool call, so it
+      // must not silently clear the pointer to a gate Mullion is still
+      // waiting on a real decision for. That gate's badge (and the "Action
+      // Required" title) may only clear via resolveGate() — a real
+      // approve/deny, a timeout, a lapse, or the stale sweep — never via a
+      // stray keystroke.
+      //
+      // Hermes review, PR #910 — ALSO requires confirmedKind ===
+      // "reviewGate", not just gateState === "waiting": those two are set
+      // together when a gate first raises the badge, but a LATER, more
+      // authoritative immune kind (e.g. promoteRequest) can supersede
+      // confirmedKind via moreAuthoritativeKind while gateState stays
+      // "waiting" underneath it (the gate itself hasn't resolved, it's
+      // just no longer what's confirmed). Without this, a keystroke
+      // genuinely answering that NEWER prompt would be wrongly blocked
+      // from clearing its own badge just because an unrelated gate is
+      // still pending somewhere in the background. Every OTHER side effect
+      // of a genuine keystroke below (lastTurnEndedAt, backgroundTasks,
+      // errorState) is unrelated to either and still applies
+      // unconditionally.
+      if (!(this.gateState === "waiting" && this.attention.state.confirmedKind === "reviewGate")) {
+        this.attention.applyAttentionTransition(
+          advanceAttention(this.attention.state, { type: "userInput", now: Date.now() }),
+        );
+      }
       // Rich statuses — a genuine keystroke means the user has responded to
       // (or moved past) the last finished turn; clear the `finished` latch
       // so the next poll doesn't keep reporting a turn that's no longer the
