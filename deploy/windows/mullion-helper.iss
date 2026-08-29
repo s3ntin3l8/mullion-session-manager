@@ -83,7 +83,7 @@ var
 // skips that outright, and matters more for a genuinely unattended
 // enterprise-provisioning install than for CI: nothing should ever pop up
 // asking a deployment script to click OK.
-procedure ShowMsg(const Msg: String; MsgType: Integer);
+procedure ShowMsg(const Msg: String; MsgType: TMsgBoxType);
 begin
   Log(Msg);
   if not WizardSilent() then
