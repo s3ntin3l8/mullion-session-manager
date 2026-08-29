@@ -82,11 +82,14 @@ export const projectsApi = {
 
   // Issue: per-project Mullion briefing authored from the UI — a DB row
   // (project-tooling.ts), not a file, so unlike the agent-rules trio above
-  // there's no target list and no host-branching to reflect: `briefing` is
-  // `null` when the project has no DB-authored briefing yet (the ordinary
-  // case), never 404.
+  // there's no target list and no host-branching to reflect: each field is
+  // `null` when the project has no DB-authored content for it yet (the
+  // ordinary case), never 404. PR-5 extended the row with `skill`/
+  // `reviewerAgent` alongside `briefing` — GET returns all three together.
   getProjectTooling: (projectId: number) =>
-    request<{ briefing: string | null }>(`/api/projects/${projectId}/tooling`),
+    request<{ briefing: string | null; skill: string | null; reviewerAgent: string | null }>(
+      `/api/projects/${projectId}/tooling`,
+    ),
 
   writeProjectTooling: (projectId: number, briefing: string) =>
     request<{ briefing: string | null }>(`/api/projects/${projectId}/tooling`, {
@@ -100,6 +103,27 @@ export const projectsApi = {
   // if any, rather than overriding it with a blank briefing.
   deleteProjectTooling: (projectId: number) =>
     request<void>(`/api/projects/${projectId}/tooling`, { method: "DELETE" }),
+
+  // PR-5 — same posture as the briefing trio above, independent field
+  // (deleting the skill leaves briefing/reviewerAgent on the same row
+  // untouched — see project-tooling.ts's clearToolingColumn).
+  writeProjectSkill: (projectId: number, skill: string) =>
+    request<{ skill: string | null }>(`/api/projects/${projectId}/tooling/skill`, {
+      method: "PUT",
+      body: JSON.stringify({ skill }),
+    }),
+
+  deleteProjectSkill: (projectId: number) =>
+    request<void>(`/api/projects/${projectId}/tooling/skill`, { method: "DELETE" }),
+
+  writeProjectReviewerAgent: (projectId: number, reviewerAgent: string) =>
+    request<{ reviewerAgent: string | null }>(`/api/projects/${projectId}/tooling/reviewer-agent`, {
+      method: "PUT",
+      body: JSON.stringify({ reviewerAgent }),
+    }),
+
+  deleteProjectReviewerAgent: (projectId: number) =>
+    request<void>(`/api/projects/${projectId}/tooling/reviewer-agent`, { method: "DELETE" }),
 
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 

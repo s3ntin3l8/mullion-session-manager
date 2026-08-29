@@ -15,7 +15,11 @@ import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveProjectHostId } from "./session-live-info.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
-import { readProjectBriefing } from "./project-tooling.js";
+import {
+  readProjectBriefing,
+  readProjectSkill,
+  readProjectReviewerAgent,
+} from "./project-tooling.js";
 
 // Issue #822 — bounds shared between routes/sessions.ts's `env` schema
 // property, routes/internal-schemas.ts's duplicate for the agent-side
@@ -261,6 +265,12 @@ export type CreateSessionParams = CreateSessionBody & {
   // public route sets this yet. See CreateSessionOptions.briefingOverride's
   // own doc comment (pty-manager.ts) for the full multi-host reasoning.
   briefingOverride?: string;
+  // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's own
+  // doc comments (pty-manager.ts). Same "not part of CreateSessionBody, no
+  // public route sets these directly" posture as briefingOverride above —
+  // the producer below resolves them from project_tooling itself.
+  projectSkill?: string;
+  projectReviewerAgent?: string;
 };
 
 export type CreateSessionResult =
@@ -325,6 +335,8 @@ export async function createSessionRecord(
     resumeAgentSessionId,
     env,
     briefingOverride,
+    projectSkill,
+    projectReviewerAgent,
   } = params;
   let cwd = params.cwd;
 
@@ -506,6 +518,16 @@ export async function createSessionRecord(
   // apply exactly as it always has.
   const resolvedBriefingOverride =
     briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
+  // PR-5 — same producer posture as resolvedBriefingOverride immediately
+  // above: an explicit caller-supplied value (currently unused by any
+  // public route, same as briefingOverride) wins, otherwise this project's
+  // own DB row wins. `null`/absent falls through to `undefined`, which
+  // every adapter's prepareLaunch already treats as "no project content" —
+  // see HookAdapterContext.projectSkill/projectReviewerAgent's own doc
+  // comments.
+  const resolvedProjectSkill = projectSkill ?? readProjectSkill(app.db, project.id) ?? undefined;
+  const resolvedProjectReviewerAgent =
+    projectReviewerAgent ?? readProjectReviewerAgent(app.db, project.id) ?? undefined;
 
   let spawnResult: { initialPromptApplied?: boolean };
   try {
@@ -521,6 +543,8 @@ export async function createSessionRecord(
       resumeAgentSessionId,
       projectId,
       briefingOverride: resolvedBriefingOverride,
+      projectSkill: resolvedProjectSkill,
+      projectReviewerAgent: resolvedProjectReviewerAgent,
       env,
     });
   } catch (err) {

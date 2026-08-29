@@ -91,6 +91,33 @@ export interface HookAdapterContext {
    * consumed — a user-supplied promote seed must not vanish just because
    * someone disabled the unrelated guide-injection setting. */
   seedPrompt?: string;
+  /** PR-5 (per-project skills/reviewer) — the project's own DB-authored
+   * skill content (project_tooling.skill, schema.ts), resolved on the
+   * primary and threaded through the spawn body exactly the way
+   * `briefingOverride` already is (session-lifecycle.ts's createSessionRecord
+   * is the producer for both, and PtyManager.getOrCreate/buildLaunchPlan the
+   * same pass-through) — see briefingOverride's own multi-host reasoning,
+   * which applies identically here. Raw SKILL.md content (YAML frontmatter +
+   * body); consumed by claude-code.ts's prepareLaunch (composed into a
+   * per-session --plugin-dir bundle, hook-adapters/mullion-bundle.ts's
+   * composeClaudeSessionBundle) and opencode.ts's prepareLaunch (written
+   * under the ephemeral OPENCODE_CONFIG_DIR and added to `skills.paths`).
+   * Undefined/absent for codex and agy — neither has an ephemeral overlay
+   * for project-scoped skills (see the plan's per-CLI coverage table; PR-6
+   * is the repo-write fallback for those two). */
+  projectSkill?: string;
+  /** PR-5 — the project's own DB-authored reviewer subagent content
+   * (project_tooling.reviewerAgent, schema.ts), same spawn-time-resolved,
+   * multi-host-correct channel as `projectSkill` immediately above. Stored
+   * and threaded in Claude Code's OWN subagent frontmatter shape (`name`/
+   * `description`/`tools`/`model`); claude-code.ts writes it through
+   * unchanged into the composed bundle's `agents/` dir, while opencode.ts
+   * MUST translate it first (mullion-bundle.ts's
+   * deriveOpenCodeReviewerAgentFile — see that function's own doc comment
+   * for why writing this shape verbatim into opencode's config hard-fails
+   * the whole session, not just that one skill). Undefined/absent for codex
+   * and agy, same reason as `projectSkill`. */
+  projectReviewerAgent?: string;
 }
 
 export interface HookLaunchPlan {

@@ -5,8 +5,15 @@ import os from "node:os";
 import type { HookAdapterContext } from "../../../src/services/hook-adapters/types.js";
 
 const mockResolveMullionBundleDir = vi.fn((): string | null => "/opt/mullion/dist/bundle");
+const mockComposeClaudeSessionBundle = vi.fn(
+  (): Array<{ path: string; contents: string }> | null => [
+    { path: "/composed/.claude-plugin/plugin.json", contents: "{}" },
+  ],
+);
 vi.mock("../../../src/services/hook-adapters/mullion-bundle.js", () => ({
   resolveMullionBundleDir: () => mockResolveMullionBundleDir(),
+  composeClaudeSessionBundle: (destDir: string, content: unknown) =>
+    mockComposeClaudeSessionBundle(destDir, content),
 }));
 
 const {
@@ -212,6 +219,75 @@ describe("claudeCodeAdapter.prepareLaunch — Mullion tooling bundle (--plugin-d
 
   it("omits --plugin-dir when the bundle isn't shipped on this install, even though injectMullionBundle is on", () => {
     mockResolveMullionBundleDir.mockReturnValue(null);
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).not.toContain("--plugin-dir");
+  });
+});
+
+// PR-5 — a project with its own skill/reviewer content gets a per-session
+// COMPOSED plugin dir instead of the static shipped one, per
+// composeClaudeSessionBundle's own doc comment (mullion-bundle.ts).
+describe("claudeCodeAdapter.prepareLaunch — per-project skill/reviewer composition", () => {
+  const ctx: HookAdapterContext = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+    injectMullionBundle: true,
+    projectSkill: "---\nname: my-skill\ndescription: d\n---\nbody",
+  };
+
+  beforeEach(() => {
+    mockResolveMullionBundleDir.mockClear();
+    mockResolveMullionBundleDir.mockReturnValue("/opt/mullion/dist/bundle");
+    mockComposeClaudeSessionBundle.mockClear();
+    mockComposeClaudeSessionBundle.mockReturnValue([
+      {
+        path: "/tmp/mullion-sessions/42.mullion-bundle/skills/my-skill/SKILL.md",
+        contents: "body",
+      },
+    ]);
+  });
+
+  it("points --plugin-dir at the per-session composed dir, not the static shipped bundle", () => {
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).toContain(
+      '--plugin-dir "/tmp/mullion-sessions/42.mullion-bundle"',
+    );
+    expect(mockComposeClaudeSessionBundle).toHaveBeenCalledWith(
+      "/tmp/mullion-sessions/42.mullion-bundle",
+      { skill: ctx.projectSkill, reviewerAgent: undefined },
+    );
+    // resolveMullionBundleDir is still used internally by
+    // composeClaudeSessionBundle (mocked away here), but this call site
+    // itself never falls back to the plain shipped-dir resolution once
+    // project content is present.
+    expect(mockResolveMullionBundleDir).not.toHaveBeenCalled();
+  });
+
+  it("includes composeClaudeSessionBundle's returned files in settingsFiles", () => {
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.settingsFiles).toContainEqual({
+      path: "/tmp/mullion-sessions/42.mullion-bundle/skills/my-skill/SKILL.md",
+      contents: "body",
+    });
+  });
+
+  it("falls back to the plain shipped bundle when neither projectSkill nor projectReviewerAgent is set", () => {
+    const plan = claudeCodeAdapter.prepareLaunch({
+      ...ctx,
+      projectSkill: undefined,
+    });
+    expect(plan.commandTransform?.("claude")).toContain('--plugin-dir "/opt/mullion/dist/bundle"');
+    expect(mockComposeClaudeSessionBundle).not.toHaveBeenCalled();
+  });
+
+  it("omits --plugin-dir when composeClaudeSessionBundle returns null (no bundle shipped)", () => {
+    mockComposeClaudeSessionBundle.mockReturnValue(null);
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     expect(plan.commandTransform?.("claude")).not.toContain("--plugin-dir");
   });

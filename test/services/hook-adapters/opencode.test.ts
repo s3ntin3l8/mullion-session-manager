@@ -209,6 +209,94 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills.paths 
   });
 });
 
+// PR-5 — a project's own skill/reviewer content, threaded from
+// project_tooling. Uses a real temp sessionsDir (same posture as the
+// agent-guide describe block below) so settingsFiles' actual writes can be
+// asserted on disk, not just inspected as returned entries.
+describe("openCodeAdapter.prepareLaunch — per-project skill/reviewer (PR-5)", () => {
+  const ctx = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+    injectMullionBundle: true,
+  };
+
+  const validSkill = "---\nname: my-project-skill\ndescription: d\n---\nbody";
+  const validReviewerAgent =
+    "---\nname: my-project-reviewer\ndescription: reviews stuff\ntools: Read, Grep\nmodel: inherit\n---\nreview body";
+
+  it("writes the project skill under a dedicated subdir and adds it to skills.paths", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...ctx, projectSkill: validSkill });
+    const skillFile = plan.settingsFiles?.find(
+      (f) => f.path.endsWith("SKILL.md") && f.path.includes("mullion-project-skills"),
+    );
+    expect(skillFile).toBeDefined();
+    expect(skillFile!.path).toBe(
+      "/tmp/mullion-sessions/42.opencode-config/mullion-project-skills/my-project-skill/SKILL.md",
+    );
+    expect(skillFile!.contents).toBe(validSkill);
+
+    const configContent = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(configContent.skills.paths).toContain(
+      "/tmp/mullion-sessions/42.opencode-config/mullion-project-skills",
+    );
+    // Alongside the shipped bundle's own skills dir, not instead of it.
+    expect(configContent.skills.paths).toContain(path.join(resolveMullionBundleDir()!, "skills"));
+  });
+
+  it("translates the reviewer agent into opencode's own agent/<name>.md shape — never writes the raw Claude Code frontmatter", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...ctx,
+      projectReviewerAgent: validReviewerAgent,
+    });
+    const agentFile = plan.settingsFiles?.find((f) => f.path.endsWith("my-project-reviewer.md"));
+    expect(agentFile).toBeDefined();
+    expect(agentFile!.path).toBe(
+      "/tmp/mullion-sessions/42.opencode-config/agent/my-project-reviewer.md",
+    );
+    expect(agentFile!.contents).not.toContain("tools:");
+    expect(agentFile!.contents).not.toContain("model:");
+    expect(agentFile!.contents).toContain("mode: subagent");
+  });
+
+  it("skips both when injectMullionBundle is off, even with project content set", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...ctx,
+      injectMullionBundle: false,
+      projectSkill: validSkill,
+      projectReviewerAgent: validReviewerAgent,
+    });
+    expect(plan.settingsFiles?.some((f) => f.path.includes("mullion-project-skills"))).toBe(false);
+    expect(plan.settingsFiles?.some((f) => f.path.includes("agent"))).toBe(false);
+  });
+
+  it("silently skips unparseable project content rather than throwing", () => {
+    expect(() =>
+      openCodeAdapter.prepareLaunch({
+        ...ctx,
+        projectSkill: "not a skill",
+        projectReviewerAgent: "not an agent",
+      }),
+    ).not.toThrow();
+    const plan = openCodeAdapter.prepareLaunch({
+      ...ctx,
+      projectSkill: "not a skill",
+      projectReviewerAgent: "not an agent",
+    });
+    expect(plan.settingsFiles?.some((f) => f.path.includes("mullion-project-skills"))).toBe(false);
+    expect(
+      plan.settingsFiles?.some(
+        (f) => f.path.endsWith(".md") && f.path.includes(`${path.sep}agent${path.sep}`),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-briefing follow-up to #405)", () => {
   // Same "real temp dir, real per-session file, existsSync-gated" posture
   // as the agent-guide injection describe block above, for the identical

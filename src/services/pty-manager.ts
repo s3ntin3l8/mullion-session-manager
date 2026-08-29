@@ -154,11 +154,19 @@ export interface CreateSessionOptions {
    * DB of its own (see src/plugins/hooks.ts's `app.db ? ... :
    * DEFAULT_SETTINGS` comment for the same constraint on
    * `injectAgentGuide`) — resolving a per-project briefing there directly
-   * would silently resolve to nothing on every remote host. No producer
-   * sets this yet; every current caller omits it, and
-   * writeSessionBriefing falls back to `resolveProjectBriefing(cwd)`
-   * exactly as it always has. */
+   * would silently resolve to nothing on every remote host. The producer is
+   * session-lifecycle.ts's createSessionRecord (PR-4); a caller that omits
+   * this leaves writeSessionBriefing to fall back to
+   * `resolveProjectBriefing(cwd)` exactly as it always has. */
   briefingOverride?: string;
+  /** PR-5 — see HookAdapterContext.projectSkill's own doc comment
+   * (hook-adapters/types.ts). Same producer/multi-host reasoning as
+   * `briefingOverride` immediately above. */
+  projectSkill?: string;
+  /** PR-5 — see HookAdapterContext.projectReviewerAgent's own doc comment
+   * (hook-adapters/types.ts). Same producer/multi-host reasoning as
+   * `briefingOverride` above. */
+  projectReviewerAgent?: string;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the
@@ -957,11 +965,16 @@ export class Session {
   // body the same way seedPrompt already is, all the way to
   // writeSessionBriefing's `override` param (project-briefing.ts). Same
   // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
-  // initialPrompt/seedPrompt/resumeAgentSessionId above. This field alone
-  // has no producer yet — every current caller passes undefined, and
-  // writeSessionBriefing falls back to resolveProjectBriefing(cwd) exactly
-  // as it always has.
+  // initialPrompt/seedPrompt/resumeAgentSessionId above. Producer:
+  // session-lifecycle.ts's createSessionRecord (PR-4); a caller that omits
+  // it leaves writeSessionBriefing to fall back to
+  // resolveProjectBriefing(cwd) exactly as it always has.
   private readonly briefingOverride: string | undefined;
+  // PR-5 — see HookAdapterContext.projectSkill/projectReviewerAgent's own
+  // doc comments (hook-adapters/types.ts). Same producer/pass-through
+  // posture as briefingOverride immediately above.
+  private readonly projectSkill: string | undefined;
+  private readonly projectReviewerAgent: string | undefined;
   // Issue #822 — see CreateSessionOptions.env's own doc comment. Unlike
   // initialPrompt/seedPrompt/resumeAgentSessionId above, this IS re-read on
   // every bootstrapMaster() call for this instance, including a later
@@ -1296,6 +1309,8 @@ export class Session {
     projectId?: number;
     env?: Record<string, string>;
     briefingOverride?: string;
+    projectSkill?: string;
+    projectReviewerAgent?: string;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -1320,6 +1335,8 @@ export class Session {
     this.seedPrompt = opts.seedPrompt;
     this.resumeAgentSessionId = opts.resumeAgentSessionId;
     this.briefingOverride = opts.briefingOverride;
+    this.projectSkill = opts.projectSkill;
+    this.projectReviewerAgent = opts.projectReviewerAgent;
     this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
@@ -1859,6 +1876,8 @@ export class Session {
       resumeAgentSessionId: this.resumeAgentSessionId,
       env: this.env,
       briefingOverride: this.briefingOverride,
+      projectSkill: this.projectSkill,
+      projectReviewerAgent: this.projectReviewerAgent,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -3562,6 +3581,8 @@ export class PtyManager {
         projectId: opts.projectId,
         env: opts.env,
         briefingOverride: opts.briefingOverride,
+        projectSkill: opts.projectSkill,
+        projectReviewerAgent: opts.projectReviewerAgent,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

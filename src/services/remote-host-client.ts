@@ -199,6 +199,11 @@ export interface SessionTarget {
   // above. See CreateSessionOptions.briefingOverride's own doc comment
   // (pty-manager.ts) for the full multi-host reasoning this exists for.
   briefingOverride?: string;
+  // PR-5 — for spawn() only, same posture as briefingOverride above. See
+  // CreateSessionOptions.projectSkill/projectReviewerAgent's own doc
+  // comments (pty-manager.ts).
+  projectSkill?: string;
+  projectReviewerAgent?: string;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES

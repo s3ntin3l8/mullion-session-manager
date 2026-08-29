@@ -65,6 +65,11 @@ export interface SessionBackend {
     // (pty-manager.ts). Forwarded to a remote host verbatim
     // (RemoteBackend.spawn below), same as seedPrompt/env.
     briefingOverride?: string;
+    // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's
+    // own doc comments (pty-manager.ts). Same "forwarded to a remote host
+    // verbatim" posture as briefingOverride above.
+    projectSkill?: string;
+    projectReviewerAgent?: string;
   }): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
@@ -257,6 +262,8 @@ class LocalBackend implements SessionBackend {
     projectId?: number;
     env?: Record<string, string>;
     briefingOverride?: string;
+    projectSkill?: string;
+    projectReviewerAgent?: string;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
     // throw synchronously (getOrCreate() is sync by design; a spawn failure
@@ -454,6 +461,8 @@ class RemoteBackend implements SessionBackend {
     projectId?: number;
     env?: Record<string, string>;
     briefingOverride?: string;
+    projectSkill?: string;
+    projectReviewerAgent?: string;
   }): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment

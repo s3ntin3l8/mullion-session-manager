@@ -926,11 +926,21 @@ export const projectUrls = sqliteTable("project_urls", {
 // Precedence (session-lifecycle.ts's createSessionRecord, the producer):
 // this row wins over a project's own committed AGENTS.md/CLAUDE.md briefing
 // region — it's the more recently and deliberately authored artifact, and
-// deleting the row (DELETE, not just clearing the text — see
-// project-tooling.ts) restores the committed file's region, if any. Same
-// autoincrement-id + unique-index-on-project_id shape as
+// clearing this field (project-tooling.ts's deleteProjectBriefing, NOT just
+// writing an empty string) restores the committed file's region, if any.
+// Same autoincrement-id + unique-index-on-project_id shape as
 // webhookRegistrations above, not projectId-as-primary-key, for consistency
 // with the rest of this file's per-project 1:1 tables.
+//
+// PR-5 (per-project skills/reviewer, issue: apply Mullion tooling to other
+// repos) added `skill`/`reviewerAgent` alongside `briefing` on the SAME row
+// rather than a second table — all three are per-project, UI-authored,
+// spawn-time-resolved Mullion tooling, and a project may set any subset
+// independently (e.g. a reviewer subagent with no custom briefing). That's
+// why `briefing` is nullable here even though it wasn't originally: a row
+// can now exist for skill/reviewerAgent alone. project-tooling.ts's
+// clear-a-field helper only deletes the ROW once every column is null again
+// — clearing one field never discards the other two.
 export const projectTooling = sqliteTable(
   "project_tooling",
   {
@@ -938,13 +948,36 @@ export const projectTooling = sqliteTable(
     projectId: integer("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    // Capped at MAX_PROJECT_BRIEFING_BYTES (project-tooling.ts) — kept in
-    // sync with internal-schemas.ts's spawnSessionSchema `briefingOverride`
-    // maxLength (8192) by hand, the same "duplicated rather than imported
-    // across a DB-schema/DB-less-agent-schema boundary" posture
-    // internal-schemas.ts's own header comment documents for
-    // MAX_SESSION_ENV_ENTRIES/MAX_SESSION_ENV_VALUE_LENGTH.
-    briefing: text("briefing").notNull(),
+    // Each of the three content columns below is capped at
+    // MAX_PROJECT_TOOLING_FIELD_BYTES (project-tooling.ts) — kept in sync
+    // with internal-schemas.ts's spawnSessionSchema `briefingOverride`/
+    // `projectSkill`/`projectReviewerAgent` maxLength (8192 each) by hand,
+    // the same "duplicated rather than imported across a DB-schema/DB-less-
+    // agent-schema boundary" posture internal-schemas.ts's own header
+    // comment documents for MAX_SESSION_ENV_ENTRIES/
+    // MAX_SESSION_ENV_VALUE_LENGTH.
+    briefing: text("briefing"),
+    // Raw SKILL.md content (YAML frontmatter + Markdown body) for a
+    // project-specific Claude Code/opencode skill — composed into a
+    // per-session bundle by hook-adapters/mullion-bundle.ts's
+    // composeClaudeSessionBundle (Claude Code's --plugin-dir) and
+    // opencode.ts's prepareLaunch (skills.paths). codex/agy have no
+    // equivalent ephemeral channel (see the plan's per-CLI coverage table);
+    // the UI surfaces those two as "requires repo setup" (PR-6).
+    skill: text("skill"),
+    // Raw subagent Markdown content (Claude Code's own `name`/`description`/
+    // `tools`/`model` frontmatter shape, matching .claude/agents/
+    // mullion-reviewer.md's own format — the starter template this is
+    // meant to be edited from). Composed into the same per-session Claude
+    // Code plugin dir as `skill` above. opencode.ts's prepareLaunch
+    // TRANSLATES this (deriveOpenCodeReviewerAgentFile) rather than writing
+    // it verbatim — opencode's own `agent/<name>.md` config schema hard-
+    // rejects Claude Code's `tools:`/`model:` frontmatter shape at config-
+    // load time (verified empirically this session: `Expected object |
+    // undefined, got "Read, Grep, Glob, Bash" tools`, not a soft failure —
+    // the whole session fails to start). codex/agy have no subagent concept
+    // at all.
+    reviewerAgent: text("reviewer_agent"),
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

@@ -1601,6 +1601,8 @@ export async function internalRoutes(app: FastifyInstance) {
         projectId,
         env,
         briefingOverride,
+        projectSkill,
+        projectReviewerAgent,
       } = request.body;
       app.pty.getOrCreate({
         id,
@@ -1614,6 +1616,8 @@ export async function internalRoutes(app: FastifyInstance) {
         projectId,
         env,
         briefingOverride,
+        projectSkill,
+        projectReviewerAgent,
       });
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's

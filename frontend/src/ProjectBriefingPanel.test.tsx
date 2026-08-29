@@ -7,23 +7,52 @@ import { jsonResponse } from "./test/jsonResponse.js";
 
 // Same "route a mocked fetch by URL/method, unhandled requests reject
 // loudly" convention as AgentRulesPanel.test.tsx's own mockFetch — this
-// panel has no list to fetch, just one GET/PUT/DELETE over a single row.
+// panel has one GET over the combined row, plus an independent PUT/DELETE
+// per field (base `/tooling` for briefing, `/tooling/skill`,
+// `/tooling/reviewer-agent` — PR-5). `write`/`del` handle the base
+// briefing path; `writeSkill`/`delSkill`/`writeReviewerAgent`/
+// `delReviewerAgent` are checked first so a test can distinguish which
+// field's PUT/DELETE actually fired.
 function mockFetch(opts: {
   get?: () => Response | Promise<Response>;
   write?: (body: unknown) => Response | Promise<Response>;
   del?: () => Response | Promise<Response>;
+  writeSkill?: (body: unknown) => Response | Promise<Response>;
+  delSkill?: () => Response | Promise<Response>;
+  writeReviewerAgent?: (body: unknown) => Response | Promise<Response>;
+  delReviewerAgent?: () => Response | Promise<Response>;
 }) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
-    if (url.includes("/tooling") && method === "GET") {
+    if (url.endsWith("/tooling") && method === "GET") {
       return Promise.resolve(opts.get ? opts.get() : new Response(null, { status: 200 }));
     }
-    if (url.includes("/tooling") && method === "PUT") {
-      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+    const body = init?.body ? JSON.parse(init.body as string) : undefined;
+    if (url.endsWith("/tooling/skill") && method === "PUT") {
+      return Promise.resolve(
+        opts.writeSkill ? opts.writeSkill(body) : new Response(null, { status: 500 }),
+      );
+    }
+    if (url.endsWith("/tooling/skill") && method === "DELETE") {
+      return Promise.resolve(opts.delSkill ? opts.delSkill() : new Response(null, { status: 204 }));
+    }
+    if (url.endsWith("/tooling/reviewer-agent") && method === "PUT") {
+      return Promise.resolve(
+        opts.writeReviewerAgent
+          ? opts.writeReviewerAgent(body)
+          : new Response(null, { status: 500 }),
+      );
+    }
+    if (url.endsWith("/tooling/reviewer-agent") && method === "DELETE") {
+      return Promise.resolve(
+        opts.delReviewerAgent ? opts.delReviewerAgent() : new Response(null, { status: 204 }),
+      );
+    }
+    if (url.endsWith("/tooling") && method === "PUT") {
       return Promise.resolve(opts.write ? opts.write(body) : new Response(null, { status: 500 }));
     }
-    if (url.includes("/tooling") && method === "DELETE") {
+    if (url.endsWith("/tooling") && method === "DELETE") {
       return Promise.resolve(opts.del ? opts.del() : new Response(null, { status: 204 }));
     }
     return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
@@ -49,7 +78,11 @@ describe("ProjectBriefingPanel", () => {
         get: () => {
           attempt++;
           if (attempt === 1) return Promise.reject(new Error("network error"));
-          return jsonResponse(200, { briefing: "existing briefing" });
+          return jsonResponse(200, {
+            briefing: "existing briefing",
+            skill: null,
+            reviewerAgent: null,
+          });
         },
       }),
     );
@@ -57,7 +90,7 @@ describe("ProjectBriefingPanel", () => {
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
     const retryButton = await screen.findByText("Retry");
-    expect(screen.getByText("Couldn't load this project's briefing.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load this project's Mullion tooling.")).toBeInTheDocument();
 
     await user.click(retryButton);
 
@@ -66,7 +99,12 @@ describe("ProjectBriefingPanel", () => {
   });
 
   it("shows an empty, placeholder-guided editor when the project has no DB briefing yet", async () => {
-    vi.stubGlobal("fetch", mockFetch({ get: () => jsonResponse(200, { briefing: null }) }));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+      }),
+    );
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
     const textarea = await screen.findByPlaceholderText(/No Mullion briefing set/);
@@ -78,7 +116,14 @@ describe("ProjectBriefingPanel", () => {
   it("loads an existing briefing into the editor and offers Delete", async () => {
     vi.stubGlobal(
       "fetch",
-      mockFetch({ get: () => jsonResponse(200, { briefing: "operator instructions" }) }),
+      mockFetch({
+        get: () =>
+          jsonResponse(200, {
+            briefing: "operator instructions",
+            skill: null,
+            reviewerAgent: null,
+          }),
+      }),
     );
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
@@ -88,7 +133,7 @@ describe("ProjectBriefingPanel", () => {
 
   it("saves edited content via PUT and reflects the updated value", async () => {
     const fetchMock = mockFetch({
-      get: () => jsonResponse(200, { briefing: null }),
+      get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
       write: (body) => jsonResponse(200, { briefing: (body as { briefing: string }).briefing }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -125,7 +170,7 @@ describe("ProjectBriefingPanel", () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({
-        get: () => jsonResponse(200, { briefing: "base" }),
+        get: () => jsonResponse(200, { briefing: "base", skill: null, reviewerAgent: null }),
         write: () => writePromise,
       }),
     );
@@ -150,7 +195,8 @@ describe("ProjectBriefingPanel", () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({
-        get: () => jsonResponse(200, { briefing: "to be deleted" }),
+        get: () =>
+          jsonResponse(200, { briefing: "to be deleted", skill: null, reviewerAgent: null }),
         del: () => new Response(null, { status: 204 }),
       }),
     );
@@ -172,7 +218,10 @@ describe("ProjectBriefingPanel", () => {
     const delSpy = vi.fn(() => new Response(null, { status: 204 }));
     vi.stubGlobal(
       "fetch",
-      mockFetch({ get: () => jsonResponse(200, { briefing: "content" }), del: delSpy }),
+      mockFetch({
+        get: () => jsonResponse(200, { briefing: "content", skill: null, reviewerAgent: null }),
+        del: delSpy,
+      }),
     );
     const user = userEvent.setup();
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
@@ -186,7 +235,7 @@ describe("ProjectBriefingPanel", () => {
     vi.stubGlobal(
       "fetch",
       mockFetch({
-        get: () => jsonResponse(200, { briefing: "base" }),
+        get: () => jsonResponse(200, { briefing: "base", skill: null, reviewerAgent: null }),
         write: () => jsonResponse(400, { message: "Briefing is too large" }),
       }),
     );
@@ -204,7 +253,12 @@ describe("ProjectBriefingPanel", () => {
   // Hermes review, PR #893 — the byte cap used to be invisible until Save
   // 400s with a byte count.
   it("shows a live byte-count hint and disables Save once the draft exceeds the byte cap", async () => {
-    vi.stubGlobal("fetch", mockFetch({ get: () => jsonResponse(200, { briefing: null }) }));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+      }),
+    );
     const user = userEvent.setup();
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
@@ -219,7 +273,12 @@ describe("ProjectBriefingPanel", () => {
   });
 
   it("Discard restores the last-saved value and disables itself", async () => {
-    vi.stubGlobal("fetch", mockFetch({ get: () => jsonResponse(200, { briefing: "base" }) }));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        get: () => jsonResponse(200, { briefing: "base", skill: null, reviewerAgent: null }),
+      }),
+    );
     const user = userEvent.setup();
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
@@ -230,5 +289,130 @@ describe("ProjectBriefingPanel", () => {
     await user.click(screen.getByText("Discard"));
     expect(screen.getByDisplayValue("base")).toBeInTheDocument();
     expect(screen.queryByText("Discard")).not.toBeInTheDocument();
+  });
+
+  // PR-5 — skill/reviewerAgent are independent DB columns on the same
+  // project_tooling row, switched between via the field list on the left
+  // (reusing AgentRulesPanel's own target-list shell).
+  describe("skill and reviewer agent fields", () => {
+    it("switches between fields, each showing its own saved value", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () =>
+            jsonResponse(200, {
+              briefing: "the briefing",
+              skill: "---\nname: s\ndescription: d\n---\nskill body",
+              reviewerAgent: null,
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByDisplayValue("the briefing");
+
+      await user.click(screen.getByText("Skill"));
+      expect(await screen.findByPlaceholderText(/No project skill set yet/)).toHaveValue(
+        "---\nname: s\ndescription: d\n---\nskill body",
+      );
+
+      await user.click(screen.getByText("Reviewer agent"));
+      expect(
+        await screen.findByPlaceholderText(/No project reviewer subagent set yet/),
+      ).toHaveValue("");
+    });
+
+    it("saves the skill field via PUT /tooling/skill, independent of briefing", async () => {
+      const fetchMock = mockFetch({
+        get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        writeSkill: (body) => jsonResponse(200, { skill: (body as { skill: string }).skill }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No Mullion briefing set/);
+      await user.click(screen.getByText("Skill"));
+      const textarea = await screen.findByPlaceholderText(/No project skill set yet/);
+      await user.type(textarea, "---\nname: x\ndescription: d\n---\nbody");
+      await user.click(screen.getByText("Save"));
+
+      const putCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith("/tooling/skill") &&
+          (init as RequestInit | undefined)?.method === "PUT",
+      );
+      expect(putCall).toBeDefined();
+      await screen.findByText("Delete");
+    });
+
+    it("deletes only the reviewer agent field, leaving the panel on that field cleared", async () => {
+      const delSpy = vi.fn(() => new Response(null, { status: 204 }));
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () =>
+            jsonResponse(200, {
+              briefing: "keep",
+              skill: null,
+              reviewerAgent: "---\nname: r\ndescription: d\n---\nreview body",
+            }),
+          delReviewerAgent: delSpy,
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByDisplayValue("keep");
+      await user.click(screen.getByText("Reviewer agent"));
+      expect(
+        await screen.findByPlaceholderText(/No project reviewer subagent set yet/),
+      ).toHaveValue("---\nname: r\ndescription: d\n---\nreview body");
+
+      const deleteButton = screen.getByTitle(/Delete this project's reviewer agent\?/);
+      await user.click(deleteButton);
+      await user.click(deleteButton);
+
+      expect(delSpy).toHaveBeenCalledTimes(1);
+      expect(
+        await screen.findByPlaceholderText(/No project reviewer subagent set yet/),
+      ).toBeInTheDocument();
+    });
+
+    it("fills the textarea from the starter template without touching the saved value until Save", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No Mullion briefing set/);
+      await user.click(screen.getByText("Skill"));
+      await screen.findByPlaceholderText(/No project skill set yet/);
+
+      await user.click(screen.getByText("Use starter template"));
+      expect(screen.getByDisplayValue(/name: my-project-skill/)).toBeInTheDocument();
+      expect(screen.getByText("Save")).not.toBeDisabled();
+    });
+
+    it("disables switching to another field while the current one has unsaved changes", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: "base", skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      const textarea = await screen.findByDisplayValue("base");
+      await user.type(textarea, " edited");
+
+      expect(screen.getByRole("button", { name: /Skill/ })).toBeDisabled();
+    });
   });
 });

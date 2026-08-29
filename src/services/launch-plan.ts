@@ -127,6 +127,13 @@ export interface LaunchPlanSession {
    * straight through to writeSessionBriefing below — nothing here decides
    * precedence, that's entirely writeSessionBriefing's job. */
   readonly briefingOverride: string | undefined;
+  /** See HookAdapterContext.projectSkill's own doc comment
+   * (hook-adapters/types.ts) — passed straight through to applyHookAdapters
+   * below, nothing here decides anything about it. */
+  readonly projectSkill: string | undefined;
+  /** See HookAdapterContext.projectReviewerAgent's own doc comment
+   * (hook-adapters/types.ts) — same pass-through as projectSkill above. */
+  readonly projectReviewerAgent: string | undefined;
 }
 
 export interface LaunchPlan {
@@ -315,6 +322,8 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,
     seedPrompt: session.seedPrompt,
+    projectSkill: session.projectSkill,
+    projectReviewerAgent: session.projectReviewerAgent,
   });
   Object.assign(sessionEnv, envAdditions);
 

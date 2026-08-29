@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { resolveMcpServerPath, shellQuote } from "./shared.js";
-import { resolveMullionBundleDir } from "./mullion-bundle.js";
+import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -388,12 +388,42 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // this is still appended inside commandTransform, still only reached for
   // a simple, unchained `claude ...` invocation (claudeCodeAdapter.matches'
   // anchored-token + no-shell-metacharacter guard below).
-  const bundleDir = ctx.injectMullionBundle ? resolveMullionBundleDir() : null;
+  //
+  // PR-5 — when this project has its own skill/reviewer content
+  // (ctx.projectSkill/ctx.projectReviewerAgent), `--plugin-dir` points at a
+  // per-session COMPOSED copy of the bundle instead of the static shipped
+  // one (mullion-bundle.ts's composeClaudeSessionBundle) — one plugin dir
+  // carrying both the universal `mullion-host` skill and this project's own
+  // content, rather than a second `--plugin-dir` flag (spike S7 confirmed
+  // the CLI would accept one, but the plan deliberately keeps argv from
+  // growing a flag per content source). Falls back to the plain shipped
+  // bundle when neither field is set — the ordinary case for every project
+  // until someone opts in via the UI — and to no flag at all if
+  // composeClaudeSessionBundle itself returns null (this install/checkout
+  // shipped no bundle, same as the plain resolveMullionBundleDir() branch).
+  let bundleDir: string | null = null;
+  const bundleSettingsFiles: Array<{ path: string; contents: string }> = [];
+  if (ctx.injectMullionBundle) {
+    if (ctx.projectSkill || ctx.projectReviewerAgent) {
+      const composedDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.mullion-bundle`);
+      const files = composeClaudeSessionBundle(composedDir, {
+        skill: ctx.projectSkill,
+        reviewerAgent: ctx.projectReviewerAgent,
+      });
+      if (files) {
+        bundleDir = composedDir;
+        bundleSettingsFiles.push(...files);
+      }
+    } else {
+      bundleDir = resolveMullionBundleDir();
+    }
+  }
   const bundleFlag = bundleDir ? ` --plugin-dir ${JSON.stringify(bundleDir)}` : "";
   return {
     settingsFiles: [
       { path: settingsPath, contents: JSON.stringify(settings, null, 2) },
       { path: mcpConfigPath, contents: JSON.stringify(mcpConfig, null, 2) },
+      ...bundleSettingsFiles,
     ],
     commandTransform: (command) =>
       `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}`,
