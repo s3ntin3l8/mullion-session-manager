@@ -164,26 +164,39 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // directly instead, since sshAgentPlugin registers after ptyPlugin — see
   // that function's own comment for why this is a shared predicate rather
   // than an inline role check repeated at every call site.
+  // Computed once and threaded through both calls below — resolveSshAuthSock
+  // and describeBridgeShadowing must agree on this exact value, since the
+  // latter's `null`-vs-shadow branching assumes it matches what actually
+  // produced `resolvedSshAuthSock` (mullion-reviewer, PR #875 self-review).
+  const willMaterializeBridgeSocket = materializesBridgeSocket(app.config.MULLION_ROLE);
   const resolvedSshAuthSock = resolveSshAuthSock({
     configured: app.config.MULLION_SSH_AUTH_SOCK,
     ambient: process.env.SSH_AUTH_SOCK,
-    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
+    materializesBridgeSocket: willMaterializeBridgeSocket,
     sessionsDir,
   });
   // Post-ship audit follow-up (#873) — the missing breadcrumb: without this,
   // a paired bridge can sit shadowed by `configured`/`ambient` with nothing
   // anywhere saying so. See describeBridgeShadowing's own doc comment.
   const shadowing = describeBridgeShadowing(resolvedSshAuthSock, {
-    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
+    materializesBridgeSocket: willMaterializeBridgeSocket,
     sessionsDir,
   });
   if (shadowing) {
-    app.log.info(
-      {
-        shadowedBy: shadowing.shadowedBy,
-        bridgePath: shadowing.bridgePath,
-        winningPath: resolvedSshAuthSock.path || "(ambient, inherited untouched)",
-      },
+    // `resolvedSshAuthSock.path` is "" in the `ambient` case by design
+    // (resolveSshAuthSock's own doc comment: "" means "don't touch it," a
+    // correct *injection* decision) — but this is a *diagnostic*, and an
+    // operator debugging "why isn't my paired bridge used" needs the actual
+    // winning path, not a placeholder. Read it straight from the same
+    // process.env.SSH_AUTH_SOCK already passed as `ambient` above; nothing
+    // sensitive here that buildAgentConfig's own Settings diagnostic
+    // doesn't already surface unredacted.
+    const winningPath =
+      shadowing.shadowedBy === "ambient"
+        ? (process.env.SSH_AUTH_SOCK ?? "(unset)")
+        : resolvedSshAuthSock.path;
+    app.log.warn(
+      { shadowedBy: shadowing.shadowedBy, bridgePath: shadowing.bridgePath, winningPath },
       "this host materializes an ssh-agent bridge socket, but SSH_AUTH_SOCK resolves via a higher-precedence source — a paired bridge will not be used by sessions here until that source is removed",
     );
   }
