@@ -388,8 +388,10 @@ install`/`uninstall` (manual supervision only, see
   [issue #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)
   and [issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874)).
   An inherited ambient `SSH_AUTH_SOCK` on an agent host or the primary
-  deliberately outranks a paired bridge in precedence (upgrade-safety
-  trade-off, see [`ssh-agent.md`](ssh-agent.md#precedence)) — the host
-  logs a shadow warning at boot when this happens, so it's visible in logs
-  even though Settings' own `connected` status doesn't distinguish it from
-  a session actually using the bridge.
+  deliberately outranks the bridge in precedence (upgrade-safety
+  trade-off, see [`ssh-agent.md`](ssh-agent.md#precedence)) — this applies
+  regardless of whether a laptop has ever actually paired, since the
+  bridge socket is materialized unconditionally on every host. The host
+  logs a shadow warning at boot whenever this shadowing happens, so it's
+  visible in logs even though Settings' own `connected` status doesn't
+  distinguish it from a session actually using the bridge.
