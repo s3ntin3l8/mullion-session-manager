@@ -125,6 +125,38 @@ export const projectsApi = {
   deleteProjectReviewerAgent: (projectId: number) =>
     request<void>(`/api/projects/${projectId}/tooling/reviewer-agent`, { method: "DELETE" }),
 
+  // PR-6 — scaffolding Mullion's tooling as a committed PR (routes/
+  // project-setup.ts). Preview is mandatory before apply: `previewId`
+  // round-trips exactly what the backend computed and wrote into its own
+  // scratch worktree, so apply can never act on options the user hasn't
+  // actually seen the diff for.
+  previewProjectSetup: (
+    projectId: number,
+    options: {
+      slug: string;
+      mirrors?: Array<"GEMINI.md" | "AGENTS.override.md">;
+      symlinkAgentsSkills?: boolean;
+      includeDockConfig?: boolean;
+    },
+  ) =>
+    request<{ previewId: string; diff: string; files: string[] }>(
+      `/api/projects/${projectId}/setup/preview`,
+      { method: "POST", body: JSON.stringify(options) },
+    ),
+
+  applyProjectSetup: (projectId: number, previewId: string) =>
+    request<{
+      ok: boolean;
+      mode?: "pull-request" | "local-branch";
+      prUrl?: string;
+      prNumber?: number;
+      branch?: string;
+      detail?: string;
+    }>(`/api/projects/${projectId}/setup/apply`, {
+      method: "POST",
+      body: JSON.stringify({ previewId }),
+    }),
+
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 
   listFavoriteUrls: () => request<ProjectUrl[]>("/api/browser-urls/favorites"),

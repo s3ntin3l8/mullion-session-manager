@@ -56,6 +56,7 @@ import { previewsRoute } from "./routes/previews.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
 import { agentRulesRoute } from "./routes/agent-rules.js";
 import { projectToolingRoute } from "./routes/project-tooling.js";
+import { projectSetupRoute } from "./routes/project-setup.js";
 import { dockConfigRoute } from "./routes/dock-config.js";
 import { skillsRoute } from "./routes/skills.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
@@ -424,6 +425,7 @@ export async function buildApp() {
   await app.register(projectUrlsRoute);
   await app.register(agentRulesRoute);
   await app.register(projectToolingRoute);
+  await app.register(projectSetupRoute);
   await app.register(dockConfigRoute);
   await app.register(skillsRoute);
   await app.register(browserCookiesRoute);

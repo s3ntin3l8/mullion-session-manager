@@ -47,3 +47,45 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
     .replace(/�+$/, "");
   return `${truncated}\n\n[mullion: truncated at ${maxBytes} bytes — full text at ${sourceLabel}]`;
 }
+
+/**
+ * PR-6 (scaffold Mullion integration as a PR) — the write-side counterpart
+ * `extractMarkedRegion` above never needed: every EXISTING caller
+ * (agent-guide.ts, project-briefing.ts) only ever READS a region a human
+ * already committed by hand. Scaffolding is the first caller that needs to
+ * AUTHOR one. Pure string-in, string-out (mullion-scaffold.ts's own
+ * "current contents in, target contents out" contract) — no filesystem
+ * access here, same posture as extractMarkedRegion/clampToBytes.
+ *
+ * If both markers are already present (a re-run over a previous scaffold,
+ * or a repo that already committed a region by hand), replaces everything
+ * from `startMarker` through `endMarker` in place — the surrounding
+ * document is left untouched, and a pre-existing region's content is fully
+ * superseded, not merged with. If either marker is missing, appends a new
+ * region to the end of `text` instead (separated by a blank line from
+ * whatever's already there), rather than refusing or guessing where to
+ * insert into unfamiliar prose — this mirrors `check-briefing-sync.mjs`'s
+ * own byte-identical-region assumption: a fresh region always starts
+ * unambiguous only when appended, never spliced mid-paragraph. `body` is
+ * trimmed before being placed between the markers, so callers don't need
+ * to worry about leading/trailing whitespace producing a visually
+ * inconsistent region across repeated calls.
+ */
+export function upsertMarkedRegion(
+  text: string,
+  startMarker: string,
+  endMarker: string,
+  body: string,
+): string {
+  const region = `${startMarker}\n${body.trim()}\n${endMarker}`;
+  const startIdx = text.indexOf(startMarker);
+  const endIdx = startIdx === -1 ? -1 : text.indexOf(endMarker, startIdx + startMarker.length);
+  if (startIdx !== -1 && endIdx !== -1) {
+    const before = text.slice(0, startIdx);
+    const after = text.slice(endIdx + endMarker.length);
+    return `${before}${region}${after}`;
+  }
+  const trimmedText = text.trim();
+  if (trimmedText.length === 0) return `${region}\n`;
+  return `${trimmedText}\n\n${region}\n`;
+}
