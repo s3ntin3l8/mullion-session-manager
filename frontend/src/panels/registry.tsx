@@ -11,6 +11,8 @@ import { AgentRulesPanel } from "../AgentRulesPanel.js";
 import type { AgentRulesPanelParams } from "../AgentRulesPanel.js";
 import { ProjectBriefingPanel } from "../ProjectBriefingPanel.js";
 import type { ProjectBriefingPanelParams } from "../ProjectBriefingPanel.js";
+import { ProjectSetupPanel } from "../ProjectSetupPanel.js";
+import type { ProjectSetupPanelParams } from "../ProjectSetupPanel.js";
 import { DockConfigPanel } from "../DockConfigPanel.js";
 import type { DockConfigPanelParams } from "../DockConfigPanel.js";
 import { SkillsPanel } from "../SkillsPanel.js";
@@ -295,6 +297,10 @@ const AgentRulesPanelWrapper = makePanelWrapper<AgentRulesPanelParams>(AgentRule
 const ProjectBriefingPanelWrapper =
   makePanelWrapper<ProjectBriefingPanelParams>(ProjectBriefingPanel);
 
+// Same reasoning as GitHubPanelWrapper above — a crashing setup-preview
+// fetch shouldn't blank the whole dashboard either.
+const ProjectSetupPanelWrapper = makePanelWrapper<ProjectSetupPanelParams>(ProjectSetupPanel);
+
 // Same reasoning as GitHubPanelWrapper above — a crashing dock-config fetch
 // shouldn't blank the whole dashboard either.
 const DockConfigPanelWrapper = makePanelWrapper<DockConfigPanelParams>(DockConfigPanel);
@@ -436,6 +442,7 @@ export const components = {
   git: GitPanelWrapper,
   "agent-rules": AgentRulesPanelWrapper,
   "project-briefing": ProjectBriefingPanelWrapper,
+  "project-setup": ProjectSetupPanelWrapper,
   "dock-config": DockConfigPanelWrapper,
   skills: SkillsPanelWrapper,
   browser: BrowserPanelWrapper,

@@ -43,6 +43,11 @@ const PROJECT_BRIEFING_CONFIG: ProjectPanelKindConfig = {
   titleLabel: "Mullion Briefing",
   applyDesktopPositioning: true,
 };
+const PROJECT_SETUP_CONFIG: ProjectPanelKindConfig = {
+  kind: "project-setup",
+  titleLabel: "Scaffold Mullion",
+  applyDesktopPositioning: true,
+};
 const DOCK_CONFIG_CONFIG: ProjectPanelKindConfig = {
   kind: "dock-config",
   titleLabel: "Dock",
@@ -124,6 +129,9 @@ export interface UsePanelOpenerResult {
   onOpenAgentRules: (projectId: number) => void;
   // Opens (or focuses) a project's DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
+  // PR-6 — opens (or focuses) a project's "scaffold Mullion integration as
+  // a PR" setup panel.
+  onOpenProjectSetup: (projectId: number) => void;
   // U4 — opens (or focuses) a project's dock-config editor.
   onOpenDockConfig: (projectId: number) => void;
   // Opens (or focuses) a project's (read-only) skills panel (issue #432).
@@ -284,6 +292,16 @@ export function usePanelOpener({
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
+  const onOpenProjectSetup = useCallback(
+    (projectId: number) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, PROJECT_SETUP_CONFIG);
+      setSidebarOpen(false);
+    },
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+  );
+
   const onOpenDockConfig = useCallback(
     (projectId: number) => {
       if (!dockviewApi) return;
@@ -363,6 +381,7 @@ export function usePanelOpener({
     onOpenGit,
     onOpenAgentRules,
     onOpenProjectBriefing,
+    onOpenProjectSetup,
     onOpenDockConfig,
     onOpenSkills,
     onOpenBrowser,

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { clampToBytes, extractMarkedRegion } from "../../src/services/marked-region.js";
+import {
+  clampToBytes,
+  extractMarkedRegion,
+  upsertMarkedRegion,
+} from "../../src/services/marked-region.js";
 
 const START = "<!-- start -->";
 const END = "<!-- end -->";
@@ -67,5 +71,44 @@ describe("clampToBytes", () => {
     const text = "é".repeat(20);
     const result = clampToBytes(text, 7, "source.md");
     expect(result).not.toContain("�");
+  });
+});
+
+describe("upsertMarkedRegion", () => {
+  it("appends a fresh region to empty text", () => {
+    expect(upsertMarkedRegion("", START, END, "hello")).toBe(`${START}\nhello\n${END}\n`);
+  });
+
+  it("appends a fresh region after existing content, separated by a blank line", () => {
+    const result = upsertMarkedRegion("# Title\n\nSome prose.", START, END, "hello");
+    expect(result).toBe(`# Title\n\nSome prose.\n\n${START}\nhello\n${END}\n`);
+  });
+
+  it("replaces an existing region in place, leaving surrounding text untouched", () => {
+    const text = `before\n${START}\nold content\n${END}\nafter`;
+    const result = upsertMarkedRegion(text, START, END, "new content");
+    expect(result).toBe(`before\n${START}\nnew content\n${END}\nafter`);
+  });
+
+  it("trims the body before placing it between the markers", () => {
+    const result = upsertMarkedRegion("", START, END, "  padded  \n");
+    expect(result).toBe(`${START}\npadded\n${END}\n`);
+  });
+
+  it("only replaces the FIRST region — matches extractMarkedRegion's own first-region-only contract", () => {
+    const text = `${START}\nfirst\n${END}\nmiddle\n${START}\nsecond\n${END}`;
+    const result = upsertMarkedRegion(text, START, END, "replaced");
+    expect(result).toBe(`${START}\nreplaced\n${END}\nmiddle\n${START}\nsecond\n${END}`);
+  });
+
+  it("appends a new region when the end marker precedes the start marker (same 'no valid region' case extractMarkedRegion treats as absent)", () => {
+    const text = `${END}\nold\n${START}`;
+    const result = upsertMarkedRegion(text, START, END, "hello");
+    expect(result).toBe(`${text}\n\n${START}\nhello\n${END}\n`);
+  });
+
+  it("round-trips through extractMarkedRegion", () => {
+    const result = upsertMarkedRegion("# Doc", START, END, "round trip body");
+    expect(extractMarkedRegion(result, START, END)).toBe("round trip body");
   });
 });
