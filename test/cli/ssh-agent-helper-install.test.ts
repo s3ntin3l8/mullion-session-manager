@@ -910,6 +910,63 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(staleTmp)).toBe(false);
   });
 
+  // Issue #904 (self-review, PR #911) — a process killed before ITS OWN
+  // renameSync ever ran (the canonical file was never created, only the
+  // temp file it was about to become) must not print "removed
+  // <canonical path>" — that path never existed. The message must name
+  // whatever was actually removed.
+  it("win32: uninstall reports the stray tmp path, not the canonical filename, when the main credential never existed", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const stateDir = path.join(d, "state");
+    mkdirSync(stateDir, { recursive: true });
+    const staleTmp = path.join(stateDir, "ssh-agent-bridge.json.48291.tmp");
+    writeFileSync(staleTmp, "{}");
+    await runInstall([], io);
+
+    const stdoutLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(staleTmp)).toBe(false);
+    const output = stdoutLines.join("");
+    expect(output).toMatch(/removed .*ssh-agent-bridge\.json\.48291\.tmp/);
+    expect(output).not.toMatch(/removed .*[/\\]ssh-agent-bridge\.json\n/);
+  });
+
+  // Issue #904 (self-review, PR #911) — a failed delete (a real, non-exotic
+  // occurrence on Windows: {app} IS stateDir(), and this runs from the
+  // installer's own [UninstallRun], where a transient AV/indexer lock on a
+  // just-renamed JSON file is ordinary) must be best-effort, like
+  // saveCredential's own cleanup — reported to stderr, not thrown. An
+  // uncaught throw here would turn an already-successful supervisor
+  // teardown (the task really is gone, already reported below) into a hard
+  // crash for a problem that isn't the teardown's fault. A directory where
+  // the credential file should be is a real, portable, deterministic way to
+  // force fs.rmSync to fail (EISDIR) without relying on OS permission
+  // semantics that can behave differently across CI runners.
+  it("win32: a failed credential delete is reported, not thrown — the successful task teardown still counts", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    const xmlPath = windowsTaskXmlPath(io);
+    mkdirSync(credentialPath(io), { recursive: true });
+
+    const stdoutLines: string[] = [];
+    const stderrLines: string[] = [];
+    io.stdout = { write: (s: string) => stdoutLines.push(s) };
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    // The task teardown itself still succeeded and is still reported...
+    expect(existsSync(xmlPath)).toBe(false);
+    expect(stdoutLines.join("")).toMatch(/removed .*mullion-helper-task\.xml/);
+    // ...but the credential delete failure is reported as a warning, not a
+    // "removed" claim, and definitely not an uncaught throw.
+    expect(stderrLines.join("")).toMatch(/could not remove pairing credential/);
+    expect(stdoutLines.join("")).not.toMatch(/removed .*ssh-agent-bridge\.json/);
+  });
+
   // Issue #904 — the case per-platform placement would miss: a laptop that
   // ran `helper pair` but never `helper install` still needs uninstall to
   // forget the credential, even though every platform's own teardown

@@ -673,15 +673,33 @@ function uninstallWindows(io) {
 // all three of those return 0 from their own "nothing installed" gate
 // before touching anything, and a paired-but-never-installed credential
 // still needs to go.
+//
+// Best-effort per file, like saveCredential's own cleanup (same module,
+// helper.mjs): {app} on Windows IS stateDir() (PR3's own DisableDirPage
+// comment), and this runs from the installer's own [UninstallRun] — a
+// transient AV/indexer lock (EPERM/EBUSY) on a just-renamed JSON file there
+// is an ordinary occurrence, not exotic, and `{ force: true }` alone only
+// suppresses ENOENT. A failed delete is reported, not thrown — it must not
+// turn an already-successful supervisor teardown into a hard crash. Only
+// paths that actually get removed are reported, not the canonical filename
+// unconditionally — a run that only finds a stray .tmp sibling (the main
+// file never existed) must not claim it removed a file that was never
+// there. (Hermes/self-review, PR #911.)
 function removeCredential(io) {
   const file = credentialPath(io);
   const dir = stateDir(io);
   const base = path.basename(file);
-  let removedAny = false;
+  const removed = [];
 
   if (fs.existsSync(file)) {
-    fs.rmSync(file, { force: true });
-    removedAny = true;
+    try {
+      fs.rmSync(file, { force: true });
+      removed.push(file);
+    } catch (err) {
+      io.stderr.write(
+        `warning: could not remove pairing credential ${file}: ${err.message} — remove it by hand if you want it fully forgotten.\n`,
+      );
+    }
   }
 
   let entries;
@@ -692,12 +710,19 @@ function removeCredential(io) {
   }
   for (const entry of entries) {
     if (entry.startsWith(`${base}.`) && entry.endsWith(".tmp")) {
-      fs.rmSync(path.join(dir, entry), { force: true });
-      removedAny = true;
+      const tmpPath = path.join(dir, entry);
+      try {
+        fs.rmSync(tmpPath, { force: true });
+        removed.push(tmpPath);
+      } catch (err) {
+        io.stderr.write(
+          `warning: could not remove stale credential file ${tmpPath}: ${err.message}\n`,
+        );
+      }
     }
   }
 
-  if (removedAny) io.stdout.write(`removed ${file}\n`);
+  for (const removedPath of removed) io.stdout.write(`removed ${removedPath}\n`);
 }
 
 export async function runUninstall(_args, io) {
@@ -714,10 +739,28 @@ export async function runUninstall(_args, io) {
   // /Delete, systemctl disable, launchctl bootout all returning nonzero)
   // means the platform function's own stderr message already warns
   // "'mullion helper run' may still be active" — deleting the credential
-  // out from under a still-running, still-supervised process would strand
-  // it mid-session with no way to reconnect. That failure path returns
+  // out from under a still-running, still-supervised process would leave it
+  // unable to reconnect on its next restart. That failure path returns
   // early above (uninstallWindows etc. `return 1`), so `code === 0` here
-  // already means the supervisor artifact really is gone.
+  // means the supervisor's OWN registration is genuinely gone.
+  //
+  // Windows-only residual gap, not fully closed by that: uninstallWindows's
+  // own `code` comes from `/Delete` alone — a `/End` failure is swallowed
+  // there by design (its own comment: "e.g. the task was already stopped"
+  // is the common, benign case, and distinguishing it from a genuine
+  // termination failure would mean parsing schtasks' own locale-dependent
+  // error text). So `code === 0` on win32 does NOT guarantee the actual
+  // mullion-helper.exe process has exited, only that its Scheduled Task
+  // registration has. If it's still alive and renewing when this runs, the
+  // narrow way it could notice is removeCredential's own tmp-sibling sweep
+  // below racing that SAME process's own in-flight saveCredential call
+  // (ssh-agent-helper.mjs) — deleting its just-written `<pid>.tmp` out from
+  // under it before its own renameSync runs. That renameSync's ENOENT
+  // lands in renewSession's generic catch, which treats ANY save failure as
+  // transient and retries on its own backoff — not a crash, not a stranded
+  // session, just one missed renewal cycle before either a later renewal
+  // succeeds or the process eventually exits on "credential file missing".
+  // Not worth chasing further given that self-healing (self-review, PR #911).
   if (code === 0) removeCredential(io);
   return code;
 }
