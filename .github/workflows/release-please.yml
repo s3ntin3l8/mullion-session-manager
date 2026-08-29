@@ -101,3 +101,70 @@ jobs:
           version="${VERSION#v}"
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             "mullion-${version}.tgz" "mullion-${version}.tgz.sha256"
+
+  # Round 3 (PR2/PR3, Windows SEA) — builds and attaches `mullion-helper.exe`
+  # (scripts/build-helper-sea.mjs) the same way build-tarball above attaches
+  # the server tarball: a real multi-step job (no reusable upstream
+  # workflow for this either), gated on the same release_created output,
+  # checksummed the same way. `windows-latest`, not cross-compiled from
+  # ubuntu-latest — postject injects into a COPY of process.execPath, so the
+  # blob and the host node.exe must come from the same real Windows Node
+  # install for the result to actually be a valid PE the OS will run; cross-
+  # generating a Windows SEA from Linux isn't an officially supported Node
+  # SEA path.
+  build-helper-exe:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: "npm"
+
+      - name: Build mullion-helper.exe
+        run: |
+          npm ci
+          npm run build:helper-sea
+
+      - name: Smoke test the built exe
+        shell: pwsh
+        run: |
+          $output = & build\helper-sea\mullion-helper.exe bogus 2>&1
+          if ($LASTEXITCODE -ne 2) { throw "expected exit code 2, got $LASTEXITCODE" }
+          # GitHub Actions' pwsh shell fails a step on whatever $LASTEXITCODE
+          # is when the script ends, regardless of the `if` check above
+          # having already validated it as the EXPECTED value (2, for an
+          # unrecognized verb) — without this, the exe's own designed exit
+          # code would re-surface as a spurious failure of THIS step, which
+          # would skip the upload step entirely and ship a release with no
+          # mullion-helper.exe attached.
+          exit 0
+
+      - name: Rename, checksum, and upload to the GitHub Release
+        shell: pwsh
+        run: |
+          $version = $env:VERSION -replace '^v', ''
+          $exeName = "mullion-helper-$version.exe"
+          Copy-Item "build\helper-sea\mullion-helper.exe" $exeName
+
+          # sha256sum's own output format ("<lowercase-hex>  <filename>"),
+          # not PowerShell's default Get-FileHash table — self-update.sh and
+          # deploy/install.sh both expect a `sha256sum -c`-compatible file
+          # for the tarball's own checksum (see build-tarball above); this
+          # asset's checksum matches that same convention so anyone
+          # verifying it can use the same one-liner regardless of which
+          # release asset they downloaded.
+          $hash = (Get-FileHash $exeName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $exeName" | Out-File -Encoding ascii -NoNewline "$exeName.sha256"
+
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" $exeName "$exeName.sha256"

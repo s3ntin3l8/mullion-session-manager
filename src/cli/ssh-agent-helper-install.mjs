@@ -22,9 +22,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync as nodeSpawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { isSea as nodeIsSea } from "node:sea";
 import { extractFlags, CliUsageError } from "./core.mjs";
-import { stateDir, loadCredential } from "./ssh-agent-helper.mjs";
+import { stateDir, loadCredential, WINDOWS_DEFAULT_SSH_AUTH_SOCK } from "./ssh-agent-helper.mjs";
 
 // One instance total, not one per host — unlike the manual ssh -R tunnel
 // (docs/ssh-agent.md), a single bridge connection already serves every
@@ -33,10 +33,27 @@ export const LAUNCHD_LABEL = "de.s3ntin3l8.mullion-helper";
 export const SYSTEMD_UNIT_NAME = "mullion-helper.service";
 export const WINDOWS_TASK_NAME = "MullionHelper";
 
-function defaultScriptPath() {
-  // Sibling of this file — mullion.mjs, byte-identical in dist/cli/ per
-  // package.json's build step (see mullion.mjs's own header comment).
-  return path.join(path.dirname(fileURLToPath(import.meta.url)), "mullion.mjs");
+// Round 3 (PR2) — `defaultScriptPath()` lives in its own file, imported
+// dynamically and ONLY on the non-SEA path (runInstall below), rather than
+// as a plain top-level import here — see that file's own header comment
+// for why: its `import.meta.url` usage can't be bundled to CJS at all, and
+// this module IS part of the Node SEA's bundle graph (install/uninstall
+// must work from mullion-helper.exe too), so a top-level import would drag
+// that unbundlable syntax into the SEA build regardless of whether
+// isSea ever gates its result. scripts/build-helper-sea.mjs marks this
+// specific file `external` so esbuild never even parses it for that build.
+//
+// This dynamic import's specifier gets rewritten to a relative path by
+// esbuild's bundler wherever it's the caller who ends up bundled (a real
+// SEA build) — that rewritten specifier is inert, not a live bug: the ONLY
+// call site (runInstall below) is behind `isSea ? null : await
+// defaultScriptPath()`, and `isSea` is provably true for the entire
+// lifetime of an actual SEA process (node:sea's own isSea(), not a guess),
+// so this function is never actually invoked inside one. Self-review
+// confirmed this by building and running a real SEA binary end-to-end.
+async function defaultScriptPath() {
+  const { defaultScriptPath: resolve } = await import("./ssh-agent-helper-default-script-path.mjs");
+  return resolve();
 }
 
 export function launchdPlistPath(io) {
@@ -224,6 +241,17 @@ WantedBy=default.target
 //     by default, so this is a correctness fix, not a preference.
 //   - LogonType InteractiveToken + RunLevel LeastPrivilege <-> launchd/
 //     systemd both run as the inviting user with no privilege escalation.
+// Round 3 (PR2, Windows SEA) — `scriptPath` is now optional: a Node SEA
+// binary (helper-main.mjs, bundled by scripts/build-helper-sea.mjs) IS
+// `execPath` itself and takes no separate script argument at all, unlike
+// today's `node.exe mullion.mjs helper run ...` shape. Passing `null` here
+// (never `undefined` — see runInstall's own comment on why the two must
+// stay distinct) collapses the argv to `[execPath, "helper", "run",
+// --ssh-auth-sock, sshAuthSock]`. This also incidentally fixes the
+// path-permanence trap `defaultScriptPath()` had: under a SEA there's no
+// sibling file location for the argv to hard-code, so wherever `install`
+// copies/finds the exe IS the permanent path — no "extracted the tarball to
+// Downloads, cleaned it up later, task silently breaks" failure mode.
 export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
   // Every token quoted uniformly (scriptPath included — a very plausible
   // "C:\Program Files\..." space, unlike execPath which Windows itself
@@ -242,9 +270,14 @@ export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
   //   2. xmlEscape — makes THAT text safe as XML element content. Must run
   //      second: windowsArgEscape's own output can itself contain literal
   //      `"` characters (from its `\"` escaping) that still need `&quot;`.
-  const args = [scriptPath, "helper", "run", "--ssh-auth-sock", sshAuthSock]
-    .map((value) => `"${xmlEscape(windowsArgEscape(value))}"`)
-    .join(" ");
+  const argv = [
+    ...(scriptPath !== null && scriptPath !== undefined ? [scriptPath] : []),
+    "helper",
+    "run",
+    "--ssh-auth-sock",
+    sshAuthSock,
+  ];
+  const args = argv.map((value) => `"${xmlEscape(windowsArgEscape(value))}"`).join(" ");
   const comment = xmlEscape(EXPIRY_COMMENT_LINES.join(" "));
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -284,7 +317,14 @@ export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
 }
 
 function resolveSshAuthSock(flags, io, platform) {
-  const value = flags["ssh-auth-sock"] || io.env.SSH_AUTH_SOCK;
+  // Windows falls through to the empirically-confirmed default (issue
+  // #874) rather than requiring the flag/env every time — macOS/Linux have
+  // no equivalent well-known default (a manual ssh-agent's socket path is
+  // never fixed), so this default is win32-only, not a general fallback.
+  const value =
+    flags["ssh-auth-sock"] ||
+    io.env.SSH_AUTH_SOCK ||
+    (platform === "win32" ? WINDOWS_DEFAULT_SSH_AUTH_SOCK : undefined);
   if (!value) {
     throw new CliUsageError(
       "no SSH_AUTH_SOCK to install with — pass --ssh-auth-sock <path>, or run this from a " +
@@ -490,7 +530,38 @@ export async function runInstall(args, io) {
   const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
   const sshAuthSock = resolveSshAuthSock(flags, io, platform);
   const execPath = io.execPath ?? process.execPath;
-  const scriptPath = io.scriptPath ?? defaultScriptPath();
+  // Round 3 (PR2) — `io.isSea` is the same injected-seam convention as
+  // `io.platform`/`io.homedir` above, letting tests exercise the SEA
+  // branch from Linux without an actual SEA binary. `node:sea`'s own
+  // `isSea()` returns `false` (never throws) outside a SEA, so this is
+  // safe to call unconditionally on every platform.
+  const isSea = io.isSea !== undefined ? io.isSea : nodeIsSea();
+  // This round ships a Windows SEA exclusively (see below) — a SEA on any
+  // other platform is a state nothing here produces yet, but refusing
+  // cleanly is far better than the alternative already confirmed by self-
+  // review: `defaultScriptPath()`'s dynamic import of its own split-out
+  // sibling file (see that file's own comment) fails at runtime inside a
+  // real SEA with an opaque "No such built-in module" error, since a
+  // single-file executable has no real on-disk module-resolution context
+  // to satisfy an externalized relative import against.
+  if (isSea && platform !== "win32") {
+    io.stderr.write(
+      `mullion helper install: this build is a Node SEA, which is only supported on win32 — got '${platform}'.\n`,
+    );
+    return 1;
+  }
+  // `isSea` implies win32 here — the guard above already rejected every
+  // other combination — so `null` (not `defaultScriptPath()`) is safe:
+  // `buildWindowsTaskXml` is the only one of the three builders below with
+  // a scriptPath-optional mode (`buildLaunchdPlist`/`buildSystemdUnit`
+  // both still unconditionally interpolate `scriptPath` as a string).
+  //
+  // Deliberately `!== undefined`, not `??`, for `io.scriptPath` itself: a
+  // caller passing `scriptPath: null` explicitly must stay `null` all the
+  // way to buildWindowsTaskXml — `??` would treat `null` the same as
+  // `undefined` and fall through to `defaultScriptPath()` instead.
+  const scriptPath =
+    io.scriptPath !== undefined ? io.scriptPath : isSea ? null : await defaultScriptPath();
   warnIfNotPaired(io);
 
   const opts = { execPath, scriptPath, sshAuthSock };

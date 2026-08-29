@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { MullionSocketClient } from "./client.mjs";
 import { runCommand, parseGlobalFlags, resolveCommand } from "./core.mjs";
-import { runHelper } from "./ssh-agent-helper.mjs";
+import { runHelper, buildHelperIo } from "./ssh-agent-helper.mjs";
 
 function buildIo() {
   return {
@@ -79,7 +79,7 @@ async function main() {
   // here too, before MullionSocketClient is ever constructed, the same way
   // `mcp` already is just above.
   if (!resolved.error && resolved.noun === "helper") {
-    const code = await runHelper(resolved.verb, resolved.args, buildIo());
+    const code = await runHelper(resolved.verb, resolved.args, buildHelperIo());
     process.exit(code);
   }
 

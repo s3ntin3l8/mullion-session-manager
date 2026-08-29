@@ -111,3 +111,85 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run e2e suite
         run: npm run test:e2e
+
+  # Round 3 (PR2/PR3, Windows SEA) — the counterpart to test-e2e's own
+  # "no upstream reusable workflow for this" exception above: real
+  # verification of the two things `test-node` (ubuntu-latest) structurally
+  # cannot exercise — an actual `schtasks.exe` round trip, and the Node SEA
+  # binary (scripts/build-helper-sea.mjs) actually executing at all. This
+  # retires the "no local verification path for schtasks.exe" caveat
+  # ssh-agent-helper-install.mjs's own header comment and docs/ssh-agent.md
+  # have both carried since #879.
+  #
+  # Deliberately NOT added to CLAUDE.md's required-status-checks list yet —
+  # same reasoning as test-e2e above: this is the job's first run anywhere
+  # outside a developer's own machine (this repo's CI has never run on a
+  # Windows runner before), so it needs a stretch of unattended real runs
+  # before every future merge is gated on it.
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build mullion-helper.exe
+        run: npm run build:helper-sea
+      # Confirms the bundle actually runs as a SEA at all — the one thing
+      # genuinely uncertain building this from Linux-only dev/CI: whether
+      # `process.argv` inside a real SEA is shaped the way helper-main.mjs
+      # assumes (argv[2] onward = the noun/verb/args this binary parses).
+      # Exit code 2 + the exact usage message is `helper-main.mjs`'s own
+      # documented behavior for an unrecognized noun.
+      - name: Smoke test — unknown command
+        shell: pwsh
+        run: |
+          $exe = "build\helper-sea\mullion-helper.exe"
+          $output = & $exe bogus 2>&1
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -ne 2) { throw "expected exit code 2, got $code" }
+          $joined = $output -join "`n"
+          if ($joined -notmatch "unknown command: bogus") { throw "unexpected output: $joined" }
+          # GitHub Actions' pwsh shell fails a step on whatever $LASTEXITCODE
+          # is when the script ends, regardless of whether the `if` checks
+          # above already validated it as the EXPECTED value — the exit code
+          # 2 asserted above would otherwise be re-surfaced as this step's
+          # own (spurious) failure. Reset it now that success is confirmed.
+          exit 0
+      # Real schtasks.exe round trip: install (registers a REAL Scheduled
+      # Task on this runner), query it, uninstall, confirm it's gone.
+      # Scoped to /Create + /Query round-tripping the XML this generates —
+      # NOT asserting /Run actually started the process, which a CI
+      # runner's non-interactive session may not support the same way a
+      # real interactive logon does (installWindows's own comment: a failed
+      # /Run degrades to a warning, not a failed install, for exactly this
+      # kind of environment).
+      - name: schtasks round trip — install, query, uninstall
+        shell: pwsh
+        env:
+          MULLION_HELPER_STATE_DIR: ${{ runner.temp }}\mullion-helper-state
+        run: |
+          $exe = "build\helper-sea\mullion-helper.exe"
+          & $exe helper install --ssh-auth-sock "\\.\pipe\openssh-ssh-agent"
+          if ($LASTEXITCODE -ne 0) { throw "helper install failed with exit code $LASTEXITCODE" }
+
+          schtasks /Query /TN MullionHelper /V /FO LIST
+          if ($LASTEXITCODE -ne 0) { throw "schtasks /Query found no registered task after install" }
+
+          & $exe helper uninstall
+          if ($LASTEXITCODE -ne 0) { throw "helper uninstall failed with exit code $LASTEXITCODE" }
+
+          schtasks /Query /TN MullionHelper 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "task still registered after uninstall" }
+          # Same reset as the smoke-test step above — the LAST native call
+          # here is EXPECTED to fail (proving the task is really gone), so
+          # $LASTEXITCODE is non-zero on the success path and would
+          # otherwise fail this step despite every assertion having passed.
+          exit 0
