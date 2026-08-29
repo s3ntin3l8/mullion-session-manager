@@ -347,3 +347,32 @@ jobs:
             echo "job still registered in $LABEL after uninstall"
             exit 1
           fi
+
+      # SPIKE (round 4 PR5, issue #820) — throwaway, removed before merge.
+      # A .pkg's postinstall script runs as root; installLaunchd's own
+      # `launchctl bootstrap gui/$(id -u)/...` needs to run as the actual
+      # console user instead, or it registers into the wrong (root's) GUI
+      # domain. `launchctl asuser <uid> sudo -u <user> ...` is the documented
+      # way to cross that root-to-console-user boundary. Confirming this
+      # actually works on a real macos-latest runner BEFORE writing
+      # deploy/macos/build-pkg.sh's postinstall around it.
+      - name: SPIKE — root-to-console-user launchctl transition
+        env:
+          MULLION_HELPER_STATE_DIR: ${{ runner.temp }}/mullion-helper-state-spike
+        run: |
+          set -e
+          EXE="$(pwd)/build/helper-sea/mullion-helper"
+          USER_NAME="$(id -un)"
+          USER_UID="$(id -u)"
+          LABEL="gui/$USER_UID/de.s3ntin3l8.mullion-helper"
+          sudo launchctl asuser "$USER_UID" sudo -u "$USER_NAME" \
+            env "MULLION_HELPER_STATE_DIR=$MULLION_HELPER_STATE_DIR" \
+            "$EXE" helper install --ssh-auth-sock /tmp/fake-agent-spike.sock
+          if ! launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "SPIKE FAILED: launchctl print found no registered job in $LABEL"
+            exit 1
+          fi
+          echo "SPIKE PASSED: root-to-console-user launchctl asuser transition works"
+          sudo launchctl asuser "$USER_UID" sudo -u "$USER_NAME" \
+            env "MULLION_HELPER_STATE_DIR=$MULLION_HELPER_STATE_DIR" \
+            "$EXE" helper uninstall
