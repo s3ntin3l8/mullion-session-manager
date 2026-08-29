@@ -172,12 +172,17 @@ tunnel](#manual-tunnel-ssh--r) below are directly adaptable: swap the
 The helper reconnects on its own if the primary is briefly unreachable
 (laptop sleep, network drop, primary restart) — backing off from 1s up to
 30s between attempts, and it never gives up outright, so a laptop that wakes
-up hours later resumes forwarding without a manual restart, **as long as the
-session credential from pairing hasn't hit its 24h deadline** (see the next
-section — that deadline doesn't reset on reconnect). Once it has, `run`
-prints that the session is no longer valid and exits — under a supervisor
-that restarts it unconditionally, this becomes a restart loop until you
-re-pair with a fresh payload from Settings, not a self-healing retry.
+up hours later resumes forwarding without a manual restart. Independently
+of that reconnect loop, `run` also **renews its own session automatically**
+(see [Credential storage](#credential-storage) below) — the two together
+mean a helper left running under `install` normally never needs a human to
+re-pair it at all. If the session is ever genuinely dead by the time `run`
+next needs it — the bridge was revoked from Settings, or the primary stayed
+unreachable long enough for renewal itself to exhaust its own retries —
+`run` prints that the session is no longer valid and exits; under a
+supervisor that restarts it unconditionally, this becomes a restart loop
+until you re-pair with a fresh payload from Settings, not a self-healing
+retry.
 
 ### Credential storage
 
@@ -190,13 +195,20 @@ delete the file to forget the pairing locally (revoking from Settings, see
 below, is the primary-side equivalent and takes effect immediately either
 way).
 
-**This credential is valid for 24h from the moment you paired, a fixed
-deadline that reconnecting does not extend.** A helper that's been
-disconnected and reconnecting all day, or one that's stayed continuously
-connected, hits the same wall 24h after `pair` ran — there is currently no
-way to renew a session short of re-pairing. Plan on running `mullion helper
-pair` again at least once a day for uninterrupted coverage; a first-class
-renewal path is expected in a later release.
+**A freshly paired session is valid for 24h, but `run` renews it on its own
+at roughly half that TTL** (a plain HTTP call to the primary,
+`POST /api/bridges/renew`, deliberately independent of the WS connection
+actually forwarding traffic — renewing never disrupts a session mid-signing)
+— well before the original deadline, and every renewal resets the clock for
+another 24h. A helper that's continuously connected, or one that's
+disconnected-and-reconnecting, both keep renewing this way as long as `run`
+is running and can reach the primary at all; there's no daily chore anymore.
+The 24h deadline still matters as a hard backstop: if `run` isn't running,
+or the primary is unreachable for longer than renewal's own retry budget, or
+the bridge is revoked from Settings, the session eventually (or immediately,
+for a revoke) stops being valid, and only a fresh `mullion helper pair`
+payload from Settings fixes that — restarting `run` alone won't revive an
+actually-dead credential.
 
 ### Revoking
 
@@ -208,12 +220,12 @@ it hasn't expired yet.
 
 ### Status labels
 
-| Settings shows...      | Meaning                                                                                                                                                                                                                                                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connected`            | The helper's `run` process is currently connected. Sessions on any enrolled agent host, or on the primary itself, can sign.                                                                                                                                                                                                           |
-| `pairing pending`      | A pairing code was issued but `mullion helper pair` hasn't redeemed it yet — or it already expired (10 minutes) and needs a fresh one.                                                                                                                                                                                                |
-| `session expired`      | The 24h credential from pairing has hit its fixed deadline (see [Credential storage](#credential-storage) — reconnecting doesn't extend it), or `run` simply isn't running / can't reach the primary within that window. Re-pair with a fresh payload from Settings; restarting `run` alone won't fix an actually-expired credential. |
-| `last seen <time> ago` | Paired, not currently connected, still within the 24h window. Restart `mullion helper run` if it's not running — no re-pair needed yet.                                                                                                                                                                                               |
+| Settings shows...      | Meaning                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connected`            | The helper's `run` process is currently connected. Sessions on any enrolled agent host, or on the primary itself, can sign.                                                                                                                                                                                                                                      |
+| `pairing pending`      | A pairing code was issued but `mullion helper pair` hasn't redeemed it yet — or it already expired (10 minutes) and needs a fresh one.                                                                                                                                                                                                                           |
+| `session expired`      | The credential is genuinely dead — `run` wasn't running (or couldn't reach the primary) for long enough that renewal never had a chance to fire before the 24h deadline, or the bridge was revoked from Settings (see [Credential storage](#credential-storage)). Re-pair with a fresh payload; restarting `run` alone won't fix an actually-expired credential. |
+| `last seen <time> ago` | Paired, not currently connected. If `run` is stopped, restart it — a live session renews itself, so no re-pair is needed unless it's actually expired (see the row above).                                                                                                                                                                                       |
 
 A bridge that's genuinely been revoked doesn't appear in this list at all —
 revoking deletes the row outright, it never shows up as a lingering

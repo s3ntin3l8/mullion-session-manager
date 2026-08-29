@@ -125,21 +125,30 @@ function windowsArgEscape(value) {
   return result;
 }
 
-// Both generators embed the same warning: the bridge session `pair` issues
-// is a fixed 24h deadline from the moment of pairing (bridge-registry.ts's
-// SESSION_TTL_MS), never extended by reconnecting — rotateBridgeSession
-// exists but has zero call sites (see docs/ssh-agent.md's Credential
-// storage section). Once it expires, `run` exits 1 rather than retrying,
-// so an unconditional Restart=always/KeepAlive would otherwise tight-loop
-// once a day until a human re-pairs. Comment says why; RestartSec/
-// ThrottleInterval keep the actual respawn cadence calm rather than tight.
+// Both generators embed the same note. Round 3 (session renewal) — `run`
+// now renews its own session on its own schedule (~50% of the bridge
+// session's 24h TTL, ssh-agent-helper.mjs's scheduleRenewal, calling
+// routes/agent-bridge.ts's POST /api/bridges/renew, which wires up
+// rotateBridgeSession — previously unwired, see docs/ssh-agent.md's
+// Credential storage section), so under normal conditions this job runs
+// indefinitely without a human re-pairing it. It can still genuinely die —
+// the bridge revoked from Settings, or the primary unreachable for longer
+// than renewal's own retry budget — and when it does, `run` exits 1 rather
+// than retrying with a now-permanently-invalid credential, so an
+// unconditional Restart=always/KeepAlive would otherwise tight-loop until a
+// human re-pairs. Comment says why; RestartSec/ThrottleInterval keep the
+// actual respawn cadence calm rather than tight for that (now much rarer)
+// case.
 const EXPIRY_COMMENT_LINES = [
-  "The bridge session 'mullion helper pair' issues is valid for 24h from",
-  "pairing and is never renewed by reconnecting (docs/ssh-agent.md) — once",
-  "it expires, 'run' exits 1 and this job restarts into the same failure",
-  "until you re-pair with a fresh payload from Settings -> Hosts -> SSH",
-  "agent bridges. The restart cadence below is deliberately calm, not",
-  "tight, for exactly that expected daily failure.",
+  "The bridge session 'mullion helper pair' issues is valid for 24h, but",
+  "'mullion helper run' renews it automatically at ~50% of that TTL — under",
+  "normal conditions this job runs indefinitely with no re-pairing needed.",
+  "If the bridge is revoked from Settings, or the primary is unreachable",
+  "for an extended stretch, 'run' still exits 1 once its session is",
+  "genuinely dead, and this job restarts into the same failure until you",
+  "re-pair with a fresh payload from Settings -> Hosts -> SSH agent",
+  "bridges. The restart cadence below is deliberately calm, not tight, for",
+  "exactly that (now much rarer) case.",
 ];
 
 export function buildLaunchdPlist({ execPath, scriptPath, sshAuthSock, logPath }) {
@@ -205,11 +214,10 @@ WantedBy=default.target
 //     review and Hermes, PR #879) flagged that Task Scheduler's own
 //     RestartCount element is documented with a 999 upper bound elsewhere
 //     in Microsoft's schema docs, and this environment can't confirm the
-//     exact figure against a real `schtasks /Create` — 999 restarts at a
-//     1-minute floor is already ~16.6 hours of retrying, comfortably more
-//     than enough headroom for the 24h credential-expiry cycle
-//     EXPIRY_COMMENT_LINES describes, so staying at or under any plausible
-//     cap costs nothing here.
+//     exact figure against a real `schtasks /Create` — staying at or under
+//     any plausible cap costs nothing here regardless of the exact number,
+//     since a genuinely dead credential (EXPIRY_COMMENT_LINES above) needs
+//     a human to re-pair either way, not more restart attempts.
 //   - ExecutionTimeLimit PT0S (unlimited) — the default is PT72H (3 days),
 //     which would silently kill this long-running foreground process out
 //     from under itself; every other platform's job here runs indefinitely
@@ -361,8 +369,8 @@ function installLaunchd(io, { execPath, scriptPath, sshAuthSock }) {
     `installed and started — ${plistPath}\n` +
       "check status: launchctl list | grep mullion-helper\n" +
       `logs: tail -f ${logPath}\n` +
-      "the paired session is valid for 24h — re-run 'mullion helper pair <payload>' at least " +
-      "once a day for uninterrupted coverage.\n",
+      "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
+      "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;
 }
@@ -392,8 +400,8 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
       `check status: systemctl --user status ${SYSTEMD_UNIT_NAME}\n` +
       `logs: journalctl --user -u ${SYSTEMD_UNIT_NAME} -f\n` +
       "run 'loginctl enable-linger $(whoami)' so this survives logout.\n" +
-      "the paired session is valid for 24h — re-run 'mullion helper pair <payload>' at least " +
-      "once a day for uninterrupted coverage.\n",
+      "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
+      "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;
 }
@@ -467,8 +475,8 @@ function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   }
   io.stdout.write(
     `check status: schtasks /Query /TN ${WINDOWS_TASK_NAME} /V\n` +
-      "the paired session is valid for 24h — re-run 'mullion helper pair <payload>' at least " +
-      "once a day for uninterrupted coverage.\n",
+      "this session renews itself automatically — no need to re-run 'mullion helper pair' " +
+      "unless it's revoked from Settings or unreachable long enough to expire outright.\n",
   );
   return 0;
 }

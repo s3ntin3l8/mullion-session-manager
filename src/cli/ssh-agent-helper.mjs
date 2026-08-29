@@ -41,6 +41,20 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // side before the server even times it out itself.
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 
+// Round 3 (session renewal) — POST /api/bridges/renew (routes/agent-
+// bridge.ts), called on its own schedule, independent of the WS connect/
+// reconnect loop below (see runRun's own comment on why the two are kept
+// separate). Fraction and retry ladder mirror
+// src/plugins/agent-enrollment.ts's scheduleRenewal()/renew(): ~50% of TTL
+// before the deadline, retried on failure rather than given up on — a
+// bridge session has no bootstrap credential to fall back to the way an
+// agent host's MULLION_AGENT_TOKEN does (bridge-registry.ts's own comment
+// on rotateBridgeSession), so a transient renewal failure must keep trying
+// rather than surface as a fatal error.
+const RENEW_AT_FRACTION = 0.5;
+const RENEW_TIMEOUT_MS = 10_000;
+const RENEW_RETRY_DELAYS_MS = [5000, 15000, 60000, 300000];
+
 /** Thrown for a handshake the SERVER explicitly rejected (bad pairing code,
  * invalid/expired session) — as opposed to a network-level failure (DNS,
  * refused, timeout). The distinction matters to `run`'s reconnect loop:
@@ -53,6 +67,13 @@ function toWsUrl(baseUrl, urlPath) {
   const url = new URL(urlPath, baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
+}
+
+// Round 3 (session renewal) — baseUrl is already validated http(s) by
+// loadCredential/isValidHttpBaseUrl below, so this is a plain path join,
+// symmetric with toWsUrl above but without the protocol rewrite.
+function toHttpUrl(baseUrl, urlPath) {
+  return new URL(urlPath, baseUrl).toString();
 }
 
 function sleep(ms) {
@@ -194,6 +215,16 @@ function isValidHttpBaseUrl(value) {
   }
 }
 
+// Round 3 (session renewal) — `expiresAt` is a new credential-file field;
+// `undefined` is explicitly valid here (not just "falls through to
+// false"), so a credential file written before this round still loads
+// instead of being treated as corrupt. runRun's own renewal scheduler
+// reads a missing value as "renew immediately" (see scheduleRenewal).
+function isValidExpiresAt(value) {
+  if (value === undefined) return true;
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
 export function stateDir(io) {
   if (io.env.MULLION_HELPER_STATE_DIR) return io.env.MULLION_HELPER_STATE_DIR;
   const base = io.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
@@ -220,11 +251,12 @@ export function loadCredential(io) {
   } catch {
     return null;
   }
-  const { baseUrl, bridgeId, sessionId } = parsed ?? {};
+  const { baseUrl, bridgeId, sessionId, expiresAt } = parsed ?? {};
   if (
     !isValidHttpBaseUrl(baseUrl) ||
     !isValidBridgeId(bridgeId) ||
-    !isValidSessionToken(sessionId)
+    !isValidSessionToken(sessionId) ||
+    !isValidExpiresAt(expiresAt)
   ) {
     return null;
   }
@@ -238,12 +270,37 @@ export function loadCredential(io) {
  * option only applies when the file is CREATED — an overwrite of a
  * pre-existing file (re-pairing) would otherwise keep whatever looser
  * mode it already had. */
+// Round 3 (session renewal) — write-to-temp-then-rename, not a direct
+// writeFileSync, now that this runs on every rotation (~every 12h) rather
+// than once at `pair` time: a process killed mid-write (power loss, OOM
+// kill) between those two calls used to risk a truncated/corrupt credential
+// file at pair-time odds low enough to accept; at a recurring 12h cadence
+// for the life of a long-running `run`, the same risk compounds enough to
+// be worth the two extra syscalls. `fs.renameSync` within the SAME
+// directory is atomic on every platform this ships for (POSIX rename(2);
+// Windows MoveFileEx without COPY_ALLOWED, which NTFS/ReFS honor for a
+// same-volume rename) — a reader (this same process's own next
+// loadCredential, or a human `cat`-ing the file) always sees either the
+// old, fully-written credential or the new one, never a partial write.
 function saveCredential(io, credential) {
   const dir = stateDir(io);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = credentialPath(io);
-  fs.writeFileSync(file, `${JSON.stringify(credential, null, 2)}\n`, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  const tmpFile = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, `${JSON.stringify(credential, null, 2)}\n`, { mode: 0o600 });
+    fs.chmodSync(tmpFile, 0o600);
+    fs.renameSync(tmpFile, file);
+  } catch (err) {
+    // Best-effort cleanup so a write/rename failure (disk full, permission
+    // denied) doesn't leave a stray, harmless-but-confusing
+    // ssh-agent-bridge.json.<pid>.tmp behind for a human to later wonder
+    // about — loadCredential never reads it (fixed filename), so leaving
+    // it isn't a correctness issue, just clutter worth cleaning up when we
+    // can.
+    fs.rmSync(tmpFile, { force: true });
+    throw err;
+  }
 }
 
 async function runPair(args, io) {
@@ -274,7 +331,8 @@ async function runPair(args, io) {
   if (
     !isValidBridgeId(ready.bridge_id) ||
     !isValidSessionToken(ready.session_id) ||
-    !isValidSessionToken(ready.session_secret)
+    !isValidExpiresAt(ready.expires_at) ||
+    ready.expires_at === undefined
   ) {
     throw new Error(
       `unexpected handshake reply shape from ${decoded.baseUrl} — refusing to persist it`,
@@ -285,10 +343,12 @@ async function runPair(args, io) {
     baseUrl: decoded.baseUrl,
     bridgeId: ready.bridge_id,
     sessionId: ready.session_id,
-    // Not currently used to reconnect (routes/agent-bridge.ts's own
-    // handshake only checks bridge_id+session_id) — persisted anyway,
-    // forward-compat, per that route's own comment on session_secret.
-    sessionSecret: ready.session_secret,
+    // Round 3 (session renewal) — drives runRun's own proactive-renewal
+    // timer. session_secret is deliberately no longer part of this reply
+    // (routes/agent-bridge.ts) or persisted here — it was never used to
+    // reconnect or renew (both authenticate on session_id alone) and had
+    // become a standing trap for a later PR to wire up "meaningfully."
+    expiresAt: ready.expires_at,
   });
 
   io.stdout.write(
@@ -341,7 +401,7 @@ async function runRun(args, io) {
     );
     return 1;
   }
-  const credential = loadCredential(io);
+  let credential = loadCredential(io);
   if (!credential) {
     io.stderr.write(
       "not paired yet — run 'mullion helper pair <payload>' first " +
@@ -351,21 +411,175 @@ async function runRun(args, io) {
   }
 
   let stopped = false;
+  let renewTimer = null;
+  // Tracks whichever WebSocket the connect loop below currently has open
+  // (or is mid-handshake on) — renewSession's rejection branch uses this to
+  // force a prompt shutdown (see there for why a rejected renewal can't
+  // just wait for the connection to drop on its own).
+  let activeWs = null;
+  // Set only by a REJECTED renewal (routes/agent-bridge.ts's 401) — as
+  // opposed to a network-level renewal failure, which just retries (see
+  // renewSession below). Distinguishes "the credential is genuinely dead,
+  // exit 1" from "still connected fine, keep going" at the very end of this
+  // function, the same HandshakeRejectedError-vs-plain-Error split the
+  // connect loop below already makes for the WS handshake.
+  let renewalRejected = false;
   io.onInterrupt?.(() => {
     stopped = true;
+    if (renewTimer) clearTimeout(renewTimer);
+    // Same reasoning as the renewal-rejection branch below: `stopped` alone
+    // doesn't unblock a loop iteration currently parked on
+    // `await new Promise((resolve) => mux.onClose(resolve))` — nothing else
+    // was going to close this connection on its own. Pre-existing gap
+    // (SIGINT/SIGTERM while connected previously just hung), fixed here
+    // since `activeWs` now exists for the identical purpose.
+    activeWs?.close();
   });
+
+  // Round 3 (session renewal) — deliberately its own timer loop, independent
+  // of the WS connect/reconnect loop below: renewing never tears down or
+  // waits on the live connection, so a session in the middle of forwarding
+  // real traffic is never disrupted by its own credential's upkeep. Mirrors
+  // src/plugins/agent-enrollment.ts's scheduleRenewal()/renew() shape.
+  //
+  // That independence has one sharp edge (self-review, round 3): if the
+  // live WS drops for a completely unrelated reason (network blip, laptop
+  // sleep) while a renewal is ALSO in flight, the reconnect loop below can
+  // send an "auth" carrying the OLD session id at the exact moment this
+  // renewal rotates it server-side — the server correctly rejects that
+  // stale id, but the credential itself was never actually invalid, just
+  // momentarily out of date. `renewalPromise` lets the reconnect loop's
+  // rejection handler wait for any in-flight renewal to settle (so a
+  // rotation that's about to succeed isn't raced) before deciding whether
+  // a HandshakeRejectedError reflects a genuinely dead credential.
+  let renewAttempt = 0;
+  let renewalPromise = null;
+
+  function scheduleRenewal() {
+    if (renewTimer) clearTimeout(renewTimer);
+    if (stopped) return;
+    if (!credential.expiresAt) {
+      // Defensive only — by the time this is first called (right after a
+      // successful "auth", which always carries expires_at per routes/
+      // agent-bridge.ts) there should always be a value. Renew right away
+      // rather than guess a TTL if this is somehow reached anyway.
+      renewTimer = setTimeout(() => void startRenewal(), 0);
+      return;
+    }
+    const ttlMs = new Date(credential.expiresAt).getTime() - Date.now();
+    // Floored, same reasoning as agent-enrollment.ts's own scheduleRenewal:
+    // a clock skew or an already-near-expiry credential (e.g. right after
+    // loading an old file) must not produce a negative/near-zero delay that
+    // busy-loops.
+    const renewInMs = Math.max(ttlMs * RENEW_AT_FRACTION, 1_000);
+    renewTimer = setTimeout(() => void startRenewal(), renewInMs);
+  }
+
+  // renewSession() never throws (its own try/catch handles every failure
+  // internally, see below) — this wrapper's only job is publishing the
+  // in-flight promise to `renewalPromise` for the reconnect loop to await,
+  // and clearing it once settled.
+  function startRenewal() {
+    const p = renewSession();
+    renewalPromise = p;
+    void p.finally(() => {
+      if (renewalPromise === p) renewalPromise = null;
+    });
+  }
+
+  async function renewSession() {
+    if (stopped) return;
+    const current = credential;
+    try {
+      const res = await fetch(toHttpUrl(current.baseUrl, "/api/bridges/renew"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id: current.bridgeId, session_id: current.sessionId }),
+        signal: AbortSignal.timeout(RENEW_TIMEOUT_MS),
+      });
+      if (stopped) return;
+      if (res.status === 401) {
+        renewalRejected = true;
+        stopped = true;
+        io.stderr.write(
+          "session renewal rejected — session no longer valid, re-pair with " +
+            "'mullion helper pair <payload>'\n",
+        );
+        // The renewal endpoint rejecting the credential doesn't itself
+        // touch the live WS — force it closed rather than silently leaving
+        // `run` connected-but-doomed until the connection happens to drop
+        // on its own for an unrelated reason (see `activeWs`'s own comment
+        // above for why this can't just wait).
+        activeWs?.close();
+        return;
+      }
+      if (!res.ok) throw new Error(`renewal request failed: HTTP ${res.status}`);
+      const json = await res.json();
+      if (!isValidSessionToken(json.session_id) || !isValidExpiresAt(json.expires_at)) {
+        throw new Error("unexpected renewal reply shape — refusing to persist it");
+      }
+      credential = { ...current, sessionId: json.session_id, expiresAt: json.expires_at };
+      saveCredential(io, credential);
+      renewAttempt = 0;
+      io.stderr.write(`session renewed — valid until ${json.expires_at}\n`);
+      scheduleRenewal();
+    } catch (err) {
+      if (stopped) return;
+      // Network-level failure (primary unreachable, timeout, malformed
+      // reply) — retry rather than give up. Unlike agent-enrollment.ts's
+      // renew(), there's no bootstrap credential to fall back to
+      // (bridge-registry.ts's own comment on rotateBridgeSession), so
+      // retrying with the SAME still-valid session id is the only option,
+      // and there's normally hours of TTL left at 50% to retry within.
+      const delay = RENEW_RETRY_DELAYS_MS[Math.min(renewAttempt, RENEW_RETRY_DELAYS_MS.length - 1)];
+      renewAttempt++;
+      io.stderr.write(`session renewal attempt failed (${err.message}) — retrying in ${delay}ms\n`);
+      renewTimer = setTimeout(() => void renewSession(), delay);
+    }
+  }
+
+  // Armed once, after the FIRST successful handshake below — not up front.
+  // Arming it here, before any connection exists, would race a legacy
+  // credential's missing expiresAt (which schedules an immediate renewal)
+  // against the very first "auth" handshake: if the renewal wins that race,
+  // it rotates the session id the in-flight handshake is still presenting,
+  // and that handshake fails with HandshakeRejectedError over a credential
+  // that was never actually invalid — just momentarily stale. Once armed
+  // from an authoritative post-handshake expires_at, renewSession's own
+  // re-arm-on-success (above) keeps it running on its own schedule,
+  // independent of whatever the connect loop below does afterward.
+  let renewalArmed = false;
 
   let attempt = 0;
   while (!stopped) {
+    // Captured up front so the rejection handler below can tell whether a
+    // HandshakeRejectedError reflects THIS id genuinely being dead, or
+    // whether a concurrent renewal already moved credential.sessionId on
+    // from under it (see renewalPromise's own comment above).
+    const presentedSessionId = credential.sessionId;
     try {
       const ws = new WebSocket(toWsUrl(credential.baseUrl, "/ws/agent-bridge"));
+      activeWs = ws;
       const ready = await handshake(ws, {
         type: "auth",
         bridge_id: credential.bridgeId,
-        session_id: credential.sessionId,
+        session_id: presentedSessionId,
       });
       attempt = 0;
       io.stderr.write(`connected to ${credential.baseUrl} — bridge_id ${ready.bridge_id}\n`);
+
+      // ready.expires_at is always present on a successful "auth" (routes/
+      // agent-bridge.ts) — sync it in case it drifted from what's on disk
+      // (e.g. this file was copied from a machine paired earlier), and use
+      // it as the one-time seed for the renewal timer below.
+      if (ready.expires_at && ready.expires_at !== credential.expiresAt) {
+        credential = { ...credential, expiresAt: ready.expires_at };
+        saveCredential(io, credential);
+      }
+      if (!renewalArmed) {
+        renewalArmed = true;
+        scheduleRenewal();
+      }
 
       const mux = attachInboundMux(ws, {
         onChannel(channel) {
@@ -383,19 +597,37 @@ async function runRun(args, io) {
       io.stderr.write("disconnected — reconnecting...\n");
     } catch (err) {
       if (err instanceof HandshakeRejectedError) {
-        io.stderr.write(
-          `${err.message} — session no longer valid, re-pair with 'mullion helper pair <payload>'\n`,
-        );
-        return 1;
+        // A renewal that was in flight when this rejection arrived might be
+        // ABOUT to (or might just have) rotated the very id this attempt
+        // presented — wait for it to settle (it never throws) before
+        // trusting this rejection at all.
+        if (renewalPromise) await renewalPromise;
+        if (credential.sessionId !== presentedSessionId) {
+          // Stale rejection: a concurrent renewal already moved past the id
+          // this attempt presented. The credential is fine — retry below
+          // with whatever credential.sessionId is now, rather than treating
+          // an artifact of the race as proof the session is dead.
+          io.stderr.write(
+            "auth rejected using a session id superseded by a concurrent renewal — retrying\n",
+          );
+        } else {
+          io.stderr.write(
+            `${err.message} — session no longer valid, re-pair with 'mullion helper pair <payload>'\n`,
+          );
+          clearTimeout(renewTimer);
+          return 1;
+        }
+      } else {
+        io.stderr.write(`connect failed: ${err.message}\n`);
       }
-      io.stderr.write(`connect failed: ${err.message}\n`);
     }
     if (stopped) break;
     const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
     attempt++;
     await sleep(delay);
   }
-  return 0;
+  clearTimeout(renewTimer);
+  return renewalRejected ? 1 : 0;
 }
 
 const VERBS = { pair: runPair, run: runRun, install: runInstall, uninstall: runUninstall };

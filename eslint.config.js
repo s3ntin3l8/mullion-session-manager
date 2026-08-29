@@ -37,9 +37,12 @@ export default tseslint.config(
         clearInterval: "readonly",
         setImmediate: "readonly",
         Buffer: "readonly",
-        // Node 18+ global, for any of these files that talks HTTP directly
-        // (e.g. scripts/capture-screenshots.mjs's own seed calls).
+        // Node 18+ globals, for any of these files that talks HTTP directly
+        // (e.g. scripts/capture-screenshots.mjs's own seed calls; round 3's
+        // ssh-agent-helper.mjs renewal loop bounding its own POST with a
+        // timeout via AbortSignal.timeout()).
         fetch: "readonly",
+        AbortSignal: "readonly",
         // Node 21+ globals — src/cli/ssh-agent-helper.mjs (issue #820,
         // PR6) is the first file here to need them: the laptop-side helper
         // dials /ws/agent-bridge with the WHATWG WebSocket builtin
