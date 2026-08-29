@@ -121,6 +121,12 @@ export interface LaunchPlanSession {
   /** Issue #271 follow-up — see CreateSessionOptions.resumeAgentSessionId's
    * own doc comment (pty-manager.ts). */
   readonly resumeAgentSessionId: string | undefined;
+  /** See CreateSessionOptions.briefingOverride's own doc comment
+   * (pty-manager.ts) and writeSessionBriefing's `override` param
+   * (project-briefing.ts) for the full multi-host reasoning. Passed
+   * straight through to writeSessionBriefing below — nothing here decides
+   * precedence, that's entirely writeSessionBriefing's job. */
+  readonly briefingOverride: string | undefined;
 }
 
 export interface LaunchPlan {
@@ -265,7 +271,15 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // this session's cwd (project-briefing.ts's own doc comment) — a project
   // briefing can disappear between spawns in a way the shipped guide never
   // does.
-  writeSessionBriefing(path.dirname(session.hookSocketPath), session.id, session.cwd);
+  writeSessionBriefing(
+    path.dirname(session.hookSocketPath),
+    session.id,
+    session.cwd,
+    console,
+    session.briefingOverride
+      ? { body: session.briefingOverride, sourceLabel: "Mullion's per-project settings" }
+      : undefined,
+  );
 
   // Phase 2 (issue #174): if `session.command` matches a known agent with a
   // hook adapter (currently just Claude Code), rewrite the command/env for

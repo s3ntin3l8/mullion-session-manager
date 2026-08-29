@@ -254,6 +254,12 @@ export type CreateSessionParams = CreateSessionBody & {
   // above. See SessionBackend.spawn's own doc comment for why this is
   // local-only for now.
   resumeAgentSessionId?: string;
+  // Issue: per-project briefing storage (a follow-up PR) — resolved here,
+  // on the primary (where the DB lives), and threaded through spawn() below
+  // the same way seedPrompt is. Also NOT part of CreateSessionBody: no
+  // public route sets this yet. See CreateSessionOptions.briefingOverride's
+  // own doc comment (pty-manager.ts) for the full multi-host reasoning.
+  briefingOverride?: string;
 };
 
 export type CreateSessionResult =
@@ -317,6 +323,7 @@ export async function createSessionRecord(
     seedPrompt,
     resumeAgentSessionId,
     env,
+    briefingOverride,
   } = params;
   let cwd = params.cwd;
 
@@ -501,6 +508,7 @@ export async function createSessionRecord(
       resumeAgentSessionId,
       projectId,
       env,
+      briefingOverride,
     });
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):

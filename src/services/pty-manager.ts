@@ -146,6 +146,19 @@ export interface CreateSessionOptions {
    * that column's own doc comment for why it's persisted rather than
    * spawn-time-only. */
   env?: Record<string, string>;
+  /** Issue: per-project briefing storage (a follow-up PR, not this one) —
+   * resolved on the PRIMARY (where the DB lives) and threaded straight
+   * through to writeSessionBriefing's `override` param
+   * (project-briefing.ts), the same spawn-body channel `seedPrompt` above
+   * already uses. Exists because a multi-host **agent**-role process has no
+   * DB of its own (see src/plugins/hooks.ts's `app.db ? ... :
+   * DEFAULT_SETTINGS` comment for the same constraint on
+   * `injectAgentGuide`) — resolving a per-project briefing there directly
+   * would silently resolve to nothing on every remote host. No producer
+   * sets this yet; every current caller omits it, and
+   * writeSessionBriefing falls back to `resolveProjectBriefing(cwd)`
+   * exactly as it always has. */
+  briefingOverride?: string;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the
@@ -938,6 +951,17 @@ export class Session {
   // own doc comment. Same "spawn-time snapshot, consumed once in
   // bootstrapMaster()" posture as initialPrompt/seedPrompt above.
   private readonly resumeAgentSessionId: string | undefined;
+  // Issue: per-project briefing storage (deferred to a follow-up PR) needs
+  // a channel that also works on a multi-host agent-role process, which has
+  // no DB of its own — resolved on the PRIMARY, threaded through the spawn
+  // body the same way seedPrompt already is, all the way to
+  // writeSessionBriefing's `override` param (project-briefing.ts). Same
+  // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
+  // initialPrompt/seedPrompt/resumeAgentSessionId above. This field alone
+  // has no producer yet — every current caller passes undefined, and
+  // writeSessionBriefing falls back to resolveProjectBriefing(cwd) exactly
+  // as it always has.
+  private readonly briefingOverride: string | undefined;
   // Issue #822 — see CreateSessionOptions.env's own doc comment. Unlike
   // initialPrompt/seedPrompt/resumeAgentSessionId above, this IS re-read on
   // every bootstrapMaster() call for this instance, including a later
@@ -1271,6 +1295,7 @@ export class Session {
     resumeAgentSessionId?: string;
     projectId?: number;
     env?: Record<string, string>;
+    briefingOverride?: string;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -1294,6 +1319,7 @@ export class Session {
     this.initialPrompt = opts.initialPrompt;
     this.seedPrompt = opts.seedPrompt;
     this.resumeAgentSessionId = opts.resumeAgentSessionId;
+    this.briefingOverride = opts.briefingOverride;
     this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
@@ -1832,6 +1858,7 @@ export class Session {
       seedPrompt: this.seedPrompt,
       resumeAgentSessionId: this.resumeAgentSessionId,
       env: this.env,
+      briefingOverride: this.briefingOverride,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -3534,6 +3561,7 @@ export class PtyManager {
         resumeAgentSessionId: opts.resumeAgentSessionId,
         projectId: opts.projectId,
         env: opts.env,
+        briefingOverride: opts.briefingOverride,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

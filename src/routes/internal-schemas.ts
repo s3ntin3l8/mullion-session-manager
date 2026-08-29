@@ -64,6 +64,14 @@ export interface SpawnSessionBody {
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts).
   env?: Record<string, string>;
+  // Issue: per-project briefing storage (a follow-up PR) — see
+  // CreateSessionOptions.briefingOverride's own doc comment
+  // (pty-manager.ts). Bounded (unlike initialPrompt/seedPrompt above,
+  // which carry unbounded issue/task text): this is operator-authored
+  // configuration, not arbitrary user content, so 2x
+  // project-briefing.ts's own MAX_BRIEFING_BYTES (4096) is a real bound,
+  // not a token gesture — see the schema's own maxLength below.
+  briefingOverride?: string;
 }
 
 export const spawnSessionSchema = {
@@ -95,6 +103,14 @@ export const spawnSessionSchema = {
         maxProperties: MAX_SESSION_ENV_ENTRIES,
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
+      // Issue: per-project briefing storage (a follow-up PR) — unlike
+      // initialPrompt/seedPrompt above (arbitrary issue/task text with no
+      // sane upper bound), this is operator-authored config resolved on
+      // the primary, so a real maxLength is appropriate — 2x
+      // project-briefing.ts's own MAX_BRIEFING_BYTES (4096), covering the
+      // clamped body plus buildSessionBriefingContent's header with room
+      // to spare, without being unbounded.
+      briefingOverride: { type: "string", maxLength: 8192 },
     },
   },
 };

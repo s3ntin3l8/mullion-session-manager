@@ -231,4 +231,75 @@ describe("writeSessionBriefing", () => {
     ).not.toThrow();
     expect(errors.length).toBe(1);
   });
+
+  // Issue: per-project briefing storage (a follow-up PR) — this PR only
+  // wires the channel through writeSessionBriefing's optional `override`
+  // param; no producer sets it yet, but the channel itself must already be
+  // correct. See CreateSessionOptions.briefingOverride's own doc comment
+  // (pty-manager.ts) for the multi-host reasoning this exists for.
+  describe("override param", () => {
+    it("wins over a repo-authored AGENTS.md region when both are present", () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-briefing-sessions-"));
+      cwd = mkProject();
+      writeFileSync(path.join(cwd, "AGENTS.md"), marked("repo-authored briefing"));
+
+      writeSessionBriefing(dir, "42", cwd, console, {
+        body: "override briefing",
+        sourceLabel: "Mullion's per-project settings",
+      });
+
+      const written = readFileSync(sessionBriefingPath(dir, "42"), "utf8");
+      expect(written).toBe(
+        buildSessionBriefingContent("override briefing", "Mullion's per-project settings"),
+      );
+      expect(written).not.toContain("repo-authored briefing");
+    });
+
+    it("is used even when nothing resolves from cwd at all", () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-briefing-sessions-"));
+      cwd = mkProject();
+
+      writeSessionBriefing(dir, "42", cwd, console, {
+        body: "override with no repo briefing present",
+        sourceLabel: "Mullion's per-project settings",
+      });
+
+      expect(existsSync(sessionBriefingPath(dir, "42"))).toBe(true);
+      expect(readFileSync(sessionBriefingPath(dir, "42"), "utf8")).toContain(
+        "override with no repo briefing present",
+      );
+    });
+
+    it("still goes through the same MAX_BRIEFING_BYTES clamp as a resolved file body", () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-briefing-sessions-"));
+      cwd = mkProject();
+
+      writeSessionBriefing(dir, "42", cwd, console, {
+        body: "a".repeat(MAX_BRIEFING_BYTES * 2),
+        sourceLabel: "Mullion's per-project settings",
+      });
+
+      const written = readFileSync(sessionBriefingPath(dir, "42"), "utf8");
+      expect(written).toContain("[mullion: truncated at");
+    });
+
+    it("does not resolve or read any file from cwd when an override is present", () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-briefing-sessions-"));
+      // A cwd that doesn't even exist — if writeSessionBriefing tried to
+      // resolve it, resolveProjectBriefing's own existsSync checks would
+      // just return null (not throw), so this alone doesn't prove much;
+      // the real proof is the previous "wins over a repo-authored AGENTS.md"
+      // test. This one guards against a future edit accidentally requiring
+      // cwd to exist even when override is supplied.
+      cwd = path.join(os.tmpdir(), "mullion-briefing-nonexistent-cwd");
+
+      expect(() =>
+        writeSessionBriefing(dir, "42", cwd, console, {
+          body: "override body",
+          sourceLabel: "Mullion's per-project settings",
+        }),
+      ).not.toThrow();
+      expect(readFileSync(sessionBriefingPath(dir, "42"), "utf8")).toContain("override body");
+    });
+  });
 });

@@ -80,6 +80,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     injectMullionBundle: true,
     skipPermissions: false,
     initialPrompt: undefined,
+    briefingOverride: undefined,
     ...overrides,
   };
 }
@@ -332,7 +333,7 @@ describe("buildLaunchPlan — agent guide injection", () => {
 });
 
 describe("buildLaunchPlan — project briefing injection", () => {
-  it("calls writeSessionBriefing with dirname(hookSocketPath), the session id, and cwd", () => {
+  it("calls writeSessionBriefing with dirname(hookSocketPath), the session id, cwd, console, and no override by default", () => {
     buildLaunchPlan(
       baseSession({
         hookSocketPath: "/tmp/sessions/hooks.sock",
@@ -341,7 +342,13 @@ describe("buildLaunchPlan — project briefing injection", () => {
       }),
     );
 
-    expect(mockWriteSessionBriefing).toHaveBeenCalledWith("/tmp/sessions", "99", "/tmp/project");
+    expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
+      "/tmp/sessions",
+      "99",
+      "/tmp/project",
+      console,
+      undefined,
+    );
   });
 
   it("writes the briefing AFTER the guide but BEFORE applying hook adapters (same #437c ordering constraint the guide has, for the identical reason)", () => {
@@ -358,6 +365,34 @@ describe("buildLaunchPlan — project briefing injection", () => {
     buildLaunchPlan(baseSession({ injectProjectBriefing: false }));
 
     expect(mockWriteSessionBriefing).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue: per-project briefing storage (a follow-up PR) — this PR only
+  // wires the spawn-body channel through; no producer sets briefingOverride
+  // yet, but buildLaunchPlan must already thread it correctly for when one
+  // does.
+  it("passes session.briefingOverride through to writeSessionBriefing as { body, sourceLabel }", () => {
+    buildLaunchPlan(baseSession({ briefingOverride: "custom project instructions" }));
+
+    expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      console,
+      { body: "custom project instructions", sourceLabel: "Mullion's per-project settings" },
+    );
+  });
+
+  it("passes undefined (not an override object) when session.briefingOverride is undefined", () => {
+    buildLaunchPlan(baseSession({ briefingOverride: undefined }));
+
+    expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      console,
+      undefined,
+    );
   });
 });
 

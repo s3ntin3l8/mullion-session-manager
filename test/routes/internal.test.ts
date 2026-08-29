@@ -20,6 +20,7 @@ import {
   sign,
 } from "../../src/services/request-signature.js";
 import { taskReviewFindingsPath, taskCommitTitlePath } from "../../src/services/task-prompt.js";
+import { sessionBriefingPath } from "../../src/services/project-briefing.js";
 
 // The agent's /internal/* API (issue #26) reaches the exact same PtyManager
 // spawn/liveness path as the primary's own routes (sessions.ts, terminal.ts)
@@ -2782,6 +2783,59 @@ describe("internal routes (agent role, issue #26)", () => {
     });
     expect(res.statusCode).toBe(201);
     expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    await app.close();
+  });
+
+  // Issue: per-project briefing storage (a follow-up PR) — this PR only
+  // wires the spawn-body channel through; no producer sets briefingOverride
+  // yet, but the agent-side route must already thread whatever a future
+  // primary sends correctly. Proves the field survives the actual HTTP
+  // round trip (request body -> schema validation -> app.pty.getOrCreate ->
+  // writeSessionBriefing), not just a typechecked-but-untested pass-through.
+  it("threads briefingOverride from the spawn body into the per-session briefing file", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "507",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        briefingOverride: "operator-configured briefing text",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const written = fs.readFileSync(sessionBriefingPath(app.config.SESSIONS_DIR, "507"), "utf8");
+    expect(written).toContain("operator-configured briefing text");
+
+    await app.close();
+  });
+
+  it("rejects a briefingOverride over the schema's maxLength", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "508",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        briefingOverride: "a".repeat(8193),
+      },
+    });
+    expect(res.statusCode).toBe(400);
+
     await app.close();
   });
 
