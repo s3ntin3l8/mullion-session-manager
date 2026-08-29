@@ -731,6 +731,50 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       });
     });
 
+    describe("POST /api/bridges/renew exemption (round 3, SSH-agent bridge session renewal)", () => {
+      it("gets past this hook with no credential — reaches the handler's own rejection, not this plugin's", async () => {
+        // Unlike the webhook exemption above, this route ALSO replies via
+        // @fastify/sensible's reply.unauthorized() (agent-bridge.ts), so
+        // the response SHAPE can't distinguish the two rejections — both
+        // are {statusCode, error: "Unauthorized", message}. The MESSAGE
+        // TEXT is what discriminates: this plugin's own rejection is
+        // always the fixed literal "authentication required" (asserted
+        // throughout this file, e.g. the test right below); a 401 with a
+        // DIFFERENT message — this route's own "invalid or expired session
+        // credential", for a bridge id that doesn't exist — proves this
+        // hook got out of the way and the route's own check ran instead.
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/bridges/renew",
+          payload: { bridge_id: "does-not-exist", session_id: "x" },
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("invalid or expired session credential");
+        await app.close();
+      });
+
+      it("POST /api/bridges itself (generating a pairing code) stays session-gated — only the renewal route is exempt", async () => {
+        const app = await buildApp();
+        const res = await app.inject({ method: "POST", url: "/api/bridges" });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("authentication required");
+        await app.close();
+      });
+
+      it("a traversal path that resolves off the exemption stays gated with this plugin's own rejection", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/bridges/renew/../../projects",
+          payload: { name: "p", cwd: "/tmp" },
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("authentication required");
+        await app.close();
+      });
+    });
+
     describe("/api/auth/* exact-match exemption, not a prefix (finding AS8)", () => {
       it("a hypothetical future route under /api/auth/* is PROTECTED by default, unlike the old startsWith prefix", async () => {
         // Proves the fix actually closes the gap: with the old

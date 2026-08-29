@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import net from "node:net";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -350,6 +351,267 @@ describe("mullion helper run()'s reconnect and dial-failure behavior", () => {
     expect(await runPromise).toBe(0);
     await app.close();
   });
+});
+
+describe("mullion helper run()'s session renewal (round 3)", () => {
+  // Forces the just-paired session to a near-immediate expiry so
+  // scheduleRenewal's 50%-of-TTL math floors to its 1000ms minimum instead
+  // of waiting out a real 24h TTL — same "force it directly in the DB"
+  // approach test/services/bridge-registry.test.ts already uses for
+  // pairing-code expiry. Set AFTER pairing (which needs the real 24h
+  // window to succeed) but BEFORE run() ever connects, so the very first
+  // "auth" handshake already reads the shortened expiry from
+  // routes/agent-bridge.ts's own fresh-off-the-row expires_at.
+  async function pairAndForceNearExpiry(runIo: ReturnType<typeof fakeIo>) {
+    const { app, port } = await buildAndListen();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
+    const { pairing_payload } = (await pairRes.json()) as { pairing_payload: string };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const pairIo = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    await runHelper("pair", [pairing_payload], pairIo);
+    const credentialFile = path.join(stateDir, "ssh-agent-bridge.json");
+    const credential = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
+    await waitUntil(() => !app.connectedBridges.has(credential.bridgeId));
+
+    const { bridges } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    app.db
+      .update(bridges)
+      .set({ sessionExpiresAt: new Date(Date.now() + 4000) })
+      .where(eq(bridges.id, credential.bridgeId))
+      .run();
+
+    runIo.env.MULLION_HELPER_STATE_DIR = stateDir;
+    const runPromise = runHelper("run", [], runIo);
+    await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connected to")));
+    return { app, stateDir, credentialFile, credential, runPromise };
+  }
+
+  it("renews before expiry, persists the rotated credential, and never disturbs the live connection", async () => {
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    const { app, credentialFile, credential, runPromise } = await pairAndForceNearExpiry(runIo);
+
+    await waitUntil(() => runIo.stderrLines.some((line) => line.includes("session renewed")), 8000);
+
+    const renewed = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
+    expect(renewed.sessionId).not.toBe(credential.sessionId);
+    expect(new Date(renewed.expiresAt).getTime()).toBeGreaterThan(Date.now());
+    // fd-based mode check, same pattern as the happy-path pairing test —
+    // a rewritten (renamed-into-place) file must still be 0600, not
+    // whatever fs.renameSync's target inherits by default.
+    expect(fs.statSync(credentialFile).mode & 0o777).toBe(0o600);
+
+    // The renewal is a plain HTTP call, never touching the live WS — this
+    // is still the SAME, never-reconnected connection: exactly one
+    // "connected to" line for the whole test.
+    expect(runIo.stderrLines.filter((line) => line.includes("connected to")).length).toBe(1);
+    expect(runIo.stderrLines.some((line) => line.includes("reconnecting"))).toBe(false);
+    expect(app.connectedBridges.has(credential.bridgeId)).toBe(true);
+
+    runIo.triggerInterrupt();
+    app.connectedBridges.get(credential.bridgeId)!.mux.close();
+    expect(await runPromise).toBe(0);
+    await app.close();
+  });
+
+  // Revokes via the bare service function (bridge-registry.ts's
+  // deleteBridge), NOT the DELETE /api/bridges/:id ROUTE — the route would
+  // close the live connection itself as part of revocation, which would
+  // exercise a completely different code path (the existing "reconnects
+  // after a drop" test) and never actually prove that a renewal REJECTION
+  // is what forces the shutdown. This leaves the WS connection genuinely
+  // untouched server-side, so the only thing that can end it is `run`'s
+  // own activeWs?.close() in the renewal-rejected branch.
+  it("a rejected renewal (bridge deleted server-side) forces shutdown and exits 1 with a re-pair message", async () => {
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    const { app, credential, runPromise } = await pairAndForceNearExpiry(runIo);
+
+    const { deleteBridge } = await import("../../src/services/bridge-registry.js");
+    deleteBridge(app, credential.bridgeId);
+
+    const code = await runPromise;
+    expect(code).toBe(1);
+    expect(runIo.stderrLines.join("")).toContain("renewal rejected");
+    expect(runIo.stderrLines.join("")).toContain("re-pair");
+    await app.close();
+  });
+
+  // The 0.3.3-era credential shape (no `expiresAt` at all) must still work
+  // — loadCredential's own back-compat allowance, exercised end-to-end here
+  // rather than just at the loadCredential-unit level, since the real risk
+  // was never "does it load" but "does the FIRST scheduleRenewal(), armed
+  // with no expiresAt to go on, race the in-flight first handshake" (see
+  // ssh-agent-helper.mjs's own comment on `renewalArmed` for the failure
+  // mode this guards against).
+  it("a legacy credential file with no expiresAt connects cleanly and picks one up after its first auth", async () => {
+    const { app, port } = await buildAndListen();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
+    const { pairing_payload } = (await pairRes.json()) as { pairing_payload: string };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const pairIo = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    await runHelper("pair", [pairing_payload], pairIo);
+    const credentialFile = path.join(stateDir, "ssh-agent-bridge.json");
+    const credential = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
+    delete credential.expiresAt;
+    fs.writeFileSync(credentialFile, JSON.stringify(credential), { mode: 0o600 });
+    await waitUntil(() => !app.connectedBridges.has(credential.bridgeId));
+
+    const runIo = fakeIo({
+      SSH_AUTH_SOCK: "/tmp/whatever-unused.sock",
+      MULLION_HELPER_STATE_DIR: stateDir,
+    });
+    const runPromise = runHelper("run", [], runIo);
+    await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connected to")));
+
+    // No HandshakeRejectedError from a renewal that raced the handshake —
+    // the connection is up and a real expiresAt eventually lands on disk.
+    await waitUntil(() => {
+      const onDisk = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
+      return typeof onDisk.expiresAt === "string";
+    }, 5000);
+    expect(app.connectedBridges.has(credential.bridgeId)).toBe(true);
+    expect(runIo.stderrLines.join("")).not.toContain("session no longer valid");
+
+    runIo.triggerInterrupt();
+    app.connectedBridges.get(credential.bridgeId)!.mux.close();
+    expect(await runPromise).toBe(0);
+    await app.close();
+  });
+
+  // Self-review (round 3) found a real race: renewSession() and the
+  // connect/reconnect loop are independent by design, but a WS drop for an
+  // UNRELATED reason (network blip, laptop sleep) can land while a renewal
+  // is in flight — the reconnect's "auth" then presents the id the renewal
+  // is ABOUT to rotate away, gets rejected, and (before the fix below) the
+  // loop treated any auth rejection as unconditionally fatal, discarding a
+  // perfectly healthy, already-rotated credential and exiting 1.
+  //
+  // Reproducing this deterministically needs precise control over exactly
+  // when the server rotates the session vs. when it replies to the renewal
+  // call vs. when the reconnect's "auth" reaches it — timing the real
+  // primary app's own SQLite-backed round trip can't guarantee. This uses a
+  // hand-rolled HTTP+WS server instead, sequenced explicitly:
+  //   1. First "auth" (old id) succeeds; scheduleRenewal arms at ~1000ms
+  //      (the floor, for a ~2s forced TTL).
+  //   2. The renewal POST arrives; the server rotates its truth to the new
+  //      id IMMEDIATELY (synchronously) but delays the HTTP response 1800ms
+  //      — longer than RECONNECT_DELAYS_MS[0] (1000ms) — and closes the
+  //      live WS right away, simulating an unrelated drop.
+  //   3. The reconnect's "auth" (still holding the old id — the delayed
+  //      renewal response hasn't reached the client yet) arrives ~1000ms
+  //      later and gets rejected, since the server's truth already moved
+  //      on in step 2.
+  //   4. The delayed renewal response then lands (t≈1800ms after step 2),
+  //      updating the client's credential — this is what the fix's
+  //      `await renewalPromise` inside the rejection handler waits for.
+  //   5. The loop must retry with the NEW id (logging the "superseded by a
+  //      concurrent renewal" line) rather than exiting 1.
+  it("a reconnect racing an in-flight renewal retries with the rotated id instead of exiting fatally", async () => {
+    const bridgeId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const oldSessionId = "1".repeat(64);
+    const newSessionId = "2".repeat(64);
+    let currentValidSessionId = oldSessionId;
+    let firstWs: NodeWebSocket | null = null;
+    let staleRejectionSent = false;
+    let succeededWithNewId = false;
+
+    const httpServer = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/api/bridges/renew") {
+        let body = "";
+        req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+        req.on("end", () => {
+          const parsed = JSON.parse(body) as { bridge_id: string; session_id: string };
+          if (parsed.session_id !== currentValidSessionId) {
+            res.writeHead(401, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "invalid or expired session credential" }));
+            return;
+          }
+          currentValidSessionId = newSessionId;
+          firstWs?.close();
+          setTimeout(() => {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                session_id: newSessionId,
+                expires_at: new Date(Date.now() + 60_000).toISOString(),
+              }),
+            );
+          }, 1800);
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    const wss = new WebSocketServer({ noServer: true });
+    httpServer.on("upgrade", (req, socket, head) => {
+      if (req.url !== "/ws/agent-bridge") {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
+    });
+    let connectionCount = 0;
+    wss.on("connection", (ws: NodeWebSocket) => {
+      connectionCount++;
+      if (connectionCount === 1) firstWs = ws;
+      ws.once("message", (data: Buffer) => {
+        const parsed = JSON.parse(data.toString()) as { session_id: string };
+        if (parsed.session_id !== currentValidSessionId) {
+          staleRejectionSent = true;
+          ws.send(JSON.stringify({ type: "error", message: "invalid session credential" }));
+          ws.close();
+          return;
+        }
+        if (parsed.session_id === newSessionId) succeededWithNewId = true;
+        ws.send(
+          JSON.stringify({
+            type: "ready",
+            bridge_id: bridgeId,
+            expires_at: new Date(Date.now() + 2000).toISOString(),
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected a real bound address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    fs.writeFileSync(
+      path.join(stateDir, "ssh-agent-bridge.json"),
+      JSON.stringify({
+        baseUrl,
+        bridgeId,
+        sessionId: oldSessionId,
+        expiresAt: new Date(Date.now() + 2000).toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+
+    const runIo = fakeIo({
+      SSH_AUTH_SOCK: "/tmp/whatever-unused.sock",
+      MULLION_HELPER_STATE_DIR: stateDir,
+    });
+    const runPromise = runHelper("run", [], runIo);
+
+    await waitUntil(() => succeededWithNewId, 15000);
+    expect(staleRejectionSent).toBe(true);
+    expect(runIo.stderrLines.join("")).toContain("superseded by a concurrent renewal");
+    expect(runIo.stderrLines.join("")).not.toContain("session no longer valid");
+
+    runIo.triggerInterrupt();
+    const code = await runPromise;
+    expect(code).toBe(0);
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  }, 20000);
 });
 
 describe("mullion helper run() — missing prerequisites", () => {

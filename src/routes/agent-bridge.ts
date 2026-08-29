@@ -7,13 +7,14 @@ import {
   issuePairingCode,
   listBridges,
   redeemPairingCode,
+  rotateBridgeSession,
   touchBridgeLastSeen,
   verifyBridgeSession,
 } from "../services/bridge-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 
 // Issue #820 — the primary-side half of the SSH-agent bridge's laptop-
-// facing surface (see the design plan). Four routes:
+// facing surface (see the design plan). Five routes:
 //   - POST /api/bridges — Settings generates a pairing code. A normal,
 //     in-app-auth-gated admin action (same posture as POST /api/hosts),
 //     NOT exempted from authPlugin's global gate.
@@ -27,14 +28,24 @@ import { createMuxConnection } from "../services/ssh-agent-mux.js";
 //     other two.
 //   - GET /ws/agent-bridge — the helper's actual persistent connection.
 //     Authenticated by its OWN credential (pairing code on first connect,
-//     a rotating session on every one after), carried in the connection's
-//     own first frame rather than an Authorization header, so a plain
-//     global `WebSocket` — no custom-header support — works as the client
-//     (see PR6's `mullion helper` CLI). Deliberately exempted from
+//     an unrotated session id on every reconnect after), carried in the
+//     connection's own first frame rather than an Authorization header, so
+//     a plain global `WebSocket` — no custom-header support — works as the
+//     client (see PR6's `mullion helper` CLI). Deliberately exempted from
 //     authPlugin's global gate (src/plugins/auth.ts's isProtectedPath) the
 //     same way /api/internal/register and /api/internal/deregister are:
 //     the helper is never going to hold this deployment's
 //     MULLION_AUTH_TOKEN or an OIDC session cookie.
+//   - POST /api/bridges/renew (round 3) — the helper's own periodic
+//     credential refresh, called on a timer from `mullion helper run`
+//     WITHOUT tearing down the live `/ws/agent-bridge` connection (unlike
+//     the WS "auth" handshake above, which stays a plain, non-rotating
+//     verify — see below for why). Mirrors src/plugins/agent-enrollment.ts's
+//     scheduleRenewal()/renew() shape: same "renew at ~50% of TTL,
+//     independent of whatever else is happening on the connection" idea,
+//     ported from an enrolled agent host's HTTP heartbeat to a bridge's
+//     WS-held connection. Same exemption reasoning as the WS route just
+//     above — the helper's own session id is its credential here too.
 //
 // Primary-only (registered from src/app.ts's primary branch only — an
 // agent has no `bridges` table to pair a helper into).
@@ -55,6 +66,7 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 // credential-checking endpoint bounded regardless.
 const PAIR_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 const BRIDGE_CONNECT_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+const RENEW_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
 interface PairResponse {
   bridge_id: string;
@@ -104,6 +116,22 @@ interface BridgeListItem {
    * and Settings needs to tell those apart, not collapse them into one
    * status. */
   connected: boolean;
+}
+
+interface RenewRequestBody {
+  bridge_id: string;
+  session_id: string;
+}
+
+function isRenewRequestBody(value: unknown): value is RenewRequestBody {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.bridge_id === "string" && typeof v.session_id === "string";
+}
+
+interface RenewResponse {
+  session_id: string;
+  expires_at: string;
 }
 
 type ClientHandshake =
@@ -221,6 +249,39 @@ export async function agentBridgeRoute(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
+  // Round 3 (session renewal) — the helper's periodic credential refresh,
+  // deliberately a plain HTTP route rather than a frame on the live
+  // `/ws/agent-bridge` connection. Mirrors src/plugins/agent-enrollment.ts's
+  // own registerWithRetry()/renew() split: the bridge's forwarding
+  // connection and its credential's lifecycle are independent concerns, so
+  // renewing never has to touch (or risk disrupting) a connection that may
+  // be mid-forward. `rotateBridgeSession` (bridge-registry.ts) already does
+  // exactly this — this route is the "none exists yet" wire path its own
+  // doc comment has been flagging since PR #860. session_secret is
+  // deliberately NOT returned here (see the "pair" reply above, which also
+  // dropped it this round) — the "auth" WS handshake and this route both
+  // authenticate on session_id alone, so a second, unused secret only ever
+  // existed as an unwired trap.
+  app.post(
+    "/api/bridges/renew",
+    { config: { rateLimit: RENEW_RATE_LIMIT } },
+    async (request, reply) => {
+      if (!isRenewRequestBody(request.body)) {
+        return reply.badRequest("expected {bridge_id, session_id}");
+      }
+      const rotated = rotateBridgeSession(app, request.body.bridge_id, request.body.session_id);
+      if (!rotated) {
+        return reply.unauthorized("invalid or expired session credential");
+      }
+      touchBridgeLastSeen(app, request.body.bridge_id);
+      const response: RenewResponse = {
+        session_id: rotated.sessionId,
+        expires_at: rotated.expiresAt.toISOString(),
+      };
+      return response;
+    },
+  );
+
   app.get(
     "/ws/agent-bridge",
     { websocket: true, config: { rateLimit: BRIDGE_CONNECT_RATE_LIMIT } },
@@ -278,30 +339,53 @@ export async function agentBridgeRoute(app: FastifyInstance) {
               type: "ready",
               bridge_id: session.bridgeId,
               session_id: session.sessionId,
-              // Handed to the helper so it can persist it for a future
-              // reconnect, but NOT currently used for anything on the wire
-              // — the "auth" path below re-authenticates on session_id
-              // alone (a 256-bit random value, so this is fine
-              // security-wise). Flagged so a later PR doesn't assume this
-              // is already the reconnect credential and skip actually
-              // wiring it in: rotateBridgeSession (bridge-registry.ts) is
-              // the function that would need a route to make this
-              // meaningful, and none exists yet.
-              session_secret: session.sessionSecret,
               expires_at: session.expiresAt.toISOString(),
             }),
           );
           return;
         }
 
-        // parsed.type === "auth"
+        // parsed.type === "auth" — a plain, non-rotating verify. Round 3
+        // (session renewal) deliberately does NOT fold rotation in here:
+        // rotating on every reconnect would mean a reconnect immediately
+        // following one that JUST rotated (a flappy connection, or this
+        // same helper retrying after a transient error mid-handshake)
+        // presents an already-superseded session id and gets rejected —
+        // this route has no way to tell "the client hasn't heard about the
+        // last rotation yet" apart from "this credential is genuinely
+        // stale." Keeping "auth" a stable, idempotent check and putting
+        // renewal on its own route below (POST /api/bridges/renew) means
+        // reconnecting can never itself invalidate the credential a moment
+        // earlier still-in-flight code was relying on.
         if (!verifyBridgeSession(app, parsed.bridge_id, parsed.session_id)) {
+          sendError(socket, "invalid session credential");
+          return;
+        }
+        // Round 3 — the reply now also carries the CURRENT session's
+        // expiry, read fresh off the row rather than trusted from whatever
+        // this client last persisted. This is what lets the client's own
+        // renewal timer (ssh-agent-helper.mjs's scheduleRenewal) arm itself
+        // from an authoritative value on every successful connect, instead
+        // of either guessing a legacy file's missing expiresAt or racing a
+        // pre-armed timer against the very first handshake that establishes
+        // the connection it's meant to run alongside.
+        const row = getBridgeRow(app, parsed.bridge_id);
+        if (!row || !row.sessionExpiresAt) {
+          // Vanishingly unlikely (revoked in the instant between the check
+          // above and this read) — must not crash or send a malformed
+          // reply if it somehow happens.
           sendError(socket, "invalid session credential");
           return;
         }
         touchBridgeLastSeen(app, parsed.bridge_id);
         trackBridge(app, parsed.bridge_id, socket);
-        socket.send(JSON.stringify({ type: "ready", bridge_id: parsed.bridge_id }));
+        socket.send(
+          JSON.stringify({
+            type: "ready",
+            bridge_id: parsed.bridge_id,
+            expires_at: row.sessionExpiresAt.toISOString(),
+          }),
+        );
       }
 
       socket.on("message", handleHandshake);

@@ -117,7 +117,10 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       expect(reply.type).toBe("ready");
       expect(reply.bridge_id).toBe(pairRes.json().bridge_id);
       expect(typeof reply.session_id).toBe("string");
-      expect(typeof reply.session_secret).toBe("string");
+      // Round 3 — session_secret is deliberately no longer sent (never used
+      // to reconnect or renew; both authenticate on session_id alone).
+      expect(reply.session_secret).toBeUndefined();
+      expect(new Date(reply.expires_at!).getTime()).toBeGreaterThan(Date.now());
       expect(app.connectedBridges.has(reply.bridge_id!)).toBe(true);
 
       ws.close();
@@ -186,7 +189,13 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
       const reply = await replyPromise;
 
-      expect(reply).toEqual({ type: "ready", bridge_id });
+      expect(reply.type).toBe("ready");
+      expect(reply.bridge_id).toBe(bridge_id);
+      // Round 3 — the auth reply now also carries the session's current
+      // expiry, so the client can arm its renewal timer from an
+      // authoritative value rather than guessing (see agent-bridge.ts's own
+      // comment on the "auth" branch for why this doesn't rotate the id).
+      expect(new Date(reply.expires_at!).getTime()).toBeGreaterThan(Date.now());
       expect(app.connectedBridges.has(bridge_id)).toBe(true);
       ws.close();
     });
@@ -245,6 +254,174 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       expect((await replyPromise).type).toBe("error");
       await closePromise;
     });
+  });
+
+  describe("POST /api/bridges/renew (round 3, session renewal)", () => {
+    async function pairFreshBridge(port: number) {
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges`, { method: "POST" });
+      const body = (await res.json()) as { bridge_id: string; pairing_payload: string };
+      const { code } = decodePairingPayload(body.pairing_payload)!;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "pair", code }));
+      const reply = await replyPromise;
+      ws.close();
+      await waitForClose(ws);
+      return reply as Required<Pick<HandshakeReply, "bridge_id" | "session_id" | "expires_at">>;
+    }
+
+    it("rotates the session and returns a fresh id + expiry", async () => {
+      const { port } = await buildAndListen();
+      const { bridge_id, session_id, expires_at } = await pairFreshBridge(port);
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id, session_id }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { session_id: string; expires_at: string };
+      expect(typeof body.session_id).toBe("string");
+      expect(body.session_id).not.toBe(session_id);
+      // A fresh session gets a fresh 24h deadline, not the same instant as
+      // the one just replaced — confirms this is a real rotation, not an
+      // echo of the row's unchanged expiry.
+      expect(new Date(body.expires_at).getTime()).toBeGreaterThan(new Date(expires_at).getTime());
+    });
+
+    it("invalidates the OLD session id — a later auth with it is rejected", async () => {
+      const { port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+
+      await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id, session_id }),
+      });
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      const closePromise = waitForClose(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      expect((await replyPromise).type).toBe("error");
+      await closePromise;
+    });
+
+    it("a renewed session id DOES authenticate a later auth handshake", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+
+      const renewRes = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id, session_id }),
+      });
+      const { session_id: renewedSessionId } = (await renewRes.json()) as { session_id: string };
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id: renewedSessionId }));
+      const reply = await replyPromise;
+      expect(reply.type).toBe("ready");
+      expect(app.connectedBridges.has(bridge_id)).toBe(true);
+      ws.close();
+    });
+
+    it("does NOT disrupt an already-open, actively-forwarding connection", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+
+      // A second, live connection for the SAME bridge (a fresh auth,
+      // distinct from the one pairFreshBridge already closed).
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const readyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      await readyPromise;
+      const bridge = app.connectedBridges.get(bridge_id)!;
+
+      // Renew via the HTTP route while that connection stays open — this is
+      // the entire point of a route separate from the WS: the live
+      // connection must be completely unaffected.
+      const renewRes = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id, session_id }),
+      });
+      expect(renewRes.status).toBe(200);
+
+      // Still the SAME tracked connection (not superseded, re-tracked, or
+      // torn down) and the raw socket is still open — the renewal touched
+      // only the DB row, never this live WS. (Not exercising a full
+      // channel round-trip here: that needs a real peer-side mux to ack the
+      // Open frame, which this bare test `ws` isn't; test/cli/ssh-agent-
+      // helper.test.ts's real-helper harness covers that side.)
+      expect(app.connectedBridges.get(bridge_id)).toBe(bridge);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      ws.close();
+    });
+
+    it("rejects a stale/wrong session id without rotating anything", async () => {
+      const { port } = await buildAndListen();
+      const { bridge_id } = await pairFreshBridge(port);
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id, session_id: "wrong" }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects renewal against an unknown bridge id", async () => {
+      const { port } = await buildAndListen();
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id: "does-not-exist", session_id: "x" }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects renewal of a session that's since been revoked", async () => {
+      const { port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+
+      const deleteRes = await fetch(`http://127.0.0.1:${port}/api/bridges/${bridge_id}`, {
+        method: "DELETE",
+      });
+      expect(deleteRes.status).toBe(204);
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bridge_id, session_id }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects a malformed body without throwing", async () => {
+      const { port } = await buildAndListen();
+      const res = await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nonsense: true }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    // The actual isProtectedPath exemption (does this route stay reachable
+    // with MULLION_AUTH_TOKEN genuinely enabled and no session cookie
+    // presented) is covered where it belongs — test/plugins/auth.test.ts's
+    // own "POST /api/bridges/renew exemption" block, which turns real auth
+    // on. This file's buildTestApp() never sets MULLION_AUTH_TOKEN, so the
+    // global hook is a no-op here regardless of what isProtectedPath says —
+    // a test in THIS file asserting "reachable with no credential" would
+    // pass even with the exemption deleted, proving nothing.
   });
 
   describe("GET /ws/agent-bridge — malformed handshakes", () => {

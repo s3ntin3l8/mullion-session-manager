@@ -132,6 +132,14 @@ function isProtectedPath(pathname: string): boolean {
   // deliberately NOT exempted here — that's a Settings-side admin action
   // and stays behind the normal gate, matching POST /api/hosts.
   if (pathname === "/ws/agent-bridge") return false;
+  // Round 3 (session renewal) — same exemption, same reasoning, for the
+  // helper's periodic credential-renewal call: it presents its own current
+  // session id as proof of identity (routes/agent-bridge.ts's
+  // POST /api/bridges/renew, gated by rotateBridgeSession), not this
+  // deployment's session cookie or MULLION_AUTH_TOKEN. Exact-match, not a
+  // prefix — POST /api/bridges itself stays protected, same contrast as
+  // the pairing-code route above.
+  if (pathname === "/api/bridges/renew") return false;
   if (pathname.startsWith("/api/")) return true;
   return pathname.startsWith("/ws/");
 }
