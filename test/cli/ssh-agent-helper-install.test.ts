@@ -5,11 +5,14 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync
 import {
   buildLaunchdPlist,
   buildSystemdUnit,
+  buildWindowsTaskXml,
   launchdPlistPath,
   systemdUnitPath,
+  windowsTaskXmlPath,
   xmlCommentSafe,
   LAUNCHD_LABEL,
   SYSTEMD_UNIT_NAME,
+  WINDOWS_TASK_NAME,
 } from "../../src/cli/ssh-agent-helper-install.mjs";
 // Dispatched through runHelper, not called directly — matches how
 // mullion.mjs actually invokes install/uninstall, and (like pair/run)
@@ -169,6 +172,76 @@ describe("buildSystemdUnit", () => {
   });
 });
 
+describe("buildWindowsTaskXml", () => {
+  it("embeds the exact argv run needs, in order, each token quoted", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      scriptPath: "C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs",
+      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
+    });
+    const argsMatch = xml.match(/<Arguments>(.*?)<\/Arguments>/);
+    expect(argsMatch).not.toBeNull();
+    expect(argsMatch![1]).toBe(
+      '"C:\\Program Files\\Mullion\\dist\\cli\\mullion.mjs" "helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"',
+    );
+    expect(xml).toContain("<Command>C:\\Program Files\\nodejs\\node.exe</Command>");
+  });
+
+  it("XML-escapes a value containing special characters", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\node.exe",
+      scriptPath: "C:\\mullion.mjs",
+      sshAuthSock: "\\\\.\\pipe\\a & b",
+    });
+    expect(xml).toContain("a &amp; b");
+    expect(xml).not.toMatch(/a & b(?!amp)/);
+  });
+
+  it("sets a LogonTrigger, RestartOnFailure with a calm (>=1 minute) interval, and an unlimited execution time", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\node.exe",
+      scriptPath: "C:\\mullion.mjs",
+      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
+    });
+    expect(xml).toContain("<LogonTrigger>");
+    expect(xml).toMatch(/<RestartOnFailure>\s*<Interval>PT\d+M<\/Interval>/);
+    expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+  });
+
+  it("runs with least-privilege, not elevated", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\node.exe",
+      scriptPath: "C:\\mullion.mjs",
+      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
+    });
+    expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+  });
+
+  it("documents the 24h credential deadline in the task description", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\node.exe",
+      scriptPath: "C:\\mullion.mjs",
+      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
+    });
+    expect(xml).toMatch(/<Description>[\s\S]*24h[\s\S]*<\/Description>/);
+  });
+
+  it("is valid, well-formed-enough XML (every opened tag closes)", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\node.exe",
+      scriptPath: "C:\\mullion.mjs",
+      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
+    });
+    expect(xml.startsWith('<?xml version="1.0" encoding="UTF-16"?>')).toBe(true);
+    expect(xml.trim().endsWith("</Task>")).toBe(true);
+    for (const tag of ["Task", "Triggers", "Principals", "Settings", "Actions", "Exec"]) {
+      const opens = (xml.match(new RegExp(`<${tag}[ >]`, "g")) ?? []).length;
+      const closes = (xml.match(new RegExp(`</${tag}>`, "g")) ?? []).length;
+      expect(opens, `<${tag}> open/close mismatch`).toBe(closes);
+    }
+  });
+});
+
 describe("xmlCommentSafe", () => {
   it("leaves ordinary text untouched", () => {
     expect(xmlCommentSafe("nothing special here")).toBe("nothing special here");
@@ -197,6 +270,18 @@ describe("launchdPlistPath / systemdUnitPath", () => {
       homedir: "/home/alice",
     });
     expect(p).toBe(`/home/alice/.xdgconfig/systemd/user/${SYSTEMD_UNIT_NAME}`);
+  });
+});
+
+describe("windowsTaskXmlPath", () => {
+  it("honors XDG_STATE_HOME like the credential file's stateDir() does", () => {
+    const p = windowsTaskXmlPath({ env: { XDG_STATE_HOME: "C:\\Users\\alice\\.state" } });
+    expect(p).toBe(path.join("C:\\Users\\alice\\.state", "mullion", "mullion-helper-task.xml"));
+  });
+
+  it("honors MULLION_HELPER_STATE_DIR like the credential file does", () => {
+    const p = windowsTaskXmlPath({ env: { MULLION_HELPER_STATE_DIR: "C:\\custom\\state" } });
+    expect(p).toBe(path.join("C:\\custom\\state", "mullion-helper-task.xml"));
   });
 });
 
@@ -364,13 +449,64 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(plistPath)).toBe(true);
   });
 
-  it("win32: refuses cleanly, no files written", async () => {
-    const { io } = baseIo({ platform: "win32" });
+  it("win32: writes a Scheduled Task XML and creates it with /F", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    const xmlPath = windowsTaskXmlPath(io);
+    expect(existsSync(xmlPath)).toBe(true);
+    expect(calls.map((c) => c.join(" "))).toEqual([
+      `schtasks /Create /TN ${WINDOWS_TASK_NAME} /XML ${xmlPath} /F`,
+    ]);
+  });
+
+  it("win32: re-install overwrites the previous task via /F, no separate teardown call", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    calls.length = 0;
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    // Unlike launchd/systemd, schtasks /Create /F is unconditionally
+    // idempotent — no pre-teardown call, no "was preTeardown ambiguous"
+    // rollback judgment needed.
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain("/F");
+  });
+
+  it("win32: surfaces a non-zero schtasks /Create exit as a failure and rolls back the XML", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("/Create"))
+        return { status: 1, stdout: "", stderr: "ERROR: Access is denied." };
+      return { status: 0, stdout: "", stderr: "" };
+    };
     const stderrLines: string[] = [];
     io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runInstall([], io);
     expect(code).toBe(1);
-    expect(stderrLines.join("")).toMatch(/isn't supported on Windows yet/);
+    expect(stderrLines.join("")).toMatch(/schtasks \/Create failed/);
+    const xmlPath = windowsTaskXmlPath(io);
+    expect(existsSync(xmlPath)).toBe(false);
+  });
+
+  it("win32: does not warn about a missing --ssh-auth-sock path — named pipes aren't statSync-able files", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    io.env = {
+      ...(io.env as Record<string, string>),
+      SSH_AUTH_SOCK: "\\\\.\\pipe\\openssh-ssh-agent",
+    };
+    io.statSync = () => {
+      throw new Error("statSync should not be called for a win32 named pipe path");
+    };
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    expect(stderrLines.join("")).not.toMatch(/doesn't exist right now/);
   });
 
   it("an unrecognized platform is also refused cleanly", async () => {
@@ -469,10 +605,41 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(plistPath)).toBe(false);
   });
 
-  it("win32: uninstall is also refused cleanly", async () => {
-    const { io } = baseIo({ platform: "win32" });
+  it("win32: uninstall removes the task XML and deletes it via schtasks; a no-op is not an error", async () => {
+    const { io, calls, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    const xmlPath = windowsTaskXmlPath(io);
+    expect(existsSync(xmlPath)).toBe(true);
+
+    calls.length = 0;
+    const code = await runUninstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(xmlPath)).toBe(false);
+    expect(calls.map((c) => c.join(" "))).toEqual([`schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`]);
+
+    // Uninstalling again (nothing installed) must not throw or fail.
+    const second = await runUninstall([], io);
+    expect(second).toBe(0);
+  });
+
+  it("win32: a failed schtasks /Delete is surfaced, not swallowed — the task XML is left in place", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    await runInstall([], io);
+    const xmlPath = windowsTaskXmlPath(io);
+
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("/Delete"))
+        return { status: 1, stdout: "", stderr: "ERROR: Access is denied." };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
     const code = await runUninstall([], io);
     expect(code).toBe(1);
+    expect(stderrLines.join("")).toMatch(/schtasks \/Delete failed/);
+    expect(existsSync(xmlPath)).toBe(true);
   });
 
   it("linux: a failed systemctl disable is surfaced, not swallowed — the unit file is left in place", async () => {

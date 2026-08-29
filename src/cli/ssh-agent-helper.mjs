@@ -314,14 +314,30 @@ async function runPair(args, io) {
  * flow entirely would mean removing the reconnect-with-saved-credential
  * feature outright, not narrowing it.
  */
+// Issue #873 Phase 3 (Windows headless support) — `sshAuthSock` below is
+// handed straight to `net.connect({ path })` a few lines down with no
+// platform branch at all, on purpose. Node's own `net` module treats a
+// Windows named pipe path (`\\.\pipe\openssh-ssh-agent`, 1Password's own
+// Win32-OpenSSH-compatible pipe name) as a first-class IPC endpoint for
+// `net.connect`'s `path` option, exactly the same shape as a unix domain
+// socket path on macOS/Linux — confirmed against Node's own `net.md` docs,
+// which document `path` as accepting "an IPC endpoint (Unix domain socket
+// or Windows named pipe)" without qualification. One implementation covers
+// all three platforms; see ssh-agent-helper-install.mjs's own Windows
+// Scheduled Task generator for the other half of Windows support (the
+// supervisor that keeps this process running). Concurrency behavior of
+// 1Password's own pipe under many simultaneous opens (the mux's channel-
+// per-request shape) is a separate, not-yet-verified question — tracked at
+// https://github.com/s3ntin3l8/mullion-session-manager/issues/874.
 async function runRun(args, io) {
   const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
   const sshAuthSock = flags["ssh-auth-sock"] || io.env.SSH_AUTH_SOCK;
   if (!sshAuthSock) {
     io.stderr.write(
       "no SSH_AUTH_SOCK in this process's environment — pass --ssh-auth-sock <path>, or run this " +
-        "under a shell that has SSH_AUTH_SOCK set. Note: a launchd/systemd unit does NOT inherit " +
-        "your login shell's SSH_AUTH_SOCK — hardcode the real path there instead (see docs/ssh-agent.md).\n",
+        "under a shell that has SSH_AUTH_SOCK set. Note: a launchd/systemd/Scheduled Task job does " +
+        "NOT inherit your login shell's SSH_AUTH_SOCK — hardcode the real path there instead (see " +
+        "docs/ssh-agent.md).\n",
     );
     return 1;
   }

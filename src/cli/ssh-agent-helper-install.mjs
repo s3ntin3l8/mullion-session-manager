@@ -1,11 +1,12 @@
 // Issue #820 (PR6b) — `mullion helper install`/`uninstall`: generates and
-// (de)registers a launchd job (macOS) or systemd --user unit (Linux) that
-// supervises `mullion helper run`, so a laptop user doesn't have to
-// hand-write one from docs/ssh-agent.md's manual-tunnel examples. Windows
-// isn't supported yet (no way to test a Windows Scheduled Task generator
-// from this Linux-only CI/dev environment) — `runInstall`/`runUninstall`
-// return a clear, testable error there instead of shipping an unverified
-// `schtasks.exe` invocation. Tracked separately; see docs/ssh-agent.md.
+// (de)registers a launchd job (macOS), systemd --user unit (Linux), or
+// Windows Scheduled Task (issue #873 Phase 3) that supervises
+// `mullion helper run`, so a laptop user doesn't have to hand-write one
+// from docs/ssh-agent.md's manual-tunnel examples. The Windows generator
+// has no local verification path either (no way to run `schtasks.exe` from
+// this Linux-only CI/dev environment) — same caveat the macOS/Linux
+// generators already carried before their own first real-machine test; see
+// docs/ssh-agent.md for status and the tracking issue.
 //
 // The builder functions (buildLaunchdPlist/buildSystemdUnit) and the path
 // resolvers below are pure — no fs/process/child_process access — so
@@ -30,6 +31,7 @@ import { stateDir, loadCredential } from "./ssh-agent-helper.mjs";
 // enrolled agent host, so there's nothing to template per-host here.
 export const LAUNCHD_LABEL = "de.s3ntin3l8.mullion-helper";
 export const SYSTEMD_UNIT_NAME = "mullion-helper.service";
+export const WINDOWS_TASK_NAME = "MullionHelper";
 
 function defaultScriptPath() {
   // Sibling of this file — mullion.mjs, byte-identical in dist/cli/ per
@@ -46,6 +48,21 @@ export function systemdUnitPath(io) {
   const home = io.homedir ?? os.homedir();
   const configHome = io.env.XDG_CONFIG_HOME || path.join(home, ".config");
   return path.join(configHome, "systemd", "user", SYSTEMD_UNIT_NAME);
+}
+
+// `schtasks /Create /XML <path>` reads the task definition from a file on
+// disk (there's no stdin form), so — unlike launchd/systemd, which register
+// directly against a well-known filesystem location the OS itself expects —
+// this file's location is Mullion's own choice. Same directory convention
+// as launchd's log file (installLaunchd's own `logPath`): stateDir(io),
+// this platform's equivalent of `~/Library/Application Support` /
+// `$XDG_STATE_HOME`. Kept on disk (not a temp file deleted after
+// registration) so uninstallWindows can use the same "check the file first"
+// pattern uninstallLaunchd/uninstallSystemd already use, without needing to
+// shell out to `schtasks /Query` just to find out whether anything's
+// installed.
+export function windowsTaskXmlPath(io) {
+  return path.join(stateDir(io), "mullion-helper-task.xml");
 }
 
 function xmlEscape(value) {
@@ -143,7 +160,76 @@ WantedBy=default.target
 `;
 }
 
-function resolveSshAuthSock(flags, io) {
+// Task Scheduler XML (schema: http://schemas.microsoft.com/windows/2004/02/mit/task)
+// rather than a long `schtasks /Create` flag list — same reasoning as the
+// launchd/systemd generators above: a file on disk a user (or a future
+// uninstaller) can actually read, not an opaque one-liner. Element-by-
+// element mapping to the other two platforms' equivalents:
+//   - LogonTrigger                    <-> launchd RunAtLoad / systemd WantedBy=default.target
+//   - RestartOnFailure (PT1M, x9999)  <-> launchd KeepAlive+ThrottleInterval / systemd Restart=always+RestartSec
+//     — 1-minute floor is Task Scheduler's own minimum granularity for this
+//     element (Microsoft's schema docs), which happens to land in the same
+//     "calm, not tight" territory EXPIRY_COMMENT_LINES above explains the
+//     other two platforms' own interval choices with.
+//   - ExecutionTimeLimit PT0S (unlimited) — the default is PT72H (3 days),
+//     which would silently kill this long-running foreground process out
+//     from under itself; every other platform's job here runs indefinitely
+//     by default, so this is a correctness fix, not a preference.
+//   - LogonType InteractiveToken + RunLevel LeastPrivilege <-> launchd/
+//     systemd both run as the inviting user with no privilege escalation.
+export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
+  // Every token quoted uniformly (scriptPath included — a very plausible
+  // "C:\Program Files\..." space, unlike execPath which Windows itself
+  // never puts a space in for a bare `node.exe`), matching
+  // <Arguments>'s own documented shell-like tokenizing (Microsoft's Task
+  // Scheduler docs: this string is parsed the same way a command line
+  // typed at a prompt would be). xmlEscape applies to each raw value
+  // BEFORE wrapping in literal quotes, not after — a `"` in element text
+  // content (unlike an XML attribute value) needs no escaping at all, so
+  // escaping the wrapping quote characters themselves would just produce
+  // `&quot;` where a plain `"` reads just as correctly.
+  const args = [scriptPath, "helper", "run", "--ssh-auth-sock", sshAuthSock]
+    .map((value) => `"${xmlEscape(value)}"`)
+    .join(" ");
+  const comment = xmlEscape(EXPIRY_COMMENT_LINES.join(" "));
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Mullion SSH agent bridge helper. ${comment}</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>9999</Count>
+    </RestartOnFailure>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>${xmlEscape(execPath)}</Command>
+      <Arguments>${args}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+`;
+}
+
+function resolveSshAuthSock(flags, io, platform) {
   const value = flags["ssh-auth-sock"] || io.env.SSH_AUTH_SOCK;
   if (!value) {
     throw new CliUsageError(
@@ -157,12 +243,22 @@ function resolveSshAuthSock(flags, io) {
   // the manual tunnel's own "present: false" diagnostic in
   // docs/ssh-agent.md) — the path can be perfectly correct and just not
   // live yet at install time.
-  const stat = (io.statSync ?? fs.statSync)(value, { throwIfNoEntry: false });
-  if (!stat) {
-    io.stderr.write(
-      `note: ${value} doesn't exist right now — that's fine if the agent app just isn't ` +
-        "running yet, but double-check the path if this is unexpected.\n",
-    );
+  //
+  // Skipped entirely on win32: `value` here is a named pipe path
+  // (`\\.\pipe\...`), not a regular file, and `fs.statSync` on a Windows
+  // named pipe is unreliable/platform-quirky rather than a clean
+  // exists-or-not signal the way it is for a unix domain socket file —
+  // untestable from this Linux-only dev/CI environment either way, so this
+  // stays a documented gap rather than a confident (and possibly wrong)
+  // check.
+  if (platform !== "win32") {
+    const stat = (io.statSync ?? fs.statSync)(value, { throwIfNoEntry: false });
+    if (!stat) {
+      io.stderr.write(
+        `note: ${value} doesn't exist right now — that's fine if the agent app just isn't ` +
+          "running yet, but double-check the path if this is unexpected.\n",
+      );
+    }
   }
   return value;
 }
@@ -256,27 +352,59 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
   return 0;
 }
 
-export async function runInstall(args, io) {
-  const platform = io.platform ?? process.platform;
-  if (platform === "win32") {
+// Unlike launchd/systemd, `schtasks /Create /F` is unconditionally
+// idempotent — it silently overwrites an existing task with the same name
+// rather than erroring, so there's no separate pre-teardown step, and
+// therefore none of the "was preTeardown itself ambiguous" rollback
+// judgment call installLaunchd's own comment works through. A create
+// failure simply means the task was never (re)registered; deleting the
+// just-written XML file is unconditionally safe here.
+function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
+  const xmlPath = windowsTaskXmlPath(io);
+  fs.mkdirSync(path.dirname(xmlPath), { recursive: true });
+  fs.writeFileSync(xmlPath, buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }), {
+    encoding: "utf16le",
+  });
+  const result = runSpawnSync(io, "schtasks", [
+    "/Create",
+    "/TN",
+    WINDOWS_TASK_NAME,
+    "/XML",
+    xmlPath,
+    "/F",
+  ]);
+  if (result.status !== 0) {
+    fs.rmSync(xmlPath, { force: true });
     io.stderr.write(
-      "mullion helper install isn't supported on Windows yet — run 'mullion helper run' " +
-        "under a supervisor (e.g. a Scheduled Task) manually for now; see docs/ssh-agent.md.\n",
+      `schtasks /Create failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
     );
     return 1;
   }
-  if (platform !== "darwin" && platform !== "linux") {
+  io.stdout.write(
+    `installed and started — ${xmlPath}\n` +
+      `check status: schtasks /Query /TN ${WINDOWS_TASK_NAME} /V\n` +
+      "the paired session is valid for 24h — re-run 'mullion helper pair <payload>' at least " +
+      "once a day for uninterrupted coverage.\n",
+  );
+  return 0;
+}
+
+export async function runInstall(args, io) {
+  const platform = io.platform ?? process.platform;
+  if (platform !== "darwin" && platform !== "linux" && platform !== "win32") {
     io.stderr.write(`mullion helper install isn't supported on '${platform}'.\n`);
     return 1;
   }
   const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
-  const sshAuthSock = resolveSshAuthSock(flags, io);
+  const sshAuthSock = resolveSshAuthSock(flags, io, platform);
   const execPath = io.execPath ?? process.execPath;
   const scriptPath = io.scriptPath ?? defaultScriptPath();
   warnIfNotPaired(io);
 
   const opts = { execPath, scriptPath, sshAuthSock };
-  return platform === "darwin" ? installLaunchd(io, opts) : installSystemd(io, opts);
+  if (platform === "darwin") return installLaunchd(io, opts);
+  if (platform === "win32") return installWindows(io, opts);
+  return installSystemd(io, opts);
 }
 
 // Both uninstallers check the on-disk file FIRST, before ever shelling out:
@@ -329,10 +457,33 @@ function uninstallSystemd(io) {
   return 0;
 }
 
+// Same "check the file first, then treat a genuine teardown failure as
+// real, not swallowed" shape as uninstallLaunchd/uninstallSystemd above.
+function uninstallWindows(io) {
+  const xmlPath = windowsTaskXmlPath(io);
+  if (!fs.existsSync(xmlPath)) {
+    io.stdout.write("nothing installed.\n");
+    return 0;
+  }
+  const result = runSpawnSync(io, "schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
+  if (result.status !== 0) {
+    io.stderr.write(
+      `schtasks /Delete failed: ${(result.stderr || result.error?.message || "unknown error").trim()} — ` +
+        "leaving the task file in place; 'mullion helper run' may still be active. Investigate with " +
+        `'schtasks /Query /TN ${WINDOWS_TASK_NAME}' before retrying.\n`,
+    );
+    return 1;
+  }
+  fs.rmSync(xmlPath, { force: true });
+  io.stdout.write(`removed ${xmlPath}\n`);
+  return 0;
+}
+
 export async function runUninstall(_args, io) {
   const platform = io.platform ?? process.platform;
   if (platform === "darwin") return uninstallLaunchd(io);
   if (platform === "linux") return uninstallSystemd(io);
+  if (platform === "win32") return uninstallWindows(io);
   io.stderr.write(`mullion helper uninstall isn't supported on '${platform}'.\n`);
   return 1;
 }

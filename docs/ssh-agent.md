@@ -118,36 +118,49 @@ pair '<payload>'` works identically, no build step required.
 
 `mullion helper run` is a plain foreground process — it doesn't daemonize or
 install itself as a service on its own. `mullion helper install` does that
-for you on **macOS and Linux**:
+for you on **macOS, Linux, and Windows**:
 
 ```sh
 mullion helper install --ssh-auth-sock "$SSH_AUTH_SOCK"
 ```
 
-This generates and registers a launchd job (`~/Library/LaunchAgents/de.s3ntin3l8.mullion-helper.plist`)
-or a systemd `--user` unit (`~/.config/systemd/user/mullion-helper.service`),
-starts it immediately, and re-running the command later cleanly replaces the
-previous install (new `--ssh-auth-sock`, moved checkout, ...) rather than
-erroring over an already-loaded job. `mullion helper uninstall` stops and
-removes it again — a no-op, not an error, if nothing is installed. On Linux,
-also run `loginctl enable-linger $(whoami)` so the unit survives logout, the
-same requirement the manual tunnel's own [systemd
+This generates and registers a launchd job (`~/Library/LaunchAgents/de.s3ntin3l8.mullion-helper.plist`),
+a systemd `--user` unit (`~/.config/systemd/user/mullion-helper.service`), or
+a Windows Scheduled Task (`MullionHelper`, registered from a generated
+`mullion-helper-task.xml` alongside the credential file), starts it
+immediately, and re-running the command later cleanly replaces the previous
+install (new `--ssh-auth-sock`, moved checkout, ...) rather than erroring
+over an already-loaded job — `schtasks /Create /F` is unconditionally
+idempotent, so Windows doesn't even need the explicit pre-teardown step the
+other two platforms do. `mullion helper uninstall` stops and removes it
+again — a no-op, not an error, if nothing is installed. On Linux, also run
+`loginctl enable-linger $(whoami)` so the unit survives logout, the same
+requirement the manual tunnel's own [systemd
 section](#linux-systemd---user) below has.
 
-**Windows isn't supported by `install`/`uninstall` yet** — run `mullion
-helper run` under a supervisor manually there (a Scheduled Task, NSSM, ...).
-Track native support at [issue
-#871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
+**Windows note:** `install`/`uninstall` are implemented but have no local
+verification path (no way to run `schtasks.exe` from Linux-only CI/dev) —
+same caveat the macOS/Linux generators carried before their own first
+real-machine test. Separately, whether 1Password's Windows named pipe
+accepts the mux's concurrent-channel shape at all (independent of
+`install`/`uninstall` working) is tracked at [issue
+#874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874) —
+`--ssh-auth-sock` there is the pipe path, typically
+`\\.\pipe\openssh-ssh-agent`.
 
 **Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
-above. Neither `launchd` nor `systemd --user` inherits your login shell's
-`SSH_AUTH_SOCK` — the same reasoning as the manual tunnel's own
+above. Neither `launchd`, `systemd --user`, nor a Windows Scheduled Task
+inherits your login shell's `SSH_AUTH_SOCK` — the same reasoning as the
+manual tunnel's own
 [launchd](#macos-launchd)/[systemd](#linux-systemd---user) sections below —
 so `install` captures whatever `--ssh-auth-sock` resolves to (the flag, or
 your current shell's `$SSH_AUTH_SOCK`) as a literal path baked into the
 generated job, once, at install time; it is not re-read from the
 environment afterward. `install` refuses outright, rather than generating a
-job that would fail at every restart, if neither is available.
+job that would fail at every restart, if neither is available — except on
+Windows, where a named pipe path can't be reliably existence-checked the way
+a unix socket file can, so that check is skipped there rather than risking a
+confident-but-wrong warning.
 
 If you'd rather supervise it yourself instead of using `install` — a
 process manager you already run, a platform `install` doesn't cover yet —
