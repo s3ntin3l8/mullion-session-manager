@@ -3,7 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolveOpenCodePluginPath, shellQuote } from "./shared.js";
 import { sessionAgentGuidePath } from "../agent-guide.js";
 import { sessionBriefingPath } from "../project-briefing.js";
-import { resolveMullionBundleDir } from "./mullion-bundle.js";
+import {
+  resolveMullionBundleDir,
+  deriveContentName,
+  deriveOpenCodeReviewerAgentFile,
+} from "./mullion-bundle.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -229,6 +233,49 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   if (ctx.injectMullionBundle) {
     const bundleDir = resolveMullionBundleDir();
     if (bundleDir) skillsPaths.push(path.join(bundleDir, "skills"));
+  }
+
+  // PR-5 — a project's own skill (project_tooling.skill, schema.ts) rides
+  // the same verified `skills.paths` channel as the universal bundle
+  // immediately above: written into its own subdirectory of this session's
+  // already-ephemeral configDir (never the shipped bundle's own tree,
+  // which this checkout doesn't own writing into) and that subdirectory
+  // added to `skills.paths` alongside the shipped bundle's. Unlike Claude
+  // Code's single composed --plugin-dir (claude-code.ts), opencode's
+  // `skills.paths` is already a list, so this is a second entry, not a
+  // merge. Content whose frontmatter `name` can't be safely derived
+  // (deriveContentName's own doc comment) is silently skipped — same
+  // posture as claude-code.ts's composeClaudeSessionBundle, and the route
+  // (routes/project-tooling.ts) already rejects that at write time.
+  if (ctx.injectMullionBundle && ctx.projectSkill) {
+    const name = deriveContentName(ctx.projectSkill);
+    if (name) {
+      const projectSkillsDir = path.join(configDir, "mullion-project-skills");
+      settingsFiles.push({
+        path: path.join(projectSkillsDir, name, "SKILL.md"),
+        contents: ctx.projectSkill,
+      });
+      skillsPaths.push(projectSkillsDir);
+    }
+  }
+
+  // PR-5 — a project's own reviewer subagent (project_tooling.reviewerAgent)
+  // rides opencode's `<OPENCODE_CONFIG_DIR>/agent/<name>.md` convention
+  // (verified empirically this session, see
+  // deriveOpenCodeReviewerAgentFile's own doc comment for the full spike —
+  // including why it CANNOT be the raw Claude-Code-shaped content
+  // ctx.projectReviewerAgent actually holds). No `skills.paths`-style env
+  // entry needed beyond the file write itself: opencode auto-discovers
+  // `agent/*.md` under OPENCODE_CONFIG_DIR, which envAdditions below
+  // already points at this session's configDir.
+  if (ctx.injectMullionBundle && ctx.projectReviewerAgent) {
+    const agentFile = deriveOpenCodeReviewerAgentFile(ctx.projectReviewerAgent);
+    if (agentFile) {
+      settingsFiles.push({
+        path: path.join(configDir, "agent", `${agentFile.name}.md`),
+        contents: agentFile.contents,
+      });
+    }
   }
 
   if (instructions.length > 0 || skillsPaths.length > 0) {

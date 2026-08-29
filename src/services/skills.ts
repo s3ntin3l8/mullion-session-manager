@@ -236,7 +236,17 @@ export function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
   let name: string | null = null;
   let description: string | null = null;
   for (const line of match[1].split(/\r?\n/)) {
-    const kv = /^(name|description):\s*(.*)$/.exec(line);
+    // CodeQL (js/polynomial-redos), PR #894 — `\s*(.*)$` overlaps `\s` and
+    // `.` on the same input, a superlinear-backtracking shape newly
+    // reachable from arbitrary HTTP-body text once PR-894's project-skill/
+    // reviewer-agent write routes started feeding attacker-controlled
+    // content through this parser (every prior caller only ever ran it
+    // against committed/discovered skill files). Dropping the `\s*` is
+    // behavior-preserving, not just a workaround: `kv[2].trim()` right
+    // below already strips exactly the leading whitespace `\s*` used to
+    // consume, so capturing it into the group and trimming it afterward
+    // produces the identical `value`.
+    const kv = /^(name|description):(.*)$/.exec(line);
     if (!kv) continue;
     const value = kv[2].trim();
     if (/^[|>][+-]?\d?$/.test(value)) continue; // block-scalar indicator, unsupported

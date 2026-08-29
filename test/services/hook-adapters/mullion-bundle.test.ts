@@ -14,7 +14,28 @@ import {
   resolveMullionBundleDir,
   installBundleSkills,
   uninstallBundleSkills,
+  deriveContentName,
+  composeClaudeSessionBundle,
+  deriveOpenCodeReviewerAgentFile,
 } from "../../../src/services/hook-adapters/mullion-bundle.js";
+
+const VALID_SKILL = `---
+name: my-project-skill
+description: A project-specific skill.
+---
+
+Do the project-specific thing.
+`;
+
+const VALID_REVIEWER_AGENT = `---
+name: my-project-reviewer
+description: Reviews diffs for this project's own invariants.
+tools: Read, Grep, Glob, Bash
+model: inherit
+---
+
+You are reviewing a change in this project.
+`;
 
 // Same resolution shape as shared.test.ts's resolveForwarderPath coverage —
 // import.meta.url-relative in a dev checkout, MULLION_HOME's stable
@@ -178,5 +199,155 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
       if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
       else process.env.MULLION_HOME = originalMullionHome;
     }
+  });
+});
+
+describe("deriveContentName", () => {
+  it("returns the frontmatter name for valid skill/reviewer content", () => {
+    expect(deriveContentName(VALID_SKILL)).toBe("my-project-skill");
+    expect(deriveContentName(VALID_REVIEWER_AGENT)).toBe("my-project-reviewer");
+  });
+
+  it("returns null for unparseable frontmatter", () => {
+    expect(deriveContentName("not frontmatter at all")).toBeNull();
+  });
+
+  it("returns null for a dangerous frontmatter name", () => {
+    expect(deriveContentName("---\nname: __proto__\ndescription: nope\n---\nbody")).toBeNull();
+  });
+
+  // Hermes review, PR #894 — a frontmatter name is joined straight into a
+  // path (composeClaudeSessionBundle below, opencode.ts's project-skill
+  // wiring); a traversal segment must never survive this far.
+  it("returns null for a path-traversal frontmatter name", () => {
+    expect(
+      deriveContentName("---\nname: ../../etc/passwd\ndescription: nope\n---\nbody"),
+    ).toBeNull();
+    expect(deriveContentName("---\nname: a/b\ndescription: nope\n---\nbody")).toBeNull();
+    expect(deriveContentName("---\nname: a\\b\ndescription: nope\n---\nbody")).toBeNull();
+    expect(deriveContentName("---\nname: ..\ndescription: nope\n---\nbody")).toBeNull();
+    expect(deriveContentName("---\nname: .\ndescription: nope\n---\nbody")).toBeNull();
+  });
+});
+
+// composeClaudeSessionBundle — PR-5's per-session --plugin-dir composition:
+// the shipped bundle's own tree, verbatim, plus a project's own skill/
+// reviewer content under frontmatter-derived names.
+describe("composeClaudeSessionBundle", () => {
+  it("includes the shipped bundle's own files even with no project content", () => {
+    const files = composeClaudeSessionBundle("/session/123.mullion-bundle", {});
+    expect(files).not.toBeNull();
+    const relPaths = files!.map((f) => f.path);
+    expect(relPaths.some((p) => p.endsWith(path.join(".claude-plugin", "plugin.json")))).toBe(true);
+    expect(relPaths.some((p) => p.endsWith(path.join("skills", "mullion-host", "SKILL.md")))).toBe(
+      true,
+    );
+  });
+
+  it("adds the project skill under skills/<frontmatter-name>/SKILL.md", () => {
+    const files = composeClaudeSessionBundle("/session/123.mullion-bundle", { skill: VALID_SKILL });
+    const skillFile = files!.find((f) =>
+      f.path.endsWith(path.join("skills", "my-project-skill", "SKILL.md")),
+    );
+    expect(skillFile).toBeDefined();
+    expect(skillFile!.contents).toBe(VALID_SKILL);
+  });
+
+  it("adds the reviewer agent under agents/<frontmatter-name>.md, verbatim (Claude Code's own shape)", () => {
+    const files = composeClaudeSessionBundle("/session/123.mullion-bundle", {
+      reviewerAgent: VALID_REVIEWER_AGENT,
+    });
+    const agentFile = files!.find((f) =>
+      f.path.endsWith(path.join("agents", "my-project-reviewer.md")),
+    );
+    expect(agentFile).toBeDefined();
+    expect(agentFile!.contents).toBe(VALID_REVIEWER_AGENT);
+  });
+
+  it("silently skips project content with unparseable frontmatter rather than throwing", () => {
+    const withoutProjectContent = composeClaudeSessionBundle("/session/123.mullion-bundle", {});
+    const withUnparseableSkill = composeClaudeSessionBundle("/session/123.mullion-bundle", {
+      skill: "not a skill",
+    });
+    expect(withUnparseableSkill).toEqual(withoutProjectContent);
+  });
+
+  // Hermes review, PR #894 — never join a traversal-shaped frontmatter name
+  // into the composed dir's own path.
+  it("skips a path-traversal frontmatter name rather than escaping destDir", () => {
+    const withoutProjectContent = composeClaudeSessionBundle("/session/123.mullion-bundle", {});
+    const withTraversalSkill = composeClaudeSessionBundle("/session/123.mullion-bundle", {
+      skill: "---\nname: ../../etc/passwd\ndescription: d\n---\nbody",
+    });
+    expect(withTraversalSkill).toEqual(withoutProjectContent);
+    expect(withTraversalSkill!.every((f) => !f.path.includes(".."))).toBe(true);
+  });
+
+  it("returns null when MULLION_HOME points at a location shipping no bundle and there is no project content either", () => {
+    const originalMullionHome = process.env.MULLION_HOME;
+    process.env.MULLION_HOME = "/nonexistent/mullion/home";
+    try {
+      expect(composeClaudeSessionBundle("/session/123.mullion-bundle", {})).toBeNull();
+    } finally {
+      if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
+      else process.env.MULLION_HOME = originalMullionHome;
+    }
+  });
+
+  // Hermes review, PR #894 round 2 — the shipped bundle being absent has
+  // nothing to do with whether a project's own, separately-authored content
+  // should still reach the session; the earlier behavior dropped it
+  // entirely just because the unrelated shipped bundle was missing.
+  it("still composes the project's own content under a synthesized manifest when no bundle is shipped", () => {
+    const originalMullionHome = process.env.MULLION_HOME;
+    process.env.MULLION_HOME = "/nonexistent/mullion/home";
+    try {
+      const files = composeClaudeSessionBundle("/session/123.mullion-bundle", {
+        skill: VALID_SKILL,
+      });
+      expect(files).not.toBeNull();
+      const manifestFile = files!.find((f) =>
+        f.path.endsWith(path.join(".claude-plugin", "plugin.json")),
+      );
+      expect(manifestFile).toBeDefined();
+      expect(JSON.parse(manifestFile!.contents)).toMatchObject({ name: "mullion" });
+      const skillFile = files!.find((f) =>
+        f.path.endsWith(path.join("skills", "my-project-skill", "SKILL.md")),
+      );
+      expect(skillFile).toBeDefined();
+      expect(skillFile!.contents).toBe(VALID_SKILL);
+    } finally {
+      if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
+      else process.env.MULLION_HOME = originalMullionHome;
+    }
+  });
+});
+
+// deriveOpenCodeReviewerAgentFile — opencode's agent/<name>.md convention
+// hard-rejects Claude Code's tools:/model: frontmatter shape at config-load
+// time (verified empirically against installed opencode 1.18.23, see the
+// function's own doc comment); this must translate, never pass through.
+describe("deriveOpenCodeReviewerAgentFile", () => {
+  it("strips the content down to description/mode, dropping tools/model", () => {
+    const result = deriveOpenCodeReviewerAgentFile(VALID_REVIEWER_AGENT);
+    expect(result).not.toBeNull();
+    expect(result!.name).toBe("my-project-reviewer");
+    expect(result!.contents).not.toContain("tools:");
+    expect(result!.contents).not.toContain("model:");
+    expect(result!.contents).toContain("mode: subagent");
+    expect(result!.contents).toContain(
+      'description: "Reviews diffs for this project\'s own invariants."',
+    );
+    expect(result!.contents).toContain("You are reviewing a change in this project.");
+  });
+
+  it("returns null for unparseable frontmatter", () => {
+    expect(deriveOpenCodeReviewerAgentFile("not a subagent file")).toBeNull();
+  });
+
+  it("returns null for a dangerous frontmatter name", () => {
+    expect(
+      deriveOpenCodeReviewerAgentFile("---\nname: __proto__\ndescription: nope\n---\nbody"),
+    ).toBeNull();
   });
 });

@@ -72,6 +72,13 @@ export interface SpawnSessionBody {
   // project-briefing.ts's own MAX_BRIEFING_BYTES (4096) is a real bound,
   // not a token gesture — see the schema's own maxLength below.
   briefingOverride?: string;
+  // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's own
+  // doc comments (pty-manager.ts). Same "operator-authored, bounded"
+  // posture as briefingOverride above — see the schema's own maxLength
+  // below for the exact bound and why it differs in derivation from
+  // briefingOverride's.
+  projectSkill?: string;
+  projectReviewerAgent?: string;
 }
 
 export const spawnSessionSchema = {
@@ -111,6 +118,15 @@ export const spawnSessionSchema = {
       // clamped body plus buildSessionBriefingContent's header with room
       // to spare, without being unbounded.
       briefingOverride: { type: "string", maxLength: 8192 },
+      // PR-5 — unlike briefingOverride's maxLength above (derived from
+      // project-briefing.ts's own post-clamp/header-prepend file-write cap,
+      // a different pipeline these two fields never go through), this
+      // mirrors project-tooling.ts's MAX_PROJECT_TOOLING_FIELD_BYTES
+      // directly — the DB write-side cap this value was read from is
+      // already exactly this size, so there's no separate headroom
+      // calculation to duplicate here.
+      projectSkill: { type: "string", maxLength: 8192 },
+      projectReviewerAgent: { type: "string", maxLength: 8192 },
     },
   },
 };

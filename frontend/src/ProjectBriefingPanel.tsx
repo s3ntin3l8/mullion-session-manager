@@ -9,60 +9,304 @@ export interface ProjectBriefingPanelParams {
 }
 
 // Hermes review, PR #893 — kept in sync BY HAND with
-// src/services/project-tooling.ts's MAX_PROJECT_BRIEFING_BYTES (which is
-// itself kept in sync by hand with internal-schemas.ts's spawnSessionSchema
-// briefingOverride maxLength) — the frontend has no access to backend
-// source, so this is a third copy of the same number, same posture as that
-// file's own header comment. Only used here to show a live hint before Save
-// — the backend's own check is still the actual enforcement.
-const MAX_PROJECT_BRIEFING_BYTES = 8192;
+// src/services/project-tooling.ts's MAX_PROJECT_TOOLING_FIELD_BYTES (which
+// is itself kept in sync by hand with internal-schemas.ts's
+// spawnSessionSchema briefingOverride/projectSkill/projectReviewerAgent
+// maxLength) — the frontend has no access to backend source, so this is a
+// third copy of the same number, same posture as that file's own header
+// comment. Only used here to show a live hint before Save — the backend's
+// own check is still the actual enforcement. Shared by all three fields
+// below (PR-5): they're all validated against the same byte cap.
+const MAX_TOOLING_FIELD_BYTES = 8192;
 
-// A dockview panel (opened from the CommandPalette's Integrations section,
-// same "project-scoped panel kind" shape AgentRulesPanel/DockConfigPanel/
-// SkillsPanel already use — see usePanelOpener.ts's ProjectPanelKindConfig)
-// for authoring a project's DB-backed Mullion briefing
-// (src/services/project-tooling.ts). Unlike AgentRulesPanel, there's no
-// target list here — this is one DB row, one textarea. `briefing === null`
-// means the project has no DB-authored briefing yet, the ordinary case; the
-// project may still have its own committed AGENTS.md/CLAUDE.md briefing
-// region on disk, which this row — once saved — takes precedence over (see
-// project-tooling.ts's own doc comment for why: the DB entry is the more
-// recently and deliberately authored artifact).
-//
-// Fetched once on open, never polled — same "these change rarely" precedent
-// as AgentRulesPanel/GitPanel's own fetch-once posture.
-export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelParams }) {
-  const [briefing, setBriefing] = useState<string | null | undefined>(undefined);
-  const [loadError, setLoadError] = useState(false);
-  const [draft, setDraft] = useState("");
+// PR-5 — a starting point for the reviewer-agent field, mirroring
+// .claude/agents/mullion-reviewer.md's own shape with this repo's specific
+// invariants stripped out (per the plan's PR-5 section: "ship a starter
+// template ... the shape, with this repo's invariants stripped"). Not
+// auto-inserted — the "Use starter template" button below only fills the
+// textarea when it's still empty, so it never clobbers existing content.
+const REVIEWER_AGENT_TEMPLATE = `---
+name: my-project-reviewer
+description: "Review a diff or PR in this project for correctness against this project's own domain invariants, not just general code quality."
+tools: Read, Grep, Glob, Bash
+model: inherit
+---
+
+You are reviewing a change in this project. Your job is to catch violations
+of this project's own domain invariants — the kind of mistake that looks
+reasonable in isolation but breaks an assumption another part of the
+codebase depends on.
+
+## What to check
+
+1. (Replace this with your project's own invariants — the things a careful
+   reviewer who knows this codebase would check that a generic reviewer
+   wouldn't know to look for.)
+2. General correctness and test coverage: does the diff do what it claims,
+   are edge cases covered, do the new/changed tests actually exercise the
+   changed behavior.
+
+## How to report
+
+For each finding: file, line if applicable, what's wrong, and — for
+invariant violations specifically — which invariant it breaks and why that
+matters. If you find nothing, say so plainly rather than manufacturing a
+nitpick to seem thorough.
+`;
+
+const SKILL_TEMPLATE = `---
+name: my-project-skill
+description: "A short sentence describing what this skill does and when an agent should use it — this is what Claude Code shows in its skill list."
+---
+
+Describe what an agent following this skill should do. This body is only
+loaded when the skill is actually invoked, so it can be as long as it needs
+to be.
+`;
+
+type ToolingFieldKey = "briefing" | "skill" | "reviewerAgent";
+
+interface ToolingFieldConfig {
+  key: ToolingFieldKey;
+  label: string;
+  placeholder: string;
+  notice: string;
+  deleteConfirmTitle: string;
+  template?: string;
+  write: (projectId: number, value: string) => Promise<{ [k: string]: string | null }>;
+  remove: (projectId: number) => Promise<void>;
+}
+
+const FIELD_CONFIGS: ToolingFieldConfig[] = [
+  {
+    key: "briefing",
+    label: "Briefing",
+    placeholder: "No Mullion briefing set for this project yet — start typing to create one.",
+    notice:
+      "Carried into every session's context at startup, taking precedence over any " +
+      "<!-- mullion:briefing:start --> region already committed in this project's own " +
+      "AGENTS.md or CLAUDE.md. Delete this to fall back to that committed region, if one exists.",
+    deleteConfirmTitle:
+      "Delete this project's Mullion briefing? This restores any committed AGENTS.md/CLAUDE.md briefing region instead — it can't be undone.",
+    write: (projectId, value) => api.writeProjectTooling(projectId, value),
+    remove: (projectId) => api.deleteProjectTooling(projectId),
+  },
+  {
+    key: "skill",
+    label: "Skill",
+    placeholder:
+      "No project skill set yet — start typing (or use the starter template) to create one.",
+    notice:
+      "A project-specific Claude Code/opencode skill, composed into every session's tooling " +
+      "alongside Mullion's own bundle (never written into this project's own repo). " +
+      "Requires YAML frontmatter with name and description. codex and agy need a repo-level " +
+      "skill file instead — see “Scaffold Mullion integration” for those two.",
+    deleteConfirmTitle: "Delete this project's skill? This can't be undone.",
+    template: SKILL_TEMPLATE,
+    write: (projectId, value) => api.writeProjectSkill(projectId, value),
+    remove: (projectId) => api.deleteProjectSkill(projectId),
+  },
+  {
+    key: "reviewerAgent",
+    label: "Reviewer agent",
+    placeholder:
+      "No project reviewer subagent set yet — start typing (or use the starter template) to create one.",
+    notice:
+      "A project-specific reviewer subagent, in the same shape as this session's own " +
+      "mullion-reviewer.md. Composed into Claude Code's plugin bundle verbatim; translated " +
+      "automatically for opencode (its own agent format can't carry the tools:/model: fields " +
+      "here, so those are stripped for that one CLI only — the description and body still " +
+      "apply everywhere). codex and agy have no subagent concept.",
+    deleteConfirmTitle: "Delete this project's reviewer agent? This can't be undone.",
+    template: REVIEWER_AGENT_TEMPLATE,
+    write: (projectId, value) => api.writeProjectReviewerAgent(projectId, value),
+    remove: (projectId) => api.deleteProjectReviewerAgent(projectId),
+  },
+];
+
+interface FieldEditorProps {
+  config: ToolingFieldConfig;
+  projectId: number;
+  savedValue: string | null;
+  onSaved: (value: string | null) => void;
+  onDeleted: () => void;
+  // Lets the parent gate switching to another field while this one has
+  // unsaved changes — same posture as AgentRulesPanel's own
+  // `disabled={dirty && row.id !== selectedId}` on its target list.
+  onDirtyChange: (dirty: boolean) => void;
+}
+
+// One field's editor — a textarea plus Save/Discard/Delete, shared by all
+// three targets below. Each field is an independent DB column
+// (project-tooling.ts's clearToolingColumn), so each instance owns its own
+// draft/dirty/saving/deleting state entirely separately from its siblings.
+function ToolingFieldEditor({
+  config,
+  projectId,
+  savedValue,
+  onSaved,
+  onDeleted,
+  onDirtyChange,
+}: FieldEditorProps) {
+  const [draft, setDraft] = useState(savedValue ?? "");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   // Same "read the LIVE draft after an in-flight await" reasoning as
-  // AgentRulesPanel's own draftRef (Hermes review, PR #458) — a remote round
-  // trip can take long enough for more keystrokes to land before it resolves.
+  // AgentRulesPanel's own draftRef (Hermes review, PR #458).
   const draftRef = useRef(draft);
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
 
-  // Hermes review, PR #893 — the byte cap was previously invisible until
-  // Save 400s with a byte count. UTF-8 byte length, not character length,
-  // to match writeProjectBriefing's own Buffer.byteLength check exactly —
-  // a multi-byte character could otherwise read as "under the cap" here
-  // while still failing server-side.
-  const draftByteLength = useMemo(() => new TextEncoder().encode(draft).length, [draft]);
-  const overCap = draftByteLength > MAX_PROJECT_BRIEFING_BYTES;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
 
-  const fetchBriefing = useCallback(
+  // No effect syncing `draft` from `savedValue` here — the parent remounts
+  // this whole component (`key={activeConfig.key}` at the call site) on
+  // every field switch, so the `useState(savedValue ?? "")` initializer
+  // above already handles "switched to a different field" correctly. The
+  // only way `savedValue` changes while THIS instance stays mounted is via
+  // its own handleSave/handleDelete below, which already update
+  // draft/dirty locally at the same time — a prop-sync effect here would
+  // just redundantly re-set state React already has.
+
+  const draftByteLength = useMemo(() => new TextEncoder().encode(draft).length, [draft]);
+  const overCap = draftByteLength > MAX_TOOLING_FIELD_BYTES;
+
+  const handleDiscard = useCallback(() => {
+    setDraft(savedValue ?? "");
+    setDirty(false);
+    setActionError(null);
+  }, [savedValue]);
+
+  const handleUseTemplate = useCallback(() => {
+    if (!config.template) return;
+    setDraft(config.template);
+    setDirty(true);
+    setActionError(null);
+  }, [config.template]);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setActionError(null);
+    const savedContent = draft;
+    try {
+      const result = await config.write(projectId, savedContent);
+      onSaved(result[config.key] ?? null);
+      if (draftRef.current === savedContent) setDirty(false);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }, [config, draft, onSaved, projectId]);
+
+  const handleDelete = useCallback(async () => {
+    setDeleting(true);
+    setActionError(null);
+    const draftAtDeleteTime = draft;
+    try {
+      await config.remove(projectId);
+      onDeleted();
+      if (draftRef.current === draftAtDeleteTime) {
+        setDraft("");
+        setDirty(false);
+      }
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Failed to delete");
+    } finally {
+      setDeleting(false);
+    }
+  }, [config, draft, onDeleted, projectId]);
+
+  return (
+    <div className="agent-rules-panel-editor">
+      <div className="agent-rules-panel-editor-header">
+        <div className="agent-rules-panel-editor-title">
+          <FileTextIcon size={14} />
+          {config.label}
+        </div>
+        <div className="agent-rules-panel-editor-actions">
+          {config.template && draft.length === 0 && !dirty && (
+            <button className="git-panel-fetch-btn" onClick={handleUseTemplate} disabled={saving}>
+              Use starter template
+            </button>
+          )}
+          {savedValue !== null &&
+            (deleting || saving ? (
+              <button className="git-panel-fetch-btn" disabled>
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            ) : (
+              <ConfirmButton title={config.deleteConfirmTitle} onConfirm={handleDelete}>
+                Delete
+              </ConfirmButton>
+            ))}
+          {dirty && (
+            <button className="git-panel-fetch-btn" onClick={handleDiscard} disabled={saving}>
+              Discard
+            </button>
+          )}
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleSave}
+            disabled={!dirty || saving || overCap}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+      <div className="agent-rules-panel-notice">{config.notice}</div>
+      {actionError && <div className="agent-rules-panel-notice error">{actionError}</div>}
+      <textarea
+        className="agent-rules-panel-textarea"
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setDirty(true);
+        }}
+        placeholder={config.placeholder}
+        spellCheck={false}
+      />
+      <div className={`agent-rules-panel-row-meta${overCap ? " error" : ""}`}>
+        {draftByteLength.toLocaleString()} / {MAX_TOOLING_FIELD_BYTES.toLocaleString()} bytes
+        {overCap && " — over the limit, trim before saving"}
+      </div>
+    </div>
+  );
+}
+
+// A dockview panel (opened from the CommandPalette's Integrations section,
+// same "project-scoped panel kind" shape AgentRulesPanel/DockConfigPanel/
+// SkillsPanel already use — see usePanelOpener.ts's ProjectPanelKindConfig)
+// for authoring a project's DB-backed Mullion tooling
+// (src/services/project-tooling.ts): a briefing, a project-specific skill,
+// and a reviewer subagent, one project_tooling row with three independent
+// columns. Reuses AgentRulesPanel's own two-pane target-list/editor shell
+// (`.agent-rules-panel-list` + `.agent-rules-panel-row`) for the field
+// switcher — each row here is a DB column instead of a file target, but the
+// "pick one, edit it, Save/Discard/Delete gated on this one's own dirty
+// state" shape is identical.
+//
+// Fetched once on open, never polled — same "these change rarely" precedent
+// as AgentRulesPanel/GitPanel's own fetch-once posture.
+export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelParams }) {
+  const [tooling, setTooling] = useState<
+    { briefing: string | null; skill: string | null; reviewerAgent: string | null } | undefined
+  >(undefined);
+  const [loadError, setLoadError] = useState(false);
+  const [activeField, setActiveField] = useState<ToolingFieldKey>("briefing");
+  const [activeFieldDirty, setActiveFieldDirty] = useState(false);
+
+  const fetchTooling = useCallback(
     async (cancelledRef?: { current: boolean }) => {
       try {
         const result = await api.getProjectTooling(params.projectId);
         if (cancelledRef?.current) return;
-        setBriefing(result.briefing);
-        setDraft(result.briefing ?? "");
-        setDirty(false);
+        setTooling(result);
         setLoadError(false);
       } catch (err) {
         if (cancelledRef?.current) return;
@@ -76,59 +320,18 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
   useEffect(() => {
     const cancelledRef = { current: false };
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchBriefing(cancelledRef);
+    void fetchTooling(cancelledRef);
     return () => {
       cancelledRef.current = true;
     };
-  }, [fetchBriefing]);
+  }, [fetchTooling]);
 
-  const handleDiscard = useCallback(() => {
-    setDraft(briefing ?? "");
-    setDirty(false);
-    setActionError(null);
-  }, [briefing]);
-
-  const handleSave = useCallback(async () => {
-    setSaving(true);
-    setActionError(null);
-    const savedContent = draft;
-    try {
-      const result = await api.writeProjectTooling(params.projectId, savedContent);
-      setBriefing(result.briefing);
-      // Same "only clear dirty if the draft is still exactly what got
-      // saved" guard as AgentRulesPanel's handleSave.
-      if (draftRef.current === savedContent) setDirty(false);
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Failed to save");
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, params.projectId]);
-
-  const handleDelete = useCallback(async () => {
-    setDeleting(true);
-    setActionError(null);
-    const draftAtDeleteTime = draft;
-    try {
-      await api.deleteProjectTooling(params.projectId);
-      setBriefing(null);
-      if (draftRef.current === draftAtDeleteTime) {
-        setDraft("");
-        setDirty(false);
-      }
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Failed to delete");
-    } finally {
-      setDeleting(false);
-    }
-  }, [draft, params.projectId]);
-
-  if (briefing === undefined) {
+  if (tooling === undefined) {
     if (loadError) {
       return (
         <EmptyStateNote>
-          <div>Couldn't load this project's briefing.</div>
-          <button className="git-panel-fetch-btn" onClick={() => void fetchBriefing()}>
+          <div>Couldn't load this project's Mullion tooling.</div>
+          <button className="git-panel-fetch-btn" onClick={() => void fetchTooling()}>
             Retry
           </button>
         </EmptyStateNote>
@@ -137,64 +340,46 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
     return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
 
+  const activeConfig = FIELD_CONFIGS.find((c) => c.key === activeField) ?? FIELD_CONFIGS[0];
+
   return (
     <div className="agent-rules-panel">
-      <div className="agent-rules-panel-editor">
-        <div className="agent-rules-panel-editor-header">
-          <div className="agent-rules-panel-editor-title">
-            <FileTextIcon size={14} />
-            Mullion briefing
-          </div>
-          <div className="agent-rules-panel-editor-actions">
-            {briefing !== null &&
-              (deleting || saving ? (
-                <button className="git-panel-fetch-btn" disabled>
-                  {deleting ? "Deleting…" : "Delete"}
-                </button>
-              ) : (
-                <ConfirmButton
-                  title="Delete this project's Mullion briefing? This restores any committed AGENTS.md/CLAUDE.md briefing region instead — it can't be undone."
-                  onConfirm={handleDelete}
-                >
-                  Delete
-                </ConfirmButton>
-              ))}
-            {dirty && (
-              <button className="git-panel-fetch-btn" onClick={handleDiscard} disabled={saving}>
-                Discard
-              </button>
-            )}
-            <button
-              className="git-panel-fetch-btn"
-              onClick={handleSave}
-              disabled={!dirty || saving || overCap}
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </div>
-        </div>
-        <div className="agent-rules-panel-notice">
-          Carried into every session's context at startup, taking precedence over any{" "}
-          <code>&lt;!-- mullion:briefing:start --&gt;</code> region already committed in this
-          project's own AGENTS.md or CLAUDE.md. Delete this to fall back to that committed region,
-          if one exists.
-        </div>
-        {actionError && <div className="agent-rules-panel-notice error">{actionError}</div>}
-        <textarea
-          className="agent-rules-panel-textarea"
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setDirty(true);
-          }}
-          placeholder="No Mullion briefing set for this project yet — start typing to create one."
-          spellCheck={false}
-        />
-        <div className={`agent-rules-panel-row-meta${overCap ? " error" : ""}`}>
-          {draftByteLength.toLocaleString()} / {MAX_PROJECT_BRIEFING_BYTES.toLocaleString()} bytes
-          {overCap && " — over the limit, trim before saving"}
-        </div>
+      <div className="agent-rules-panel-list cmux-scroll">
+        {FIELD_CONFIGS.map((config) => (
+          <button
+            key={config.key}
+            className={`agent-rules-panel-row${activeField === config.key ? " selected" : ""}`}
+            onClick={() => setActiveField(config.key)}
+            disabled={activeFieldDirty && config.key !== activeField}
+            title={
+              activeFieldDirty && config.key !== activeField
+                ? "Save or discard your changes first"
+                : undefined
+            }
+          >
+            <span
+              className={`github-panel-ci-dot ${tooling[config.key] !== null ? "good" : "none"}`}
+            />
+            <span className="agent-rules-panel-row-name">{config.label}</span>
+            <span className="agent-rules-panel-row-meta">
+              {tooling[config.key] !== null ? "set" : "not set"}
+            </span>
+          </button>
+        ))}
       </div>
+      <ToolingFieldEditor
+        key={activeConfig.key}
+        config={activeConfig}
+        projectId={params.projectId}
+        savedValue={tooling[activeConfig.key]}
+        onSaved={(value) =>
+          setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: value } : prev))
+        }
+        onDeleted={() =>
+          setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: null } : prev))
+        }
+        onDirtyChange={setActiveFieldDirty}
+      />
     </div>
   );
 }
