@@ -28,6 +28,29 @@ import { attachInboundMux, pipeNetSocketToChannel } from "./ssh-agent-bridge-mux
 import { extractFlags, CliUsageError } from "./core.mjs";
 import { runInstall, runUninstall } from "./ssh-agent-helper-install.mjs";
 
+// Round 3 (PR2) — the `io` object every `runHelper` verb actually touches:
+// stdout/stderr for output, env for reading SSH_AUTH_SOCK/MULLION_HELPER_
+// STATE_DIR/etc., onInterrupt for the SIGINT/SIGTERM handling `run`'s
+// reconnect loop wires up. Everything else `runInstall`/`runUninstall`
+// read off `io` (platform, homedir, execPath, scriptPath, isSea, uid,
+// spawnSync, statSync) is an optional test-injection seam that already
+// defaults via `??`/`??`-shaped fallbacks to the real process/os/node:sea
+// values when absent — nothing here needs to set them explicitly. Shared
+// by src/cli/mullion.mjs's own `helper` dispatch and
+// src/cli/helper-main.mjs (the Node SEA entry point), so the two can't
+// independently drift on what a "real" helper environment looks like.
+export function buildHelperIo() {
+  return {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    env: process.env,
+    onInterrupt: (cb) => {
+      process.once("SIGINT", cb);
+      process.once("SIGTERM", cb);
+    },
+  };
+}
+
 // Mirrors ssh-agent-fanout.ts's own reconnect ladder (src/services/) —
 // same reasoning: fast retries for a blip, backing off for a genuinely
 // unreachable primary, never giving up outright (a laptop that's asleep
@@ -54,6 +77,16 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const RENEW_AT_FRACTION = 0.5;
 const RENEW_TIMEOUT_MS = 10_000;
 const RENEW_RETRY_DELAYS_MS = [5000, 15000, 60000, 300000];
+
+// Round 3 (PR2) — 1Password's own Win32-OpenSSH-compatible named pipe name.
+// Exported (not local to runRun below) because ssh-agent-helper-install.mjs
+// needs the identical default for `install`'s own --ssh-auth-sock
+// resolution — a bare `\\.\pipe\openssh-ssh-agent` there and a different
+// literal here would silently diverge the moment either one gets edited.
+// Empirically confirmed to accept the mux's concurrent-channel shape (8 and
+// 16 simultaneous connections, each a correct independent round trip) —
+// issue #874.
+export const WINDOWS_DEFAULT_SSH_AUTH_SOCK = "\\\\.\\pipe\\openssh-ssh-agent";
 
 /** Thrown for a handshake the SERVER explicitly rejected (bad pairing code,
  * invalid/expired session) — as opposed to a network-level failure (DNS,
@@ -236,9 +269,30 @@ function isValidExpiresAt(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+// Round 3 (PR2, Windows SEA) — `io.platform`/`io.homedir` overrides follow
+// the same injected-seam convention ssh-agent-helper-install.mjs's own
+// header comment documents (`io.spawnSync`/`io.execPath`/`io.scriptPath`/
+// `io.uid`), so the win32 branch below is unit-testable from this
+// Linux-only dev/CI environment without actually running on Windows.
+//
+// No compat read of the OLD (Unix-shaped) path on win32: `resolveSshAuthSock`
+// (ssh-agent-helper-install.mjs) has thrown unconditionally on win32 since
+// the day this file shipped — Windows had no way to supply an
+// `--ssh-auth-sock` value the old code would accept — so `mullion helper
+// install` has never once succeeded there, and no bridge has ever paired
+// from a Windows helper either (`select count(*) from bridges` was 0 in
+// production as of this PR). There is no pre-existing state at the old
+// path on any real Windows machine to migrate, so the branch below is
+// unconditional rather than defensive.
 export function stateDir(io) {
   if (io.env.MULLION_HELPER_STATE_DIR) return io.env.MULLION_HELPER_STATE_DIR;
-  const base = io.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  const platform = io.platform ?? process.platform;
+  const home = io.homedir ?? os.homedir();
+  if (platform === "win32") {
+    const base = io.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+    return path.join(base, "Mullion");
+  }
+  const base = io.env.XDG_STATE_HOME || path.join(home, ".local", "state");
   return path.join(base, "mullion");
 }
 
@@ -401,11 +455,23 @@ async function runPair(args, io) {
 // Scheduled Task generator for the other half of Windows support (the
 // supervisor that keeps this process running). Concurrency behavior of
 // 1Password's own pipe under many simultaneous opens (the mux's channel-
-// per-request shape) is a separate, not-yet-verified question — tracked at
-// https://github.com/s3ntin3l8/mullion-session-manager/issues/874.
+// per-request shape) is confirmed working — issue #874, 8 and 16
+// simultaneous connections each round-tripped correctly.
 async function runRun(args, io) {
   const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
-  const sshAuthSock = flags["ssh-auth-sock"] || io.env.SSH_AUTH_SOCK;
+  const platform = io.platform ?? process.platform;
+  // Round 3 (PR2) — same default (and same reasoning: no per-machine
+  // equivalent exists on macOS/Linux, so this stays win32-only) as
+  // ssh-agent-helper-install.mjs's own resolveSshAuthSock. Distinct code
+  // path, not a shared function, because this one has no `platform`
+  // parameter threaded through today and adding one purely to dedupe a
+  // three-line fallback chain isn't worth the API churn — but the LITERAL
+  // default (WINDOWS_DEFAULT_SSH_AUTH_SOCK) is shared, so the two can't
+  // independently drift on the actual pipe name.
+  const sshAuthSock =
+    flags["ssh-auth-sock"] ||
+    io.env.SSH_AUTH_SOCK ||
+    (platform === "win32" ? WINDOWS_DEFAULT_SSH_AUTH_SOCK : undefined);
   if (!sshAuthSock) {
     io.stderr.write(
       "no SSH_AUTH_SOCK in this process's environment — pass --ssh-auth-sock <path>, or run this " +

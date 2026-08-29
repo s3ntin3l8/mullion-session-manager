@@ -84,6 +84,7 @@ export default tseslint.config(
     // from the primary checkout.
     ignores: [
       "dist/",
+      "build/",
       "node_modules/",
       "drizzle/",
       "coverage/",

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import { WebSocketServer, type WebSocket as NodeWebSocket } from "ws";
 import { buildTestApp } from "../helpers/app.js";
 import { decodePairingPayload, encodePairingPayload } from "../../src/services/bridge-registry.js";
-import { runHelper } from "../../src/cli/ssh-agent-helper.mjs";
+import { runHelper, stateDir } from "../../src/cli/ssh-agent-helper.mjs";
 
 // Issue #820 (PR6) — end-to-end: the real primary route
 // (routes/agent-bridge.ts) issuing a pairing code, `mullion helper pair`
@@ -56,6 +56,47 @@ async function buildAndListen() {
   }
   return { app, port: address.port };
 }
+
+// Round 3 (PR2, Windows SEA) — `io.platform`/`io.homedir` overrides let this
+// exercise the win32 branch from Linux (see stateDir's own comment).
+// Fake homedir/LOCALAPPDATA values below are deliberately POSIX-shaped
+// (e.g. "/fake/local/appdata"), not literal "C:\..." strings — stateDir
+// joins them with plain path.join, which is Node's PLATFORM-NATIVE path
+// module (path.win32 only when Node itself is actually running on
+// Windows), not an emulation of whatever `io.platform` claims. A literal
+// backslash-laden Windows path run through this Linux test runner's
+// path.join would be treated as one opaque segment and get a bogus mixed
+// "C:\...\Local/Mullion" result — not a real bug in stateDir (a real
+// Windows process's own native path.join handles this correctly), just an
+// artifact of testing the win32 branch's LOGIC from a non-Windows runner.
+// Asserting against `path.join(...)` (not a hardcoded string) keeps this
+// test honest about what it actually verifies: which inputs win and in
+// what order, not the separator character Node's own path module already
+// gets right.
+describe("stateDir", () => {
+  it("resolves under %LOCALAPPDATA% on win32", () => {
+    const io = { env: { LOCALAPPDATA: "/fake/local/appdata" }, platform: "win32" };
+    expect(stateDir(io)).toBe(path.join("/fake/local/appdata", "Mullion"));
+  });
+
+  it("falls back to <homedir>/AppData/Local on win32 when LOCALAPPDATA is unset", () => {
+    const io = { env: {}, platform: "win32", homedir: "/fake/home" };
+    expect(stateDir(io)).toBe(path.join("/fake/home", "AppData", "Local", "Mullion"));
+  });
+
+  it("MULLION_HELPER_STATE_DIR still wins on win32, same as every other platform", () => {
+    const io = {
+      env: { MULLION_HELPER_STATE_DIR: "/custom/state", LOCALAPPDATA: "/ignored" },
+      platform: "win32",
+    };
+    expect(stateDir(io)).toBe("/custom/state");
+  });
+
+  it("stays on the posix XDG_STATE_HOME/~/.local/state shape on linux/darwin, unaffected", () => {
+    const io = { env: {}, platform: "linux", homedir: "/home/me" };
+    expect(stateDir(io)).toBe("/home/me/.local/state/mullion");
+  });
+});
 
 describe("mullion helper (pair + run) against the real primary", () => {
   it("pairs, persists a 0600 credential, then run() forwards real bytes through to a local fake agent socket", async () => {
@@ -621,6 +662,22 @@ describe("mullion helper run() — missing prerequisites", () => {
     const code = await runHelper("run", [], io);
     expect(code).toBe(1);
     expect(io.stderrLines.join("")).toContain("SSH_AUTH_SOCK");
+  });
+
+  // Round 3 (PR2) — on win32, an unset SSH_AUTH_SOCK must NOT be treated
+  // as missing: it defaults to the named pipe (issue #874's empirically
+  // confirmed default). Proven by which error fires next — "not paired"
+  // (the credential check runRun runs right after resolving sshAuthSock),
+  // not "no SSH_AUTH_SOCK" — since nothing here ever actually connects to
+  // a real pipe.
+  it("on win32, an unset SSH_AUTH_SOCK defaults to the named pipe instead of failing", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const io = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    (io as unknown as { platform: string }).platform = "win32";
+    const code = await runHelper("run", [], io);
+    expect(code).toBe(1);
+    expect(io.stderrLines.join("")).toContain("not paired");
+    expect(io.stderrLines.join("")).not.toContain("no SSH_AUTH_SOCK");
   });
 
   it("fails with a clear message when not yet paired", async () => {

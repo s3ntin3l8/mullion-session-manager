@@ -324,6 +324,22 @@ describe("buildWindowsTaskXml", () => {
       expect(opens, `<${tag}> open/close mismatch`).toBe(closes);
     }
   });
+
+  // Round 3 (PR2) — a SEA has no separate script file: `execPath` IS the
+  // whole program. `scriptPath: null` (never `undefined` — see
+  // runInstall's own comment) must collapse the argv, not embed a "null"
+  // token or an empty quoted string.
+  it("omits the script-path token entirely when scriptPath is null (SEA shape)", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe",
+      scriptPath: null,
+      sshAuthSock: "\\\\.\\pipe\\openssh-ssh-agent",
+    });
+    const argsMatch = xml.match(/<Arguments>(.*?)<\/Arguments>/);
+    expect(argsMatch).not.toBeNull();
+    expect(argsMatch![1]).toBe('"helper" "run" "--ssh-auth-sock" "\\\\.\\pipe\\openssh-ssh-agent"');
+    expect(xml).not.toContain("null");
+  });
 });
 
 describe("xmlCommentSafe", () => {
@@ -408,6 +424,23 @@ describe("runInstall / runUninstall", () => {
     const code = await runInstall([], io);
     expect(code).toBe(2);
     expect(stderrLines.join("")).toMatch(/no SSH_AUTH_SOCK to install with/);
+  });
+
+  // Round 3 (PR2) — the SAME "no flag, no ambient env" case as above, but
+  // on win32, must succeed rather than refuse: this platform has an
+  // empirically-confirmed default (issue #874) neither macOS nor Linux has
+  // an equivalent for.
+  it("win32: installs with no --ssh-auth-sock or ambient SSH_AUTH_SOCK, defaulting to the named pipe", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    // Real MULLION_HELPER_STATE_DIR from baseIo's own defaults, SSH_AUTH_SOCK
+    // deliberately dropped — the same "no flag, no ambient env" case as the
+    // refusing test above, but on win32.
+    io.env = { MULLION_HELPER_STATE_DIR: io.env.MULLION_HELPER_STATE_DIR };
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    const contents = readFileSync(windowsTaskXmlPath(io), "utf16le").replace(/^\uFEFF/, "");
+    expect(contents).toContain("\\\\.\\pipe\\openssh-ssh-agent");
   });
 
   it("--ssh-auth-sock overrides the ambient env var", async () => {
@@ -545,6 +578,51 @@ describe("runInstall / runUninstall", () => {
       `schtasks /Run /TN ${WINDOWS_TASK_NAME}`,
     ]);
   });
+
+  // Round 3 (PR2) — under a Node SEA, `execPath` IS the whole program: no
+  // sibling `mullion.mjs` exists to point a scriptPath at. `io.isSea: true`
+  // + `scriptPath` deleted must produce the collapsed SEA argv, not fall
+  // through to `defaultScriptPath()` (which resolves a real path on disk
+  // relative to THIS test file's own install module — if that path leaked
+  // into the XML, this assertion on "no mullion.mjs anywhere" would catch
+  // it).
+  it("win32 SEA: omits the script path and never falls back to defaultScriptPath()", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    (io as { isSea?: boolean }).isSea = true;
+    delete (io as { scriptPath?: string }).scriptPath;
+    io.execPath = "C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe";
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    const contents = readFileSync(windowsTaskXmlPath(io), "utf16le").replace(/^\uFEFF/, "");
+    expect(contents).not.toContain("mullion.mjs");
+    expect(contents).toContain(
+      "<Command>C:\\Users\\me\\AppData\\Local\\Mullion\\mullion-helper.exe</Command>",
+    );
+    const argsMatch = contents.match(/<Arguments>(.*?)<\/Arguments>/);
+    expect(argsMatch![1]).toBe('"helper" "run" "--ssh-auth-sock" "/tmp/agent.sock"');
+  });
+
+  // Self-review — found by actually building and running a Linux SEA smoke
+  // binary: `isSea` on any platform OTHER than win32 used to fall through
+  // to `scriptPath: null`, which `buildLaunchdPlist`/`buildSystemdUnit`
+  // (unlike buildWindowsTaskXml) have no null-handling for at all —
+  // `systemdQuote(null)` threw "Cannot read properties of null" rather
+  // than a clear error. This round ships a Windows SEA exclusively, so a
+  // SEA on any other platform must refuse cleanly instead.
+  for (const platform of ["darwin", "linux"] as const) {
+    it(`${platform} SEA: refuses cleanly instead of crashing (this round ships a Windows SEA only)`, async () => {
+      const { io, dir: d } = baseIo({ platform });
+      (io as { homedir?: string }).homedir = path.join(d, "home");
+      (io as { isSea?: boolean }).isSea = true;
+      delete (io as { scriptPath?: string }).scriptPath;
+      const stderrLines: string[] = [];
+      io.stderr = { write: (s: string) => stderrLines.push(s) };
+      const code = await runInstall([], io);
+      expect(code).toBe(1);
+      expect(stderrLines.join("")).toMatch(/only supported on win32/);
+    });
+  }
 
   // Hermes review, PR #879 — /Create only registers the task; its
   // LogonTrigger won't fire until the next interactive logon, unlike

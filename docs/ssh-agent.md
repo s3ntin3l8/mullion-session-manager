@@ -141,12 +141,14 @@ section](#linux-systemd---user) below has.
 **Windows note:** `install`/`uninstall` are implemented but have no local
 verification path (no way to run `schtasks.exe` from Linux-only CI/dev) —
 same caveat the macOS/Linux generators carried before their own first
-real-machine test. Separately, whether 1Password's Windows named pipe
-accepts the mux's concurrent-channel shape at all (independent of
-`install`/`uninstall` working) is tracked at [issue
-#874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874) —
-`--ssh-auth-sock` there is the pipe path, typically
-`\\.\pipe\openssh-ssh-agent`.
+real-machine test; tracked at [issue
+#871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871).
+1Password's Windows named pipe accepting the mux's concurrent-channel shape
+is confirmed working ([issue
+#874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874),
+closed): 8 and 16 simultaneous connections each round-tripped correctly.
+`--ssh-auth-sock` defaults to `\\.\pipe\openssh-ssh-agent` on Windows if not
+given explicitly — pass it only to override.
 
 **Pass `--ssh-auth-sock <literal path>` explicitly**, as in the example
 above. Neither `launchd`, `systemd --user`, nor a Windows Scheduled Task
