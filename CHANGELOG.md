@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.4](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.3...v0.3.4) (2026-08-29)
+
+
+### Features
+
+* **gate:** correlate concurrent permission gates per session ([#912](https://github.com/s3ntin3l8/mullion-session-manager/issues/912)) ([372d16e](https://github.com/s3ntin3l8/mullion-session-manager/commit/372d16e54a2b5990c848219db5eba50e6a538655))
+* **ssh-agent:** add a per-user Windows installer for the helper ([#905](https://github.com/s3ntin3l8/mullion-session-manager/issues/905)) ([2851ea6](https://github.com/s3ntin3l8/mullion-session-manager/commit/2851ea60dcfa663f8eaa84964d8b34c04fe0d036))
+* **ssh-agent:** build mullion-helper.exe as a Node SEA for Windows ([#900](https://github.com/s3ntin3l8/mullion-session-manager/issues/900)) ([a70a1b7](https://github.com/s3ntin3l8/mullion-session-manager/commit/a70a1b73a1d0826acebff1d0a8331bd601152a00))
+* **ssh-agent:** renew bridge sessions automatically, no daily re-pair ([#898](https://github.com/s3ntin3l8/mullion-session-manager/issues/898)) ([f08547e](https://github.com/s3ntin3l8/mullion-session-manager/commit/f08547e8e985e0a81e12391e8113381349fcfe72))
+
+
+### Bug Fixes
+
+* **attention:** keep the review-gate badge while a gate is still waiting ([#910](https://github.com/s3ntin3l8/mullion-session-manager/issues/910)) ([07b529e](https://github.com/s3ntin3l8/mullion-session-manager/commit/07b529ecb6c9077b2ad1cee27577d9c00f4d0e14))
+* **gate:** make a parked Codex permission gate legible and correctly lapsed ([#908](https://github.com/s3ntin3l8/mullion-session-manager/issues/908)) ([0a09a37](https://github.com/s3ntin3l8/mullion-session-manager/commit/0a09a37609df84deb1ed6b48bdb713ed423ce226))
+* **ssh-agent:** remove the pairing credential on helper uninstall ([#911](https://github.com/s3ntin3l8/mullion-session-manager/issues/911)) ([722848c](https://github.com/s3ntin3l8/mullion-session-manager/commit/722848cff94e719a9297e8f4b1c26a4c096b2c96))
+
 ## [0.3.3](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.2...v0.3.3) (2026-08-29)
 
 
