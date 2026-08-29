@@ -118,13 +118,20 @@ end;
 // exists to guard against elsewhere in this same PR series): a stray
 // pasted quote character would otherwise silently split into extra argv
 // tokens `helper pair` never expects, rather than failing with a clear
-// message.
+// message. MAX_PAIRING_PAYLOAD_LEN guards against a pathological paste (a
+// whole file dropped into the box by mistake) reaching Exec at all — a real
+// payload (base64url of {baseUrl, code} JSON) is nowhere close to this;
+// Windows' own CreateProcess command-line limit is ~32767 characters, so
+// this is a generous ceiling, not a realistic one (Hermes review, PR #905).
+const
+  MAX_PAIRING_PAYLOAD_LEN = 4096;
+
 function IsValidPairingPayload(const S: String): Boolean;
 var
   I: Integer;
   C: Char;
 begin
-  Result := S <> '';
+  Result := (S <> '') and (Length(S) <= MAX_PAIRING_PAYLOAD_LEN);
   if not Result then Exit;
   for I := 1 to Length(S) do
   begin
@@ -212,6 +219,10 @@ begin
         mbError);
     end
     else if Paired then
-      ShowMsg('Mullion Helper is installed, paired, and running.', mbInformation);
+      // "installed and paired", not "...and running": helper install's own
+      // schtasks /Run is best-effort (installWindows treats a failed /Run as
+      // a non-fatal warning, not an install failure), so this exit code 0
+      // doesn't guarantee the task actually started — Hermes review, PR #905.
+      ShowMsg('Mullion Helper is installed and paired.', mbInformation);
   end;
 end;
