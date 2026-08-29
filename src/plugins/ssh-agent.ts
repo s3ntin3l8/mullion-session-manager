@@ -129,19 +129,32 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   // is actually LIVE at the path in that case, so a frozen "bridge" session
   // just fails safely as `Connection refused`, same as the documented
   // "dangling socket" behavior everywhere else in this feature.
+  // Hermes review, PR #877 — skip the bind entirely (not just catch its
+  // failure) when `sshAuthSockBridgeExpected` is already `false`: whether
+  // that's because the preflight found the path occupied, or simply
+  // because `configured`/`ambient` already won this boot's precedence (the
+  // common case on most hosts), no session's SSH_AUTH_SOCK was ever going
+  // to point at this path either way — resolveSshAuthSock's result is
+  // frozen once, at construction, and can't retroactively start using a
+  // socket this plugin binds after the fact. Attempting the bind anyway
+  // was pointless work in the ordinary case and produced a second,
+  // redundant error log line stacked on top of pty.ts's own preflight log
+  // in the collision case.
   let handle: Awaited<ReturnType<typeof materializeSshAgentSocket>> | null = null;
-  try {
-    handle = await materializeSshAgentSocket({ socketPath, openChannel });
-  } catch (err) {
-    if (shouldCrashOnBridgeSocketBindFailure(err, app.sshAuthSockBridgeExpected)) {
-      throw err;
+  if (app.sshAuthSockBridgeExpected) {
+    try {
+      handle = await materializeSshAgentSocket({ socketPath, openChannel });
+    } catch (err) {
+      if (shouldCrashOnBridgeSocketBindFailure(err, app.sshAuthSockBridgeExpected)) {
+        throw err;
+      }
+      app.log.error(
+        { err, socketPath },
+        "failed to materialize the local ssh-agent bridge socket — nothing is listening at " +
+          "this path, so sessions here fail safely as a dangling socket (Connection refused) " +
+          "rather than reaching any live process",
+      );
     }
-    app.log.error(
-      { err, socketPath, sshAuthSockBridgeExpected: app.sshAuthSockBridgeExpected },
-      "failed to materialize the local ssh-agent bridge socket — nothing is listening at " +
-        "this path, so sessions here fail safely as a dangling socket (Connection refused) " +
-        "rather than reaching any live process",
-    );
   }
 
   app.addHook("onClose", async () => {
