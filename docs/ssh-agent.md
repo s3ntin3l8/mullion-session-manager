@@ -223,6 +223,36 @@ supervisor that restarts it unconditionally, this becomes a restart loop
 until you re-pair with a fresh payload from Settings, not a self-healing
 retry.
 
+### Structured events (`--json-events`)
+
+`mullion helper run --json-events` writes one JSON object per line
+(newline-delimited JSON) to **stdout** for every state transition below —
+useful for a status icon, log shipper, or any other supervisor that needs to
+react to connection state without regex-matching prose. The human-readable
+messages already documented above keep going to **stderr**, completely
+unchanged, whether or not `--json-events` is passed — an existing script
+parsing stderr today keeps working exactly as it does now.
+
+Every line is a single object with at least a `type` field:
+
+| `type`             | Extra fields            | Meaning                                                                                                                                                              |
+| ------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connected`        | `bridge_id`, `base_url` | The auth handshake with the primary succeeded (first connect or a reconnect).                                                                                        |
+| `disconnected`     | —                       | The connection dropped and wasn't caused by `run` itself stopping; a reconnect attempt follows.                                                                      |
+| `connect_failed`   | `message`               | A connection attempt failed at the network level (DNS, refused, timeout) rather than being rejected by the primary; a reconnect attempt follows.                     |
+| `session_renewed`  | `expires_at`            | The session was proactively renewed (see [Credential storage](#credential-storage) below) and the rotated credential was persisted.                                  |
+| `renewal_retry`    | `delay_ms`              | A renewal attempt failed at the network level and will be retried after `delay_ms`; the current session stays in use in the meantime.                                |
+| `renewal_rejected` | —                       | The primary rejected the renewal outright (the bridge was revoked). Fatal: `run` closes the connection and exits 1.                                                  |
+| `dead_credential`  | `message`               | The primary rejected an auth handshake using the current session id, and no concurrent renewal explains it — the credential is genuinely dead. Fatal: `run` exits 1. |
+
+There's no `paired` event on this stream — pairing state is only ever
+observable via whether the credential file exists, and `run` never touches
+that file at startup beyond reading it once.
+
+```sh
+mullion helper run --ssh-auth-sock "$SSH_AUTH_SOCK" --json-events | jq .
+```
+
 ### Credential storage
 
 `mullion helper pair` persists the session credential it gets back to

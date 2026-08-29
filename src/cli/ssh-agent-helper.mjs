@@ -463,7 +463,19 @@ async function runPair(args, io) {
 // per-request shape) is confirmed working — issue #874, 8 and 16
 // simultaneous connections each round-tripped correctly.
 async function runRun(args, io) {
-  const { flags } = extractFlags(args, { "ssh-auth-sock": "string" });
+  const { flags } = extractFlags(args, { "ssh-auth-sock": "string", "json-events": "boolean" });
+  // Round 4 (issue #820, tray-repo prerequisites) — a tray needs something
+  // more reliable than regex-matching the stderr prose below, which has
+  // already been reworded three times across PR1/PR2/PR3. NDJSON on
+  // stdout, a stream `run` has never written anything to before now (only
+  // `pair` does) — the existing stderr prose is UNCHANGED, so any
+  // supervisor/log-watcher already parsing it keeps working exactly as
+  // today. See docs/ssh-agent.md for the documented event shapes.
+  const jsonEvents = flags["json-events"] === true;
+  function emitEvent(type, data = {}) {
+    if (!jsonEvents) return;
+    io.stdout.write(`${JSON.stringify({ type, ...data })}\n`);
+  }
   const platform = io.platform ?? process.platform;
   // Round 3 (PR2) — same default (and same reasoning: no per-machine
   // equivalent exists on macOS/Linux, so this stays win32-only) as
@@ -593,6 +605,7 @@ async function runRun(args, io) {
           "session renewal rejected — session no longer valid, re-pair with " +
             "'mullion helper pair <payload>'\n",
         );
+        emitEvent("renewal_rejected");
         // The renewal endpoint rejecting the credential doesn't itself
         // touch the live WS — force it closed rather than silently leaving
         // `run` connected-but-doomed until the connection happens to drop
@@ -610,6 +623,7 @@ async function runRun(args, io) {
       saveCredential(io, credential);
       renewAttempt = 0;
       io.stderr.write(`session renewed — valid until ${json.expires_at}\n`);
+      emitEvent("session_renewed", { expires_at: json.expires_at });
       scheduleRenewal();
     } catch (err) {
       if (stopped) return;
@@ -622,6 +636,7 @@ async function runRun(args, io) {
       const delay = RENEW_RETRY_DELAYS_MS[Math.min(renewAttempt, RENEW_RETRY_DELAYS_MS.length - 1)];
       renewAttempt++;
       io.stderr.write(`session renewal attempt failed (${err.message}) — retrying in ${delay}ms\n`);
+      emitEvent("renewal_retry", { delay_ms: delay });
       renewTimer = setTimeout(() => void renewSession(), delay);
     }
   }
@@ -655,6 +670,7 @@ async function runRun(args, io) {
       });
       attempt = 0;
       io.stderr.write(`connected to ${credential.baseUrl} — bridge_id ${ready.bridge_id}\n`);
+      emitEvent("connected", { bridge_id: ready.bridge_id, base_url: credential.baseUrl });
 
       // ready.expires_at is always present on a successful "auth" (routes/
       // agent-bridge.ts) — sync it in case it drifted from what's on disk
@@ -689,6 +705,7 @@ async function runRun(args, io) {
       await new Promise((resolve) => mux.onClose(resolve));
       if (stopped) break;
       io.stderr.write("disconnected — reconnecting...\n");
+      emitEvent("disconnected");
     } catch (err) {
       if (err instanceof HandshakeRejectedError) {
         // A renewal that was in flight when this rejection arrived might be
@@ -708,11 +725,13 @@ async function runRun(args, io) {
           io.stderr.write(
             `${err.message} — session no longer valid, re-pair with 'mullion helper pair <payload>'\n`,
           );
+          emitEvent("dead_credential", { message: err.message });
           clearTimeout(renewTimer);
           return 1;
         }
       } else {
         io.stderr.write(`connect failed: ${err.message}\n`);
+        emitEvent("connect_failed", { message: err.message });
       }
     }
     if (stopped) break;

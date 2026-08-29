@@ -39,6 +39,14 @@ function frame(type: number, body: Buffer = Buffer.alloc(0)): Buffer {
   return out;
 }
 
+// Round 4 (issue #820) — `run --json-events` writes one JSON object per
+// line to stdout (see ssh-agent-helper.mjs's own emitEvent); every test
+// asserting on an event goes through this rather than hand-parsing
+// stdoutLines itself.
+function jsonEvents(io: ReturnType<typeof fakeIo>): Array<Record<string, unknown>> {
+  return io.stdoutLines.map((line) => JSON.parse(line));
+}
+
 function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -173,7 +181,7 @@ describe("mullion helper (pair + run) against the real primary", () => {
     await waitUntil(() => !app.connectedBridges.has(credential.bridgeId));
 
     const runIo = fakeIo({ SSH_AUTH_SOCK: agentSocketPath, MULLION_HELPER_STATE_DIR: stateDir });
-    const runPromise = runHelper("run", [], runIo);
+    const runPromise = runHelper("run", ["--json-events"], runIo);
 
     // Waiting on connectedBridges alone is a race under CI-level load
     // (confirmed by two separate CI failures reproducing "no OpenAck
@@ -190,6 +198,16 @@ describe("mullion helper (pair + run) against the real primary", () => {
     // here, the client-side listener is already attached.
     await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connected to")));
     const bridge = app.connectedBridges.get(credential.bridgeId)!;
+
+    // Round 4 (issue #820) — the same "connected" moment asserted above via
+    // stderr prose, but through the NDJSON stream a tray would actually
+    // parse: exactly one `connected` event, carrying the real bridge_id and
+    // base_url rather than requiring a regex over prose that's already been
+    // reworded three times across prior rounds.
+    const connectedEvents = jsonEvents(runIo).filter((e) => e.type === "connected");
+    expect(connectedEvents).toHaveLength(1);
+    expect(connectedEvents[0].bridge_id).toBe(credential.bridgeId);
+    expect(connectedEvents[0].base_url).toBe(baseUrl);
 
     const serverChannel = await bridge.mux.openChannel();
     const received: Buffer[] = [];
@@ -249,9 +267,17 @@ describe("mullion helper (pair + run) against the real primary", () => {
 
     const agentSocketPath = path.join(stateDir, "fake-agent.sock");
     const io = fakeIo({ SSH_AUTH_SOCK: agentSocketPath, MULLION_HELPER_STATE_DIR: stateDir });
-    const code = await runHelper("run", [], io);
+    const code = await runHelper("run", ["--json-events"], io);
     expect(code).toBe(1);
     expect(io.stderrLines.join("")).toContain("re-pair");
+
+    // Round 4 (issue #820) — a tray needs to tell "genuinely dead, stop
+    // showing a spinner and prompt for re-pairing" apart from every other
+    // transient failure, which is exactly what dead_credential is for.
+    const events = jsonEvents(io);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("dead_credential");
+    expect(typeof events[0].message).toBe("string");
 
     await app.close();
   });
@@ -361,7 +387,10 @@ describe("handshake() failure modes (pair, against a fake bridge server)", () =>
 });
 
 describe("mullion helper run()'s reconnect and dial-failure behavior", () => {
-  async function pairAndWaitForRunConnection(runIo: ReturnType<typeof fakeIo>) {
+  async function pairAndWaitForRunConnection(
+    runIo: ReturnType<typeof fakeIo>,
+    runArgs: string[] = [],
+  ) {
     const { app, port } = await buildAndListen();
     const baseUrl = `http://127.0.0.1:${port}`;
     const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
@@ -375,7 +404,7 @@ describe("mullion helper run()'s reconnect and dial-failure behavior", () => {
     await waitUntil(() => !app.connectedBridges.has(credential.bridgeId));
 
     runIo.env.MULLION_HELPER_STATE_DIR = stateDir;
-    const runPromise = runHelper("run", [], runIo);
+    const runPromise = runHelper("run", runArgs, runIo);
     await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connected to")));
     return { app, credential, runPromise };
   }
@@ -408,7 +437,9 @@ describe("mullion helper run()'s reconnect and dial-failure behavior", () => {
   // from under the client.
   it("reconnects (not just exits) when the connection drops before the helper itself was asked to stop", async () => {
     const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
-    const { app, credential, runPromise } = await pairAndWaitForRunConnection(runIo);
+    const { app, credential, runPromise } = await pairAndWaitForRunConnection(runIo, [
+      "--json-events",
+    ]);
 
     // Drop the connection from the server side WITHOUT setting `stopped` —
     // this is what a real network blip / laptop sleep looks like, as
@@ -423,11 +454,75 @@ describe("mullion helper run()'s reconnect and dial-failure behavior", () => {
       8000,
     );
 
+    // Round 4 (issue #820) — the same reconnect asserted above via stderr
+    // prose, but through the NDJSON stream a tray would actually consume:
+    // two `connected` events (the initial handshake and the reconnect) with
+    // exactly one `disconnected` between them, not folded into one or
+    // missing the drop entirely.
+    const events = jsonEvents(runIo);
+    expect(events.filter((e) => e.type === "connected").length).toBe(2);
+    expect(events.filter((e) => e.type === "disconnected").length).toBe(1);
+    expect(events.findIndex((e) => e.type === "disconnected")).toBeGreaterThan(
+      events.findIndex((e) => e.type === "connected"),
+    );
+    expect(events.every((e) => e.type !== "connected" || typeof e.bridge_id === "string")).toBe(
+      true,
+    );
+
     runIo.triggerInterrupt();
     app.connectedBridges.get(credential.bridgeId)!.mux.close();
     expect(await runPromise).toBe(0);
     await app.close();
   });
+
+  // Round 4 (issue #820) — connect_failed has no prior coverage at all
+  // (neither prose nor event): every OTHER failure branch in this file
+  // starts from a successful pairing and then breaks something server-side
+  // afterward, but nothing previously drove a genuine network-level
+  // connect failure (as opposed to a handshake REJECTION, which is a
+  // different branch — see the "invalid/expired session credential" test
+  // above). Rewriting a real, successfully-paired credential's baseUrl to
+  // an address nothing listens on reproduces that branch faithfully: pairing
+  // itself must succeed first (so the credential is otherwise perfectly
+  // valid), and only THEN does the primary become unreachable, exactly like
+  // a laptop that paired fine yesterday and is offline today.
+  it("emits connect_failed (and keeps retrying) when the primary is unreachable at run() time", async () => {
+    const { app, port } = await buildAndListen();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
+    const { pairing_payload } = (await pairRes.json()) as { pairing_payload: string };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-helper-state-"));
+    const pairIo = fakeIo({ MULLION_HELPER_STATE_DIR: stateDir });
+    await runHelper("pair", [pairing_payload], pairIo);
+    const credentialFile = path.join(stateDir, "ssh-agent-bridge.json");
+    const credential = JSON.parse(fs.readFileSync(credentialFile, "utf8"));
+    await waitUntil(() => !app.connectedBridges.has(credential.bridgeId));
+    await app.close();
+
+    // Port 1 on loopback: reserved, nothing ever listens there — a real,
+    // fast connection-refused, not a synthetic error (same trick the
+    // "unreachable host" pair() test above uses).
+    credential.baseUrl = "http://127.0.0.1:1";
+    fs.writeFileSync(credentialFile, JSON.stringify(credential), { mode: 0o600 });
+
+    const runIo = fakeIo({
+      SSH_AUTH_SOCK: "/tmp/whatever-unused.sock",
+      MULLION_HELPER_STATE_DIR: stateDir,
+    });
+    const runPromise = runHelper("run", ["--json-events"], runIo);
+    await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connect failed")));
+
+    const events = jsonEvents(runIo);
+    const failed = events.find((e) => e.type === "connect_failed");
+    expect(failed).toBeDefined();
+    expect(typeof failed.message).toBe("string");
+
+    runIo.triggerInterrupt();
+    // The reconnect loop is mid-backoff (RECONNECT_DELAYS_MS[0], a real
+    // 1000ms timer) when interrupt fires — `stopped` is only checked again
+    // once that sleep resolves, so this needs more than the default budget.
+    expect(await runPromise).toBe(0);
+  }, 8000);
 });
 
 describe("mullion helper run()'s session renewal (round 3)", () => {
@@ -439,7 +534,7 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
   // window to succeed) but BEFORE run() ever connects, so the very first
   // "auth" handshake already reads the shortened expiry from
   // routes/agent-bridge.ts's own fresh-off-the-row expires_at.
-  async function pairAndForceNearExpiry(runIo: ReturnType<typeof fakeIo>) {
+  async function pairAndForceNearExpiry(runIo: ReturnType<typeof fakeIo>, runArgs: string[] = []) {
     const { app, port } = await buildAndListen();
     const baseUrl = `http://127.0.0.1:${port}`;
     const pairRes = await fetch(`${baseUrl}/api/bridges`, { method: "POST" });
@@ -460,14 +555,16 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
       .run();
 
     runIo.env.MULLION_HELPER_STATE_DIR = stateDir;
-    const runPromise = runHelper("run", [], runIo);
+    const runPromise = runHelper("run", runArgs, runIo);
     await waitUntil(() => runIo.stderrLines.some((line) => line.includes("connected to")));
     return { app, stateDir, credentialFile, credential, runPromise };
   }
 
   it("renews before expiry, persists the rotated credential, and never disturbs the live connection", async () => {
     const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
-    const { app, credentialFile, credential, runPromise } = await pairAndForceNearExpiry(runIo);
+    const { app, credentialFile, credential, runPromise } = await pairAndForceNearExpiry(runIo, [
+      "--json-events",
+    ]);
 
     await waitUntil(() => runIo.stderrLines.some((line) => line.includes("session renewed")), 8000);
 
@@ -486,6 +583,13 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
     expect(runIo.stderrLines.some((line) => line.includes("reconnecting"))).toBe(false);
     expect(app.connectedBridges.has(credential.bridgeId)).toBe(true);
 
+    // Round 4 (issue #820) — session_renewed carries the new expiry so a
+    // tray can display/reschedule off it without re-reading the credential
+    // file itself.
+    const renewedEvents = jsonEvents(runIo).filter((e) => e.type === "session_renewed");
+    expect(renewedEvents).toHaveLength(1);
+    expect(renewedEvents[0].expires_at).toBe(renewed.expiresAt);
+
     runIo.triggerInterrupt();
     app.connectedBridges.get(credential.bridgeId)!.mux.close();
     expect(await runPromise).toBe(0);
@@ -502,7 +606,7 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
   // own activeWs?.close() in the renewal-rejected branch.
   it("a rejected renewal (bridge deleted server-side) forces shutdown and exits 1 with a re-pair message", async () => {
     const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
-    const { app, credential, runPromise } = await pairAndForceNearExpiry(runIo);
+    const { app, credential, runPromise } = await pairAndForceNearExpiry(runIo, ["--json-events"]);
 
     const { deleteBridge } = await import("../../src/services/bridge-registry.js");
     deleteBridge(app, credential.bridgeId);
@@ -511,6 +615,14 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
     expect(code).toBe(1);
     expect(runIo.stderrLines.join("")).toContain("renewal rejected");
     expect(runIo.stderrLines.join("")).toContain("re-pair");
+
+    // Round 4 (issue #820) — the fatal, no-more-retries-possible case: a
+    // tray must stop reconnecting and prompt for re-pairing on this event,
+    // not treat it like renewal_retry's transient one.
+    const events = jsonEvents(runIo);
+    expect(events.filter((e) => e.type === "renewal_rejected")).toHaveLength(1);
+    expect(events.some((e) => e.type === "renewal_retry")).toBe(false);
+
     await app.close();
   });
 
@@ -550,6 +662,13 @@ describe("mullion helper run()'s session renewal (round 3)", () => {
     }, 5000);
     expect(app.connectedBridges.has(credential.bridgeId)).toBe(true);
     expect(runIo.stderrLines.join("")).not.toContain("session no longer valid");
+    // Round 4 (issue #820) — without --json-events, stdout must stay
+    // completely untouched, even though this run genuinely connects (which
+    // would emit a `connected` event under the flag): a supervisor that
+    // treats `run`'s stdout as always-empty today must not start seeing
+    // surprise NDJSON mixed in just because a later refactor accidentally
+    // inverted or dropped the --json-events guard.
+    expect(runIo.stdoutLines).toEqual([]);
 
     runIo.triggerInterrupt();
     app.connectedBridges.get(credential.bridgeId)!.mux.close();

@@ -277,11 +277,15 @@ socket-wide posture from `docs/socket-api.md`.
 - `mullion helper pair <payload> [--name <name>]` — redeems a pairing payload
   (generated from Settings → Hosts → SSH agent bridges on the primary) and
   persists the resulting session credential.
-- `mullion helper run [--ssh-auth-sock <path>]` — long-running; forwards this
-  machine's SSH agent to every enrolled agent host via the primary, using
-  the credential `pair` persisted. `--ssh-auth-sock` overrides this
-  process's own `SSH_AUTH_SOCK` env var — required under a supervisor that
-  doesn't set one (see below).
+- `mullion helper run [--ssh-auth-sock <path>] [--json-events]` —
+  long-running; forwards this machine's SSH agent to every enrolled agent
+  host via the primary, using the credential `pair` persisted.
+  `--ssh-auth-sock` overrides this process's own `SSH_AUTH_SOCK` env var —
+  required under a supervisor that doesn't set one (see below).
+  `--json-events` additionally writes newline-delimited JSON connection
+  events to stdout; see
+  [`ssh-agent.md`](ssh-agent.md#structured-events---json-events) for the
+  event shapes.
 - `mullion helper install [--ssh-auth-sock <path>]` — generates and
   registers a launchd job (macOS), systemd `--user` unit (Linux), or
   Windows Scheduled Task that supervises `run`, so you don't have to
