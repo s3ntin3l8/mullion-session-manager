@@ -32,7 +32,14 @@ import {
 } from "../src/services/ssh-agent-filter.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FIXTURE_PATH = path.join(root, "test/fixtures/ssh-agent-filter-vectors.json");
+// Overridable so tests can point this at a tmpdir fixture instead of the
+// real, tracked JSON file — same convention as check-briefing-sync.mjs's
+// own BRIEFING_SYNC_ROOT (see that script's comment). Every real invocation
+// (`npm run lint`, `npm run generate:ssh-agent-filter-vectors`) leaves this
+// unset and gets the real repo path.
+const FIXTURE_PATH =
+  process.env.SSH_AGENT_FILTER_VECTORS_FIXTURE_PATH ??
+  path.join(root, "test/fixtures/ssh-agent-filter-vectors.json");
 
 export interface SshAgentFilterFixture {
   description: string;
@@ -62,7 +69,11 @@ export interface SshAgentFilterFixture {
   /** Behaviors that aren't representable in the {type,name,allowed} shape
    * alone — each one already has a discriminating test in
    * test/services/ssh-agent-filter.test.ts; this is that coverage,
-   * described for a reimplementer rather than left implicit. */
+   * described for a reimplementer rather than left implicit. Self-review,
+   * PR #913: unlike `vectors` above, this prose is hand-written, not
+   * derived from source — the `--check` drift guard can't catch it going
+   * stale if `classify()`/`feed()`'s actual behavior ever changes. Update
+   * it by hand alongside any such change. */
   edgeCases: { name: string; description: string }[];
 }
 
