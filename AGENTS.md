@@ -41,7 +41,8 @@ covers, rather than assuming it reached your context automatically.
 - **Run a review pass on your own diff before declaring done** — `/code-review`
   in Claude Code, or the equivalent step in your own CLI.
 - **File a GitHub issue for anything a plan defers, blocks, or descopes.**
-  Before implementing, open one issue per item (Issue Blueprint format) and
+  Before implementing, open one issue per item
+  ([Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md) format) and
   link it from the PR — a footnote in a plan doc is not a durable record.
 - **Post-merge:** delete the local and remote branch, and
   `git worktree remove <path>`.
