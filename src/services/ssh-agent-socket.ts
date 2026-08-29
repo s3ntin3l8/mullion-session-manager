@@ -154,6 +154,36 @@ export function resolveSshAuthSock(opts: {
   return { path: "", source: "none" };
 }
 
+/**
+ * Issue #820 follow-up (post-ship audit) — `resolveSshAuthSock`'s precedence
+ * (configured > ambient > bridge) is deliberate and correct (see that
+ * function's own doc comment / PR #865), but it means a host that
+ * materializes a bridge socket can have `source` land on `configured` or
+ * `ambient` with nothing anywhere saying so: Settings can show a paired
+ * bridge as reachable while every session on this host actually uses a
+ * different agent, and there is no breadcrumb connecting the two. This is
+ * the missing breadcrumb — a pure description of the shadowing, so the
+ * caller (plugins/pty.ts) can log it once at boot without this module
+ * needing to know anything about `app.log`.
+ *
+ * Returns `null` when nothing is shadowed: either this process doesn't
+ * materialize a bridge socket at all, or `resolved.source` is already
+ * `"bridge"`. Note `resolved.source` can never be `"none"` when
+ * `materializesBridgeSocket` is true (see `resolveSshAuthSock`), so the two
+ * remaining cases are exactly `"configured"` and `"ambient"`.
+ */
+export function describeBridgeShadowing(
+  resolved: { path: string; source: SshAuthSockSource },
+  opts: { materializesBridgeSocket: boolean; sessionsDir: string },
+): { bridgePath: string; shadowedBy: "configured" | "ambient" } | null {
+  if (!opts.materializesBridgeSocket) return null;
+  if (resolved.source === "bridge") return null;
+  return {
+    bridgePath: sshAgentSocketPath(opts.sessionsDir),
+    shadowedBy: resolved.source as "configured" | "ambient",
+  };
+}
+
 async function handleConnection(
   socket: net.Socket,
   openChannel: () => Promise<MuxChannel | null>,

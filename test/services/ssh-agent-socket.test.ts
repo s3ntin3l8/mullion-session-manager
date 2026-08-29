@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
+  describeBridgeShadowing,
   materializeSshAgentSocket,
   materializesBridgeSocket,
   resolveSshAuthSock,
@@ -247,5 +248,58 @@ describe("resolveSshAuthSock", () => {
         sessionsDir,
       }),
     ).toEqual({ path: "", source: "none" });
+  });
+});
+
+describe("describeBridgeShadowing", () => {
+  const sessionsDir = "/var/lib/mullion/sessions";
+  const bridgePath = sshAgentSocketPath(sessionsDir);
+
+  it("flags shadowing when ambient wins over a materialized bridge socket — the case a bridge pairing would otherwise silently do nothing", () => {
+    const resolved = resolveSshAuthSock({
+      configured: "",
+      ambient: "/run/user/1000/keyring/ssh",
+      materializesBridgeSocket: true,
+      sessionsDir,
+    });
+    expect(
+      describeBridgeShadowing(resolved, { materializesBridgeSocket: true, sessionsDir }),
+    ).toEqual({ bridgePath, shadowedBy: "ambient" });
+  });
+
+  it("flags shadowing when configured wins over a materialized bridge socket", () => {
+    const resolved = resolveSshAuthSock({
+      configured: "/run/ssh-r-tunnel.sock",
+      ambient: undefined,
+      materializesBridgeSocket: true,
+      sessionsDir,
+    });
+    expect(
+      describeBridgeShadowing(resolved, { materializesBridgeSocket: true, sessionsDir }),
+    ).toEqual({ bridgePath, shadowedBy: "configured" });
+  });
+
+  it("does not flag shadowing when the bridge tier actually won", () => {
+    const resolved = resolveSshAuthSock({
+      configured: "",
+      ambient: undefined,
+      materializesBridgeSocket: true,
+      sessionsDir,
+    });
+    expect(
+      describeBridgeShadowing(resolved, { materializesBridgeSocket: true, sessionsDir }),
+    ).toBeNull();
+  });
+
+  it("does not flag shadowing when this process doesn't materialize a bridge socket at all (e.g. primary, pre-PR-B) — nothing to shadow", () => {
+    const resolved = resolveSshAuthSock({
+      configured: "",
+      ambient: "/run/user/1000/keyring/ssh",
+      materializesBridgeSocket: false,
+      sessionsDir,
+    });
+    expect(
+      describeBridgeShadowing(resolved, { materializesBridgeSocket: false, sessionsDir }),
+    ).toBeNull();
   });
 });

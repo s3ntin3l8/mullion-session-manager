@@ -8,7 +8,11 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
-import { resolveSshAuthSock, materializesBridgeSocket } from "../services/ssh-agent-socket.js";
+import {
+  resolveSshAuthSock,
+  materializesBridgeSocket,
+  describeBridgeShadowing,
+} from "../services/ssh-agent-socket.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 
@@ -160,14 +164,33 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // directly instead, since sshAgentPlugin registers after ptyPlugin — see
   // that function's own comment for why this is a shared predicate rather
   // than an inline role check repeated at every call site.
+  const resolvedSshAuthSock = resolveSshAuthSock({
+    configured: app.config.MULLION_SSH_AUTH_SOCK,
+    ambient: process.env.SSH_AUTH_SOCK,
+    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
+    sessionsDir,
+  });
+  // Post-ship audit follow-up (#873) — the missing breadcrumb: without this,
+  // a paired bridge can sit shadowed by `configured`/`ambient` with nothing
+  // anywhere saying so. See describeBridgeShadowing's own doc comment.
+  const shadowing = describeBridgeShadowing(resolvedSshAuthSock, {
+    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
+    sessionsDir,
+  });
+  if (shadowing) {
+    app.log.info(
+      {
+        shadowedBy: shadowing.shadowedBy,
+        bridgePath: shadowing.bridgePath,
+        winningPath: resolvedSshAuthSock.path || "(ambient, inherited untouched)",
+      },
+      "this host materializes an ssh-agent bridge socket, but SSH_AUTH_SOCK resolves via a higher-precedence source — a paired bridge will not be used by sessions here until that source is removed",
+    );
+  }
+
   const manager = new PtyManager({
     sessionsDir,
-    sshAuthSock: resolveSshAuthSock({
-      configured: app.config.MULLION_SSH_AUTH_SOCK,
-      ambient: process.env.SSH_AUTH_SOCK,
-      materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
-      sessionsDir,
-    }).path,
+    sshAuthSock: resolvedSshAuthSock.path,
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),
