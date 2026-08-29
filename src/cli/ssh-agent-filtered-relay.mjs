@@ -37,6 +37,12 @@ export function pipeFilteredChannelRequestsToSocket(socket, channel) {
   // requester just sees a stalled request instead of an immediate
   // SSH_AGENT_FAILURE — and channel.send() itself would throw on an
   // over-window chunk if called unguarded (InboundChannel's own contract).
+  // Self-review, PR #915: this send window is SHARED with
+  // pipeSocketRepliesToChannel's own real-agent replies on this same
+  // channel — a reject flood could in principle push a subsequent real
+  // reply into that function's own pendingChunk/socket.pause() path. Not a
+  // new failure mode (recoverable via onDrain, same as any other window
+  // exhaustion) and the TS twin's own shared-window shape is identical.
   function sendReject(replyFrame) {
     if (!channel.closed && replyFrame.length <= channel.sendWindow) {
       channel.send(replyFrame);
@@ -67,7 +73,12 @@ export function pipeFilteredChannelRequestsToSocket(socket, channel) {
     // any) of its frames were forwarded vs. blocked — matches
     // pipeChannelRequestsToSocket's own accounting (ssh-agent-bridge-
     // mux.mjs): the channel's flow-control credit is about bytes RECEIVED
-    // on this leg, not bytes actually written to the real agent.
+    // on this leg, not bytes actually written to the real agent. (This is
+    // per-CHUNK accounting, one acknowledgeConsumed call per onData
+    // invocation — unlike ssh-agent-relay.ts's own per-FRAME accounting via
+    // result.rejectedLengths, which this call site deliberately never
+    // reads. Both are correct: every received byte is credited exactly
+    // once either way; only the batching granularity differs.)
     if (result.forward.length === 0) {
       channel.acknowledgeConsumed(byteLength);
       return;

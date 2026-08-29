@@ -23,6 +23,13 @@ import {
 // identically) — unlike that file's own no-op acknowledgeConsumed, this
 // one records calls, since the accounting behavior itself is under test.
 
+// self-review, PR #915: send() now decrements sendWindow and onDrain/onEof
+// actually store their listeners, matching the real InboundChannel's own
+// semantics (src/cli/ssh-agent-bridge-mux.mjs) — the original version left
+// sendWindow frozen and both callbacks as no-ops, which made the window-guard
+// test below pass vacuously (a window that never shrinks always has room)
+// and gave no way to write a real multi-blocked-frame-exhausts-the-window
+// test at all.
 class FakeChannel {
   sendWindow = 256 * 1024;
   closed = false;
@@ -30,11 +37,21 @@ class FakeChannel {
   acknowledged: number[] = [];
   #dataListeners: Array<(chunk: Buffer) => void> = [];
   #closeListeners: Array<() => void> = [];
+  #eofListeners: Array<() => void> = [];
+  #drainListeners: Array<() => void> = [];
 
   send(chunk: Buffer): void {
     if (this.closed) throw new Error("send on closed FakeChannel");
     if (chunk.length > this.sendWindow) throw new Error("send exceeds sendWindow");
+    this.sendWindow -= chunk.length;
     this.sent.push(chunk);
+  }
+  /** Not driven by any test here (nothing exhausts the window and then
+   * needs it replenished) — provided so a future test can, matching
+   * InboundChannel.handleWindowAdjust's own clamp-and-notify shape. */
+  grantWindow(byteCount: number): void {
+    this.sendWindow += byteCount;
+    for (const l of this.#drainListeners) l();
   }
   close(): void {
     if (this.closed) return;
@@ -44,17 +61,24 @@ class FakeChannel {
   onData(listener: (chunk: Buffer) => void): void {
     this.#dataListeners.push(listener);
   }
-  onEof(): void {}
+  onEof(listener: () => void): void {
+    this.#eofListeners.push(listener);
+  }
   onClose(listener: () => void): void {
     this.#closeListeners.push(listener);
   }
-  onDrain(): void {}
+  onDrain(listener: () => void): void {
+    this.#drainListeners.push(listener);
+  }
   acknowledgeConsumed(byteCount: number): void {
     this.acknowledged.push(byteCount);
   }
 
   emitData(chunk: Buffer): void {
     for (const l of this.#dataListeners) l(chunk);
+  }
+  emitEof(): void {
+    for (const l of this.#eofListeners) l();
   }
 }
 
@@ -67,6 +91,7 @@ class FakeChannel {
  * timing — nothing under test here depends on the callback being async). */
 class FakeSocket {
   destroyed = false;
+  ended = false;
   written: Buffer[] = [];
   #listeners = new Map<string, Array<(...args: never[]) => void>>();
 
@@ -75,7 +100,9 @@ class FakeSocket {
     cb?.();
     return true;
   }
-  end(): void {}
+  end(): void {
+    this.ended = true;
+  }
   destroy(): void {
     this.destroyed = true;
   }
@@ -187,6 +214,37 @@ describe("ssh-agent-filtered-relay.mjs", () => {
 
       expect(() => channel.emitData(frame(SSH_AGENTC_ADD_IDENTITY))).not.toThrow();
       expect(channel.sent).toHaveLength(0);
+    });
+
+    it("sends the first blocked frame's reject but drops a second one in the same chunk once it exhausts the (real, shrinking) send window", () => {
+      const channel = new FakeChannel();
+      // Exactly one SSH_AGENT_FAILURE_FRAME (5 bytes) fits; a second cannot.
+      // Only meaningful now that FakeChannel.send() actually decrements
+      // sendWindow (self-review, PR #915) — against the old frozen-window
+      // fake this would have passed vacuously with both rejects "fitting".
+      channel.sendWindow = 7;
+      const socket = new FakeSocket();
+      pipeFilteredChannelRequestsToSocket(socket as never, channel as never);
+
+      const combined = Buffer.concat([frame(SSH_AGENTC_ADD_IDENTITY), frame(SSH_AGENTC_LOCK)]);
+      channel.emitData(combined);
+
+      expect(channel.sent).toEqual([SSH_AGENT_FAILURE_FRAME]);
+      expect(channel.sendWindow).toBe(2);
+      expect(socket.written).toHaveLength(0);
+      // The original chunk's full length is still acknowledged even though
+      // one of its two rejects was dropped — dropping a REPLY never affects
+      // how much of the ORIGINAL request the channel credits as consumed.
+      expect(channel.acknowledged).toEqual([combined.length]);
+    });
+
+    it("ends the real agent socket on channel EOF", () => {
+      const channel = new FakeChannel();
+      const socket = new FakeSocket();
+      pipeFilteredChannelRequestsToSocket(socket as never, channel as never);
+
+      channel.emitEof();
+      expect(socket.ended).toBe(true);
     });
   });
 
