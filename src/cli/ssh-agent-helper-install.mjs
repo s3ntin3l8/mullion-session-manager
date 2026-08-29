@@ -95,6 +95,36 @@ export function xmlCommentSafe(value) {
   return value.replace(/--/g, "—");
 }
 
+/** Escapes a value for embedding inside a double-quoted Windows command
+ * line, per the CommandLineToArgvW/MSVCRT parsing rules — a different
+ * dialect than systemdQuote's above. A lone `\` before a `"` doesn't
+ * protect it there: `\"` mid-argument closes the quoted argument early
+ * rather than embedding a literal quote (self-review, PR #879). Rule:
+ * any run of backslashes immediately preceding a `"` — or preceding the
+ * end of the string, since every caller here wraps the result in a
+ * closing `"` right after — must be doubled; a run of backslashes NOT
+ * followed by a `"` (the common case: a bare UNC/pipe path like
+ * `\\.\pipe\name`) passes through untouched. */
+function windowsArgEscape(value) {
+  let result = "";
+  let backslashes = 0;
+  for (const ch of value) {
+    if (ch === "\\") {
+      backslashes++;
+      continue;
+    }
+    if (ch === '"') {
+      result += "\\".repeat(backslashes * 2 + 1) + '"';
+      backslashes = 0;
+      continue;
+    }
+    result += "\\".repeat(backslashes) + ch;
+    backslashes = 0;
+  }
+  result += "\\".repeat(backslashes * 2);
+  return result;
+}
+
 // Both generators embed the same warning: the bridge session `pair` issues
 // is a fixed 24h deadline from the moment of pairing (bridge-registry.ts's
 // SESSION_TTL_MS), never extended by reconnecting — rotateBridgeSession
@@ -180,16 +210,23 @@ WantedBy=default.target
 export function buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }) {
   // Every token quoted uniformly (scriptPath included — a very plausible
   // "C:\Program Files\..." space, unlike execPath which Windows itself
-  // never puts a space in for a bare `node.exe`), matching
-  // <Arguments>'s own documented shell-like tokenizing (Microsoft's Task
-  // Scheduler docs: this string is parsed the same way a command line
-  // typed at a prompt would be). xmlEscape applies to each raw value
-  // BEFORE wrapping in literal quotes, not after — a `"` in element text
-  // content (unlike an XML attribute value) needs no escaping at all, so
-  // escaping the wrapping quote characters themselves would just produce
-  // `&quot;` where a plain `"` reads just as correctly.
+  // never puts a space in for a bare `node.exe`), matching <Arguments>'s
+  // own documented shell-like tokenizing (Microsoft's Task Scheduler docs:
+  // this string is parsed the same way a command line typed at a prompt
+  // would be — i.e. CommandLineToArgvW rules, not just "valid XML"). Two
+  // escaping layers, applied in this order and not the reverse:
+  //   1. windowsArgEscape — makes the raw value safe as CommandLineToArgvW-
+  //      quoted argv text (backslash-escapes an embedded `"` so it doesn't
+  //      prematurely close the quoted argument). Self-review (mullion-
+  //      reviewer) caught that XML-escaping alone doesn't provide this: an
+  //      embedded `"` decoded from a bare `&quot;` would still be parsed by
+  //      Windows as closing the argument early, silently truncating/
+  //      corrupting the value rather than embedding it.
+  //   2. xmlEscape — makes THAT text safe as XML element content. Must run
+  //      second: windowsArgEscape's own output can itself contain literal
+  //      `"` characters (from its `\"` escaping) that still need `&quot;`.
   const args = [scriptPath, "helper", "run", "--ssh-auth-sock", sshAuthSock]
-    .map((value) => `"${xmlEscape(value)}"`)
+    .map((value) => `"${xmlEscape(windowsArgEscape(value))}"`)
     .join(" ");
   const comment = xmlEscape(EXPIRY_COMMENT_LINES.join(" "));
   return `<?xml version="1.0" encoding="UTF-16"?>
@@ -354,15 +391,33 @@ function installSystemd(io, { execPath, scriptPath, sshAuthSock }) {
 
 // Unlike launchd/systemd, `schtasks /Create /F` is unconditionally
 // idempotent — it silently overwrites an existing task with the same name
-// rather than erroring, so there's no separate pre-teardown step, and
-// therefore none of the "was preTeardown itself ambiguous" rollback
-// judgment call installLaunchd's own comment works through. A create
-// failure simply means the task was never (re)registered; deleting the
-// just-written XML file is unconditionally safe here.
+// rather than erroring, so there's no separate pre-teardown step, and none
+// of the "was preTeardown itself ambiguous" rollback judgment call
+// installLaunchd's own comment works through. But a create failure is
+// still not unconditionally safe to roll back the same way regardless of
+// prior state (self-review, PR #879): a FIRST-ever install failing leaves
+// nothing to restore, so deleting the just-written file is correct — but a
+// RE-install failing must NOT delete it. `schtasks /Create` either
+// replaces the previously-registered task atomically or leaves it running
+// untouched; either way that old task survives a failed `/Create`, so
+// deleting the XML would make uninstallWindows's own "check the file
+// first" gate silently report "nothing installed" forever, with no way for
+// this tool to find and stop the still-running task again. Capture and
+// restore the prior content instead, mirroring what a real rollback would
+// need to do.
 function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
   const xmlPath = windowsTaskXmlPath(io);
   fs.mkdirSync(path.dirname(xmlPath), { recursive: true });
-  fs.writeFileSync(xmlPath, buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }), {
+  const previousXml = fs.existsSync(xmlPath) ? fs.readFileSync(xmlPath) : null;
+  // Task Scheduler XML declares `encoding="UTF-16"` and XML 1.0 §4.3.3
+  // requires a UTF-16 entity to begin with a byte-order mark — Node's own
+  // `utf16le` encoding never emits one (confirmed: writeFileSync with this
+  // encoding starts directly with the first character's bytes), so without
+  // the explicit \uFEFF prefix this file would be non-conforming for the
+  // encoding it declares (self-review, PR #879). Written as an escape
+  // sequence, not a literal invisible character, so it can't be silently
+  // stripped or mangled by an editor/git.
+  fs.writeFileSync(xmlPath, "\uFEFF" + buildWindowsTaskXml({ execPath, scriptPath, sshAuthSock }), {
     encoding: "utf16le",
   });
   const result = runSpawnSync(io, "schtasks", [
@@ -374,7 +429,8 @@ function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
     "/F",
   ]);
   if (result.status !== 0) {
-    fs.rmSync(xmlPath, { force: true });
+    if (previousXml === null) fs.rmSync(xmlPath, { force: true });
+    else fs.writeFileSync(xmlPath, previousXml);
     io.stderr.write(
       `schtasks /Create failed: ${(result.stderr || result.error?.message || "unknown error").trim()}\n`,
     );

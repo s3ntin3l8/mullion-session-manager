@@ -197,6 +197,90 @@ describe("buildWindowsTaskXml", () => {
     expect(xml).not.toMatch(/a & b(?!amp)/);
   });
 
+  // Self-review (mullion-reviewer) caught that XML-escaping an embedded `"`
+  // alone isn't enough: once a real XML parser decodes `&quot;` back to a
+  // literal `"`, Windows' own CommandLineToArgvW-style tokenizer treats an
+  // unescaped `\"` mid-argument as CLOSING the quoted argument early, not as
+  // an embedded quote -- silently truncating/corrupting the value. This test
+  // simulates both decode steps a real caller (Task Scheduler -> schtasks ->
+  // the spawned process's argv) would perform, to prove round-trip fidelity
+  // rather than just "the file is well-formed XML".
+  it("a value containing a literal double-quote round-trips through both XML-decode and Windows-argv-parsing", () => {
+    const xml = buildWindowsTaskXml({
+      execPath: "C:\\node.exe",
+      scriptPath: "C:\\mullion.mjs",
+      sshAuthSock: '\\\\.\\pipe\\foo"bar',
+    });
+    const argsMatch = xml.match(/<Arguments>(.*?)<\/Arguments>/);
+    expect(argsMatch).not.toBeNull();
+
+    // Step 1: what a real XML parser produces from the <Arguments> text.
+    const xmlDecoded = argsMatch![1]
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
+
+    // Step 2: minimal CommandLineToArgvW-shaped tokenizer — splits on
+    // unquoted whitespace, treats `\"` inside a quoted run as an embedded
+    // quote (not a close), same rule windowsArgEscape's own doc comment
+    // describes.
+    function parseWindowsArgv(commandLine: string): string[] {
+      const args: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      let i = 0;
+      while (i < commandLine.length) {
+        const ch = commandLine[i];
+        if (ch === "\\") {
+          let backslashes = 0;
+          while (commandLine[i] === "\\") {
+            backslashes++;
+            i++;
+          }
+          if (commandLine[i] === '"') {
+            current += "\\".repeat(Math.floor(backslashes / 2));
+            if (backslashes % 2 === 0) {
+              inQuotes = !inQuotes;
+            } else {
+              current += '"';
+            }
+            i++;
+          } else {
+            current += "\\".repeat(backslashes);
+          }
+          continue;
+        }
+        if (ch === '"') {
+          inQuotes = !inQuotes;
+          i++;
+          continue;
+        }
+        if (ch === " " && !inQuotes) {
+          if (current.length > 0) {
+            args.push(current);
+            current = "";
+          }
+          i++;
+          continue;
+        }
+        current += ch;
+        i++;
+      }
+      if (current.length > 0) args.push(current);
+      return args;
+    }
+
+    const argv = parseWindowsArgv(xmlDecoded);
+    expect(argv).toEqual([
+      "C:\\mullion.mjs",
+      "helper",
+      "run",
+      "--ssh-auth-sock",
+      '\\\\.\\pipe\\foo"bar',
+    ]);
+  });
+
   it("sets a LogonTrigger, RestartOnFailure with a calm (>=1 minute) interval, and an unlimited execution time", () => {
     const xml = buildWindowsTaskXml({
       execPath: "C:\\node.exe",
@@ -459,6 +543,60 @@ describe("runInstall / runUninstall", () => {
     expect(calls.map((c) => c.join(" "))).toEqual([
       `schtasks /Create /TN ${WINDOWS_TASK_NAME} /XML ${xmlPath} /F`,
     ]);
+  });
+
+  // Self-review (mullion-reviewer) — Task Scheduler XML declares
+  // encoding="UTF-16", and XML 1.0 requires a UTF-16 entity to begin with a
+  // byte-order mark. Node's own "utf16le" fs encoding never emits one, so
+  // this has to be added explicitly; without it, the file is non-conforming
+  // for the encoding it declares itself as.
+  it("win32: the written XML starts with a UTF-16LE byte-order mark (FF FE)", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    const xmlPath = windowsTaskXmlPath(io);
+    const bytes = readFileSync(xmlPath);
+    expect(bytes[0]).toBe(0xff);
+    expect(bytes[1]).toBe(0xfe);
+  });
+
+  // Self-review (mullion-reviewer) — schtasks /Create /F either replaces the
+  // previously-registered task atomically or leaves it untouched; either way
+  // that OLD task survives a failed /Create. Deleting the XML on failure
+  // (correct for a first-ever install, where there's nothing to restore)
+  // would make uninstallWindows's own "check the file first" gate silently
+  // report "nothing installed" forever, orphaning a task that's still
+  // actually running with no way for this tool to find it again.
+  it("win32: a failed re-install restores the previous XML instead of deleting it", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    const first = await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\first"], io);
+    expect(first).toBe(0);
+    const xmlPath = windowsTaskXmlPath(io);
+    const previousContent = readFileSync(xmlPath);
+    expect(previousContent.toString("utf16le")).toContain("first");
+
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("/Create"))
+        return { status: 1, stdout: "", stderr: "ERROR: Access is denied." };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const second = await runInstall(["--ssh-auth-sock", "\\\\.\\pipe\\second"], io);
+    expect(second).toBe(1);
+
+    // Restored, not deleted, and restored to the exact previous bytes —
+    // not just "some file exists".
+    expect(existsSync(xmlPath)).toBe(true);
+    expect(readFileSync(xmlPath)).toEqual(previousContent);
+
+    // The still-registered old task must remain reachable by uninstall.
+    io.spawnSync = () => {
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const uninstallCode = await runUninstall([], io);
+    expect(uninstallCode).toBe(0);
+    expect(existsSync(xmlPath)).toBe(false);
   });
 
   it("win32: re-install overwrites the previous task via /F, no separate teardown call", async () => {
