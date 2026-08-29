@@ -38,13 +38,30 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..");
 const buildDir = path.join(repoRoot, "build", "helper-sea");
 const entryPoint = path.join(repoRoot, "src", "cli", "helper-main.mjs");
+
 // The one file this bundle must never inline — see its own header comment.
-const externalDefaultScriptPath = path.join(
-  repoRoot,
-  "src",
-  "cli",
-  "ssh-agent-helper-default-script-path.mjs",
-);
+// A plugin's onResolve `filter`, not esbuild's plain `external:` array with
+// a computed absolute path: the first attempt (`external:
+// [path.join(repoRoot, "src", "cli", "ssh-agent-helper-default-script-
+// path.mjs")]`) worked locally on Linux but failed on the real
+// windows-latest CI runner with the exact "import.meta is not available"
+// error this whole mechanism exists to prevent — esbuild's own resolved-
+// path matching for `external` didn't line up with a Windows-style
+// (backslash, drive-letter) absolute path the way it does with a POSIX
+// one. `onResolve`'s `filter` instead matches the RAW import specifier
+// TEXT as written in the source (`"./ssh-agent-helper-default-script-
+// path.mjs"`, relative to ssh-agent-helper-install.mjs) — a plain string
+// match with nothing OS-path-specific about it, so it can't have this
+// class of platform-dependent failure at all.
+const externalDefaultScriptPathPlugin = {
+  name: "external-default-script-path",
+  setup(build) {
+    build.onResolve({ filter: /ssh-agent-helper-default-script-path\.mjs$/ }, (args) => ({
+      path: args.path,
+      external: true,
+    }));
+  },
+};
 
 const bundlePath = path.join(buildDir, "bundle.cjs");
 const seaConfigPath = path.join(buildDir, "sea-config.json");
@@ -78,7 +95,7 @@ async function bundle() {
     // ssh-agent-helper.mjs's renewal loop) are runtime built-ins, not
     // npm packages — nothing to bundle or externalize for those.
     logOverride: { "empty-import-meta": "error" },
-    external: [externalDefaultScriptPath],
+    plugins: [externalDefaultScriptPathPlugin],
   });
 }
 
