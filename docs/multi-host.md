@@ -380,3 +380,18 @@ alternative, and how the two compose.
   PR, and Retry — given an agent build new enough to serve the routes it
   needs; an older build degrades per-path rather than breaking (see
   [`tasks.md`](tasks.md)'s Known limitations).
+- **SSH agent bridge**: Windows isn't supported yet for `mullion helper
+install`/`uninstall` (manual supervision only, see
+  [`ssh-agent.md`](ssh-agent.md#keeping-it-running)), and the headless
+  `run` process's Windows named-pipe path hasn't been verified against a
+  real 1Password agent (tracked at
+  [issue #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)
+  and [issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874)).
+  An inherited ambient `SSH_AUTH_SOCK` on an agent host or the primary
+  deliberately outranks the bridge in precedence (upgrade-safety
+  trade-off, see [`ssh-agent.md`](ssh-agent.md#precedence)) — this applies
+  regardless of whether a laptop has ever actually paired, since the
+  bridge socket is materialized unconditionally on every host. The host
+  logs a shadow warning at boot whenever this shadowing happens, so it's
+  visible in logs even though Settings' own `connected` status doesn't
+  distinguish it from a session actually using the bridge.
