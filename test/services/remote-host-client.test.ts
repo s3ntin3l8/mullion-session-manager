@@ -909,19 +909,37 @@ describe("RemoteHostClient", () => {
 
   it("posts a review-gate decision to /internal/sessions/:id/review-gate and returns its ok flag (issue #178)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { ok: true }));
-    await expect(client().resolveReviewGate("1", "denied", "looks unsafe")).resolves.toBe(true);
+    await expect(
+      client().resolveReviewGate("1", undefined, "denied", "looks unsafe"),
+    ).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledWith(
       "http://example.invalid:1234/internal/sessions/1/review-gate",
       expect.objectContaining({
         method: "POST",
+        // gateId omitted entirely (JSON.stringify drops an undefined value)
+        // when none is given — same "resolves the oldest pending gate"
+        // fallback contract as the primary's own /api/sessions/:id/review-gate
+        // route (issue: correlate concurrent permission gates).
         body: JSON.stringify({ decision: "denied", reason: "looks unsafe" }),
+      }),
+    );
+  });
+
+  it("posts an explicit gateId when given (issue: correlate concurrent permission gates)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true }));
+    await expect(client().resolveReviewGate("1", "gate-42", "approved")).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/1/review-gate",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ decision: "approved", reason: undefined, gateId: "gate-42" }),
       }),
     );
   });
 
   it("resolveReviewGate returns false when the agent reports nothing was pending", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { ok: false }));
-    await expect(client().resolveReviewGate("1", "approved")).resolves.toBe(false);
+    await expect(client().resolveReviewGate("1", undefined, "approved")).resolves.toBe(false);
   });
 
   it("bypasses fetch entirely for an empty ids array", async () => {

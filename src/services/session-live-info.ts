@@ -67,6 +67,9 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     gateState: info?.gateState ?? "idle",
     gatePrompt: info?.gatePrompt ?? null,
     gateAt: info?.gateAt ?? null,
+    // Issue: correlate concurrent permission gates — same live/in-memory,
+    // host-tracked-only fallback shape as gateState/gatePrompt/gateAt above.
+    gates: info?.gates ?? [],
     // Issue #271 — same live/in-memory, host-tracked-only fallback shape.
     promoteState: info?.promoteState ?? "idle",
     promoteSummary: info?.promoteSummary ?? null,

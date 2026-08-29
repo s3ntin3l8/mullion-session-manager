@@ -3395,9 +3395,12 @@ describe("PtyManager", () => {
 
       const events = session.getEvents();
       expect(events.map((e) => e.kind)).toEqual(["review_gate", "attention"]);
-      expect(events[0].payload).toEqual({
+      // gateId is forwarder/server-generated (issue: correlate concurrent
+      // permission gates) — assert its shape/presence, not an exact value.
+      expect(events[0].payload).toMatchObject({
         state: "waiting",
         prompt: "Run rm -rf /tmp/build?",
+        gateId: expect.any(String),
       });
       expect(events[1].payload).toEqual({
         attention: true,
@@ -3405,9 +3408,14 @@ describe("PtyManager", () => {
         prompt: "Run rm -rf /tmp/build?",
       });
       expect(session.toInfo().attention).toBe(true);
+      expect(session.toInfo().gates).toHaveLength(1);
     });
 
-    it("review_gate (approved/denied): emits a review_gate event only, no attention change", async () => {
+    it("review_gate (approved/denied): an anomalous decision arriving over the hook channel itself resolves the sole pending gate, no attention re-raise", async () => {
+      // No shipped forwarder actually sends "approved"/"denied" this way
+      // (see Session.resolveGate's own doc comment) — this exercises the
+      // defensive fallback in hook-handlers.ts's "review_gate" case, which
+      // delegates to the SAME resolveGate() the web-UI path uses.
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -3416,11 +3424,20 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "x" });
+      expect(session.toInfo().attention).toBe(true);
 
       session.emitHookEvent({ kind: "review_gate", state: "approved", prompt: "x" });
 
       const events = session.getEvents();
-      expect(events.map((e) => e.kind)).toEqual(["review_gate"]);
+      expect(events.map((e) => e.kind)).toEqual([
+        "review_gate",
+        "attention",
+        "review_gate",
+        "attention",
+      ]);
+      expect(session.toInfo().gateState).toBe("approved");
+      expect(session.toInfo().gates).toEqual([]);
       expect(session.toInfo().attention).toBe(false);
     });
 
@@ -5658,6 +5675,43 @@ describe("PtyManager", () => {
       expect(session.toInfo()).toMatchObject({ gateState: "approved", gatePrompt: null });
     });
 
+    it("the gatePrompt/gateAt summary keeps tracking the OLDEST gate, not the newest, once a second one arrives (Hermes review, PR #912)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "first command" });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", gatePrompt: "first command" });
+      const firstGateAt = session.toInfo().gateAt;
+
+      // A second, concurrent gate must NOT swap the scalar summary to its
+      // own prompt, nor reset "waiting since" for the first — the summary
+      // is documented (SessionInfo.gatePrompt/gateAt) as tracking the
+      // OLDEST still-waiting gate, and the stale sweep's TTL is measured
+      // against gateAt.
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "second command" });
+      expect(session.toInfo()).toMatchObject({
+        gateState: "waiting",
+        gatePrompt: "first command",
+        gateAt: firstGateAt,
+      });
+      expect(session.toInfo().gates).toHaveLength(2);
+
+      // Once the first (oldest) resolves, the summary re-points at the
+      // second, now the only one left.
+      const firstId = session.toInfo().gates[0].gateId;
+      session.resolveGate(firstId, "approved");
+      expect(session.toInfo()).toMatchObject({
+        gateState: "waiting",
+        gatePrompt: "second command",
+      });
+    });
+
     it("a genuine keystroke does NOT clear a waiting review_gate's attention badge, unlike hookNotification (concurrent-gates investigation)", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -5781,12 +5835,14 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+      const gateId = session.toInfo().gates[0].gateId;
 
-      session.resolveGate("denied", "looks unsafe");
+      session.resolveGate(gateId, "denied", "looks unsafe");
 
       expect(session.toInfo()).toMatchObject({
         gateState: "denied",
         gatePrompt: null,
+        gates: [],
         // Follow-up to #275 (gap #3): resolveGate is now the superseding
         // resolution that clears a reviewGate-confirmed flag (it no longer
         // clears on the tool call's own PTY output — see resolveGate's doc
@@ -5799,7 +5855,7 @@ describe("PtyManager", () => {
       const reviewGateEvent = events.findLast((e) => e.kind === "review_gate");
       expect(reviewGateEvent).toMatchObject({
         kind: "review_gate",
-        payload: { state: "denied", reason: "looks unsafe" },
+        payload: { state: "denied", reason: "looks unsafe", gateId, prompt: "Deploy?" },
       });
       expect(events[events.length - 1]).toMatchObject({
         kind: "attention",
@@ -5816,11 +5872,14 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "x" });
+      const gateId = session.toInfo().gates[0].gateId;
 
-      session.resolveGate("approved");
+      session.resolveGate(gateId, "approved");
 
       const events = session.getEvents();
-      expect(events[events.length - 1].payload).toEqual({ state: "approved" });
+      const reviewGateEvent = events.findLast((e) => e.kind === "review_gate");
+      expect(reviewGateEvent?.payload).toEqual({ state: "approved", gateId, prompt: "x" });
     });
 
     it("Session.resolveGate does not dismiss a NEWER, unrelated confirmed flag (gated on confirmedKind)", async () => {
@@ -5833,6 +5892,7 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+      const gateId = session.toInfo().gates[0].gateId;
       // A fresh, unrelated permission request supersedes the reviewGate as
       // the currently-confirmed kind before the gate decision arrives. Uses
       // a second SPECIFIC immune kind, not a generic hookNotification —
@@ -5846,19 +5906,19 @@ describe("PtyManager", () => {
       session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
       // permissionRequest settles for 2s before it confirms and actually
       // supersedes reviewGate as confirmedKind — advance past it, or
-      // resolveGate("approved") below would still be resolving the
+      // resolveGate(gateId, "approved") below would still be resolving the
       // CURRENTLY-confirmed reviewGate (not a stale one) and this test
       // would no longer be exercising what its name says.
       session.tick(Date.now() + 2_000);
       expect(session.toInfo().attention).toBe(true);
 
-      session.resolveGate("approved");
+      session.resolveGate(gateId, "approved");
 
       // The stale gate resolution must not clear the newer permission request.
       expect(session.toInfo().attention).toBe(true);
     });
 
-    it("Session.resolveGate is a no-op on the attention machine when nothing is confirmed", async () => {
+    it("Session.resolveGate is a silent no-op for an unknown gateId (already resolved, or never existed)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -5868,24 +5928,28 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
 
-      session.resolveGate("approved"); // no prior "waiting" review_gate at all
+      session.resolveGate("nonexistent-gate", "approved"); // no prior "waiting" review_gate at all
 
       expect(session.toInfo().attention).toBe(false);
       const events = session.getEvents();
       expect(events.some((e) => e.kind === "attention")).toBe(false);
+      expect(events.some((e) => e.kind === "review_gate")).toBe(false);
     });
 
-    it("PtyManager.resolveGate() routes to the right session by id and is a no-op for an untracked id", async () => {
+    it("PtyManager.resolveGate() routes to the right session/gate and is a no-op for an untracked session or gate id", async () => {
       const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
       const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
       await waitForSpawn(a);
       await waitForSpawn(b);
+      b.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "x" });
+      const gateId = b.toInfo().gates[0].gateId;
 
-      manager.resolveGate("2", "approved");
+      manager.resolveGate("2", gateId, "approved");
 
       expect(a.toInfo().gateState).toBe("idle");
       expect(b.toInfo().gateState).toBe("approved");
-      expect(() => manager.resolveGate("999", "denied")).not.toThrow();
+      expect(() => manager.resolveGate("999", "whatever", "denied")).not.toThrow();
+      expect(() => manager.resolveGate("2", "unknown-gate", "denied")).not.toThrow();
     });
   });
 

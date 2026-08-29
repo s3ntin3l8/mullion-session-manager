@@ -175,6 +175,10 @@ export const terminateSchema = {
 export interface ReviewGateBody {
   decision: "approved" | "denied";
   reason?: string;
+  /** Issue: correlate concurrent permission gates — see sessions.ts's own
+   * reviewGateSchema for the full rationale (this mirrors it for the
+   * agent-side counterpart route). */
+  gateId?: string;
 }
 
 // Issue #178 — the agent-side counterpart of POST /api/sessions/:id/review-gate.
@@ -187,6 +191,7 @@ export const reviewGateSchema = {
     properties: {
       decision: { type: "string", enum: ["approved", "denied"] },
       reason: { type: "string" },
+      gateId: { type: "string" },
     },
   },
 };

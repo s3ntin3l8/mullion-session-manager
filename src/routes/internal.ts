@@ -1793,8 +1793,8 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions/:id/review-gate",
     { ...INTERNAL_RATE_LIMIT, schema: reviewGateSchema },
     async (request) => {
-      const { decision, reason } = request.body;
-      const ok = app.resolveHookGate(request.params.id, decision, reason);
+      const { decision, reason, gateId } = request.body;
+      const ok = app.resolveHookGate(request.params.id, gateId, decision, reason);
       return { ok };
     },
   );

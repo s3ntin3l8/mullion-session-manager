@@ -103,7 +103,12 @@ export interface SessionBackend {
   // process's hooks.ts can write the reply — see that file's
   // resolvePendingGate). Returns false if no gate is currently pending for
   // this session (already resolved, timed out, or its connection died).
-  resolveReviewGate(id: string, decision: "approved" | "denied", reason?: string): Promise<boolean>;
+  resolveReviewGate(
+    id: string,
+    gateId: string | undefined,
+    decision: "approved" | "denied",
+    reason?: string,
+  ): Promise<boolean>;
   // Issue #271 — creates a worktree on whichever host actually owns `cwd`'s
   // filesystem, for the launcher-toggle and promote flows. Returns
   // `{ created: false, reason, detail? }` when creation fails for a
@@ -327,10 +332,11 @@ class LocalBackend implements SessionBackend {
 
   async resolveReviewGate(
     id: string,
+    gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
   ): Promise<boolean> {
-    return this.app.resolveHookGate(id, decision, reason);
+    return this.app.resolveHookGate(id, gateId, decision, reason);
   }
 
   createWorktree(
@@ -506,10 +512,11 @@ class RemoteBackend implements SessionBackend {
 
   resolveReviewGate(
     id: string,
+    gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
   ): Promise<boolean> {
-    return this.client.resolveReviewGate(id, decision, reason);
+    return this.client.resolveReviewGate(id, gateId, decision, reason);
   }
 
   createWorktree(

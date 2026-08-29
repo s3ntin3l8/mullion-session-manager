@@ -573,18 +573,43 @@ function EventRow({
   };
 
   // Minimal review gate (issue #178) — gated on the SESSION's own live
-  // gateState, not just this event's own payload.state === "waiting": once
-  // resolved, the session's gateState moves on to "approved"/"denied" but
-  // the original "waiting" event row stays in the feed unchanged (each
-  // NotificationEvent is an immutable point-in-time record — resolution
-  // appends a NEW review_gate event rather than mutating this one). Keying
-  // off live state means Approve/Deny disappears from this row the instant
-  // the gate is actually resolved (by this click or a timeout elsewhere),
-  // rather than staying clickable against an already-answered gate.
-  const isPendingGate =
-    item.event.kind === "review_gate" &&
-    item.event.payload.state === "waiting" &&
-    session?.gateState === "waiting";
+  // `gates` list, not just this event's own payload.state === "waiting":
+  // once resolved, the gate disappears from that list but the original
+  // "waiting" event row stays in the feed unchanged (each NotificationEvent
+  // is an immutable point-in-time record — resolution appends a NEW
+  // review_gate event rather than mutating this one). Keying off live state
+  // means Approve/Deny disappears from this row the instant the gate is
+  // actually resolved (by this click or a timeout elsewhere), rather than
+  // staying clickable against an already-answered gate.
+  //
+  // Issue: correlate concurrent permission gates — matched by `gateId`, NOT
+  // just `session?.gateState === "waiting"`: a session can now have more
+  // than one gate waiting at once, and gateState alone would make EVERY
+  // waiting-gate event row show Approve/Deny as long as ANY gate on the
+  // session is pending, including one that isn't THIS row's. An event
+  // predating this change (or a `gateId` that somehow doesn't match a
+  // still-live gate) never matches `.some()` over an empty/mismatched
+  // `gates` array, so it fails safe to "not pending" rather than showing a
+  // dead pair of buttons.
+  const isWaitingGateEvent =
+    item.event.kind === "review_gate" && item.event.payload.state === "waiting";
+  const eventGateId =
+    isWaitingGateEvent && typeof item.event.payload.gateId === "string"
+      ? item.event.payload.gateId
+      : null;
+  // A row with no gateId at all is a legacy/malformed event (an older
+  // forwarder build predating gate correlation) — falls back to the OLDEST
+  // still-waiting gate, the same fallback semantics
+  // `POST /api/sessions/:id/review-gate`'s own `gateId`-omitted contract
+  // uses server-side (routes/sessions.ts's reviewGateSchema), rather than
+  // simply never matching and leaving a genuinely-still-pending gate with
+  // no way to answer it from this row.
+  const matchingGate = isWaitingGateEvent
+    ? eventGateId !== null
+      ? session?.gates.find((g) => g.gateId === eventGateId)
+      : session?.gates[0]
+    : undefined;
+  const isPendingGate = matchingGate !== undefined;
 
   // Issue #404 — same "key off the session's own live state, not this
   // immutable event's payload" reasoning as isPendingGate above: accepting
@@ -626,7 +651,9 @@ function EventRow({
         </span>
         {repeatCount > 1 && <span className="notif-event-repeat">×{repeatCount}</span>}
         <span className="notif-event-time">{age}</span>
-        {isPendingGate && <GateActions sessionId={item.sessionId} />}
+        {isPendingGate && matchingGate && (
+          <GateActions sessionId={item.sessionId} gateId={matchingGate.gateId} />
+        )}
         {isPendingDevServer && eventPort && (
           <DevServerActions
             sessionId={item.sessionId}
@@ -674,7 +701,7 @@ function EventRow({
 // optimistic local state is needed because the row's own visibility already
 // reacts live once the store's next poll/event picks up the session's
 // updated gateState (see EventRow's isPendingGate).
-function GateActions({ sessionId }: { sessionId: number }) {
+function GateActions({ sessionId, gateId }: { sessionId: number; gateId: string }) {
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -683,7 +710,7 @@ function GateActions({ sessionId }: { sessionId: number }) {
     e.stopPropagation();
     setSubmitting(true);
     try {
-      await api.resolveReviewGate(sessionId, "approved");
+      await api.resolveReviewGate(sessionId, gateId, "approved");
     } catch (err) {
       // Best-effort: a failed request (network hiccup, or the gate already
       // resolved/timed out elsewhere — most commonly, since issue #844, a
@@ -701,7 +728,7 @@ function GateActions({ sessionId }: { sessionId: number }) {
     e.stopPropagation();
     setSubmitting(true);
     try {
-      await api.resolveReviewGate(sessionId, "denied", reason.trim() || undefined);
+      await api.resolveReviewGate(sessionId, gateId, "denied", reason.trim() || undefined);
     } catch (err) {
       // See approve()'s catch above.
       console.debug("[NotificationBell] resolveReviewGate(denied) failed", err);

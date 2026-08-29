@@ -432,7 +432,14 @@ describe("hooksPlugin (issue #172)", () => {
       }
       expect(session.toInfo().gateState).toBe("waiting");
       expect(session.toInfo().gatePrompt).toBe(prompt);
-      return { session, socket };
+      // Issue: correlate concurrent permission gates — the forwarder (or,
+      // here, the raw socket write above) generates its own gateId; read it
+      // back off the live gate list rather than assuming one, so callers
+      // that need it (to resolve THIS specific gate once more than one can
+      // be pending) have it.
+      const gateId = session.toInfo().gates[0]?.gateId;
+      expect(gateId).toBeDefined();
+      return { session, socket, gateId: gateId as string };
     }
 
     it("app.resolveHookGate writes an approve decision back to the pending connection and flips gateState", async () => {
@@ -441,7 +448,7 @@ describe("hooksPlugin (issue #172)", () => {
       const { session, socket } = await openPendingGate(app, "1", "rm -rf /tmp/scratch");
 
       const replyPromise = waitForLine(socket);
-      expect(app.resolveHookGate("1", "approved")).toBe(true);
+      expect(app.resolveHookGate("1", undefined, "approved")).toBe(true);
 
       expect(JSON.parse(await replyPromise)).toEqual({ decision: "approved" });
       expect(session.toInfo().gateState).toBe("approved");
@@ -459,7 +466,7 @@ describe("hooksPlugin (issue #172)", () => {
       const { socket } = await openPendingGate(app, "1", "curl http://evil.example");
 
       const replyPromise = waitForLine(socket);
-      expect(app.resolveHookGate("1", "denied", "looks unsafe")).toBe(true);
+      expect(app.resolveHookGate("1", undefined, "denied", "looks unsafe")).toBe(true);
 
       expect(JSON.parse(await replyPromise)).toEqual({
         decision: "denied",
@@ -473,13 +480,28 @@ describe("hooksPlugin (issue #172)", () => {
       await app.ready();
       app.pty.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
 
-      expect(app.resolveHookGate("1", "approved")).toBe(false);
+      expect(app.resolveHookGate("1", undefined, "approved")).toBe(false);
     });
 
-    it("resolves a second concurrent waiting gate for the same session to no_response immediately, without disturbing the first (Hermes review, PR #839)", async () => {
+    it("holds two concurrent waiting gates for the same session independently — each has its own connection, its own reply, and resolving one doesn't touch the other (issue: correlate concurrent permission gates, supersedes PR #839's fall-through)", async () => {
+      // Deterministic proof at the socket layer (not dependent on any
+      // agent actually batching two escalated tool calls in one turn,
+      // which is model behavior no test can command): open TWO concurrent
+      // hook connections for the SAME session, each sending its own
+      // `review_gate {state: "waiting"}`. Before this issue, the second
+      // connection's gate resolved immediately to "no_response" (PR #839)
+      // and the first was left as the session's only trace. This is the
+      // exact scenario that wedged a real Codex turn (branchDAM, session
+      // 566): the user answered whichever ONE prompt fell through to the
+      // agent's own native TUI, with no indication a second tool call was
+      // still parked, unanswerable except from the Mullion UI.
       app = await buildApp();
       await app.ready();
-      const { session, socket: first } = await openPendingGate(app, "1", "first command");
+      const {
+        session,
+        socket: first,
+        gateId: firstId,
+      } = await openPendingGate(app, "1", "first command");
 
       const second = await connect(app.pty.hookSocketPath);
       second.write(`${JSON.stringify({ token: session.hookToken })}\n`);
@@ -487,26 +509,40 @@ describe("hooksPlugin (issue #172)", () => {
       second.write(
         `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "second command" })}\n`,
       );
+      for (let i = 0; i < 50 && session.toInfo().gates.length < 2; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
 
-      // Falls through to the agent's own native prompt for this SPECIFIC
-      // tool call, not an explicit denial — a human deciding the FIRST
-      // pending gate has nothing to do with this second, unrelated one.
-      expect(JSON.parse(await secondReplyPromise)).toEqual({
-        decision: "no_response",
-        reason: "another review is already pending for this session",
-      });
-      // The first gate is completely undisturbed.
+      // Both gates are live, independently — no "already pending" fall
+      // through, no dropped bookkeeping for either.
       expect(session.toInfo().gateState).toBe("waiting");
-      expect(session.toInfo().gatePrompt).toBe("first command");
-      // The duplicate itself never reaches emitHookEvent (Hermes review, PR
-      // #839), so it leaves no gateState/timeline trace of its own at all —
-      // there's nothing to assert "lapsed" against for the SECOND gate
-      // specifically here; it's covered instead by the standalone
-      // second-gate assertions below via app.resolveHookGate("1", "approved")
-      // resolving only the first.
+      expect(session.toInfo().gates).toHaveLength(2);
+      const [g1, g2] = session.toInfo().gates;
+      expect(g1).toMatchObject({ gateId: firstId, prompt: "first command" });
+      expect(g2.prompt).toBe("second command");
+      expect(g2.gateId).not.toBe(firstId);
 
-      expect(app.resolveHookGate("1", "approved")).toBe(true);
+      // Resolving the SECOND gate specifically (by its own id) does not
+      // touch the first — the write-side half of the "resolving A must
+      // not disturb B" invariant.
+      const replyForSecond = secondReplyPromise;
+      expect(app.resolveHookGate("1", g2.gateId, "denied", "not this one")).toBe(true);
+      expect(JSON.parse(await replyForSecond)).toEqual({
+        decision: "denied",
+        reason: "not this one",
+      });
+      expect(session.toInfo().gateState).toBe("waiting");
+      expect(session.toInfo().gates).toEqual([
+        { gateId: firstId, prompt: "first command", at: g1.at },
+      ]);
+
+      // The first gate is STILL independently resolvable, on its own
+      // connection, with its own reply.
+      const replyForFirst = waitForLine(first);
+      expect(app.resolveHookGate("1", firstId, "approved")).toBe(true);
+      expect(JSON.parse(await replyForFirst)).toEqual({ decision: "approved" });
       expect(session.toInfo().gateState).toBe("approved");
+      expect(session.toInfo().gates).toEqual([]);
 
       first.destroy();
       second.destroy();

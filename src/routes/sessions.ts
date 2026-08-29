@@ -40,6 +40,10 @@ interface RenameSessionBody {
 interface ReviewGateBody {
   decision: "approved" | "denied";
   reason?: string;
+  /** Issue: correlate concurrent permission gates — which gate to resolve;
+   * omitted resolves the oldest still-pending one (see reviewGateSchema's
+   * own comment). */
+  gateId?: string;
 }
 
 const worktreeIntentSchema = {
@@ -119,6 +123,13 @@ const reviewGateSchema = {
     properties: {
       decision: { type: "string", enum: ["approved", "denied"] },
       reason: { type: "string" },
+      // Issue: correlate concurrent permission gates — optional, not
+      // required: a session can now have more than one gate waiting at
+      // once (NotificationBell.tsx's GateActions passes its own gate's
+      // id), but omitting it stays a valid request that resolves the
+      // OLDEST still-pending gate — the same behavior the pre-correlation,
+      // one-gate-per-session contract always had.
+      gateId: { type: "string" },
     },
   },
 };
@@ -798,11 +809,12 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (!row) return reply.notFound();
 
       const hostId = resolveProjectHostId(app, row.projectId);
-      const { decision, reason } = request.body;
+      const { decision, reason, gateId } = request.body;
       let ok: boolean;
       try {
         ok = await resolveBackend(app, hostId).resolveReviewGate(
           String(sessionId),
+          gateId,
           decision,
           reason,
         );

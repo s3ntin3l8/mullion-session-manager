@@ -42,6 +42,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     lastTitle: null,
     gateState: "idle",
     gatePrompt: null,
+    gates: [],
     permissionState: "idle",
     planState: "idle",
     errorState: "idle",

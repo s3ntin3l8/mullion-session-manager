@@ -28,6 +28,7 @@ function makeSession(overrides: Partial<Session>): Session {
     attentionAt: null,
     lastTitle: null,
     gateState: "idle",
+    gates: [],
     gatePrompt: null,
     promoteState: "idle",
     promoteSummary: null,
