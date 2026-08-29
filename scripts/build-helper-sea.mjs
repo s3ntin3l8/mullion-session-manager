@@ -5,9 +5,9 @@
 // pair|run|install|uninstall` with no Node install of its own. `npm run
 // build:helper-sea`; CI wires this into `.github/workflows/release-please.yml`
 // (a `windows-latest` job, gated on `release_created`, mirroring
-// `build-tarball`'s own shape) and into `ci-cd.yml` (a Linux smoke-test job
-// that builds and probes the SAME bundle on every PR — see that job's own
-// comment for what it can and can't prove from Linux).
+// `build-tarball`'s own shape) and into `ci-cd.yml` (a `windows-latest`
+// smoke-test job, `test-windows`, that builds and probes the SAME bundle on
+// every PR — see that job's own comment for what it verifies).
 //
 // Node SEA is still explicitly experimental upstream, and `postject`
 // (https://www.npmjs.com/package/postject) is still `1.0.0-alpha.6` as of
@@ -186,10 +186,10 @@ async function main() {
   log(`built ${path.relative(repoRoot, exePath)}`);
   // Deliberately no smoke test here — a build script's job is producing
   // the artifact, not verifying it. The CI workflows that invoke this
-  // (ci-cd.yml's Linux job, release-please.yml's windows-latest job) run
-  // their own explicit probe steps against ${exePath} afterward, so a
-  // failure shows up as its own named CI step, not buried inside "build
-  // the exe."
+  // (ci-cd.yml's test-windows job, release-please.yml's build-helper-exe
+  // job — both windows-latest) run their own explicit probe steps against
+  // ${exePath} afterward, so a failure shows up as its own named CI step,
+  // not buried inside "build the exe."
 }
 
 main().catch((err) => {
