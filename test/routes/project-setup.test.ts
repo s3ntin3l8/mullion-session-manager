@@ -325,4 +325,69 @@ describe("project-setup route", () => {
 
     await app.close();
   });
+
+  // Hermes review, PR #896 round 2 — the reverse direction of the test
+  // above: switching OFF symlinkAgentsSkills left a stale symlink at
+  // exactly the path the plain-file write's mkdirSync needs to create as
+  // a real directory, which threw (reproduced: ENOENT) rather than
+  // silently succeeding.
+  it("switching from the symlink to the plain-file variant mid-preview actually replaces the stale symlink", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const symlinkPreview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo", symlinkAgentsSkills: true },
+    });
+    expect(symlinkPreview.statusCode).toBe(200);
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const agentsSkillsPath = path.join(worktreeDir, ".agents", "skills", "demo");
+    expect(fs.lstatSync(agentsSkillsPath).isSymbolicLink()).toBe(true);
+
+    const plainPreview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo", symlinkAgentsSkills: false },
+    });
+    expect(plainPreview.statusCode).toBe(200);
+    expect(fs.lstatSync(agentsSkillsPath).isSymbolicLink()).toBe(false);
+    expect(fs.statSync(agentsSkillsPath).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(agentsSkillsPath, "SKILL.md"))).toBe(true);
+
+    await app.close();
+  });
+
+  // Hermes review, PR #896 round 2 — a re-preview must not clobber a
+  // skill/reviewer/dock-config the target repo already committed or
+  // hand-edited; only the AGENTS.md briefing region is designed for
+  // repeated safe upserts.
+  it("does not clobber an already-committed skill file on a re-preview", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const customSkill =
+      "---\nname: demo\ndescription: hand-written before scaffolding\n---\nmy own content\n";
+    fs.mkdirSync(path.join(repoDir, ".claude", "skills", "demo"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, ".claude", "skills", "demo", "SKILL.md"), customSkill);
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "hand-written skill", "--no-verify"]);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo" },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().files).not.toContain(".claude/skills/demo/SKILL.md");
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const onDisk = fs.readFileSync(
+      path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"),
+      "utf8",
+    );
+    expect(onDisk).toBe(customSkill);
+
+    await app.close();
+  });
 });

@@ -88,6 +88,62 @@ describe("computeScaffold", () => {
     expect(parsed!.name).toBe("demo-reviewer");
   });
 
+  // Hermes review, PR #896 round 2 — computeScaffold used to emit the
+  // starter skill/reviewer/dock-config unconditionally, silently
+  // clobbering a target repo's own hand-edited (or previously-scaffolded-
+  // and-since-customized) content on every re-run.
+  describe("never clobbers content that already exists", () => {
+    const existingSkill =
+      "---\nname: demo\ndescription: my own hand-edited skill\n---\ncustom body";
+    const existingReviewer =
+      "---\nname: demo-reviewer\ndescription: my own hand-edited reviewer\n---\ncustom body";
+
+    it("does not emit an entry for an already-existing skill file", () => {
+      const entries = computeScaffold(
+        { ".claude/skills/demo/SKILL.md": existingSkill },
+        { slug: "demo" },
+      );
+      expect(entries.some((e) => e.path === ".claude/skills/demo/SKILL.md")).toBe(false);
+    });
+
+    it("does not emit an entry for an already-existing reviewer file", () => {
+      const entries = computeScaffold(
+        { ".claude/agents/demo-reviewer.md": existingReviewer },
+        { slug: "demo" },
+      );
+      expect(entries.some((e) => e.path === ".claude/agents/demo-reviewer.md")).toBe(false);
+    });
+
+    it("does not emit an entry for an already-existing .crs/dock.json", () => {
+      const entries = computeScaffold(
+        { ".crs/dock.json": '{"controls":[{"id":"x","title":"t","command":"c"}]}' },
+        { slug: "demo", includeDockConfig: true },
+      );
+      expect(entries.some((e) => e.path === ".crs/dock.json")).toBe(false);
+    });
+
+    it("the .agents/skills file mirror still carries the PRESERVED skill content, not a freshly-regenerated starter", () => {
+      const entries = computeScaffold(
+        { ".claude/skills/demo/SKILL.md": existingSkill },
+        { slug: "demo" },
+      );
+      const mirror = entries.find((e) => e.path === ".agents/skills/demo/SKILL.md") as {
+        contents: string;
+      };
+      expect(mirror).toBeDefined();
+      expect(mirror.contents).toBe(existingSkill);
+    });
+
+    it("existence sentinel (empty string) is still treated as 'already exists', not overwritten", () => {
+      // routes/project-setup.ts's readExistingFiles uses "" as an
+      // existence-only sentinel for paths it can't read as text (a
+      // directory, or a symlink to one) — computeScaffold must treat that
+      // the same as real content, never as "absent, generate fresh".
+      const entries = computeScaffold({ ".claude/skills/demo/SKILL.md": "" }, { slug: "demo" });
+      expect(entries.some((e) => e.path === ".claude/skills/demo/SKILL.md")).toBe(false);
+    });
+  });
+
   it("no mirrors, no dock config, no symlink by default", () => {
     const entries = computeScaffold({}, { slug: "demo" });
     expect(entries.some((e) => e.path === "GEMINI.md")).toBe(false);

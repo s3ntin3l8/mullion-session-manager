@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readlinkSync,
@@ -131,14 +132,24 @@ function resolveWithin(root: string, relPath: string): string {
 // Every path computeScaffold can ever emit, read up front so preview always
 // sees the CURRENT on-disk content (a previous scaffold's own output,
 // hand-edited content, or nothing) rather than assuming a fresh repo.
+// Includes the `.agents/skills/<slug>` mirror (file or symlink form,
+// mode-dependent) and `.crs/dock.json` too — Hermes review, PR #896 round
+// 2: computeScaffold now skips regenerating the starter skill/reviewer/
+// dock-config once something's already there, so their existence has to
+// actually be probed here, not just the region-upsert targets.
 function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] {
   const mirrors = options.mirrors ?? [];
-  return [
+  const paths = [
     "AGENTS.md",
     ...mirrors,
     path.join(".claude", "skills", slug, "SKILL.md"),
     path.join(".claude", "agents", `${slug}-reviewer.md`),
+    options.symlinkAgentsSkills
+      ? path.join(".agents", "skills", slug)
+      : path.join(".agents", "skills", slug, "SKILL.md"),
   ];
+  if (options.includeDockConfig) paths.push(path.join(".crs", "dock.json"));
+  return paths;
 }
 
 function readExistingFiles(cwd: string, relPaths: string[]): Record<string, string | undefined> {
@@ -153,15 +164,45 @@ function readExistingFiles(cwd: string, relPaths: string[]): Record<string, stri
   // class of finding.
   const existingFiles: Record<string, string | undefined> = Object.create(null);
   for (const relPath of relPaths) {
+    const resolved = resolveWithin(cwd, relPath);
     try {
-      existingFiles[relPath] = readFileSync(resolveWithin(cwd, relPath), "utf8");
-    } catch {
-      // Absent (or unreadable) — computeScaffold treats a missing key as
-      // "doesn't exist yet" and creates it fresh, same posture as every
-      // other soft-failure read in this codebase.
+      existingFiles[relPath] = readFileSync(resolved, "utf8");
+    } catch (err) {
+      // A directory (or a symlink to one — e.g. a previously-scaffolded
+      // `.agents/skills/<slug>` in symlink mode) can't be read as text,
+      // but computeScaffold still needs to know it EXISTS so a
+      // re-scaffold doesn't clobber it (Hermes review, PR #896 round 2).
+      // Empty string is a safe existence-only sentinel: computeScaffold
+      // never actually reads this path's text content, only checks
+      // `!== undefined`.
+      if ((err as NodeJS.ErrnoException).code === "EISDIR") {
+        existingFiles[relPath] = "";
+      }
+      // Otherwise absent/unreadable — computeScaffold treats a missing
+      // key as "doesn't exist yet" and creates it fresh, same posture as
+      // every other soft-failure read in this codebase.
     }
   }
   return existingFiles;
+}
+
+/** Ensures `dirPath` is a real directory before a plain file write into it
+ * — Hermes review, PR #896 round 2: a same-slug re-preview that switches
+ * OFF `symlinkAgentsSkills` leaves a stale symlink at exactly this path
+ * (from the earlier symlink-mode preview); `mkdirSync(dirPath,
+ * {recursive:true})` on a path that already exists as a symlink throws
+ * (reproduced: ENOENT), so the plain-file write below never even got a
+ * chance to run. Removing a stale symlink first mirrors the reverse fix
+ * writeScaffoldEntries' own symlink branch already applies. */
+function ensureRealDir(dirPath: string): void {
+  try {
+    if (lstatSync(dirPath).isSymbolicLink()) {
+      rmSync(dirPath, { recursive: true, force: true });
+    }
+  } catch {
+    // ENOENT — nothing there yet, mkdirSync below creates it fresh.
+  }
+  mkdirSync(dirPath, { recursive: true });
 }
 
 function writeScaffoldEntries(
@@ -170,20 +211,20 @@ function writeScaffoldEntries(
 ): void {
   for (const entry of entries) {
     const targetPath = resolveWithin(worktreePath, entry.path);
-    mkdirSync(path.dirname(targetPath), { recursive: true });
     if (entry.kind === "symlink") {
-      // Hermes review, PR #896 — the old code swallowed EVERY EEXIST,
-      // assuming whatever was already there was a matching symlink from a
-      // previous preview. That's wrong on a same-slug re-preview that
-      // switches FROM the plain-file variant TO the symlink variant (or
-      // vice versa, or after a hand-edit): the existing entry can be a
-      // directory or a stale symlink to a different target, and silently
-      // leaving it in place means apply commits content the user didn't
-      // actually opt into. Only skip the create when what's already there
-      // is a symlink pointing at the EXACT target we'd create anyway
-      // (content-compare-then-skip, same posture as
-      // mullion-bundle.ts's syncSkillDir); anything else is removed and
-      // replaced.
+      mkdirSync(path.dirname(targetPath), { recursive: true });
+      // Hermes review, PR #896 round 1 — the old code swallowed EVERY
+      // EEXIST, assuming whatever was already there was a matching
+      // symlink from a previous preview. That's wrong on a same-slug
+      // re-preview that switches FROM the plain-file variant TO the
+      // symlink variant (or vice versa, or after a hand-edit): the
+      // existing entry can be a directory or a stale symlink to a
+      // different target, and silently leaving it in place means apply
+      // commits content the user didn't actually opt into. Only skip the
+      // create when what's already there is a symlink pointing at the
+      // EXACT target we'd create anyway (content-compare-then-skip, same
+      // posture as mullion-bundle.ts's syncSkillDir); anything else is
+      // removed and replaced.
       let alreadyCorrect = false;
       try {
         alreadyCorrect = readlinkSync(targetPath) === entry.target;
@@ -196,6 +237,7 @@ function writeScaffoldEntries(
         symlinkSync(entry.target, targetPath);
       }
     } else {
+      ensureRealDir(path.dirname(targetPath));
       writeFileSync(targetPath, entry.contents);
     }
   }

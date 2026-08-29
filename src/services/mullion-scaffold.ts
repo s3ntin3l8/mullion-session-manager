@@ -223,10 +223,19 @@ console.log(\`OK — \${FILES.filter((f) => existsSync(path.join(root, f))).join
  * everything else) rather than requiring the caller to pre-populate every
  * possible path with an empty string.
  *
- * Always returns at least AGENTS.md, the two `.claude/` starter files, and
- * `.agents/skills/<slug>` — the entries `ScaffoldOptions` genuinely make
- * optional (mirrors, the sync script, `.crs/dock.json`) are the only ones
- * that can be absent from the result.
+ * Always returns at least an AGENTS.md entry (upserting the briefing
+ * region is safe to repeat by design — see upsertMarkedRegion). The
+ * starter skill/reviewer/`.crs/dock.json` entries, by contrast, are
+ * "create once, never overwrite" (Hermes review, PR #896 round 2): each
+ * is OMITTED from the result when `existingFiles` already shows something
+ * at that path, so a re-scaffold over a repo that already committed or
+ * hand-edited them leaves that content alone rather than silently
+ * clobbering it with the generic starter text. The `.agents/skills/<slug>`
+ * mirror is the one exception that's always (re-)emitted regardless —
+ * it has no independent identity to preserve, it just carries whatever
+ * the skill's resolved content is (freshly generated, or preserved from
+ * an existing `.claude/skills` file) into codex/agy's own project-scope
+ * discovery path.
  */
 export function computeScaffold(
   existingFiles: Record<string, string | undefined>,
@@ -249,16 +258,39 @@ export function computeScaffold(
     });
   }
 
-  entries.push({
-    path: path.join(".claude", "skills", slug, "SKILL.md"),
-    kind: "file",
-    contents: skillFileContents(slug),
-  });
-  entries.push({
-    path: path.join(".claude", "agents", `${slug}-reviewer.md`),
-    kind: "file",
-    contents: reviewerAgentFileContents(slug),
-  });
+  // Hermes review, PR #896 round 2 — this used to emit the starter
+  // skill/reviewer/dock-config UNCONDITIONALLY, silently clobbering a
+  // target repo's own hand-edited (or previously-scaffolded-and-since-
+  // customized) content on every re-run. Unlike the briefing region above
+  // (explicitly marker-delimited and DESIGNED for repeated safe upserts),
+  // these are one-time starter files a human is expected to edit
+  // afterward — the safe, idempotent posture is "create if missing, never
+  // touch if already there", the same convention scaffolding tools
+  // generally use. `existingFiles[path] !== undefined` means the caller
+  // (routes/project-setup.ts's readExistingFiles) found SOMETHING already
+  // there — real content for a text file, or an empty-string existence
+  // sentinel for a directory/symlink it can't read as text (see that
+  // function's own doc comment).
+  const skillPath = path.join(".claude", "skills", slug, "SKILL.md");
+  const skillAlreadyExists = existingFiles[skillPath] !== undefined;
+  // Whatever the skill's FINAL content is (freshly generated, or the
+  // existing repo's own content preserved) is what the `.agents/skills`
+  // mirror below copies — never its own independently-regenerated starter
+  // text, which would silently diverge from a preserved `.claude/skills`
+  // copy the moment a re-scaffold ran.
+  const skillContent = existingFiles[skillPath] ?? skillFileContents(slug);
+  if (!skillAlreadyExists) {
+    entries.push({ path: skillPath, kind: "file", contents: skillContent });
+  }
+
+  const reviewerPath = path.join(".claude", "agents", `${slug}-reviewer.md`);
+  if (existingFiles[reviewerPath] === undefined) {
+    entries.push({
+      path: reviewerPath,
+      kind: "file",
+      contents: reviewerAgentFileContents(slug),
+    });
+  }
 
   if (options.symlinkAgentsSkills) {
     entries.push({
@@ -271,10 +303,15 @@ export function computeScaffold(
       target: path.join("..", "..", "..", ".claude", "skills", slug),
     });
   } else {
+    // Always (re-)written, regardless of skillAlreadyExists — this mirror
+    // has no independent identity of its own to preserve; it exists only
+    // to carry whatever `.claude/skills/<slug>/SKILL.md`'s content
+    // resolved to above, in file form for codex/agy's own project-scope
+    // discovery.
     entries.push({
       path: path.join(".agents", "skills", slug, "SKILL.md"),
       kind: "file",
-      contents: skillFileContents(slug),
+      contents: skillContent,
     });
   }
 
@@ -286,10 +323,11 @@ export function computeScaffold(
     });
   }
 
-  if (options.includeDockConfig) {
+  const dockConfigPath = path.join(".crs", "dock.json");
+  if (options.includeDockConfig && existingFiles[dockConfigPath] === undefined) {
     const emptyControls: DockControl[] = [];
     entries.push({
-      path: path.join(".crs", "dock.json"),
+      path: dockConfigPath,
       kind: "file",
       contents: JSON.stringify({ controls: emptyControls }, null, 2) + "\n",
     });
