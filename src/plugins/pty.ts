@@ -169,9 +169,15 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // latter's `null`-vs-shadow branching assumes it matches what actually
   // produced `resolvedSshAuthSock` (mullion-reviewer, PR #875 self-review).
   const willMaterializeBridgeSocket = materializesBridgeSocket(app.config.MULLION_ROLE);
+  // Captured once so the shadow-warning log below describes the exact same
+  // inputs that produced `resolvedSshAuthSock`, rather than re-reading
+  // process.env.SSH_AUTH_SOCK a second time (Hermes review, PR #875) — the
+  // two calls are otherwise a hair's-width apart in time, but "describes
+  // what actually happened" shouldn't depend on that gap staying empty.
+  const ambientSshAuthSock = process.env.SSH_AUTH_SOCK;
   const resolvedSshAuthSock = resolveSshAuthSock({
     configured: app.config.MULLION_SSH_AUTH_SOCK,
-    ambient: process.env.SSH_AUTH_SOCK,
+    ambient: ambientSshAuthSock,
     materializesBridgeSocket: willMaterializeBridgeSocket,
     sessionsDir,
   });
@@ -187,13 +193,14 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // (resolveSshAuthSock's own doc comment: "" means "don't touch it," a
     // correct *injection* decision) — but this is a *diagnostic*, and an
     // operator debugging "why isn't my paired bridge used" needs the actual
-    // winning path, not a placeholder. Read it straight from the same
-    // process.env.SSH_AUTH_SOCK already passed as `ambient` above; nothing
-    // sensitive here that buildAgentConfig's own Settings diagnostic
-    // doesn't already surface unredacted.
+    // winning path, not a placeholder. Reuse the exact `ambientSshAuthSock`
+    // value already passed as `resolveSshAuthSock`'s `ambient` argument
+    // above, rather than re-reading process.env; nothing sensitive here that
+    // buildAgentConfig's own Settings diagnostic doesn't already surface
+    // unredacted.
     const winningPath =
       shadowing.shadowedBy === "ambient"
-        ? (process.env.SSH_AUTH_SOCK ?? "(unset)")
+        ? (ambientSshAuthSock ?? "(unset)")
         : resolvedSshAuthSock.path;
     app.log.warn(
       { shadowedBy: shadowing.shadowedBy, bridgePath: shadowing.bridgePath, winningPath },

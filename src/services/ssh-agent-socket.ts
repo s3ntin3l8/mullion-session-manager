@@ -177,11 +177,28 @@ export function describeBridgeShadowing(
   opts: { materializesBridgeSocket: boolean; sessionsDir: string },
 ): { bridgePath: string; shadowedBy: "configured" | "ambient" } | null {
   if (!opts.materializesBridgeSocket) return null;
-  if (resolved.source === "bridge") return null;
-  return {
-    bridgePath: sshAgentSocketPath(opts.sessionsDir),
-    shadowedBy: resolved.source as "configured" | "ambient",
-  };
+  // Checked switch rather than an `as` cast on `resolved.source` (Hermes
+  // review, PR #875) — `resolved` and `opts.materializesBridgeSocket` are
+  // two independent arguments a caller could in principle pass out of sync
+  // (e.g. `resolved` computed with `materializesBridgeSocket: false`, then
+  // this function called with `true`), which would make `"none"` reach here
+  // despite the doc comment's invariant. A cast would silently mislabel that
+  // as `shadowedBy: "none"` cast to a narrower type; this throws instead, so
+  // a future 5th `SshAuthSockSource` variant (or a caller bug) fails loudly
+  // rather than producing a bogus warning.
+  switch (resolved.source) {
+    case "bridge":
+      return null;
+    case "configured":
+    case "ambient":
+      return { bridgePath: sshAgentSocketPath(opts.sessionsDir), shadowedBy: resolved.source };
+    case "none":
+      throw new Error(
+        'describeBridgeShadowing: resolved.source is "none" but materializesBridgeSocket ' +
+          "is true — resolved and opts are out of sync (see resolveSshAuthSock's own " +
+          "invariant: this combination should be unreachable).",
+      );
+  }
 }
 
 async function handleConnection(
