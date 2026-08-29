@@ -75,7 +75,7 @@ import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket } from "./events.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
-import { resolveSshAuthSock, materializesBridgeSocket } from "../services/ssh-agent-socket.js";
+import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -425,11 +425,25 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // to a short /tmp/ fallback, and hookSocketPath already reflects whichever
   // one actually won — the same reasoning plugins/ssh-agent.ts's own
   // sshAgentSocketPath call already relies on.
+  //
+  // Hermes review, PR #877 — `app.sshAuthSockBridgeExpected`
+  // (plugins/pty.ts), not `materializesBridgeSocket(app.config.MULLION_ROLE)`
+  // recomputed from scratch. The raw role predicate says nothing about
+  // whether THIS boot's preflight probe actually let the bridge tier
+  // through — on a host where it didn't (a live foreign listener already
+  // occupies the bridge socket path), PtyManager froze every session to
+  // `none`/`ambient`, but re-deriving from the role alone would still
+  // report `source: "bridge"` here: Settings would show a path pointing at
+  // a process this host doesn't control, while sessions actually get
+  // something else entirely. That's the exact producer-drift this
+  // function's own PR5d history exists to prevent (see the paragraph
+  // above) — `sshAuthSockBridgeExpected` is the one value both this
+  // function and pty.ts must agree on.
   const ambientSshAuthSock = process.env.SSH_AUTH_SOCK;
   const resolved = resolveSshAuthSock({
     configured: app.config.MULLION_SSH_AUTH_SOCK,
     ambient: ambientSshAuthSock,
-    materializesBridgeSocket: materializesBridgeSocket(app.config.MULLION_ROLE),
+    materializesBridgeSocket: app.sshAuthSockBridgeExpected,
     sessionsDir: path.dirname(app.pty.hookSocketPath),
   });
   // PR7a: the "ambient" tier's own `path` is always "" (resolveSshAuthSock's

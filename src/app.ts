@@ -319,6 +319,14 @@ export async function buildApp() {
   // and app.pty.resolveToken(), both only available once ptyPlugin has
   // decorated app.pty.
   await app.register(hooksPlugin);
+  // Post-ship audit follow-up (#873, PR5e) — the primary's own local
+  // sessions get a bridge-backed SSH_AUTH_SOCK too now, same as an agent
+  // host. Needs app.pty.hookSocketPath (ptyPlugin, above) for its socket
+  // directory; its openChannel closure reads app.connectedBridges lazily
+  // at call time, not here, so it doesn't need agentBridgePlugin (much
+  // later in this function) to have registered first — see sshAgentPlugin's
+  // own doc comment.
+  await app.register(sshAgentPlugin);
   await app.register(githubPRPollerPlugin);
   await app.register(taskWatcherPlugin);
   // Must run before the app starts (see registerDispatchCleanup's own doc

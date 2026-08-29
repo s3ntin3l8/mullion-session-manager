@@ -365,13 +365,23 @@ describe("multi-host proxy (issue #26)", () => {
     expect(typeof body.version).toBe("string");
   });
 
+  // #873 PR-B — the primary no longer reports null here either: it now
+  // materializes its own local bridge socket the same way the agent fixture
+  // above does (sshAgentPlugin registers for both roles as of PR-B), so an
+  // unconfigured, no-ambient primary falls back to that bridge tier too.
   it("resolves the local host's own config directly, with no proxying", async () => {
     const res = await primary.app.inject({
       method: "GET",
       url: "/api/hosts/local/config",
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ role: "primary", sshAuthSock: null });
+    const body = res.json();
+    expect(body).toMatchObject({ role: "primary" });
+    expect(body.sshAuthSock).toEqual({
+      path: path.join(path.dirname(primary.app.pty.hookSocketPath), "ssh-agent.sock"),
+      present: true,
+      source: "bridge",
+    });
   });
 
   // Issue #522 — these five routes always 500'd on the agent (no app.db

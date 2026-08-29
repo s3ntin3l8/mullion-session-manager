@@ -182,12 +182,12 @@ describe("sshAgentSocketPath", () => {
 });
 
 describe("materializesBridgeSocket", () => {
-  it("is true for the agent role — the only role sshAgentPlugin registers for", () => {
+  it("is true for the agent role", () => {
     expect(materializesBridgeSocket("agent")).toBe(true);
   });
 
-  it("is false for the primary role", () => {
-    expect(materializesBridgeSocket("primary")).toBe(false);
+  it("is true for the primary role too (#873 PR-B — sshAgentPlugin now registers for both roles)", () => {
+    expect(materializesBridgeSocket("primary")).toBe(true);
   });
 });
 
@@ -239,7 +239,7 @@ describe("resolveSshAuthSock", () => {
     ).toEqual({ path: bridgePath, source: "bridge" });
   });
 
-  it("does not fall back to a bridge path when this process doesn't materialize one (e.g. primary, pre-PR5e)", () => {
+  it("does not fall back to a bridge path when materializesBridgeSocket is false (e.g. the preflight probe in pty.ts suppressed it — #873 PR-B)", () => {
     expect(
       resolveSshAuthSock({
         configured: "",

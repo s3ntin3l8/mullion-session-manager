@@ -12,7 +12,9 @@ import {
   resolveSshAuthSock,
   materializesBridgeSocket,
   describeBridgeShadowing,
+  sshAgentSocketPath,
 } from "../services/ssh-agent-socket.js";
+import { probeSocket } from "../services/unix-socket.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 
@@ -164,11 +166,60 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // directly instead, since sshAgentPlugin registers after ptyPlugin — see
   // that function's own comment for why this is a shared predicate rather
   // than an inline role check repeated at every call site.
-  // Computed once and threaded through both calls below — resolveSshAuthSock
-  // and describeBridgeShadowing must agree on this exact value, since the
-  // latter's `null`-vs-shadow branching assumes it matches what actually
-  // produced `resolvedSshAuthSock` (mullion-reviewer, PR #875 self-review).
-  const willMaterializeBridgeSocket = materializesBridgeSocket(app.config.MULLION_ROLE);
+  //
+  // Computed once and threaded through the preflight probe below AND both
+  // resolveSshAuthSock/describeBridgeShadowing calls further down —
+  // describeBridgeShadowing's `null`-vs-shadow branching assumes this exact
+  // value matches what actually produced `resolvedSshAuthSock` (mullion-
+  // reviewer, PR #875 self-review).
+  let willMaterializeBridgeSocket = materializesBridgeSocket(app.config.MULLION_ROLE);
+  if (willMaterializeBridgeSocket) {
+    // Post-ship audit follow-up (#873, PR-B) — a cheap, read-only preflight
+    // BEFORE PtyManager is constructed and freezes its sshAuthSock. Why this
+    // can't wait for sshAgentPlugin's own (later) bind attempt: that plugin
+    // registers AFTER ptyPlugin, so by the time it would discover "something
+    // else already owns this socket path," PtyManager has already frozen
+    // "bridge" as the winning source for every session on this host. Without
+    // this check, a live foreign listener at the bridge socket path (a
+    // second Mullion process, or a stale `ssh -R` socket someone pointed
+    // here) would still get handed to every session's SSH client — a
+    // signing-oracle handoff to a process we don't own, not a safe degrade.
+    // Treats "live" and "unknown" the same as reclaimSocketPath itself does
+    // (unix-socket.ts) — an inconclusive probe gets the conservative
+    // answer, not the optimistic one. A "dead" result is left for
+    // sshAgentPlugin's own reclaimSocketPath to actually reclaim and bind;
+    // this preflight only ever narrows materializesBridgeSocket from true to
+    // false, never the reverse, so it can't create the hole it's closing.
+    // The residual TOCTOU window between this probe and that later bind is
+    // the same one reclaimSocketPath's own doc comment already accepts —
+    // milliseconds at process startup, not the live-instance case that
+    // function actually defends against.
+    const preflightBridgePath = sshAgentSocketPath(sessionsDir);
+    const probe = await probeSocket(preflightBridgePath);
+    if (probe !== "dead") {
+      willMaterializeBridgeSocket = false;
+      app.log.error(
+        { bridgePath: preflightBridgePath, probe },
+        "refusing to offer a bridge-backed SSH_AUTH_SOCK to sessions on this host — " +
+          "something is already at the ssh-agent bridge socket path and this process " +
+          "cannot confirm it's safe to reclaim (see reclaimSocketPath)",
+      );
+    }
+  }
+  // Self-review (mullion-reviewer, PR #877) — sshAgentPlugin (registered
+  // after this one) needs to know whether THIS decision actually committed
+  // sessions to the bridge tier, to tell apart two very different bind
+  // failures it might hit moments later at the same path: (a) the preflight
+  // above already excluded the bridge tier, so nothing depends on that
+  // socket working — any failure there is harmless and safe to degrade; (b)
+  // the preflight found the path genuinely dead and PtyManager (below) is
+  // about to freeze "bridge" as the winning source for every session on
+  // this host, so a *subsequent* collision (something racing in during the
+  // narrow window between this probe and sshAgentPlugin's own bind) means
+  // those already-frozen sessions would be pointed at a process this host
+  // doesn't own — sshAgentPlugin must crash rather than silently degrade in
+  // that specific case. See that plugin's own comment for how it uses this.
+  app.decorate("sshAuthSockBridgeExpected", willMaterializeBridgeSocket);
   // Captured once so the shadow-warning log below describes the exact same
   // inputs that produced `resolvedSshAuthSock`, rather than re-reading
   // process.env.SSH_AUTH_SOCK a second time (Hermes review, PR #875) — the
@@ -184,6 +235,9 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // Post-ship audit follow-up (#873) — the missing breadcrumb: without this,
   // a paired bridge can sit shadowed by `configured`/`ambient` with nothing
   // anywhere saying so. See describeBridgeShadowing's own doc comment.
+  // Note this is a no-op (returns null) whenever the preflight above already
+  // suppressed `willMaterializeBridgeSocket` — a host that isn't going to
+  // materialize a bridge socket at all has nothing to shadow.
   const shadowing = describeBridgeShadowing(resolvedSshAuthSock, {
     materializesBridgeSocket: willMaterializeBridgeSocket,
     sessionsDir,
@@ -388,5 +442,12 @@ declare module "fastify" {
   interface FastifyInstance {
     pty: PtyManager;
     reconfigureReconciler: (intervalSeconds: number) => void;
+    /** Whether this boot's `resolveSshAuthSock` resolution (above) actually
+     * committed every session on this host to the bridge tier — see the
+     * decoration site's own comment. Read by `sshAgentPlugin`
+     * (plugins/ssh-agent.ts) to decide whether a bind failure at the same
+     * path is harmless (this is `false`) or a genuine race requiring a
+     * crash rather than a silent degrade (this is `true`). */
+    sshAuthSockBridgeExpected: boolean;
   }
 }
