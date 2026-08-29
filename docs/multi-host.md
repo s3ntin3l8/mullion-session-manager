@@ -380,12 +380,12 @@ alternative, and how the two compose.
   PR, and Retry — given an agent build new enough to serve the routes it
   needs; an older build degrades per-path rather than breaking (see
   [`tasks.md`](tasks.md)'s Known limitations).
-- **SSH agent bridge**: Windows isn't supported yet for `mullion helper
-install`/`uninstall` (manual supervision only, see
-  [`ssh-agent.md`](ssh-agent.md#keeping-it-running)), and the headless
-  `run` process's Windows named-pipe path hasn't been verified against a
-  real 1Password agent (tracked at
-  [issue #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)
+- **SSH agent bridge**: `mullion helper install`/`uninstall` generates a
+  Windows Scheduled Task too, but has no local verification path (see
+  [`ssh-agent.md`](ssh-agent.md#keeping-it-running)), and separately,
+  whether 1Password's Windows named pipe accepts the mux's concurrent-
+  channel shape at all hasn't been verified against a real agent (tracked
+  at [issue #871](https://github.com/s3ntin3l8/mullion-session-manager/issues/871)
   and [issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874)).
   An inherited ambient `SSH_AUTH_SOCK` on an agent host or the primary
   deliberately outranks the bridge in precedence (upgrade-safety
