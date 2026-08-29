@@ -162,9 +162,10 @@ install (new `--ssh-auth-sock`, moved checkout, ...) rather than erroring
 over an already-loaded job — `schtasks /Create /F` is unconditionally
 idempotent, so Windows doesn't even need the explicit pre-teardown step the
 other two platforms do. `mullion helper uninstall` stops and removes it
-again — a no-op, not an error, if nothing is installed (the installer's own
-uninstaller, from **Settings → Apps** or `unins000.exe` in the install
-folder, runs this for you first, before removing the exe itself). On Linux,
+again, along with the pairing credential — a no-op, not an error, if nothing
+is installed (the installer's own uninstaller, from **Settings → Apps** or
+`unins000.exe` in the install folder, runs this for you first, before
+removing the exe itself). On Linux,
 also run `loginctl enable-linger $(whoami)` so the unit survives logout, the
 same requirement the manual tunnel's own [systemd
 section](#linux-systemd---user) below has.
@@ -174,13 +175,8 @@ and the installer itself are exercised for real in CI on a `windows-latest`
 runner (`.github/workflows/ci-cd.yml`'s `test-windows` job) — a genuine
 `schtasks.exe` round trip, and the installer's own silent install/uninstall
 (`/VERYSILENT /SUPPRESSMSGBOXES`), confirming the exe lands, the Scheduled
-Task registers, and both remove the exe and the task again on uninstall.
-**Uninstalling does not remove your last pairing credential** — it's left
-at `%LOCALAPPDATA%\Mullion\ssh-agent-bridge.json`, the same as `mullion
-helper uninstall` alone does on every platform (tracked at [issue
-#904](https://github.com/s3ntin3l8/mullion-session-manager/issues/904));
-revoke the bridge from Settings if you want that credential invalidated
-rather than just idle.
+Task registers, and both remove the exe, the task, and the pairing
+credential again on uninstall.
 1Password's Windows named pipe accepting the mux's concurrent-channel shape
 is confirmed working too
 ([issue #874](https://github.com/s3ntin3l8/mullion-session-manager/issues/874),
@@ -234,9 +230,11 @@ retry.
 `$XDG_STATE_HOME/mullion/ssh-agent-bridge.json`, and finally
 `~/.local/state/mullion/ssh-agent-bridge.json` — directory created `0700`,
 file `0600`. `mullion helper run` reads it to reconnect without re-pairing;
-delete the file to forget the pairing locally (revoking from Settings, see
-below, is the primary-side equivalent and takes effect immediately either
-way).
+`mullion helper uninstall` removes it along with whatever `install` set up
+(delete it by hand to forget the pairing locally without uninstalling
+anything else). Revoking from Settings, see below, is the primary-side
+equivalent — it takes effect immediately, where a local delete alone leaves
+the session valid server-side until its own TTL or renewal budget runs out.
 
 **A freshly paired session is valid for 24h, but `run` renews it on its own
 at roughly half that TTL** (a plain HTTP call to the primary,
