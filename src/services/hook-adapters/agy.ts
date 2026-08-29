@@ -4,6 +4,7 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { resolveMcpServerPath, shellQuote } from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
+import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
 // agy (Antigravity CLI) adapter (issue #253). Verified against the
 // installed `agy` CLI's own bundled documentation during this PR (the
@@ -261,6 +262,21 @@ function resolveAgyMcpConfigPath(): string {
   return path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
 }
 
+// agy's REAL global customization root, per its own bundled documentation
+// (`agy-customizations/docs/json_configs.md`: "`~/.gemini/config/` globally")
+// — the same root resolveAgyHooksPath/resolveAgyMcpConfigPath already write
+// to. Verified this session (S6 spike, plan doc) that a skill placed at
+// `~/.agents/skills` — the path skills.ts's own globalSkillDirs table
+// lists for agy — is NEVER actually loaded by the installed agy binary
+// (its strings only reference a workspace-relative `.agents/skills`); a
+// skill placed here, at `~/.gemini/config/skills`, IS loaded. See
+// mullion-bundle.ts's installBundleSkills doc comment and this plan's
+// backlog issue #888 (skills.ts's own table is wrong and tracked
+// separately — not fixed by this file).
+function resolveAgyGlobalSkillsDir(): string {
+  return path.join(os.homedir(), ".gemini", "config", "skills");
+}
+
 interface AgyMcpConfigFile {
   mcpServers?: Record<string, unknown>;
   [key: string]: unknown;
@@ -342,6 +358,14 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
         ],
         ["mergeAgyHooks", () => mergeAgyHooks(ctx)],
         ["mergeAgyMcpConfig", () => mergeAgyMcpConfig(ctx)],
+        [
+          "installBundleSkills",
+          () => {
+            const skillsDir = resolveAgyGlobalSkillsDir();
+            if (ctx.injectMullionBundle) installBundleSkills(skillsDir);
+            else uninstallBundleSkills(skillsDir);
+          },
+        ],
       ];
       let firstError: unknown;
       for (const [name, step] of steps) {
@@ -434,5 +458,6 @@ export const __testing = {
   resolveAgyMcpConfigPath,
   mergeAgyTrustedWorkspace,
   resolveAgyTrustedWorkspacesPath,
+  resolveAgyGlobalSkillsDir,
   MULLION_HOOK_NAME,
 };

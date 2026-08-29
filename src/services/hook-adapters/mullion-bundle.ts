@@ -1,4 +1,12 @@
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,4 +58,101 @@ function resolveBundleRootDir(): string {
 export function resolveMullionBundleDir(): string | null {
   const dir = resolveBundleRootDir();
   return existsSync(dir) ? dir : null;
+}
+
+// Every directory this module ever writes under a destRoot carries this
+// prefix — installBundleSkills only ever creates `mullion-`-prefixed dirs,
+// and uninstallBundleSkills only ever removes them, so neither can ever
+// touch a skill a user or another tool placed there themselves.
+const INSTALLED_SKILL_PREFIX = "mullion-";
+
+/** Recursively syncs `sourceDir`'s files into `destDir`, creating `destDir`
+ * (and any subdirectories) as needed, and skipping any file whose content
+ * already matches — the "content-compare-then-skip" contract `managedInstall`
+ * needs (agy.ts's `mergeAgyTrustedWorkspace` calls out why: this runs on
+ * EVERY matching launch, not once, so a naive unconditional overwrite would
+ * mean every session spawn touches these files' mtimes for no reason).
+ * Never deletes a stale file that no longer exists in `sourceDir` — bundle
+ * skills are small and don't currently shed files across releases; if that
+ * ever changes, this needs a real "prune extras" pass, not a guess now. */
+function syncSkillDir(sourceDir: string, destDir: string): void {
+  mkdirSync(destDir, { recursive: true });
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      syncSkillDir(sourcePath, destPath);
+      continue;
+    }
+    const content = readFileSync(sourcePath);
+    let existing: Buffer | null;
+    try {
+      existing = readFileSync(destPath);
+    } catch {
+      existing = null;
+    }
+    if (existing === null || !existing.equals(content)) {
+      writeFileSync(destPath, content);
+    }
+  }
+}
+
+/**
+ * Installs every skill in the shipped bundle (src/bundle/skills/<name>/)
+ * into `destRoot/mullion-<name>/` — the zero-repo-change delivery vehicle
+ * for codex and agy, neither of which has an ephemeral per-session overlay
+ * (unlike Claude Code's `--plugin-dir` or opencode's `skills.paths`
+ * config key — see claude-code.ts's commandTransform and opencode.ts's
+ * prepareLaunch for those). `destRoot` differs per agent and is NOT
+ * interchangeable: `~/.agents/skills` for codex (skills.ts's own global-scope
+ * table), `~/.gemini/config/skills` for agy (its real customization root —
+ * verified this session that agy does NOT load skills from `~/.agents/skills`
+ * at all, only from a workspace-relative `.agents/skills` or this global
+ * root; see the plan doc's S6 spike). A no-op (not an error) when this
+ * install hasn't shipped a bundle (resolveMullionBundleDir() returns null)
+ * or ships one with no skills/ directory at all. */
+export function installBundleSkills(destRoot: string): void {
+  const bundleDir = resolveMullionBundleDir();
+  if (!bundleDir) return;
+  const skillsDir = path.join(bundleDir, "skills");
+  let skillNames: string[];
+  try {
+    skillNames = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return;
+  }
+  for (const name of skillNames) {
+    syncSkillDir(
+      path.join(skillsDir, name),
+      path.join(destRoot, `${INSTALLED_SKILL_PREFIX}${name}`),
+    );
+  }
+}
+
+/**
+ * Removes every `mullion-`-prefixed directory this module has ever
+ * installed under `destRoot` — the reversal of installBundleSkills, called
+ * on every matching launch when `sessions.injectMullionBundle` is off, so a
+ * managed install left behind by an earlier session with the setting on
+ * doesn't linger forever once an operator turns it off (codex-trust.ts is
+ * the precedent for a Mullion-owned host-level change staying reversible).
+ * Only ever removes entries carrying the prefix — never enumerates or
+ * touches anything else in `destRoot`, the same containment
+ * installBundleSkills itself relies on. A no-op when `destRoot` doesn't
+ * exist yet (nothing was ever installed).
+ */
+export function uninstallBundleSkills(destRoot: string): void {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(destRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith(INSTALLED_SKILL_PREFIX)) {
+      rmSync(path.join(destRoot, entry.name), { recursive: true, force: true });
+    }
+  }
 }

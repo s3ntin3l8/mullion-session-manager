@@ -5,6 +5,7 @@ import path from "node:path";
 import { openCodeAdapter } from "../../../src/services/hook-adapters/opencode.js";
 import { sessionAgentGuidePath } from "../../../src/services/agent-guide.js";
 import { sessionBriefingPath } from "../../../src/services/project-briefing.js";
+import { resolveMullionBundleDir } from "../../../src/services/hook-adapters/mullion-bundle.js";
 
 describe("openCodeAdapter.matches (issue #175)", () => {
   it("matches a bare opencode invocation", () => {
@@ -150,6 +151,61 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
       OPENCODE_CONFIG_DIR: path.join(sessionsDir, "42.opencode-config"),
     });
     expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+  });
+});
+
+// The bundle is checked in (src/bundle/) and genuinely present in this
+// checkout, so — unlike the agent-guide/briefing describes above, which
+// each need a real per-session file fixture — no setup is needed here
+// beyond the ctx flag itself. resolveMullionBundleDir() resolves the same
+// real directory both this test and opencode.ts's prepareLaunch see.
+describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills.paths (issue: make Mullion's tooling work in every repo)", () => {
+  const ctx = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+  };
+
+  it("points OPENCODE_CONFIG_CONTENT's skills.paths at the shipped bundle's skills dir when the setting is on", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: true });
+    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
+    });
+  });
+
+  it("omits OPENCODE_CONFIG_CONTENT entirely when the setting is off", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: false });
+    expect(plan.envAdditions).toEqual({
+      OPENCODE_CONFIG_DIR: "/tmp/mullion-sessions/42.opencode-config",
+    });
+    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+  });
+
+  it("composes with instructions from the agent-guide gate into one OPENCODE_CONFIG_CONTENT payload", () => {
+    const sessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-bundle-"));
+    try {
+      writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
+      const plan = openCodeAdapter.prepareLaunch({
+        ...ctx,
+        sessionsDir,
+        hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+        controlSocketPath: path.join(sessionsDir, "mullion.sock"),
+        injectAgentGuide: true,
+        injectMullionBundle: true,
+      });
+      expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        instructions: [sessionAgentGuidePath(sessionsDir, "42")],
+        skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
+      });
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -825,6 +825,14 @@ release.
   the forwarder" above), so a missing shim degrades hooks to a silent
   no-op, never a failed tool call. It's also self-healing — the next agy/
   Codex session launch reinstalls it automatically.
+- **The Mullion tooling bundle's skills** (codex/agy only — Claude Code's
+  copy is a per-session `--plugin-dir` flag, never written to disk, and
+  opencode's is a per-session config pointer, also never written) —
+  delete any `mullion-`-prefixed directory under `~/.agents/skills`
+  (codex) or `~/.gemini/config/skills` (agy). Self-healing the other
+  direction too: turning `sessions.injectMullionBundle` off in Settings
+  removes these automatically on that agent's next launch, no manual step
+  needed unless you're removing Mullion itself.
 
 Any other hooks in either file are Mullion's to leave alone, never to
 touch.

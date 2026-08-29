@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { codexAdapter } from "../../../src/services/hook-adapters/codex.js";
+import {
+  codexAdapter,
+  resolveCodexAgentsSkillsDir,
+} from "../../../src/services/hook-adapters/codex.js";
 import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 
 describe("codexAdapter.matches (issue #252)", () => {
@@ -263,5 +266,60 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     );
     expect(stopCommands).toHaveLength(3);
     expect(stopCommands).not.toContain(staleForwarderPath);
+  });
+
+  it("installs the Mullion tooling bundle under ~/.agents/skills when injectMullionBundle is on", async () => {
+    const plan = codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true });
+    await plan.managedInstall?.();
+
+    const installedSkillPath = path.join(
+      resolveCodexAgentsSkillsDir(),
+      "mullion-mullion-host",
+      "SKILL.md",
+    );
+    expect(existsSync(installedSkillPath)).toBe(true);
+    expect(readFileSync(installedSkillPath, "utf8")).toContain("mullion-host");
+  });
+
+  it("does not install the bundle when injectMullionBundle is off", async () => {
+    const plan = codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false });
+    await plan.managedInstall?.();
+
+    expect(existsSync(path.join(resolveCodexAgentsSkillsDir(), "mullion-mullion-host"))).toBe(
+      false,
+    );
+  });
+
+  it("removes a previously-installed bundle skill once injectMullionBundle is turned off", async () => {
+    await codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true }).managedInstall?.();
+    const skillDir = path.join(resolveCodexAgentsSkillsDir(), "mullion-mullion-host");
+    expect(existsSync(skillDir)).toBe(true);
+
+    await codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
+    expect(existsSync(skillDir)).toBe(false);
+  });
+
+  it("never removes a skill it didn't install, even one that happens to live alongside its own", async () => {
+    const skillsDir = resolveCodexAgentsSkillsDir();
+    const userSkillPath = path.join(skillsDir, "my-own-skill", "SKILL.md");
+    mkdirSync(path.dirname(userSkillPath), { recursive: true });
+    writeFileSync(userSkillPath, "---\nname: my-own-skill\ndescription: mine\n---\n");
+
+    await codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
+
+    expect(existsSync(userSkillPath)).toBe(true);
+  });
+
+  it("a bundle-skill install failure never skips mergeCodexHooks — the step that actually matters", async () => {
+    // A file where the skills dir needs to be makes mkdirSync inside
+    // installBundleSkills throw ENOTDIR — the per-step try/catch (same
+    // shape as agy.ts's managedInstall) must still let mergeCodexHooks run.
+    const skillsDir = resolveCodexAgentsSkillsDir();
+    writeFileSync(path.dirname(skillsDir), "", { flag: "wx" });
+
+    const plan = codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true });
+    await expect(plan.managedInstall?.()).rejects.toThrow();
+
+    expect(readHooks().hooks.Stop).toHaveLength(1);
   });
 });

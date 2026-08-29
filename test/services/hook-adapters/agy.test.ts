@@ -1,11 +1,17 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { agyAdapter, __testing } from "../../../src/services/hook-adapters/agy.js";
 import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 
-const { mergeAgyHooks, mergeAgyMcpConfig, mergeAgyTrustedWorkspace, MULLION_HOOK_NAME } = __testing;
+const {
+  mergeAgyHooks,
+  mergeAgyMcpConfig,
+  mergeAgyTrustedWorkspace,
+  resolveAgyGlobalSkillsDir,
+  MULLION_HOOK_NAME,
+} = __testing;
 
 describe("agyAdapter.matches (issue #253)", () => {
   it("matches a bare agy invocation", () => {
@@ -507,5 +513,94 @@ describe("mergeAgyHooks SessionStart (issue #321)", () => {
 
     const written = JSON.parse(readFileSync(hooksPath, "utf8"));
     expect(written[MULLION_HOOK_NAME].SessionEnd).toBeUndefined();
+  });
+});
+
+// Full managedInstall() end-to-end, not just the individual merge functions
+// via __testing — agy has no env var to relocate its skills config the way
+// resolveAgyHooksPath/resolveAgyMcpConfigPath accept an override path for
+// testing (this file's header comment), so a HOME redirect is the only way
+// to exercise resolveAgyGlobalSkillsDir() (`~/.gemini/config/skills`)
+// safely, same posture codex.test.ts's equivalent bundle-skills describe
+// uses for CODEX_HOME.
+describe("agyAdapter.prepareLaunch — Mullion tooling bundle install (issue: make Mullion's tooling work in every repo)", () => {
+  let homeDir: string;
+  const originalHome = process.env.HOME;
+
+  const ctx = () => ({
+    sessionId: "1",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "tok",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/install/hooks/forwarder.mjs",
+    injectAgentGuide: false,
+  });
+
+  beforeEach(() => {
+    homeDir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-bundle-fakehome-"));
+    process.env.HOME = homeDir;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it("installs the Mullion tooling bundle under ~/.gemini/config/skills when injectMullionBundle is on", async () => {
+    const plan = agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true });
+    await plan.managedInstall?.();
+
+    const installedSkillPath = path.join(
+      resolveAgyGlobalSkillsDir(),
+      "mullion-mullion-host",
+      "SKILL.md",
+    );
+    expect(existsSync(installedSkillPath)).toBe(true);
+    expect(readFileSync(installedSkillPath, "utf8")).toContain("mullion-host");
+  });
+
+  it("does not install the bundle when injectMullionBundle is off", async () => {
+    const plan = agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false });
+    await plan.managedInstall?.();
+
+    expect(existsSync(path.join(resolveAgyGlobalSkillsDir(), "mullion-mullion-host"))).toBe(false);
+  });
+
+  it("removes a previously-installed bundle skill once injectMullionBundle is turned off", async () => {
+    await agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true }).managedInstall?.();
+    const skillDir = path.join(resolveAgyGlobalSkillsDir(), "mullion-mullion-host");
+    expect(existsSync(skillDir)).toBe(true);
+
+    await agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
+    expect(existsSync(skillDir)).toBe(false);
+  });
+
+  it("never removes a skill it didn't install", async () => {
+    const skillsDir = resolveAgyGlobalSkillsDir();
+    const userSkillPath = path.join(skillsDir, "my-own-skill", "SKILL.md");
+    mkdirSync(path.dirname(userSkillPath), { recursive: true });
+    writeFileSync(userSkillPath, "---\nname: my-own-skill\ndescription: mine\n---\n");
+
+    await agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
+
+    expect(existsSync(userSkillPath)).toBe(true);
+  });
+
+  it("runs the bundle-skills step AFTER mergeAgyTrustedWorkspace, but a bundle-install failure never skips the other steps", async () => {
+    // A file where the skills dir needs to be makes mkdirSync inside
+    // installBundleSkills throw ENOTDIR — the per-step try/catch (this
+    // file's own managedInstall) must still let mergeAgyHooks/
+    // mergeAgyMcpConfig run.
+    const skillsDir = resolveAgyGlobalSkillsDir();
+    mkdirSync(path.dirname(skillsDir), { recursive: true });
+    writeFileSync(skillsDir, "");
+
+    const plan = agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true });
+    await expect(plan.managedInstall?.()).rejects.toThrow();
+
+    expect(existsSync(path.join(homeDir, ".gemini", "config", "hooks.json"))).toBe(true);
+    expect(existsSync(path.join(homeDir, ".gemini", "config", "mcp_config.json"))).toBe(true);
   });
 });

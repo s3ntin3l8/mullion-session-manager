@@ -4,6 +4,7 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { shellQuote } from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
+import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
 // Codex adapter (issue #252). Unlike Claude Code/OpenCode, this is NOT an
 // ephemeral, per-session injection — verified this PR against the real
@@ -320,16 +321,54 @@ function mergeCodexHooks(): void {
   writeFileSync(hooksPath, `${JSON.stringify({ ...existing, hooks }, null, 2)}\n`);
 }
 
-function prepareLaunch(_ctx: HookAdapterContext): HookLaunchPlan {
+// Codex's own global skill-scope directory, per skills.ts's globalSkillDirs
+// table (`agentsSkills = expandHome("~/.agents/skills")`, entry for
+// agent: "codex") — verified this session (S6 spike, plan doc) that the
+// installed codex CLI genuinely reads a skill placed there. Distinct from
+// agy's own global root below (agy does NOT read this path at all — see
+// mullion-bundle.ts's installBundleSkills doc comment).
+export function resolveCodexAgentsSkillsDir(): string {
+  return path.join(os.homedir(), ".agents", "skills");
+}
+
+function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
     // async, not a plain arrow wrapping a sync call: a synchronous throw
-    // from mergeCodexHooks (e.g. the malformed-JSON bail above) must become
-    // a REJECTED PROMISE here, not an exception thrown out of this function
-    // call itself — applyHookAdapters' caller does
+    // from any step below must become a REJECTED PROMISE here, not an
+    // exception thrown out of this function call itself —
+    // applyHookAdapters' caller does
     // `Promise.resolve(plan.managedInstall()).catch(...)`, which only
     // catches a rejection, not a synchronous throw from evaluating the call
     // expression itself.
-    managedInstall: async () => mergeCodexHooks(),
+    //
+    // Two independently-guarded steps, same per-step try/catch shape as
+    // agy.ts's managedInstall (and for the same reason: a bundle-skill
+    // install failure — e.g. EACCES on ~/.agents — must never skip
+    // mergeCodexHooks, which is the step that actually matters for a
+    // session's hook wiring).
+    managedInstall: async () => {
+      const steps: Array<[string, () => void]> = [
+        ["mergeCodexHooks", () => mergeCodexHooks()],
+        [
+          "installBundleSkills",
+          () => {
+            const skillsDir = resolveCodexAgentsSkillsDir();
+            if (ctx.injectMullionBundle) installBundleSkills(skillsDir);
+            else uninstallBundleSkills(skillsDir);
+          },
+        ],
+      ];
+      let firstError: unknown;
+      for (const [name, step] of steps) {
+        try {
+          step();
+        } catch (err) {
+          console.error(`[codex] managedInstall step "${name}" failed:`, err);
+          firstError ??= err;
+        }
+      }
+      if (firstError !== undefined) throw firstError;
+    },
   };
 }
 
