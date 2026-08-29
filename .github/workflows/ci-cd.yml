@@ -319,22 +319,31 @@ jobs:
       # only persist the value into the plist, never dial it (same posture
       # as test-windows's own schtasks round trip not asserting /Run
       # actually started the process).
+      #
+      # MULLION_HELPER_STATE_DIR only redirects stateDir() consumers (the
+      # credential file, the log path) — launchdPlistPath() is hardcoded to
+      # ~/Library/LaunchAgents (self-review, PR #916), unaffected by this
+      # var, same as a real laptop install always writes there. Fine on
+      # GitHub's ephemeral, single-use macOS runners; would NOT actually
+      # isolate this round trip if this job pattern were ever copied to a
+      # persistent/self-hosted macOS runner.
       - name: launchctl round trip — install, query, uninstall
         env:
           MULLION_HELPER_STATE_DIR: ${{ runner.temp }}/mullion-helper-state
         run: |
           set -e
           EXE=./build/helper-sea/mullion-helper
+          LABEL="gui/$(id -u)/de.s3ntin3l8.mullion-helper"
           "$EXE" helper install --ssh-auth-sock /tmp/fake-agent.sock
 
-          if ! launchctl list | grep -q de.s3ntin3l8.mullion-helper; then
-            echo "launchctl list did not find the registered job after install"
+          if ! launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "launchctl print found no registered job in $LABEL after install"
             exit 1
           fi
 
           "$EXE" helper uninstall
 
-          if launchctl list | grep -q de.s3ntin3l8.mullion-helper; then
-            echo "job still registered after uninstall"
+          if launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "job still registered in $LABEL after uninstall"
             exit 1
           fi
