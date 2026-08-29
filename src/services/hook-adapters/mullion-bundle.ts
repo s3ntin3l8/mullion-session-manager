@@ -1,4 +1,12 @@
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,4 +58,142 @@ function resolveBundleRootDir(): string {
 export function resolveMullionBundleDir(): string | null {
   const dir = resolveBundleRootDir();
   return existsSync(dir) ? dir : null;
+}
+
+// Every directory this module ever writes under a destRoot carries this
+// prefix, but the prefix ALONE is a namespace convention, not an ownership
+// marker — a user could name their own skill `mullion-helper` (a plausible
+// parallel to Mullion's own `mullion-host`), and a prefix-only uninstall
+// would silently rmSync it (Hermes review, PR #891). INSTALLED_MARKER_NAME
+// is the actual ownership record: installBundleSkills writes one inside
+// every directory it creates, and uninstallBundleSkills only ever removes a
+// `mullion-`-prefixed directory that carries it — never a same-prefixed
+// directory a user or another tool created themselves, marker or not.
+const INSTALLED_SKILL_PREFIX = "mullion-";
+const INSTALLED_MARKER_NAME = ".mullion-managed";
+const INSTALLED_MARKER_CONTENT =
+  "This directory is managed by Mullion (installBundleSkills, hook-adapters/mullion-bundle.ts).\n" +
+  "Safe to delete by hand; it will be recreated on the next matching session launch\n" +
+  "while sessions.injectMullionBundle is on, and removed automatically once it's off.\n";
+
+/** Recursively syncs `sourceDir`'s files into `destDir`, creating `destDir`
+ * (and any subdirectories) as needed, and skipping any file whose content
+ * already matches — the "content-compare-then-skip" contract `managedInstall`
+ * needs (agy.ts's `mergeAgyTrustedWorkspace` calls out why: this runs on
+ * EVERY matching launch, not once, so a naive unconditional overwrite would
+ * mean every session spawn touches these files' mtimes for no reason).
+ * Never deletes a stale file that no longer exists in `sourceDir` — bundle
+ * skills are small and don't currently shed files across releases; if that
+ * ever changes, this needs a real "prune extras" pass, not a guess now. */
+function syncSkillDir(sourceDir: string, destDir: string): void {
+  mkdirSync(destDir, { recursive: true });
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      syncSkillDir(sourcePath, destPath);
+      continue;
+    }
+    const content = readFileSync(sourcePath);
+    let existing: Buffer | null;
+    try {
+      existing = readFileSync(destPath);
+    } catch {
+      existing = null;
+    }
+    if (existing === null || !existing.equals(content)) {
+      writeFileSync(destPath, content);
+    }
+  }
+}
+
+/** Whether `dir` carries the ownership marker installBundleSkills writes —
+ * the actual "did Mullion install this" test, not just the `mullion-`
+ * prefix on its name. Used both to decide whether install needs to
+ * (re)write the marker and, more importantly, by uninstallBundleSkills to
+ * decide whether it's safe to delete. */
+function isCurrentMullionManagedDir(dir: string): boolean {
+  return existsSync(path.join(dir, INSTALLED_MARKER_NAME));
+}
+
+/**
+ * Installs every skill in the shipped bundle (src/bundle/skills/<name>/)
+ * into `destRoot/mullion-<name>/` — the zero-repo-change delivery vehicle
+ * for codex and agy, neither of which has an ephemeral per-session overlay
+ * (unlike Claude Code's `--plugin-dir` or opencode's `skills.paths`
+ * config key — see claude-code.ts's commandTransform and opencode.ts's
+ * prepareLaunch for those). `destRoot` differs per agent and is NOT
+ * interchangeable: `~/.agents/skills` for codex (skills.ts's own global-scope
+ * table), `~/.gemini/config/skills` for agy (its real customization root —
+ * verified this session that agy does NOT load skills from `~/.agents/skills`
+ * at all, only from a workspace-relative `.agents/skills` or this global
+ * root; see the plan doc's S6 spike). A no-op (not an error) when this
+ * install hasn't shipped a bundle (resolveMullionBundleDir() returns null)
+ * or ships one with no skills/ directory at all. */
+export function installBundleSkills(destRoot: string): void {
+  const bundleDir = resolveMullionBundleDir();
+  if (!bundleDir) return;
+  const skillsDir = path.join(bundleDir, "skills");
+  let skillNames: string[];
+  try {
+    skillNames = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return;
+  }
+  for (const name of skillNames) {
+    const destDir = path.join(destRoot, `${INSTALLED_SKILL_PREFIX}${name}`);
+    // Hermes review, PR #891 round 2 — install was asymmetric with
+    // uninstall: uninstall correctly refuses to touch an unmarked
+    // `mullion-`-prefixed dir, but install would happily sync files INTO
+    // one and then claim it by writing the marker, silently absorbing
+    // whatever a user had put there under a colliding name. Skip entirely
+    // rather than overwrite when destDir already exists without the
+    // marker — the same "no marker, not ours" rule uninstall already
+    // applies, just checked one step earlier.
+    if (existsSync(destDir) && !isCurrentMullionManagedDir(destDir)) continue;
+    syncSkillDir(path.join(skillsDir, name), destDir);
+    // Same content-compare-then-skip posture as syncSkillDir's own files —
+    // checked (not written unconditionally) so an already-marked directory
+    // doesn't get its mtime touched on every matching launch. Self-heals a
+    // marker a user deleted by hand while leaving the skill files in place.
+    if (!isCurrentMullionManagedDir(destDir)) {
+      writeFileSync(path.join(destDir, INSTALLED_MARKER_NAME), INSTALLED_MARKER_CONTENT);
+    }
+  }
+}
+
+/**
+ * Removes every directory under `destRoot` this module has actually
+ * installed — the reversal of installBundleSkills, called on every matching
+ * launch when `sessions.injectMullionBundle` is off, so a managed install
+ * left behind by an earlier session with the setting on doesn't linger
+ * forever once an operator turns it off (codex-trust.ts is the precedent
+ * for a Mullion-owned host-level change staying reversible).
+ *
+ * Deletes a `mullion-`-prefixed entry ONLY when it also carries the
+ * ownership marker (isCurrentMullionManagedDir) — the prefix alone is a
+ * naming convention, not proof of ownership: a user could plausibly have
+ * their own skill named e.g. `mullion-helper`, parallel to Mullion's own
+ * `mullion-host`, and a prefix-only match would silently delete it (Hermes
+ * review, PR #891). A same-prefixed directory with no marker — user-owned,
+ * or installed by some future release that changes this scheme — is left
+ * completely untouched. A no-op when `destRoot` doesn't exist yet (nothing
+ * was ever installed).
+ */
+export function uninstallBundleSkills(destRoot: string): void {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(destRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
+    const dir = path.join(destRoot, entry.name);
+    if (isCurrentMullionManagedDir(dir)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 }

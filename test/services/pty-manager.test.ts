@@ -6330,13 +6330,26 @@ describe("PtyManager", () => {
         .mock.calls.findLast(([file]) => file === "systemd-run");
       const opts = call?.[2] as { env?: Record<string, string> };
       expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+      // getInjectMullionBundle also defaults to () => true, and this
+      // checkout genuinely ships src/bundle/ — the payload carries
+      // skills.paths alongside instructions, same as claude-code's
+      // --plugin-dir composing with --settings/--mcp-config
+      // (pty-manager.test.ts's own claude-code describe above).
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
         instructions: [sessionAgentGuidePath(sessionsDir, "1")],
+        skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
       });
     });
 
     it("omits OPENCODE_CONFIG_CONTENT when the manager's getInjectAgentGuide reports the setting off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (issue #437c)", async () => {
-      const ungatedManager = new PtyManager({ sessionsDir, getInjectAgentGuide: () => false });
+      // getInjectMullionBundle: () => false too — this test is specifically
+      // about the injectAgentGuide gate; the bundle's own independent gate
+      // has its own coverage in "Mullion tooling bundle" below.
+      const ungatedManager = new PtyManager({
+        sessionsDir,
+        getInjectAgentGuide: () => false,
+        getInjectMullionBundle: () => false,
+      });
       const session = ungatedManager.getOrCreate({
         id: "2",
         cwd: "/tmp",
@@ -6367,7 +6380,14 @@ describe("PtyManager", () => {
     // the spawned systemd-run process, not just a typechecked-but-untested
     // pass-through.
     it("delivers a seedPrompt to opencode's OPENCODE_CONFIG_CONTENT instructions, independently of injectAgentGuide", async () => {
-      const ungatedManager = new PtyManager({ sessionsDir, getInjectAgentGuide: () => false });
+      // getInjectMullionBundle: () => false too — keeps this test's payload
+      // isolated to the seed path, its own point, not also asserting on
+      // the bundle's independently-gated skills.paths.
+      const ungatedManager = new PtyManager({
+        sessionsDir,
+        getInjectAgentGuide: () => false,
+        getInjectMullionBundle: () => false,
+      });
       const session = ungatedManager.getOrCreate({
         id: "3",
         cwd: "/tmp",
@@ -6394,6 +6414,33 @@ describe("PtyManager", () => {
       });
 
       ungatedManager.killAll();
+    });
+
+    it("omits skills.paths when the manager's getInjectMullionBundle reports the setting off, independently of injectAgentGuide", async () => {
+      const bundlelessManager = new PtyManager({
+        sessionsDir,
+        getInjectMullionBundle: () => false,
+      });
+      const session = bundlelessManager.getOrCreate({
+        id: "4",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const opts = call?.[2] as { env?: Record<string, string> };
+      // injectAgentGuide still defaults to true on this manager, so
+      // OPENCODE_CONFIG_CONTENT is still present — just without skills.
+      expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        instructions: [sessionAgentGuidePath(sessionsDir, "4")],
+      });
+
+      bundlelessManager.killAll();
     });
 
     describe("Codex (issue #252)", () => {

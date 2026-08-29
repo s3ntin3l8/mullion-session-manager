@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolveOpenCodePluginPath, shellQuote } from "./shared.js";
 import { sessionAgentGuidePath } from "../agent-guide.js";
 import { sessionBriefingPath } from "../project-briefing.js";
+import { resolveMullionBundleDir } from "./mullion-bundle.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -207,8 +208,34 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     instructions.push(seedPath);
   }
 
-  if (instructions.length > 0) {
-    envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify({ instructions });
+  // Issue: Mullion's own agent-facing tooling bundle (src/bundle/ — see
+  // mullion-bundle.ts and claude-code.ts's --plugin-dir wiring for the
+  // Claude Code half of this). opencode has no --plugin-dir equivalent,
+  // but its config schema has an explicit `skills.paths: string[]` key —
+  // verified empirically this session (`opencode debug config`, then a
+  // real `opencode run` against a probe skill) that setting it via
+  // OPENCODE_CONFIG_CONTENT, the same channel `instructions` above already
+  // uses, makes opencode load and invoke a skill from an arbitrary
+  // absolute path with no copy required — the superpowers plugin's own
+  // skills path in that same debug output lives nowhere under
+  // OPENCODE_CONFIG_DIR either, so this isn't a special case. Points
+  // directly at the shipped bundle's skills/ dir; nothing is written to
+  // opencode's own real config (unlike codex/agy's managedInstall — see
+  // mullion-bundle.ts's installBundleSkills doc comment for why those two
+  // need a real, host-level write instead). Gated on ctx.injectMullionBundle
+  // alone, same spawn-time-snapshot posture as injectAgentGuide/
+  // injectProjectBriefing above.
+  const skillsPaths: string[] = [];
+  if (ctx.injectMullionBundle) {
+    const bundleDir = resolveMullionBundleDir();
+    if (bundleDir) skillsPaths.push(path.join(bundleDir, "skills"));
+  }
+
+  if (instructions.length > 0 || skillsPaths.length > 0) {
+    const configContent: Record<string, unknown> = {};
+    if (instructions.length > 0) configContent.instructions = instructions;
+    if (skillsPaths.length > 0) configContent.skills = { paths: skillsPaths };
+    envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify(configContent);
   }
 
   return {
