@@ -21,6 +21,15 @@ set -u
 
 EXE="/usr/local/bin/mullion-helper"
 
+# Hermes review, PR #918 — whether installer(8) actually propagates
+# $SUDO_USER from a `sudo installer -pkg ...` invocation into the postinstall
+# process's own environment at all was an open, unverified question (unlike
+# /dev/console's own ownership, this isn't documented anywhere in installer(8)'s
+# own man page). Logged unconditionally, before the branch below ever reads
+# it, so a real CI run settles the question empirically instead of by
+# inference — see this script's own diff history for the confirmed answer.
+echo "mullion-helper: debug — \$SUDO_USER=${SUDO_USER:-<unset>}"
+
 # /dev/console's owner is the real interactive user for the normal
 # Finder-double-click install this script primarily exists for. That
 # assumption doesn't hold for a scripted `sudo installer -pkg ... -target /`

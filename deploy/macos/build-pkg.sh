@@ -14,6 +14,20 @@
 set -euo pipefail
 
 VERSION="${1:-0.0.0-dev}"
+# Hermes review, PR #918 — VERSION becomes part of OUT_PATH below with no
+# validation; every actual caller (a developer's own local invocation,
+# test-macos's fixed literal, release-please.yml's own tag_name output) is
+# already trusted, so this was never exploitable in practice, but a version
+# string containing "/" could still escape OUT_DIR into an unintended path
+# by accident (a malformed release tag, a copy-paste typo), not just by
+# malice — worth rejecting outright rather than silently writing somewhere
+# unexpected.
+case "$VERSION" in
+  */* | *..*)
+    echo "invalid VERSION '$VERSION' — must not contain '/' or '..'" >&2
+    exit 1
+    ;;
+esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 SEA_BIN="$REPO_ROOT/build/helper-sea/mullion-helper"
