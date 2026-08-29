@@ -628,6 +628,19 @@ function uninstallWindows(io) {
     io.stdout.write("nothing installed.\n");
     return 0;
   }
+  // Unlike uninstallLaunchd's `bootout` and uninstallSystemd's `--now`, which
+  // both stop the running job as part of unregistering it, `schtasks /Delete`
+  // only removes the task's registration — a currently-running instance of
+  // mullion-helper.exe (the steady state on a real, already-paired laptop:
+  // installWindows's own `/Run` starts it immediately) keeps running and
+  // keeps the exe file open. Left alone, that file lock makes the installer's
+  // own [Files] removal (which runs after [UninstallRun]) fail or defer on a
+  // real machine — Hermes review, PR #905, caught this: CI's uninstall step
+  // never sees it because a non-interactive runner's `/Run` degrades to a
+  // warning rather than actually starting a persistent process. `/End`'s own
+  // failure (e.g. the task was already stopped) is not fatal — only
+  // `/Delete` failing means uninstall genuinely didn't happen.
+  runSpawnSync(io, "schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
   const result = runSpawnSync(io, "schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
   if (result.status !== 0) {
     io.stderr.write(
