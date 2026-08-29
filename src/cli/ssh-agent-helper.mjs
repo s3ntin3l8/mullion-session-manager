@@ -24,7 +24,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { decodePairingPayload } from "./ssh-agent-bridge-pairing.mjs";
-import { attachInboundMux, pipeNetSocketToChannel } from "./ssh-agent-bridge-mux.mjs";
+import { attachInboundMux } from "./ssh-agent-bridge-mux.mjs";
+import { pipeFilteredNetSocketToChannel } from "./ssh-agent-filtered-relay.mjs";
 import { extractFlags, CliUsageError } from "./core.mjs";
 import { runInstall, runUninstall } from "./ssh-agent-helper-install.mjs";
 
@@ -676,7 +677,13 @@ async function runRun(args, io) {
           // whatever host opened this channel blocks until its own
           // SSH_AUTH_SOCK-connect timeout instead of failing fast.
           socket.on("error", () => channel.close());
-          pipeNetSocketToChannel(socket, channel);
+          // Round 4 (issue #820) — filtered, not the raw pipeNetSocketToChannel:
+          // this is the authoritative sign-only enforcement point
+          // (ssh-agent-filter.mjs's own header comment) between the primary
+          // and the real local agent. Requests are classified; only
+          // REQUEST_IDENTITIES/SIGN_REQUEST ever reach `socket`. Replies are
+          // relayed unmodified, same as before.
+          pipeFilteredNetSocketToChannel(socket, channel);
         },
       });
       await new Promise((resolve) => mux.onClose(resolve));

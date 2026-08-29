@@ -11,8 +11,9 @@ import { pipeChannelDirection, type MuxChannel } from "./ssh-agent-mux.js";
 // requests flowing FROM an SSH client TOWARD the real agent are filtered,
 // replies flowing back are relayed unmodified — see ssh-agent-filter.ts's
 // own header comment on why only the request direction needs policy at
-// all. The laptop-side filter instance (a separate, non-TypeScript
-// implementation per the design plan) is the authoritative enforcement
+// all. The laptop-side filter instance — src/cli/ssh-agent-filter.mjs
+// (round 4 PR2), composed the identical way by
+// src/cli/ssh-agent-filtered-relay.mjs — is the authoritative enforcement
 // point; this one exists so a compromised primary can't abuse a
 // bridge-enrolled agent host as a signing oracle even if the laptop's own
 // filter were ever bypassed.
