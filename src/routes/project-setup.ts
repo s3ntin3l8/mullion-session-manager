@@ -1,5 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,9 +25,11 @@ import {
   createWorktree,
   deriveWorktreePath,
   commitWipChanges,
+  removeWorktree,
   type CreateWorktreeResult,
 } from "../services/git-worktree.js";
 import { getFileDiff } from "../services/git-diff.js";
+import { deleteBranch } from "../services/git-branch-delete.js";
 import { resolveHostBaseRef, resolveRepoRef, pushHostBranch } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
@@ -91,6 +101,33 @@ const applySchema = {
   },
 };
 
+export class PathEscapeError extends Error {
+  constructor(root: string, relPath: string) {
+    super(`Refusing to resolve "${relPath}" outside of "${root}"`);
+    this.name = "PathEscapeError";
+  }
+}
+
+/** Joins `root` and `relPath`, then verifies the result is still inside
+ * `root` before returning it — CodeQL (js/path-injection), PR #896: every
+ * path here is built from a project's own `cwd`/worktree path plus a
+ * `slug` already validated by isValidScaffoldSlug (no separators, no `..`,
+ * no dangerous property names), so this is defense-in-depth rather than
+ * the only guard — but a manual containment check right at the join, not
+ * just an earlier regex check three call frames away, is the shape CodeQL
+ * (and a future reader) can actually verify by looking at THIS line alone.
+ * Throws PathEscapeError rather than silently truncating or refusing —
+ * every current caller already only ever calls this with slug-validated
+ * inputs, so reaching the throw means something upstream regressed. */
+function resolveWithin(root: string, relPath: string): string {
+  const resolvedRoot = path.resolve(root);
+  const target = path.resolve(resolvedRoot, relPath);
+  if (target !== resolvedRoot && !target.startsWith(resolvedRoot + path.sep)) {
+    throw new PathEscapeError(resolvedRoot, relPath);
+  }
+  return target;
+}
+
 // Every path computeScaffold can ever emit, read up front so preview always
 // sees the CURRENT on-disk content (a previous scaffold's own output,
 // hand-edited content, or nothing) rather than assuming a fresh repo.
@@ -105,10 +142,19 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
 }
 
 function readExistingFiles(cwd: string, relPaths: string[]): Record<string, string | undefined> {
-  const existingFiles: Record<string, string | undefined> = {};
+  // CodeQL (js/remote-property-injection), PR #896 — `relPath` is a
+  // slug-derived string used as an object key below; `Object.create(null)`
+  // removes the prototype entirely, so even a (currently unreachable,
+  // isValidScaffoldSlug already rejects it) `__proto__`/`constructor`/
+  // `prototype` value would land as an ordinary own property with no
+  // special behavior, rather than relying solely on the upstream slug
+  // check to keep this safe — same "guard the sink too, not just the
+  // caller" posture skill-name.ts's own header documents for the identical
+  // class of finding.
+  const existingFiles: Record<string, string | undefined> = Object.create(null);
   for (const relPath of relPaths) {
     try {
-      existingFiles[relPath] = readFileSync(path.join(cwd, relPath), "utf8");
+      existingFiles[relPath] = readFileSync(resolveWithin(cwd, relPath), "utf8");
     } catch {
       // Absent (or unreadable) — computeScaffold treats a missing key as
       // "doesn't exist yet" and creates it fresh, same posture as every
@@ -123,17 +169,31 @@ function writeScaffoldEntries(
   entries: ReturnType<typeof computeScaffold>,
 ): void {
   for (const entry of entries) {
-    const targetPath = path.join(worktreePath, entry.path);
+    const targetPath = resolveWithin(worktreePath, entry.path);
     mkdirSync(path.dirname(targetPath), { recursive: true });
     if (entry.kind === "symlink") {
+      // Hermes review, PR #896 — the old code swallowed EVERY EEXIST,
+      // assuming whatever was already there was a matching symlink from a
+      // previous preview. That's wrong on a same-slug re-preview that
+      // switches FROM the plain-file variant TO the symlink variant (or
+      // vice versa, or after a hand-edit): the existing entry can be a
+      // directory or a stale symlink to a different target, and silently
+      // leaving it in place means apply commits content the user didn't
+      // actually opt into. Only skip the create when what's already there
+      // is a symlink pointing at the EXACT target we'd create anyway
+      // (content-compare-then-skip, same posture as
+      // mullion-bundle.ts's syncSkillDir); anything else is removed and
+      // replaced.
+      let alreadyCorrect = false;
       try {
+        alreadyCorrect = readlinkSync(targetPath) === entry.target;
+      } catch {
+        // Not a symlink (ENOENT: nothing there yet; EINVAL: a real file/
+        // directory sits there instead) — fall through to remove+create.
+      }
+      if (!alreadyCorrect) {
+        rmSync(targetPath, { recursive: true, force: true });
         symlinkSync(entry.target, targetPath);
-      } catch (err) {
-        // EEXIST on a re-preview over the same reused worktree (see
-        // reuseOrCreateWorktree below) — symlinkSync has no "overwrite"
-        // mode, unlike writeFileSync. Safe to just leave a matching
-        // symlink from a previous preview in place.
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       }
     } else {
       writeFileSync(targetPath, entry.contents);
@@ -141,21 +201,42 @@ function writeScaffoldEntries(
   }
 }
 
-/** Reuses a previous preview's own scratch worktree (a re-preview after
- * tweaking options, e.g. adding a mirror) rather than failing on
- * createWorktree's own "path-exists" — that reason exists to protect
- * against colliding with something else's directory, not to block THIS
- * route's own idempotent "preview again" flow over a worktree only this
- * route ever creates or writes into. */
+/** Reuses a previous preview's own scratch worktree ONLY when `liveSlugPreview`
+ * (an unexpired preview record for this exact project+slug, from the
+ * `previews` map) confirms it's still the CURRENT preview-before-apply
+ * window — e.g. the user tweaked an option and clicked Preview again.
+ * Otherwise, a worktree already sitting at the predicted path is stale
+ * (either already applied — its HEAD now holds the scaffold commit itself,
+ * so diffing against that HEAD would show "no changes" even though the
+ * project's real base branch has since moved on — or an abandoned/expired
+ * preview) and is removed via git-worktree.ts's own removeWorktree (proper
+ * `git worktree remove` + prune, not a bare `rmSync` that would leave
+ * dangling `.git/worktrees/` metadata behind) before a fresh one is
+ * created — and, since removing the worktree does NOT also delete the
+ * branch it had checked out, the stale `mullion/<seed>` branch is deleted
+ * too: createWorktree always creates a FRESH branch of that exact name
+ * (`git worktree add -b <branch> ...`, never reusing an existing one), so
+ * leaving the old branch behind would make that call fail with "a branch
+ * named ... already exists" the very next time this runs. Hermes review,
+ * PR #896, round 1. */
 async function reuseOrCreateWorktree(
   app: FastifyInstance,
   hostId: string,
   cwd: string,
   seed: string,
+  liveSlugPreview: PreviewRecord | null,
 ): Promise<CreateWorktreeResult> {
   const predictedPath = deriveWorktreePath(cwd, seed);
-  if (existsSync(predictedPath)) {
+  if (
+    liveSlugPreview &&
+    liveSlugPreview.worktreePath === predictedPath &&
+    existsSync(predictedPath)
+  ) {
     return { created: true, path: predictedPath, branch: `mullion/${seed}` };
+  }
+  if (existsSync(predictedPath)) {
+    await removeWorktree(predictedPath, cwd);
+    await deleteBranch(cwd, `mullion/${seed}`, { force: true });
   }
   const baseRefResult = await resolveHostBaseRef(app, hostId, cwd);
   const baseRef =
@@ -188,6 +269,25 @@ function getLivePreview(previewId: string): PreviewRecord | null {
     return null;
   }
   return record;
+}
+
+/** Finds an unexpired preview already covering this exact project+slug —
+ * reuseOrCreateWorktree's own signal for "still the same preview-before-
+ * apply window" vs. "stale, remove and start fresh" (see that function's
+ * own doc comment). A linear scan over `previews`, not a secondary index:
+ * this map is small (one entry per in-flight interactive preview) and
+ * short-lived, so the O(n) cost here is never worth a second data
+ * structure to keep in sync. */
+function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | null {
+  for (const [previewId, record] of previews) {
+    if (record.projectId !== projectId || record.slug !== slug) continue;
+    if (Date.now() - record.createdAt > PREVIEW_TTL_MS) {
+      previews.delete(previewId);
+      continue;
+    }
+    return record;
+  }
+  return null;
 }
 
 export async function projectSetupRoute(app: FastifyInstance) {
@@ -225,7 +325,14 @@ export async function projectSetupRoute(app: FastifyInstance) {
       }
 
       const seed = `setup-${options.slug}`;
-      const worktreeResult = await reuseOrCreateWorktree(app, project.hostId, project.cwd, seed);
+      const liveSlugPreview = findLiveSlugPreview(projectId, options.slug);
+      const worktreeResult = await reuseOrCreateWorktree(
+        app,
+        project.hostId,
+        project.cwd,
+        seed,
+        liveSlugPreview,
+      );
       if (!worktreeResult.created || !worktreeResult.path || !worktreeResult.branch) {
         return reply.internalServerError(
           worktreeResult.detail ?? `Could not create a scratch worktree (${worktreeResult.reason})`,
@@ -377,3 +484,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
     },
   );
 }
+
+// Exposes resolveWithin directly so a test can prove its own containment
+// guard actually rejects an escape attempt — same "GitHub Advanced
+// Security" test-exposure precedent as dock-config.ts's own
+// `__testing = { resolveDockConfigPath }`.
+export const __testing = { resolveWithin };

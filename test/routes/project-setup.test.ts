@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import { PathEscapeError, __testing } from "../../src/routes/project-setup.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
@@ -40,6 +41,24 @@ async function createProject(app: Awaited<ReturnType<typeof buildApp>>, cwd: str
   });
   return res.json().id as number;
 }
+
+describe("resolveWithin (CodeQL js/path-injection containment guard)", () => {
+  it("joins an ordinary relative path under root", () => {
+    expect(__testing.resolveWithin("/repo", "AGENTS.md")).toBe(path.join("/repo", "AGENTS.md"));
+    expect(__testing.resolveWithin("/repo", path.join(".claude", "skills", "x", "SKILL.md"))).toBe(
+      path.join("/repo", ".claude", "skills", "x", "SKILL.md"),
+    );
+  });
+
+  it("throws PathEscapeError for a traversal segment that would escape root", () => {
+    expect(() => __testing.resolveWithin("/repo", "../outside")).toThrow(PathEscapeError);
+    expect(() => __testing.resolveWithin("/repo", "../../etc/passwd")).toThrow(PathEscapeError);
+  });
+
+  it("throws PathEscapeError for an absolute path that would replace root entirely", () => {
+    expect(() => __testing.resolveWithin("/repo", "/etc/passwd")).toThrow(PathEscapeError);
+  });
+});
 
 describe("project-setup route", () => {
   beforeAll(() => {
@@ -233,6 +252,76 @@ describe("project-setup route", () => {
       payload: { previewId },
     });
     expect(secondApply.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // Hermes review, PR #896 round 1 — after apply commits the scratch
+  // worktree, its HEAD IS the scaffold commit; a naive "reuse whatever's at
+  // the predicted path" would diff a later same-slug preview against that
+  // stale HEAD and silently show "no changes" even though nothing about
+  // this preview's OWN inputs repeats the prior one.
+  it("previewing again after apply removes the now-stale worktree and starts fresh, rather than silently diffing against the applied commit", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const firstPreview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo" },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/apply`,
+      payload: { previewId: firstPreview.json().previewId },
+    });
+
+    const secondPreview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo", mirrors: ["GEMINI.md"] },
+    });
+    expect(secondPreview.statusCode).toBe(200);
+    const body = secondPreview.json();
+    // A fresh worktree re-derived off the real base branch shows the new
+    // mirror as an actual change — a stale, already-applied worktree
+    // would still contain the FIRST preview's AGENTS.md/skill/reviewer as
+    // already-committed (no diff), and GEMINI.md wouldn't even be new
+    // relative to a HEAD that never had it — this only passes if the
+    // worktree was genuinely rebuilt.
+    expect(body.files).toContain("GEMINI.md");
+    expect(body.diff).toContain("GEMINI.md");
+
+    await app.close();
+  });
+
+  // Hermes review, PR #896 round 1 — the old EEXIST swallow assumed
+  // anything already at the symlink's target path was a matching symlink
+  // from a prior preview. Switching modes mid-session (still the same
+  // live preview window, so the worktree is genuinely reused) used to
+  // leave the stale plain-file directory in place and silently skip
+  // creating the symlink.
+  it("switching from the plain-file to the symlink variant mid-preview actually replaces the stale directory", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const plainPreview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo", symlinkAgentsSkills: false },
+    });
+    expect(plainPreview.statusCode).toBe(200);
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const agentsSkillsPath = path.join(worktreeDir, ".agents", "skills", "demo");
+    expect(fs.statSync(agentsSkillsPath).isDirectory()).toBe(true);
+
+    const symlinkPreview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo", symlinkAgentsSkills: true },
+    });
+    expect(symlinkPreview.statusCode).toBe(200);
+    expect(fs.lstatSync(agentsSkillsPath).isSymbolicLink()).toBe(true);
 
     await app.close();
   });
