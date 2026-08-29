@@ -1,0 +1,7 @@
+{
+  "name": "mullion",
+  "description": "Mullion's own agent-facing tooling, delivered into every session it hosts.",
+  "author": {
+    "name": "Mullion"
+  }
+}

@@ -50,6 +50,19 @@ export interface HookAdapterContext {
    * gated independently (see settings.ts's own comment on why they're
    * separate keys). */
   injectProjectBriefing: boolean;
+  /** Mirrors the live `sessions.injectMullionBundle` setting (default on,
+   * see settings.ts) at the moment THIS session is spawned — same
+   * spawn-time-snapshot posture as `injectAgentGuide`/`injectProjectBriefing`
+   * above, and governed as its own independent key for the same reason: it
+   * gates a fundamentally different mechanism (Claude Code's `--plugin-dir`,
+   * not a SessionStart injection any adapter has a live round trip for).
+   * Unlike those two settings, this one gates the WHOLE delivery mechanism,
+   * not just a pointer — a plugin-sourced Claude Code skill is invisible to
+   * Mullion's own Skills Manager (`skills.ts`'s `listInstalledClaudePluginDirs`
+   * never sees a session-only `--plugin-dir` bundle, and plugin-sourced
+   * skills are a hard no-op for `skillOverrides` — see that file's header),
+   * so there is no separate per-skill toggle to reconcile this with. */
+  injectMullionBundle: boolean;
   /** This session's working directory. Optional — only agy's adapter reads
    * it today (to pre-trust a fresh worktree, see agy.ts's
    * mergeAgyTrustedWorkspace), so it's not required on every ctx literal

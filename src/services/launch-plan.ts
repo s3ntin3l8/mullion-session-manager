@@ -107,6 +107,10 @@ export interface LaunchPlanSession {
   readonly env: Record<string, string>;
   readonly injectAgentGuide: boolean;
   readonly injectProjectBriefing: boolean;
+  /** See HookAdapterContext.injectMullionBundle's own doc comment
+   * (hook-adapters/types.ts) — threaded through unchanged to that ctx
+   * field below. */
+  readonly injectMullionBundle: boolean;
   readonly skipPermissions: boolean;
   readonly initialPrompt: string | undefined;
   /** Issue #678 — see HookAdapterContext.seedPrompt's own doc comment for
@@ -285,6 +289,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     forwarderPath,
     injectAgentGuide: session.injectAgentGuide,
     injectProjectBriefing: session.injectProjectBriefing,
+    injectMullionBundle: session.injectMullionBundle,
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,
     seedPrompt: session.seedPrompt,

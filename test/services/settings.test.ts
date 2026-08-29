@@ -368,6 +368,34 @@ describe("DEFAULT_SETTINGS.sessions.injectProjectBriefing (agent-briefing follow
   });
 });
 
+// Issue: gates whether Claude Code's launch command gets --plugin-dir
+// pointed at Mullion's own tooling bundle (src/bundle/) — a different
+// mechanism from injectAgentGuide/injectProjectBriefing above, but the same
+// default-true / mergeSettings / type-mismatch / independence coverage
+// shape, for the same reasons those two settings each get their own block.
+describe("DEFAULT_SETTINGS.sessions.injectMullionBundle", () => {
+  it("defaults to true", () => {
+    expect(DEFAULT_SETTINGS.sessions.injectMullionBundle).toBe(true);
+  });
+
+  it("can be overridden to false via mergeSettings", () => {
+    const result = mergeSettings({ sessions: { injectMullionBundle: false } });
+    expect(result.sessions.injectMullionBundle).toBe(false);
+  });
+
+  it("ignores a type-mismatched patch value instead of corrupting the field", () => {
+    const result = mergeSettings({ sessions: { injectMullionBundle: "nope" } });
+    expect(result.sessions.injectMullionBundle).toBe(true);
+  });
+
+  it("is independent of injectAgentGuide/injectProjectBriefing — overriding one leaves the others at their default", () => {
+    const result = mergeSettings({ sessions: { injectMullionBundle: false } });
+    expect(result.sessions.injectMullionBundle).toBe(false);
+    expect(result.sessions.injectAgentGuide).toBe(true);
+    expect(result.sessions.injectProjectBriefing).toBe(true);
+  });
+});
+
 // Phase 5 (Track B, issue #193 5.3b) — hard cap on live children per parent
 // enforced by createSessionRecord (services/session-lifecycle.ts), not just described
 // here; this is the sanitizeSettings clamp half of that guardrail.

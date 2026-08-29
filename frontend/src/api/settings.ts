@@ -173,6 +173,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     eventRetentionPerSession: 0,
     injectAgentGuide: true,
     injectProjectBriefing: true,
+    injectMullionBundle: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

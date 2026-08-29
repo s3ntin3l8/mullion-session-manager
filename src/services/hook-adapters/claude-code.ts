@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { resolveMcpServerPath, shellQuote } from "./shared.js";
+import { resolveMullionBundleDir } from "./mullion-bundle.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -379,13 +380,23 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     ctx.hookToken,
     ctx.controlSocketPath,
   );
+  // Only appended when both the setting is on AND the bundle actually
+  // shipped (resolveMullionBundleDir()'s own doc comment) — never emit a
+  // flag pointing at a directory that isn't there. Same sanctioned
+  // exception to the opaque-blob invariant as the `--settings`/
+  // `--mcp-config` flags below (CLAUDE.md, the plan's Context section):
+  // this is still appended inside commandTransform, still only reached for
+  // a simple, unchained `claude ...` invocation (claudeCodeAdapter.matches'
+  // anchored-token + no-shell-metacharacter guard below).
+  const bundleDir = ctx.injectMullionBundle ? resolveMullionBundleDir() : null;
+  const bundleFlag = bundleDir ? ` --plugin-dir ${JSON.stringify(bundleDir)}` : "";
   return {
     settingsFiles: [
       { path: settingsPath, contents: JSON.stringify(settings, null, 2) },
       { path: mcpConfigPath, contents: JSON.stringify(mcpConfig, null, 2) },
     ],
     commandTransform: (command) =>
-      `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}`,
+      `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}`,
   };
 }
 

@@ -224,7 +224,12 @@ function stripYamlScalarQuotes(value: string): string {
 // deliberately treated as unparseable rather than mis-captured as the
 // literal "|"/">" character — such a skill is skipped (see the caller),
 // same as any other malformed frontmatter.
-function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
+// Exported so a guard test can assert Mullion's own shipped bundle skills
+// (src/bundle/skills/) actually parse under this exact parser, rather than
+// just "looking like" valid frontmatter — a bundle edit that silently broke
+// discovery would otherwise only surface live, against a real Claude Code
+// session.
+export function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
   if (!match) return null;
 

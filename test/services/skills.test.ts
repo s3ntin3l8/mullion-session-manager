@@ -431,31 +431,43 @@ describe("skills service", () => {
     });
   });
 
-  // Issue #468 — this repo ships its own docs/agent-guide.md as a project
-  // skill, `.claude/skills/mullion-agent-guide/SKILL.md`, with an
-  // `.agents/skills/mullion-agent-guide` symlink alongside it so Codex and
-  // opencode's own `.agents/skills` scan reaches it too. Runs against the
-  // REAL repo root, same posture as agent-guide.test.ts's own
+  // Issue #468 (retargeted — see below) — this repo ships its own repo-
+  // specific review-invariants doc as a project skill,
+  // `.claude/skills/mullion-review-invariants/SKILL.md`, with an
+  // `.agents/skills/mullion-review-invariants` symlink alongside it so Codex
+  // and opencode's own `.agents/skills` scan reaches it too. Runs against
+  // the REAL repo root, same posture as agent-guide.test.ts's own
   // "is true in this checkout" test — vitest's process.cwd() is the repo
   // root, no fixture needed. Fails loudly if the frontmatter is ever broken
   // (e.g. edited into an unsupported block-scalar description).
   //
+  // Originally covered `mullion-agent-guide` — removed by the "make
+  // Mullion's tooling work in every repo" plan, which deleted that
+  // repo-local skill+symlink in favor of a session-scoped `--plugin-dir`
+  // bundle shipped from `src/bundle/` (see mullion-bundle.ts and
+  // src/bundle/skills/mullion-host/, covered by its own test under
+  // test/services/hook-adapters/). `mullion-review-invariants` is
+  // repo-specific by design (it will never move into that bundle) and has
+  // the identical two-location shape, so it's the natural replacement
+  // target for this exact coverage.
+  //
   // The symlink does NOT make this one merged SkillInfo row: scanSkillDirs
   // merges by the exact joined `sourceDir` string, and
-  // `.claude/skills/mullion-agent-guide` is a different string from
-  // `.agents/skills/mullion-agent-guide` even though the latter resolves to
-  // the former's file via the symlink — path.join never resolves symlinks.
-  // So this produces two independent rows sharing the same frontmatter name,
-  // one per real parent directory. That in turn means opencode (which scans
-  // BOTH `.claude/skills` and `.agents/skills`) sees the name twice and
-  // correctly degrades to non-toggleable via the existing ambiguous-name
-  // guard (issue #463) — expected, safe behavior, not a defect this PR needs
-  // to fix. Codex (which only scans `.agents/skills`) sees the name once and
-  // stays independently toggleable.
-  describe("mullion-agent-guide SKILL.md (issue #468)", () => {
+  // `.claude/skills/mullion-review-invariants` is a different string from
+  // `.agents/skills/mullion-review-invariants` even though the latter
+  // resolves to the former's file via the symlink — path.join never
+  // resolves symlinks. So this produces two independent rows sharing the
+  // same frontmatter name, one per real parent directory. That in turn
+  // means opencode (which scans BOTH `.claude/skills` and `.agents/skills`)
+  // sees the name twice and correctly degrades to non-toggleable via the
+  // existing ambiguous-name guard (issue #463) — expected, safe behavior,
+  // not a defect this PR needs to fix. Codex (which only scans
+  // `.agents/skills`) sees the name once and stays independently
+  // toggleable.
+  describe("mullion-review-invariants SKILL.md (issue #468)", () => {
     it("is discovered via both .claude/skills and the .agents/skills symlink in this checkout", async () => {
       const skills = await listProjectSkills(process.cwd());
-      const rows = skills.filter((s) => s.name === "mullion-agent-guide");
+      const rows = skills.filter((s) => s.name === "mullion-review-invariants");
 
       // At least the two real/symlinked project-scope rows — not an exact
       // count, since a sibling PR may add agy's own .agents/skills scanning
@@ -472,10 +484,10 @@ describe("skills service", () => {
       expect(agentsSeen.has("opencode")).toBe(true);
 
       const claudeSkillsRow = rows.find((row) =>
-        row.sourceDir.endsWith(path.join(".claude", "skills", "mullion-agent-guide")),
+        row.sourceDir.endsWith(path.join(".claude", "skills", "mullion-review-invariants")),
       );
       const agentsSkillsRow = rows.find((row) =>
-        row.sourceDir.endsWith(path.join(".agents", "skills", "mullion-agent-guide")),
+        row.sourceDir.endsWith(path.join(".agents", "skills", "mullion-review-invariants")),
       );
       expect(claudeSkillsRow).toBeDefined();
       expect(agentsSkillsRow).toBeDefined();

@@ -7,6 +7,7 @@ import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import type { HookMessage } from "../../src/services/hook-protocol.js";
 import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
+import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -5827,6 +5828,13 @@ describe("PtyManager", () => {
   // (test/services/hook-adapters/), this just proves the spawn seam calls
   // it with the right context and uses its result (issue #174).
   describe("hook adapter integration at spawn (issue #174)", () => {
+    // injectMullionBundle defaults to true (PtyManager's own getInjectMullionBundle
+    // default) and this checkout genuinely ships src/bundle/, so every real
+    // `manager.getOrCreate({command: "claude", ...})` spawn below appends
+    // --plugin-dir too — computed here, once, rather than hardcoded, so this
+    // suite doesn't hardcode a worktree-specific absolute path.
+    const bundleFlag = ` --plugin-dir ${JSON.stringify(resolveMullionBundleDir())}`;
+
     it("spawns a matching (claude) command with --settings and --mcp-config appended, and writes both files (issue #271)", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -5862,7 +5870,7 @@ describe("PtyManager", () => {
       expect(call).toBeDefined();
       const args = call?.[1] as string[];
       expect(args[args.length - 1]).toBe(
-        `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}`,
+        `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag}`,
       );
     });
 
@@ -6136,7 +6144,7 @@ describe("PtyManager", () => {
           .mock.calls.findLast(([file]) => file === "systemd-run");
         const args = call?.[1] as string[];
         expect(args[args.length - 1]).toBe(
-          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} ${quotedDangerousPrompt}`,
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag} ${quotedDangerousPrompt}`,
         );
         // Hooks stayed wired — the exact regression the rejected
         // "append the prompt to `command` before matches()" alternative
@@ -6166,7 +6174,7 @@ describe("PtyManager", () => {
           .mock.calls.findLast(([file]) => file === "systemd-run");
         const args = call?.[1] as string[];
         expect(args[args.length - 1]).toBe(
-          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} --dangerously-skip-permissions ${quotedDangerousPrompt}`,
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag} --dangerously-skip-permissions ${quotedDangerousPrompt}`,
         );
       });
 
@@ -6185,7 +6193,9 @@ describe("PtyManager", () => {
           .mock.calls.findLast(([file]) => file === "systemd-run");
         const args = call?.[1] as string[];
         expect(args[args.length - 1]).not.toContain(dangerousPrompt);
-        expect(args[args.length - 1].endsWith('.mcp.json"')).toBe(true);
+        expect(args[args.length - 1].endsWith(JSON.stringify(resolveMullionBundleDir()))).toBe(
+          true,
+        );
       });
 
       // Hermes review, PR #538 — a task title starting with `-` is a real,
@@ -6210,7 +6220,7 @@ describe("PtyManager", () => {
           .mock.calls.findLast(([file]) => file === "systemd-run");
         const args = call?.[1] as string[];
         expect(args[args.length - 1]).toBe(
-          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} -- '- fix the leading-hyphen bug'`,
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}${bundleFlag} -- '- fix the leading-hyphen bug'`,
         );
       });
 

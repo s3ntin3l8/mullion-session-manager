@@ -42,12 +42,14 @@ Mullion has a hook adapter for (Claude Code, Codex, opencode, agy) gets this
 pulled into context automatically at startup, one way or another (see
 [Auto-injection](#auto-injection) below).
 
-This repo also exposes itself as a discoverable project skill named
-`mullion-agent-guide` (`.claude/skills/mullion-agent-guide/SKILL.md`, with an
-`.agents/skills/mullion-agent-guide` symlink alongside it) — a thin pointer
-back to this same file, for a session whose agent CLI does its own project
-skill discovery rather than (or in addition to) the SessionStart injection
-described below.
+Claude Code sessions also get this as a discoverable skill named
+`mullion-host` — shipped as a session-scoped `--plugin-dir` bundle
+(`src/bundle/`, see `hook-adapters/mullion-bundle.ts`), not a file in any
+particular project's checkout, so it's available in every repo Mullion
+hosts a session in, not just this one. It's a thin pointer back to this same
+per-session copy, for an agent CLI that does its own skill discovery rather
+than (or in addition to) the SessionStart injection described below. Gated
+by the `sessions.injectMullionBundle` setting (default on).
 
 ## The four env vars you were spawned with
 

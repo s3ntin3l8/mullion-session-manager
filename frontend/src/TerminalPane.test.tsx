@@ -491,6 +491,7 @@ function renderPane(extra: { active?: boolean } = {}) {
         eventRetentionPerSession: 0,
         injectAgentGuide: true,
         injectProjectBriefing: true,
+        injectMullionBundle: true,
         maxChildSessionsPerParent: 5,
         autoOpenChildPanels: false,
       },

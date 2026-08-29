@@ -917,6 +917,11 @@ export class Session {
   // setting's own doc comment (settings.ts) for why it's a separate key
   // rather than reusing injectAgentGuide.
   private readonly injectProjectBriefing: boolean;
+  // Same spawn-time-snapshot posture as injectAgentGuide above, for the
+  // independent sessions.injectMullionBundle setting (see settings.ts's own
+  // doc comment for why this gates a different mechanism entirely — Claude
+  // Code's `--plugin-dir`, not a SessionStart text injection).
+  private readonly injectMullionBundle: boolean;
   private readonly skipPermissions: boolean;
   // Task Master's initial-turn prompt (see CreateSessionOptions.initialPrompt
   // above) — consumed once, in bootstrapMaster() below, to build finalCommand;
@@ -1259,6 +1264,7 @@ export class Session {
     sshAuthSock?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    injectMullionBundle?: boolean;
     skipPermissions?: boolean;
     initialPrompt?: string;
     seedPrompt?: string;
@@ -1283,6 +1289,7 @@ export class Session {
     this.sshAuthSock = opts.sshAuthSock ?? "";
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
+    this.injectMullionBundle = opts.injectMullionBundle ?? true;
     this.skipPermissions = opts.skipPermissions ?? false;
     this.initialPrompt = opts.initialPrompt;
     this.seedPrompt = opts.seedPrompt;
@@ -1819,6 +1826,7 @@ export class Session {
       sshAuthSock: this.sshAuthSock,
       injectAgentGuide: this.injectAgentGuide,
       injectProjectBriefing: this.injectProjectBriefing,
+      injectMullionBundle: this.injectMullionBundle,
       skipPermissions: this.skipPermissions,
       initialPrompt: this.initialPrompt,
       seedPrompt: this.seedPrompt,
@@ -3423,6 +3431,9 @@ export class PtyManager {
   // field's own doc comment for why it's a separate closure rather than
   // folded into getInjectAgentGuide.
   private readonly getInjectProjectBriefing: () => boolean;
+  // Same live-accessor posture as getInjectAgentGuide immediately above, for
+  // the independent sessions.injectMullionBundle setting.
+  private readonly getInjectMullionBundle: () => boolean;
 
   constructor(opts: {
     sessionsDir: string;
@@ -3430,6 +3441,7 @@ export class PtyManager {
     controlSocketPath?: string;
     getInjectAgentGuide?: () => boolean;
     getInjectProjectBriefing?: () => boolean;
+    getInjectMullionBundle?: () => boolean;
   }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
@@ -3464,6 +3476,7 @@ export class PtyManager {
     this.sshAuthSock = opts.sshAuthSock ? path.resolve(opts.sshAuthSock) : "";
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
     this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
+    this.getInjectMullionBundle = opts.getInjectMullionBundle ?? (() => true);
 
     // unref() so this timer alone never keeps the process (or, in tests, a
     // PtyManager instance nobody explicitly tore down) alive — same
@@ -3514,6 +3527,7 @@ export class PtyManager {
         // cached at PtyManager-construction/boot time.
         injectAgentGuide: this.getInjectAgentGuide(),
         injectProjectBriefing: this.getInjectProjectBriefing(),
+        injectMullionBundle: this.getInjectMullionBundle(),
         skipPermissions: opts.skipPermissions,
         initialPrompt: opts.initialPrompt,
         seedPrompt: opts.seedPrompt,
