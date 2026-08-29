@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.3](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.2...v0.3.3) (2026-08-29)
+
+
+### Features
+
+* **projects:** author a project's Mullion briefing from the UI ([#893](https://github.com/s3ntin3l8/mullion-session-manager/issues/893)) ([5820b37](https://github.com/s3ntin3l8/mullion-session-manager/commit/5820b375c0238b0d9da8b0a707c31e5b7f0e0b53))
+* **projects:** scaffold Mullion integration as a pull request ([#896](https://github.com/s3ntin3l8/mullion-session-manager/issues/896)) ([58f5a9f](https://github.com/s3ntin3l8/mullion-session-manager/commit/58f5a9f6e153809d25c31e78242159fbb3aabb41))
+* **sessions:** thread a per-session briefing override through the spawn path ([#892](https://github.com/s3ntin3l8/mullion-session-manager/issues/892)) ([6696d2a](https://github.com/s3ntin3l8/mullion-session-manager/commit/6696d2a0bb39b2b007fede7a0c5d3834c4e118f5))
+* **skills:** install the Mullion tooling bundle for codex, opencode and agy ([#891](https://github.com/s3ntin3l8/mullion-session-manager/issues/891)) ([dd00b83](https://github.com/s3ntin3l8/mullion-session-manager/commit/dd00b83169c4e1750bb2008449c6c2612954d4c6))
+* **skills:** per-project skills and reviewer subagent, no repo write ([#894](https://github.com/s3ntin3l8/mullion-session-manager/issues/894)) ([3091598](https://github.com/s3ntin3l8/mullion-session-manager/commit/3091598f970b0ed05df5a73b45ec21f7194829ca))
+* **skills:** ship a Mullion tooling bundle into every Claude Code session ([#890](https://github.com/s3ntin3l8/mullion-session-manager/issues/890)) ([6efdf92](https://github.com/s3ntin3l8/mullion-session-manager/commit/6efdf925e71290f6582e77c32aad49f931b6b2e2))
+* **ssh-agent:** add mullion helper install/uninstall for Windows ([#879](https://github.com/s3ntin3l8/mullion-session-manager/issues/879)) ([b2a4fa6](https://github.com/s3ntin3l8/mullion-session-manager/commit/b2a4fa61005682d00046521c0ba9bfcd24745fa9))
+* **ssh-agent:** primary-host bridge socket + safe bind-failure handling ([#877](https://github.com/s3ntin3l8/mullion-session-manager/issues/877)) ([06263e2](https://github.com/s3ntin3l8/mullion-session-manager/commit/06263e2611a7507458faadc3f2f71450563c1ed9))
+* **ssh-agent:** warn when a materialized bridge socket is shadowed ([#875](https://github.com/s3ntin3l8/mullion-session-manager/issues/875)) ([6dda992](https://github.com/s3ntin3l8/mullion-session-manager/commit/6dda992217684ad508d472e2ec80fdb9bbd4103d))
+
 ## [0.3.2](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.1...v0.3.2) (2026-08-28)
 
 
