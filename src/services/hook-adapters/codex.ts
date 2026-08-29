@@ -98,7 +98,16 @@ export interface CodexHooksFile {
   [key: string]: unknown;
 }
 
-function hookGroup(kind: string, matcher?: string, timeoutSeconds = 10, statusMessage?: string) {
+// Hermes review, PR #908 — `timeoutSeconds`/`statusMessage` take an options
+// object, not two more trailing positionals: a 4-positional signature would
+// force the PermissionRequest call site below to pass an explicit
+// `undefined` for `matcher` just to reach them, which is an easy
+// `timeoutSeconds`/`statusMessage` transposition waiting to happen.
+function hookGroup(
+  kind: string,
+  matcher?: string,
+  options?: { timeoutSeconds?: number; statusMessage?: string },
+) {
   return {
     ...(matcher ? { matcher } : {}),
     hooks: [
@@ -114,8 +123,9 @@ function hookGroup(kind: string, matcher?: string, timeoutSeconds = 10, statusMe
         // ONLY in-terminal signal a gate parked behind an already-pending
         // one has (issue tracked alongside the "concurrent gates" fix).
         statusMessage:
-          statusMessage ?? "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
-        timeout: timeoutSeconds,
+          options?.statusMessage ??
+          "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
+        timeout: options?.timeoutSeconds ?? 10,
       },
     ],
   };
@@ -288,12 +298,11 @@ function mergeCodexHooks(): void {
     // branchDAM session where the user approved the *other* concurrent
     // request in the TUI and had no indication a second one was still
     // waiting on a decision only reachable from the Mullion UI.
-    hookGroup(
-      "PermissionRequest",
-      undefined,
-      PERMISSION_REQUEST_TIMEOUT_SECONDS,
-      "Mullion is holding this approval — open Mullion and Approve/Deny it there (see docs/agent-hooks.md)",
-    ),
+    hookGroup("PermissionRequest", undefined, {
+      timeoutSeconds: PERMISSION_REQUEST_TIMEOUT_SECONDS,
+      statusMessage:
+        "Mullion is holding this approval — open Mullion and Approve/Deny it there (see docs/agent-hooks.md)",
+    }),
   ];
   hooks.UserPromptSubmit = [
     ...(hooks.UserPromptSubmit ?? []).filter(
