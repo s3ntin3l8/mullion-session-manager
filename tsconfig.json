@@ -11,6 +11,6 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "drizzle.config.ts"],
+  "include": ["src/**/*.ts", "drizzle.config.ts", "scripts/generate-ssh-agent-filter-vectors.ts"],
   "exclude": ["node_modules", "dist"]
 }

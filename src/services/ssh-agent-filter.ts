@@ -37,7 +37,11 @@
 // choice from here; it's a laptop-side agent configuration decision this
 // filter's existence doesn't change.
 
-const LENGTH_PREFIX_BYTES = 4;
+// Exported (round 4, issue #820) so the conformance-vector fixture
+// generator (scripts/generate-ssh-agent-filter-vectors.ts) can state this
+// exactly once, rather than hand-duplicating the value there — the whole
+// point of that fixture is to eliminate exactly this kind of drift risk.
+export const LENGTH_PREFIX_BYTES = 4;
 
 /** Ceiling on a single agent-protocol frame's declared body length. A real
  * frame (a public key blob, a signature, flags) is at most a few KB;
