@@ -90,6 +90,8 @@ interface CommandPaletteProps {
   // Issue #431: same section, opening the CLAUDE.md/AGENTS.md/GEMINI.md
   // editor for this project.
   onOpenAgentRules: (projectId: number) => void;
+  // Same section, opening this project's DB-backed Mullion briefing editor.
+  onOpenProjectBriefing: (projectId: number) => void;
   // U4: same section, opening the `.crs/dock.json` editor for this project.
   onOpenDockConfig: (projectId: number) => void;
   // Issue #432: same section, opening the (read-only) skills panel for this
@@ -133,6 +135,7 @@ export function CommandPalette({
   onOpenGitHub,
   onOpenGit,
   onOpenAgentRules,
+  onOpenProjectBriefing,
   onOpenDockConfig,
   onOpenSkills,
   onOpenBrowser,
@@ -794,6 +797,30 @@ export function CommandPalette({
                         Agent Rules: {target?.name ?? "this project"}
                       </span>
                       <span className="cmd-row-subtitle">CLAUDE.md, AGENTS.md, GEMINI.md</span>
+                    </span>
+                  </button>
+                )}
+                {effectiveProjectId !== null && (
+                  <button
+                    className="cmd-row"
+                    onClick={() => {
+                      onOpenProjectBriefing(effectiveProjectId);
+                      closeAfterAction();
+                    }}
+                  >
+                    <span
+                      className="cmd-row-icon"
+                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                    >
+                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
+                    </span>
+                    <span className="cmd-row-body">
+                      <span className="cmd-row-title">
+                        Mullion Briefing: {target?.name ?? "this project"}
+                      </span>
+                      <span className="cmd-row-subtitle">
+                        DB-authored — overrides any committed AGENTS.md briefing region
+                      </span>
                     </span>
                   </button>
                 )}

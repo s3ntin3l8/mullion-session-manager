@@ -80,6 +80,27 @@ export const projectsApi = {
       method: "DELETE",
     }),
 
+  // Issue: per-project Mullion briefing authored from the UI — a DB row
+  // (project-tooling.ts), not a file, so unlike the agent-rules trio above
+  // there's no target list and no host-branching to reflect: `briefing` is
+  // `null` when the project has no DB-authored briefing yet (the ordinary
+  // case), never 404.
+  getProjectTooling: (projectId: number) =>
+    request<{ briefing: string | null }>(`/api/projects/${projectId}/tooling`),
+
+  writeProjectTooling: (projectId: number, briefing: string) =>
+    request<{ briefing: string | null }>(`/api/projects/${projectId}/tooling`, {
+      method: "PUT",
+      body: JSON.stringify({ briefing }),
+    }),
+
+  // Deletes the row entirely — NOT the same as writing an empty string, see
+  // deleteProjectBriefing's own doc comment (project-tooling.ts) for why:
+  // this restores the project's own committed AGENTS.md/CLAUDE.md region,
+  // if any, rather than overriding it with a blank briefing.
+  deleteProjectTooling: (projectId: number) =>
+    request<void>(`/api/projects/${projectId}/tooling`, { method: "DELETE" }),
+
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 
   listFavoriteUrls: () => request<ProjectUrl[]>("/api/browser-urls/favorites"),
