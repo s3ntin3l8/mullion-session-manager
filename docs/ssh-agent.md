@@ -109,11 +109,56 @@ the same invocation CI itself uses to verify every release), see
 [`cli.md`](cli.md#helper) for the raw `mullion helper <verb>` commands the
 installer runs on your behalf.
 
-**On macOS or Linux**, `mullion helper` is one of the `mullion` CLI's
-subcommands (see [`cli.md`](cli.md#helper)), specifically designed to need
-no local Mullion install and no npm — it only touches Node builtins and a
-handful of small sibling files, nothing from `node_modules`. Two ways to
-get it running:
+**On macOS**, download `mullion-helper-<version>.pkg` from the latest
+[GitHub release](https://github.com/s3ntin3l8/mullion-session-manager/releases)
+and double-click it. Unlike the Windows installer, there's no pairing-payload
+wizard page — Installer.app has no scripting for a custom page like that
+without a compiled InstallerPlugin, which is future native-tray-app work, not
+this reference installer's job. The `.pkg`:
+
+- installs the binary to `/usr/local/bin/mullion-helper` (requires
+  authenticating as an admin, the same as any `.pkg` that installs outside
+  your own home directory — this is a packaging-format constraint, not a
+  privilege the helper process itself needs at runtime);
+- runs `helper install` for you afterward, registering the launchd job as
+  **your own login user**, not root, guessing 1Password's own fixed macOS
+  agent socket path (see [macOS (launchd)](#macos-launchd) below) as
+  `--ssh-auth-sock` — if you use a different agent, re-run it yourself
+  afterward with the real path:
+
+  ```sh
+  mullion-helper helper install --ssh-auth-sock <path>
+  ```
+
+- leaves pairing to you, same as leaving the Windows wizard's payload field
+  blank: `mullion-helper helper pair <payload>` in Terminal once you have a
+  payload from **Settings → Hosts → SSH agent bridges**.
+
+The download is currently **unsigned**, same stated limitation as the
+Windows installer — Gatekeeper will refuse to open it from Finder ("Apple
+could not verify..."); right-click → **Open** once to bypass that for an
+unsigned app you've deliberately chosen to run. This only applies to the
+Finder/Installer.app path — a scripted `installer -pkg ... -target /`
+(what CI uses to verify every release, and what an enterprise provisioning
+tool would use) never goes through Gatekeeper at all, so it isn't a
+substitute for actually trying the double-click flow yourself. There's also
+no first-class uninstaller: `.pkg` has no auto-generated one the way Inno
+Setup does. `mullion-helper helper uninstall` (run by hand) removes the
+launchd job and the pairing credential — the same as Windows' own
+`[UninstallRun]` step — but leaves the binary itself at
+`/usr/local/bin/mullion-helper`; remove that (and forget the package receipt)
+with:
+
+```sh
+sudo rm /usr/local/bin/mullion-helper
+sudo pkgutil --forget de.s3ntin3l8.mullion-helper-pkg
+```
+
+**On macOS (without the installer) or Linux**, `mullion helper` is one of
+the `mullion` CLI's subcommands (see [`cli.md`](cli.md#helper)), specifically
+designed to need no local Mullion install and no npm — it only touches Node
+builtins and a handful of small sibling files, nothing from `node_modules`.
+Two ways to get it running:
 
 - **From a release tarball** (typical for a laptop with no Mullion checkout).
   Every GitHub release publishes `mullion-<version>.tgz` plus a

@@ -190,3 +190,55 @@ jobs:
           "$hash  $installerName" | Out-File -Encoding ascii -NoNewline "$installerName.sha256"
 
           gh release upload "${{ needs.release-please.outputs.tag_name }}" $installerPath "$installerName.sha256"
+
+  # Round 4 (PR5, issue #820) — the macOS counterpart to build-helper-exe
+  # above: builds mullion-helper (same scripts/build-helper-sea.mjs), then
+  # deploy/macos/build-pkg.sh's pkgbuild package around it, checksummed and
+  # uploaded identically. `macos-latest`, not cross-built from ubuntu-latest,
+  # for the same reason build-helper-exe stays on windows-latest — postject's
+  # blob injection operates on the real Mach-O of whatever Node binary this
+  # runner's own npm ci pulls down, and there's no cross-platform SEA build
+  # path.
+  build-helper-pkg:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: "npm"
+
+      - name: Build mullion-helper
+        run: |
+          npm ci
+          npm run build:helper-sea
+
+      - name: Smoke test the built binary
+        run: |
+          set -e
+          output=$(./build/helper-sea/mullion-helper bogus 2>&1) && code=0 || code=$?
+          if [ "$code" -ne 2 ]; then echo "expected exit code 2, got $code"; exit 1; fi
+
+      - name: Build, checksum, and upload the macOS installer
+        run: |
+          set -e
+          version="${VERSION#v}"
+          deploy/macos/build-pkg.sh "$version"
+
+          pkgPath="build/installer/mullion-helper-$version.pkg"
+          pkgName="mullion-helper-$version.pkg"
+          if [ ! -f "$pkgPath" ]; then echo "expected package at $pkgPath"; exit 1; fi
+
+          shasum -a 256 "$pkgPath" | awk -v name="$pkgName" '{print $1 "  " name}' > "$pkgName.sha256"
+
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" "$pkgPath" "$pkgName.sha256"

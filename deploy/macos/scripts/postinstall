@@ -1,0 +1,74 @@
+#!/bin/bash
+# Round 4 (PR5, issue #820) — runs after pkgbuild's payload lands
+# mullion-helper at /usr/local/bin/mullion-helper. installer(8) always runs
+# package scripts as root, regardless of how the .pkg itself was launched
+# (Finder double-click still elevates via authentication) — but
+# installLaunchd (src/cli/ssh-agent-helper-install.mjs) registers the
+# launchd job via `launchctl bootstrap gui/$(id -u)/...`, which must run AS
+# the actual console user, or it bootstraps into root's own (headless,
+# useless) GUI domain instead of the real user's. `launchctl asuser <uid>
+# sudo -u <user> ...` is Apple's documented way to cross that root-to-
+# console-user boundary (spiked and confirmed working on a real
+# macos-latest runner before this script was written — see PR5's own
+# description).
+#
+# Deliberately does not `set -e`: same posture as deploy/windows/
+# mullion-helper.iss's own CurStepChanged — a failure at any step here
+# still leaves a USABLE install (the binary is on disk either way), so this
+# degrades to a printed warning with the exact retry command, never a
+# failed .pkg install.
+set -u
+
+EXE="/usr/local/bin/mullion-helper"
+
+# /dev/console's owner is the real interactive user for the normal
+# Finder-double-click install this script primarily exists for. That
+# assumption doesn't hold for a scripted `sudo installer -pkg ... -target /`
+# (exactly how CI's own test-macos job — and an enterprise provisioning
+# tool — installs this .pkg): sudo(8) still sets $SUDO_USER to the invoking
+# non-root account there even though /dev/console may be unowned/root on a
+# headless runner, so that's the fallback, not the primary source.
+CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+  CONSOLE_USER="${SUDO_USER:-}"
+fi
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+  echo "mullion-helper: could not determine the logged-in console user — skipping 'helper install'."
+  echo "Run it yourself once logged in: $EXE helper install --ssh-auth-sock <path>"
+  exit 0
+fi
+
+CONSOLE_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+if [ -z "$CONSOLE_UID" ]; then
+  echo "mullion-helper: could not resolve a uid for console user '$CONSOLE_USER' — skipping 'helper install'."
+  echo "Run it yourself once logged in: $EXE helper install --ssh-auth-sock <path>"
+  exit 0
+fi
+
+CONSOLE_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+if [ -z "$CONSOLE_HOME" ]; then
+  CONSOLE_HOME="/Users/$CONSOLE_USER"
+fi
+
+# 1Password's own fixed macOS agent socket path (docs/ssh-agent.md's manual-
+# tunnel section already treats this as THE macOS default —
+# https://developer.1password.com/docs/ssh/agent/compatibility/), unlike
+# Windows' single OS-wide named pipe there is no OS-standardized socket
+# convention every macOS SSH agent shares, so this is a best guess for the
+# common case, not a hard requirement: resolveSshAuthSock only WARNS (never
+# fails) if this path doesn't exist yet — a laptop that hasn't opened
+# 1Password since reboot is expected, not an error — and anyone using a
+# different agent can simply re-run:
+#   mullion-helper helper install --ssh-auth-sock <path>
+SSH_AUTH_SOCK_DEFAULT="$CONSOLE_HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+
+# installLaunchd's own stdout/stderr (registered-path, "not yet paired"
+# reminder, etc.) already goes to installer(8)'s own log verbatim — nothing
+# duplicated here.
+if ! launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+     "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_DEFAULT"; then
+  echo "mullion-helper: 'helper install' did not finish cleanly — the binary is still installed at $EXE."
+  echo "Retry yourself: $EXE helper install --ssh-auth-sock <path>"
+fi
+
+exit 0

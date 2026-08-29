@@ -348,31 +348,50 @@ jobs:
             exit 1
           fi
 
-      # SPIKE (round 4 PR5, issue #820) — throwaway, removed before merge.
-      # A .pkg's postinstall script runs as root; installLaunchd's own
-      # `launchctl bootstrap gui/$(id -u)/...` needs to run as the actual
-      # console user instead, or it registers into the wrong (root's) GUI
-      # domain. `launchctl asuser <uid> sudo -u <user> ...` is the documented
-      # way to cross that root-to-console-user boundary. Confirming this
-      # actually works on a real macos-latest runner BEFORE writing
-      # deploy/macos/build-pkg.sh's postinstall around it.
-      - name: SPIKE — root-to-console-user launchctl transition
-        env:
-          MULLION_HELPER_STATE_DIR: ${{ runner.temp }}/mullion-helper-state-spike
+      # Round 4 (PR5) — the macOS counterpart to test-windows's own Inno
+      # Setup install/uninstall verification: build the real .pkg
+      # (deploy/macos/build-pkg.sh, the SAME mullion-helper binary built
+      # above), install it silently exactly the way an enterprise
+      # provisioning script would (`installer -pkg ... -target /`, no
+      # Finder involved), and confirm postinstall's root-to-console-user
+      # launchctl transition actually registered the job — not just that
+      # the .pkg installer exited 0, which pkgbuild's default "no scripts"
+      # posture would also do even if postinstall silently failed to
+      # register anything.
+      - name: Build and install the macOS .pkg, verify it registered
         run: |
           set -e
-          EXE="$(pwd)/build/helper-sea/mullion-helper"
-          USER_NAME="$(id -un)"
-          USER_UID="$(id -u)"
-          LABEL="gui/$USER_UID/de.s3ntin3l8.mullion-helper"
-          sudo launchctl asuser "$USER_UID" sudo -u "$USER_NAME" \
-            env "MULLION_HELPER_STATE_DIR=$MULLION_HELPER_STATE_DIR" \
-            "$EXE" helper install --ssh-auth-sock /tmp/fake-agent-spike.sock
-          if ! launchctl print "$LABEL" >/dev/null 2>&1; then
-            echo "SPIKE FAILED: launchctl print found no registered job in $LABEL"
+          deploy/macos/build-pkg.sh 0.0.0-ci
+
+          PKG=build/installer/mullion-helper-0.0.0-ci.pkg
+          if [ ! -f "$PKG" ]; then
+            echo "expected a built package at $PKG"
             exit 1
           fi
-          echo "SPIKE PASSED: root-to-console-user launchctl asuser transition works"
-          sudo launchctl asuser "$USER_UID" sudo -u "$USER_NAME" \
-            env "MULLION_HELPER_STATE_DIR=$MULLION_HELPER_STATE_DIR" \
-            "$EXE" helper uninstall
+
+          sudo installer -pkg "$PKG" -target /
+
+          if [ ! -x /usr/local/bin/mullion-helper ]; then
+            echo "mullion-helper was not installed to /usr/local/bin"
+            exit 1
+          fi
+
+          LABEL="gui/$(id -u)/de.s3ntin3l8.mullion-helper"
+          if ! launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "postinstall did not register $LABEL — the root-to-console-user launchctl transition may have silently taken the 'could not determine console user' fallback branch"
+            exit 1
+          fi
+
+          # Cleanup — mirrors the direct round trip above; run as the same
+          # user postinstall registered the job as, same reasoning.
+          sudo launchctl asuser "$(id -u)" sudo -u "$(id -un)" \
+            /usr/local/bin/mullion-helper helper uninstall
+          if launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "job still registered in $LABEL after uninstall"
+            exit 1
+          fi
+          # deploy/macos/build-pkg.sh's own postinstall never removes
+          # /usr/local/bin/mullion-helper itself — `pkgutil --forget` is
+          # macOS's own uninstall path for that (docs/ssh-agent.md), not
+          # this job's job to exercise; nothing here depends on it being
+          # gone, this is just documenting why no assertion follows.
