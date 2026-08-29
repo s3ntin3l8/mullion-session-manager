@@ -29,8 +29,13 @@ EXE="/usr/local/bin/mullion-helper"
 # non-root account there even though /dev/console may be unowned/root on a
 # headless runner, so that's the fallback, not the primary source.
 CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
-if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+  echo "mullion-helper: resolved console user via /dev/console: $CONSOLE_USER"
+else
   CONSOLE_USER="${SUDO_USER:-}"
+  if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+    echo "mullion-helper: resolved console user via \$SUDO_USER fallback: $CONSOLE_USER"
+  fi
 fi
 if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
   echo "mullion-helper: could not determine the logged-in console user — skipping 'helper install'."
@@ -65,7 +70,16 @@ SSH_AUTH_SOCK_DEFAULT="$CONSOLE_HOME/Library/Group Containers/2BUA8C4S2C.com.1pa
 # installLaunchd's own stdout/stderr (registered-path, "not yet paired"
 # reminder, etc.) already goes to installer(8)'s own log verbatim — nothing
 # duplicated here.
-if ! launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+#
+# `-H` pins $HOME to CONSOLE_USER's own home directory explicitly — without
+# it, whether `sudo -u` resets HOME to the target user (rather than
+# inheriting root's) depends on this machine's own sudoers `env_reset`/
+# `always_set_home` settings, not on anything this script controls.
+# installLaunchd (src/cli/ssh-agent-helper-install.mjs) resolves the plist
+# path via os.homedir(), i.e. $HOME — a leaked root $HOME here would write
+# it to the wrong place (or fail outright) on a machine whose sudoers
+# defaults differ from GitHub's macos-latest runners (self-review, PR #918).
+if ! launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" -H \
      "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_DEFAULT"; then
   echo "mullion-helper: 'helper install' did not finish cleanly — the binary is still installed at $EXE."
   echo "Retry yourself: $EXE helper install --ssh-auth-sock <path>"
