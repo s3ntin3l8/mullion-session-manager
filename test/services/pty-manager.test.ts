@@ -5675,6 +5675,43 @@ describe("PtyManager", () => {
       expect(session.toInfo()).toMatchObject({ gateState: "approved", gatePrompt: null });
     });
 
+    it("the gatePrompt/gateAt summary keeps tracking the OLDEST gate, not the newest, once a second one arrives (Hermes review, PR #912)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "first command" });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", gatePrompt: "first command" });
+      const firstGateAt = session.toInfo().gateAt;
+
+      // A second, concurrent gate must NOT swap the scalar summary to its
+      // own prompt, nor reset "waiting since" for the first — the summary
+      // is documented (SessionInfo.gatePrompt/gateAt) as tracking the
+      // OLDEST still-waiting gate, and the stale sweep's TTL is measured
+      // against gateAt.
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "second command" });
+      expect(session.toInfo()).toMatchObject({
+        gateState: "waiting",
+        gatePrompt: "first command",
+        gateAt: firstGateAt,
+      });
+      expect(session.toInfo().gates).toHaveLength(2);
+
+      // Once the first (oldest) resolves, the summary re-points at the
+      // second, now the only one left.
+      const firstId = session.toInfo().gates[0].gateId;
+      session.resolveGate(firstId, "approved");
+      expect(session.toInfo()).toMatchObject({
+        gateState: "waiting",
+        gatePrompt: "second command",
+      });
+    });
+
     it("a genuine keystroke does NOT clear a waiting review_gate's attention badge, unlike hookNotification (concurrent-gates investigation)", async () => {
       const session = manager.getOrCreate({
         id: "1",

@@ -2640,21 +2640,28 @@ export class Session {
    * updates the derived scalar summary (`gateState`/`gatePrompt`/`gateAt`
    * — see their own doc comment) to reflect it: `gateState` becomes
    * `"waiting"` on the FIRST gate to arrive and stays `"waiting"` for every
-   * subsequent one, while `gatePrompt`/`gateAt` always track the most
-   * RECENTLY arrived gate (matching this session's single-gate-model
-   * behavior exactly when there's only ever one). Does not, itself, raise
-   * the `reviewGate` attention signal — the caller does that (same as
-   * before this issue), since a repeat raise while a gate is already
-   * confirmed is a harmless no-op (`moreAuthoritativeKind`'s existing
-   * idempotence) but keeping the raise at the call site keeps this method
-   * a pure "record the gate" operation.
+   * subsequent one. `gatePrompt`/`gateAt` are set ONLY on that first
+   * arrival and left untouched by every later one (Hermes review, PR #912
+   * — a second/third gate arriving must not silently swap the displayed
+   * prompt to a newer one, nor reset "waiting since" for the OLDEST gate,
+   * which is what `gateAt` is documented as tracking and what the stale
+   * sweep's TTL is measured against). `resolveGate()` is the only other
+   * place these fields move, re-pointing them at the new oldest once the
+   * previous one resolves. Does not, itself, raise the `reviewGate`
+   * attention signal — the caller does that (same as before this issue),
+   * since a repeat raise while a gate is already confirmed is a harmless
+   * no-op (`moreAuthoritativeKind`'s existing idempotence) but keeping the
+   * raise at the call site keeps this method a pure "record the gate"
+   * operation.
    */
   registerPendingGate(gateId: string, prompt: string): void {
-    const at = Date.now();
-    this.pendingGates.set(gateId, { prompt, at });
+    const isFirstGate = this.pendingGates.size === 0;
+    this.pendingGates.set(gateId, { prompt, at: Date.now() });
     this.gateState = "waiting";
-    this.gatePrompt = prompt;
-    this.gateAt = at;
+    if (isFirstGate) {
+      this.gatePrompt = prompt;
+      this.gateAt = Date.now();
+    }
   }
 
   /** The ids of every currently-waiting gate, oldest first (Map iteration
