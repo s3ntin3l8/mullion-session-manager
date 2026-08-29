@@ -82,7 +82,17 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     // Issue #264 — the blocking permission-approval channel needs the long
     // timeout, not the fire-and-forget default every other hook here uses.
     expect(written.hooks.PermissionRequest[0].hooks[0].timeout).toBe(300);
+    // The concurrent-gates investigation: this is the only affordance a
+    // gate parked behind an already-pending one has in the terminal, so it
+    // must point the user at Mullion rather than repeat the generic
+    // "safe to remove" message every other hook group uses.
+    expect(written.hooks.PermissionRequest[0].hooks[0].statusMessage).toBe(
+      "Mullion is holding this approval — open Mullion and Approve/Deny it there (see docs/agent-hooks.md)",
+    );
     expect(written.hooks.Stop[0].hooks[0].timeout).toBe(10);
+    expect(written.hooks.Stop[0].hooks[0].statusMessage).toBe(
+      "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
+    );
     expect(written.hooks.UserPromptSubmit).toHaveLength(1);
     expect(written.hooks.PostToolUse).toHaveLength(2);
     expect(written.hooks.PostToolUse[0].matcher).toBe("apply_patch");

@@ -98,7 +98,16 @@ export interface CodexHooksFile {
   [key: string]: unknown;
 }
 
-function hookGroup(kind: string, matcher?: string, timeoutSeconds = 10) {
+// Hermes review, PR #908 — `timeoutSeconds`/`statusMessage` take an options
+// object, not two more trailing positionals: a 4-positional signature would
+// force the PermissionRequest call site below to pass an explicit
+// `undefined` for `matcher` just to reach them, which is an easy
+// `timeoutSeconds`/`statusMessage` transposition waiting to happen.
+function hookGroup(
+  kind: string,
+  matcher?: string,
+  options?: { timeoutSeconds?: number; statusMessage?: string },
+) {
   return {
     ...(matcher ? { matcher } : {}),
     hooks: [
@@ -108,8 +117,15 @@ function hookGroup(kind: string, matcher?: string, timeoutSeconds = 10) {
         // Shown to the user when they review this hook via Codex's own
         // `/hooks` trust UI — makes clear what it is and that it's safe to
         // remove, without requiring them to go read this file's source.
-        statusMessage: "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
-        timeout: timeoutSeconds,
+        // `PermissionRequest` overrides this with an actionable message
+        // (see its own registration below) since Codex renders it live,
+        // in the terminal, for the full duration the hook blocks — the
+        // ONLY in-terminal signal a gate parked behind an already-pending
+        // one has (issue tracked alongside the "concurrent gates" fix).
+        statusMessage:
+          options?.statusMessage ??
+          "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
+        timeout: options?.timeoutSeconds ?? 10,
       },
     ],
   };
@@ -272,7 +288,21 @@ function mergeCodexHooks(): void {
     // giving us a deterministic "agent needs user input" signal regardless
     // of tool type. Also the blocking permission-approval channel (issue
     // #264) — needs the long timeout, not the fire-and-forget default.
-    hookGroup("PermissionRequest", undefined, PERMISSION_REQUEST_TIMEOUT_SECONDS),
+    //
+    // Own statusMessage, not hookGroup's shared default: Codex renders this
+    // string live, in the terminal, for as long as this hook blocks (up to
+    // PERMISSION_REQUEST_TIMEOUT_SECONDS). It is the ONLY affordance a gate
+    // has in the terminal when Mullion's own single-gate-per-session model
+    // has already parked it behind a concurrent one that fell through to
+    // Codex's native prompt instead — investigated live against a stuck
+    // branchDAM session where the user approved the *other* concurrent
+    // request in the TUI and had no indication a second one was still
+    // waiting on a decision only reachable from the Mullion UI.
+    hookGroup("PermissionRequest", undefined, {
+      timeoutSeconds: PERMISSION_REQUEST_TIMEOUT_SECONDS,
+      statusMessage:
+        "Mullion is holding this approval — open Mullion and Approve/Deny it there (see docs/agent-hooks.md)",
+    }),
   ];
   hooks.UserPromptSubmit = [
     ...(hooks.UserPromptSubmit ?? []).filter(
