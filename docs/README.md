@@ -20,6 +20,9 @@ when you'd reach for it.
 - [`tasks.md`](tasks.md) — Task Master: turn a labeled issue (or a
   dashboard-created task) into an autonomously-worked, reviewed, and
   promoted pull request.
+- [`project-briefing.md`](project-briefing.md) — a project's own briefing,
+  skill, and reviewer subagent: DB-authored with no repo write, or
+  scaffolded into the repo itself as a real pull request.
 - [`multi-host.md`](multi-host.md) — run sessions on more than one machine
   from a single dashboard.
 

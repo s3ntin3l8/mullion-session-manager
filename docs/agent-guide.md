@@ -51,6 +51,16 @@ per-session copy, for an agent CLI that does its own skill discovery rather
 than (or in addition to) the SessionStart injection described below. Gated
 by the `sessions.injectMullionBundle` setting (default on).
 
+If the PROJECT you're running against has its own skill and/or reviewer
+subagent authored (either from Mullion's UI or scaffolded into the repo
+itself), you'll see those too — composed into the same bundle for Claude
+Code, or opencode's own `skills.paths`/`agent/<name>.md` config keys.
+Neither codex nor agy has an equivalent per-project channel; if one of
+those is missing a skill you'd expect, it needs a real repo write to reach
+it (`.agents/skills/<name>/SKILL.md`) — see
+[`project-briefing.md`](project-briefing.md) for the full per-CLI delivery
+table and the repo-scaffolding flow.
+
 ## The four env vars you were spawned with
 
 Every session gets these four extra environment variables that matter to
