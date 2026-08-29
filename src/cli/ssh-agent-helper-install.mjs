@@ -445,9 +445,28 @@ function installWindows(io, { execPath, scriptPath, sshAuthSock }) {
     );
     return 1;
   }
+  // Hermes review, PR #879 — `/Create` only *registers* the task; its
+  // `LogonTrigger` won't fire the process until the next interactive
+  // logon, unlike launchd `bootstrap`/systemd `enable --now`, which both
+  // start their job immediately. Explicitly start it too, so `install`
+  // means the same thing ("running now, and persists across
+  // reboots/logout") on every platform. A failed `/Run` doesn't undo the
+  // successful registration — the task is still correctly installed and
+  // will start at the next logon regardless — so this degrades to a
+  // warning, not a failed install.
+  const runResult = runSpawnSync(io, "schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]);
+  if (runResult.status !== 0) {
+    io.stderr.write(
+      `installed — ${xmlPath}\n` +
+        `note: could not start it immediately (${(runResult.stderr || runResult.error?.message || "unknown error").trim()}) — ` +
+        "it will start at the next logon instead. Start it now with " +
+        `'schtasks /Run /TN ${WINDOWS_TASK_NAME}'.\n`,
+    );
+  } else {
+    io.stdout.write(`installed and started — ${xmlPath}\n`);
+  }
   io.stdout.write(
-    `installed and started — ${xmlPath}\n` +
-      `check status: schtasks /Query /TN ${WINDOWS_TASK_NAME} /V\n` +
+    `check status: schtasks /Query /TN ${WINDOWS_TASK_NAME} /V\n` +
       "the paired session is valid for 24h — re-run 'mullion helper pair <payload>' at least " +
       "once a day for uninterrupted coverage.\n",
   );

@@ -533,7 +533,7 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(plistPath)).toBe(true);
   });
 
-  it("win32: writes a Scheduled Task XML and creates it with /F", async () => {
+  it("win32: writes a Scheduled Task XML, creates it with /F, and starts it immediately", async () => {
     const { io, calls, dir: d } = baseIo({ platform: "win32" });
     (io as { homedir?: string }).homedir = path.join(d, "home");
     const code = await runInstall([], io);
@@ -542,7 +542,27 @@ describe("runInstall / runUninstall", () => {
     expect(existsSync(xmlPath)).toBe(true);
     expect(calls.map((c) => c.join(" "))).toEqual([
       `schtasks /Create /TN ${WINDOWS_TASK_NAME} /XML ${xmlPath} /F`,
+      `schtasks /Run /TN ${WINDOWS_TASK_NAME}`,
     ]);
+  });
+
+  // Hermes review, PR #879 — /Create only registers the task; its
+  // LogonTrigger won't fire until the next interactive logon, unlike
+  // launchd bootstrap / systemd enable --now, which both start their job
+  // immediately. A failed /Run must not undo the successful registration.
+  it("win32: a failed /Run degrades to a warning — the task stays installed", async () => {
+    const { io, dir: d } = baseIo({ platform: "win32" });
+    (io as { homedir?: string }).homedir = path.join(d, "home");
+    io.spawnSync = (cmd: string, args: string[]) => {
+      if (args.includes("/Run")) return { status: 1, stdout: "", stderr: "ERROR: cannot run now" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const stderrLines: string[] = [];
+    io.stderr = { write: (s: string) => stderrLines.push(s) };
+    const code = await runInstall([], io);
+    expect(code).toBe(0);
+    expect(existsSync(windowsTaskXmlPath(io))).toBe(true);
+    expect(stderrLines.join("")).toMatch(/could not start it immediately/);
   });
 
   // Self-review (mullion-reviewer) — Task Scheduler XML declares
@@ -608,9 +628,10 @@ describe("runInstall / runUninstall", () => {
     expect(code).toBe(0);
     // Unlike launchd/systemd, schtasks /Create /F is unconditionally
     // idempotent — no pre-teardown call, no "was preTeardown ambiguous"
-    // rollback judgment needed.
-    expect(calls.length).toBe(1);
+    // rollback judgment needed. Two calls total: /Create, then /Run.
+    expect(calls.length).toBe(2);
     expect(calls[0]).toContain("/F");
+    expect(calls[1]).toContain("/Run");
   });
 
   it("win32: surfaces a non-zero schtasks /Create exit as a failure and rolls back the XML", async () => {
