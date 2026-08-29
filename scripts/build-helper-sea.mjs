@@ -5,9 +5,10 @@
 // pair|run|install|uninstall` with no Node install of its own. `npm run
 // build:helper-sea`; CI wires this into `.github/workflows/release-please.yml`
 // (a `windows-latest` job, gated on `release_created`, mirroring
-// `build-tarball`'s own shape) and into `ci-cd.yml` (a `windows-latest`
-// smoke-test job, `test-windows`, that builds and probes the SAME bundle on
-// every PR — see that job's own comment for what it verifies).
+// `build-tarball`'s own shape — release ARTIFACTS are Windows-only for now,
+// see that job's own comment) and into `ci-cd.yml` (`test-windows` +
+// round 4's `test-macos`, both building and probing the SAME bundle on
+// every PR — see each job's own comment for what it verifies).
 //
 // Node SEA is still explicitly experimental upstream, and `postject`
 // (https://www.npmjs.com/package/postject) is still `1.0.0-alpha.6` as of
@@ -146,6 +147,38 @@ function removeWindowsSignature() {
   }
 }
 
+// Round 4 (issue #820, macOS SEA support; self-review, PR #916) — the
+// macOS counterpart to removeWindowsSignature above, but with a materially
+// different consequence on failure. The official Node.org macOS build is
+// Developer-ID signed; stripping that signature before injection is the
+// same best-effort courtesy as the Windows case (codesign not on PATH, or
+// the binary already unsigned, is fine either way).
+function removeDarwinSignature() {
+  if (process.platform !== "darwin") return;
+  try {
+    execFileSync("codesign", ["--remove-signature", exePath], { stdio: "inherit" });
+  } catch (err) {
+    log(`codesign --remove-signature skipped (non-fatal): ${err.message}`);
+  }
+}
+
+// NOT best-effort, unlike removeDarwinSignature above: postject's injected
+// NODE_SEA segment leaves the binary unsigned (or carrying a signature
+// that no longer verifies against the now-modified contents) either way,
+// and macOS's mandatory code-signing enforcement refuses to exec() ANY
+// Mach-O binary without at least a valid ad-hoc signature — unlike an
+// unsigned Windows .exe, which still runs fine (SmartScreen just warns).
+// A failed re-sign here is a genuinely unrunnable artifact, not a cosmetic
+// gap, so this must be allowed to throw and fail the build. Node's own
+// Single Executable Applications docs' macOS walkthrough ends with exactly
+// this call, in this position (after injection, not before) —
+// https://nodejs.org/api/single-executable-applications.html.
+function signDarwinBinary() {
+  if (process.platform !== "darwin") return;
+  log("re-signing (ad-hoc) after SEA blob injection");
+  execFileSync("codesign", ["--sign", "-", exePath], { stdio: "inherit" });
+}
+
 function injectBlob() {
   log("injecting SEA blob via postject");
   const postjectBin = path.join(
@@ -155,11 +188,15 @@ function injectBlob() {
     process.platform === "win32" ? "postject.cmd" : "postject",
   );
   const args = [exePath, "NODE_SEA_BLOB", blobPath, "--sentinel-fuse", SEA_FUSE];
-  // macOS would also need --macho-segment-name NODE_SEA — not reachable
-  // from this Windows-only build (process.platform is the actual OS this
-  // script runs ON, which for the shipping artifact is always win32 per
-  // the windows-latest CI job — see that job's own comment), so left
-  // unimplemented rather than guessed at.
+  // Round 4 (issue #820, macOS SEA support) — macOS needs
+  // --macho-segment-name NODE_SEA (postject's own docs: without it, the
+  // blob isn't injected into a Mach-O segment node:sea's runtime looks for
+  // it in). This flag was coded speculatively in round 3 but never
+  // exercised anywhere — no macOS CI job existed, and it can only run on
+  // real macOS hardware (postject operates on the actual binary format of
+  // whatever `copyNodeBinary()` just copied; there's no cross-build path).
+  // `.github/workflows/ci-cd.yml`'s `test-macos` job is the first real
+  // exercise of this branch.
   if (process.platform === "darwin") {
     args.push("--macho-segment-name", "NODE_SEA");
   }
@@ -182,12 +219,15 @@ async function main() {
   generateBlob();
   copyNodeBinary();
   removeWindowsSignature();
+  removeDarwinSignature();
   injectBlob();
+  signDarwinBinary();
   log(`built ${path.relative(repoRoot, exePath)}`);
   // Deliberately no smoke test here — a build script's job is producing
   // the artifact, not verifying it. The CI workflows that invoke this
-  // (ci-cd.yml's test-windows job, release-please.yml's build-helper-exe
-  // job — both windows-latest) run their own explicit probe steps against
+  // (ci-cd.yml's test-windows and test-macos jobs, release-please.yml's
+  // windows-latest-only build-helper-exe job) run their own explicit
+  // probe steps against
   // ${exePath} afterward, so a failure shows up as its own named CI step,
   // not buried inside "build the exe."
 }

@@ -174,7 +174,22 @@ const EXPIRY_COMMENT_LINES = [
 ];
 
 export function buildLaunchdPlist({ execPath, scriptPath, sshAuthSock, logPath }) {
-  const programArguments = [execPath, scriptPath, "helper", "run", "--ssh-auth-sock", sshAuthSock]
+  // Round 4 (issue #820, macOS SEA support) — scriptPath-optional, same
+  // shape as buildWindowsTaskXml's own argv construction: a SEA's execPath
+  // IS the whole program, so there is no separate script to name. Before
+  // this, a null scriptPath crashed here (xmlEscape(null).replace is not a
+  // function) the moment installLaunchd ever ran under a SEA — which
+  // could not previously happen (isSea was refused on every non-win32
+  // platform), so this exact call shape was unreachable until now.
+  const argv = [
+    execPath,
+    ...(scriptPath !== null && scriptPath !== undefined ? [scriptPath] : []),
+    "helper",
+    "run",
+    "--ssh-auth-sock",
+    sshAuthSock,
+  ];
+  const programArguments = argv
     .map((value) => `    <string>${xmlEscape(value)}</string>`)
     .join("\n");
   const comment = xmlCommentSafe(EXPIRY_COMMENT_LINES.join("\n       "));
@@ -541,25 +556,30 @@ export async function runInstall(args, io) {
   // `isSea()` returns `false` (never throws) outside a SEA, so this is
   // safe to call unconditionally on every platform.
   const isSea = io.isSea !== undefined ? io.isSea : nodeIsSea();
-  // This round ships a Windows SEA exclusively (see below) — a SEA on any
-  // other platform is a state nothing here produces yet, but refusing
-  // cleanly is far better than the alternative already confirmed by self-
-  // review: `defaultScriptPath()`'s dynamic import of its own split-out
-  // sibling file (see that file's own comment) fails at runtime inside a
-  // real SEA with an opaque "No such built-in module" error, since a
-  // single-file executable has no real on-disk module-resolution context
-  // to satisfy an externalized relative import against.
-  if (isSea && platform !== "win32") {
+  // Round 2/3 shipped Windows; round 4 (issue #820) adds macOS —
+  // `buildLaunchdPlist` now has the same scriptPath-optional handling
+  // `buildWindowsTaskXml` already did. Linux stays refused: no SEA is ever
+  // built for Linux (scripts/build-helper-sea.mjs targets win32/darwin
+  // only), so `helper install` on Linux is always the Node-from-source
+  // path, and `buildSystemdUnit` has never needed (and still doesn't have)
+  // null-scriptPath handling. Refusing cleanly here is far better than the
+  // alternative already confirmed by self-review: `defaultScriptPath()`'s
+  // dynamic import of its own split-out sibling file (see that file's own
+  // comment) fails at runtime inside a real SEA with an opaque "No such
+  // built-in module" error, since a single-file executable has no real
+  // on-disk module-resolution context to satisfy an externalized relative
+  // import against.
+  if (isSea && platform === "linux") {
     io.stderr.write(
-      `mullion helper install: this build is a Node SEA, which is only supported on win32 — got '${platform}'.\n`,
+      `mullion helper install: this build is a Node SEA, which is not supported on '${platform}'.\n`,
     );
     return 1;
   }
-  // `isSea` implies win32 here — the guard above already rejected every
-  // other combination — so `null` (not `defaultScriptPath()`) is safe:
-  // `buildWindowsTaskXml` is the only one of the three builders below with
-  // a scriptPath-optional mode (`buildLaunchdPlist`/`buildSystemdUnit`
-  // both still unconditionally interpolate `scriptPath` as a string).
+  // `isSea` implies win32 or darwin here — the guard above already
+  // rejected linux — so `null` (not `defaultScriptPath()`) is safe on
+  // both: `buildWindowsTaskXml` and `buildLaunchdPlist` both have a
+  // scriptPath-optional mode now (`buildSystemdUnit` doesn't, but isSea
+  // can no longer reach it).
   //
   // Deliberately `!== undefined`, not `??`, for `io.scriptPath` itself: a
   // caller passing `scriptPath: null` explicitly must stay `null` all the

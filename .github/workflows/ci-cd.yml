@@ -269,3 +269,81 @@ jobs:
           schtasks /Query /TN MullionHelper 2>$null
           if ($LASTEXITCODE -eq 0) { throw "MullionHelper task still registered after uninstall" }
           exit 0
+
+  # Round 4 (issue #820, macOS SEA support) — the macOS counterpart to
+  # test-windows above: a real `launchctl bootstrap`/`launchctl bootout`
+  # round trip via installLaunchd/uninstallLaunchd on a real macos-latest
+  # runner, and the first real exercise anywhere of
+  # scripts/build-helper-sea.mjs's own darwin --macho-segment-name postject
+  # flag, which existed in code since round 3 but had never actually run —
+  # no macOS CI job existed, and postject operates on the real binary
+  # format of whatever this same job just built, so there's no way to
+  # verify it without real macOS hardware.
+  #
+  # Deliberately NOT added to CLAUDE.md's required-status-checks list yet —
+  # same reasoning as test-windows: this is the job's first run anywhere
+  # outside a developer's own machine (this repo's CI has never run on a
+  # macOS runner before), so it needs a stretch of unattended real runs
+  # before every future merge is gated on it.
+  test-macos:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build mullion-helper
+        run: npm run build:helper-sea
+      # Same "does argv even look like this outside a normal dev/CI Linux
+      # process" uncertainty test-windows's own comment describes, now for
+      # a real macOS SEA binary.
+      - name: Smoke test — unknown command
+        run: |
+          set -e
+          output=$(./build/helper-sea/mullion-helper bogus 2>&1) && code=0 || code=$?
+          echo "$output"
+          if [ "$code" -ne 2 ]; then echo "expected exit code 2, got $code"; exit 1; fi
+          case "$output" in
+            *"unknown command: bogus"*) ;;
+            *) echo "unexpected output: $output"; exit 1 ;;
+          esac
+      # Real launchctl round trip: install (registers a REAL launchd agent
+      # for this runner's own user), confirm it's loaded, uninstall, confirm
+      # it's gone. A fake --ssh-auth-sock is fine here — install/uninstall
+      # only persist the value into the plist, never dial it (same posture
+      # as test-windows's own schtasks round trip not asserting /Run
+      # actually started the process).
+      #
+      # MULLION_HELPER_STATE_DIR only redirects stateDir() consumers (the
+      # credential file, the log path) — launchdPlistPath() is hardcoded to
+      # ~/Library/LaunchAgents (self-review, PR #916), unaffected by this
+      # var, same as a real laptop install always writes there. Fine on
+      # GitHub's ephemeral, single-use macOS runners; would NOT actually
+      # isolate this round trip if this job pattern were ever copied to a
+      # persistent/self-hosted macOS runner.
+      - name: launchctl round trip — install, query, uninstall
+        env:
+          MULLION_HELPER_STATE_DIR: ${{ runner.temp }}/mullion-helper-state
+        run: |
+          set -e
+          EXE=./build/helper-sea/mullion-helper
+          LABEL="gui/$(id -u)/de.s3ntin3l8.mullion-helper"
+          "$EXE" helper install --ssh-auth-sock /tmp/fake-agent.sock
+
+          if ! launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "launchctl print found no registered job in $LABEL after install"
+            exit 1
+          fi
+
+          "$EXE" helper uninstall
+
+          if launchctl print "$LABEL" >/dev/null 2>&1; then
+            echo "job still registered in $LABEL after uninstall"
+            exit 1
+          fi
