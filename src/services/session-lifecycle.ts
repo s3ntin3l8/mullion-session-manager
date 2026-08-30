@@ -577,36 +577,26 @@ export async function createSessionRecord(
     // (unlike seedDelivered, which task-claim.ts actively downgrades on a
     // mismatch), so a warning here — actionable by an operator, cheap to
     // add — covers it without growing the public API surface for a
-    // diagnostic-only signal. A remote agent build too old to echo these
-    // fields at all (`undefined`) is silently assumed correct, same as
-    // every other optional SpawnResult field's absence.
-    if (
-      spawnResult.injectAgentGuide !== undefined &&
-      spawnResult.injectAgentGuide !== resolvedInjectAgentGuide
-    ) {
-      app.log.warn(
-        {
-          sessionId: created.id,
-          hostId: project.hostId,
-          requested: resolvedInjectAgentGuide,
-          applied: spawnResult.injectAgentGuide,
-        },
-        "injectAgentGuide: remote agent applied a different value than requested — possible version skew",
-      );
-    }
-    if (
-      spawnResult.injectProjectBriefing !== undefined &&
-      spawnResult.injectProjectBriefing !== resolvedInjectProjectBriefing
-    ) {
-      app.log.warn(
-        {
-          sessionId: created.id,
-          hostId: project.hostId,
-          requested: resolvedInjectProjectBriefing,
-          applied: spawnResult.injectProjectBriefing,
-        },
-        "injectProjectBriefing: remote agent applied a different value than requested — possible version skew",
-      );
+    // diagnostic-only signal. A remote build too old to echo these fields at
+    // all replies with `undefined`, and `pty-manager.ts` then falls back to
+    // `?? true` — so an absent echo for a *requested `false`* is the one
+    // silent-fail-open case worth its own warning (an absent echo for a
+    // requested `true` degrades to the same `?? true`, i.e. no divergence).
+    for (const [field, requested, applied] of [
+      ["injectAgentGuide", resolvedInjectAgentGuide, spawnResult.injectAgentGuide],
+      ["injectProjectBriefing", resolvedInjectProjectBriefing, spawnResult.injectProjectBriefing],
+    ] as const) {
+      if (applied !== undefined && applied !== requested) {
+        app.log.warn(
+          { sessionId: created.id, hostId: project.hostId, requested, applied },
+          `${field}: remote agent applied a different value than requested — possible version skew`,
+        );
+      } else if (applied === undefined && requested === false) {
+        app.log.warn(
+          { sessionId: created.id, hostId: project.hostId, requested },
+          `${field}: remote agent did not echo this field, and likely predates it — an old build's own \`?? true\` fallback means it probably injected this even though it was requested off`,
+        );
+      }
     }
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):
