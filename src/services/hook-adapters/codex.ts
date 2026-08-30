@@ -508,9 +508,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // wrong command entirely, but that's a reason to skip the flag, not to
     // drop hooks too.
     commandTransform: (command) => {
-      const withGitDir = command.includes("--add-dir .git")
-        ? command
-        : `${command} --add-dir .git`;
+      const withGitDir = command.includes("--add-dir .git") ? command : `${command} --add-dir .git`;
       if (SHELL_METACHARACTERS_RE.test(command.trim())) return withGitDir;
       return `${withGitDir} ${buildCodexMcpFlags(resolveMcpServerPath())}`;
     },

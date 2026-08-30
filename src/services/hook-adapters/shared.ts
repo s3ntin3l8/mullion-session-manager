@@ -103,7 +103,42 @@ export const SHELL_METACHARACTERS_RE = /[;&|<>]/;
  * stringifier, to avoid dropping the user's own comments/formatting — see
  * that file's own header); hoisted here once codex.ts's MCP `-c` flags
  * (issue #880) needed the identical escaping for a different `config.toml`
- * key, so both call sites can't drift out of sync. */
+ * key, so both call sites can't drift out of sync.
+ *
+ * Hermes review, PR #930 — TOML basic strings forbid literal control
+ * characters (U+0000–U+0008, U+000A–U+001F, U+007F) outright; the original
+ * version only handled backslash/quote. Not a live bug at either current
+ * call site (skill names and internally-generated socket paths/install
+ * paths never contain one), but defense-in-depth now that this is a shared
+ * helper any future caller might feed less-trusted input through. The five
+ * TOML-defined short escapes (`\b \t \n \f \r`) go first — after them, any
+ * OTHER remaining control character (or U+007F) falls through to a generic
+ * `\uXXXX` escape, which TOML also accepts. Order matters: the short-escape
+ * replacements must run before the catch-all, or e.g. a literal newline
+ * would already be gone by the time the catch-all's own regex runs — never
+ * the reverse. */
+// Intentionally matching a literal backspace — TOML's own short escape for
+// it (`\b`). A named constant, not inline in the .replace() chain below, so
+// the eslint-disable comment stays pinned to it regardless of how Prettier
+// wraps the surrounding call.
+// eslint-disable-next-line no-control-regex
+const TOML_BACKSPACE_RE = /\x08/g;
+// Catch-all for any OTHER control character TOML forbids, once the five
+// named short escapes have already removed the ones that have one.
+// eslint-disable-next-line no-control-regex
+const TOML_OTHER_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/g;
+
 export function escapeTomlBasicString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(TOML_BACKSPACE_RE, "\\b")
+    .replace(/\t/g, "\\t")
+    .replace(/\n/g, "\\n")
+    .replace(/\f/g, "\\f")
+    .replace(/\r/g, "\\r")
+    .replace(
+      TOML_OTHER_CONTROL_CHAR_RE,
+      (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
 }
