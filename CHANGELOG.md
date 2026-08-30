@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.6](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.5...v0.3.6) (2026-08-30)
+
+
+### Features
+
+* **cli:** add project tooling CLI, MCP tools, and control-socket ops ([#938](https://github.com/s3ntin3l8/mullion-session-manager/issues/938)) ([22c63af](https://github.com/s3ntin3l8/mullion-session-manager/commit/22c63afe853a6b3d5d70205d906e4bf7762967f7))
+* **mcp:** expose the Mullion MCP server to codex ([#930](https://github.com/s3ntin3l8/mullion-session-manager/issues/930)) ([1ba8b32](https://github.com/s3ntin3l8/mullion-session-manager/commit/1ba8b3270219316bd20569ebd9205359d93e3a65))
+* **mcp:** expose the Mullion MCP server to opencode ([#928](https://github.com/s3ntin3l8/mullion-session-manager/issues/928)) ([986cfe2](https://github.com/s3ntin3l8/mullion-session-manager/commit/986cfe24bbc848e69191a1ea2bc769906986a73c))
+* **projects:** make injectAgentGuide/injectProjectBriefing per-project ([#934](https://github.com/s3ntin3l8/mullion-session-manager/issues/934)) ([9a5e2fc](https://github.com/s3ntin3l8/mullion-session-manager/commit/9a5e2fc4ae2fedba869824692bfd2db9d675c02c))
+* **skills:** discover subagents and slash commands in the Skills Manager ([#935](https://github.com/s3ntin3l8/mullion-session-manager/issues/935)) ([0e77229](https://github.com/s3ntin3l8/mullion-session-manager/commit/0e77229e3239530a2d255120cda7e0fbc97923bd))
+
+
+### Bug Fixes
+
+* **codex:** inject --add-dir .git to reduce sandbox permission escalations ([#929](https://github.com/s3ntin3l8/mullion-session-manager/issues/929)) ([db628a5](https://github.com/s3ntin3l8/mullion-session-manager/commit/db628a5431b08edceb6e0fa53ecf1a44c31463b2))
+* **hooks:** add diagnostic context to oversized-line warn log ([#907](https://github.com/s3ntin3l8/mullion-session-manager/issues/907)) ([#924](https://github.com/s3ntin3l8/mullion-session-manager/issues/924)) ([e5eea9f](https://github.com/s3ntin3l8/mullion-session-manager/commit/e5eea9fd71bca2b211826e583ac0d4f33cb233c5))
+* **skills:** use correct global skill dir for agy (~/.gemini/config/skills) ([#932](https://github.com/s3ntin3l8/mullion-session-manager/issues/932)) ([04e9367](https://github.com/s3ntin3l8/mullion-session-manager/commit/04e9367736c0587a4c1b45f9b2da695b261d934a)), closes [#888](https://github.com/s3ntin3l8/mullion-session-manager/issues/888)
+* **ui:** widen timeline kind-pill and notification panel for better readability ([#926](https://github.com/s3ntin3l8/mullion-session-manager/issues/926)) ([8272361](https://github.com/s3ntin3l8/mullion-session-manager/commit/8272361456b89ce3f0db1860c78c2954951aadf7))
+* use X-Forwarded-Proto for pairing payload baseUrl behind TLS proxy ([#936](https://github.com/s3ntin3l8/mullion-session-manager/issues/936)) ([7af015b](https://github.com/s3ntin3l8/mullion-session-manager/commit/7af015b4354f5dd29ba6d9951f93d00dbd379a78))
+
 ## [0.3.5](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.4...v0.3.5) (2026-08-30)
 
 
