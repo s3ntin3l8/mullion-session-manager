@@ -263,6 +263,19 @@ below for why it replaced the old `PreToolUse`/`Bash` gate, and why that
 means it's safe to register unconditionally rather than behind a flag.
 Every other hook above is fire-and-forget (never blocks the tool call).
 
+**The `--bare` caveat:** Claude Code's `--bare` flag ("Minimal mode: skip
+hooks, LSP, plugin credentials") disables every integration described above.
+If a user-authored launcher command includes `--bare` — e.g.
+`claude --bare --dangerously-skip-permissions` — Mullion's hooks and
+plugin-dir bundle are silently ignored: no notifications, no review gate,
+no tooling bundle. MCP config (`--mcp-config`) is also likely dropped
+under `--bare`, though this is an external-CLI behavior not yet confirmed
+empirically. The `commandTransform` function appends
+`--settings`/`--mcp-config`/`--plugin-dir` to the end of the command, but
+`--bare` causes Claude to discard them before they take effect. Avoid
+`--bare` in launcher commands unless you deliberately want a stripped-down
+session with no Mullion integration.
+
 **OpenCode** has no shell-command hooks at all — only a JS/TS plugin API,
 auto-discovered from a `plugins/` directory it scans (never referenced by
 argv or by its config file's own `plugin` array, which only accepts npm
