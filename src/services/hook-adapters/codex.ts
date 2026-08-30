@@ -413,46 +413,63 @@ export function resolveCodexAgentsSkillsDir(): string {
 //    (never the user's real `~/.codex` — redirecting CODEX_HOME itself is
 //    the file-header-documented "breaks Codex outright" mistake; a copy
 //    sidesteps that while still exercising real auth), with
-//    `-c mcp_servers.probe.command/args/env` pointing at a stdio probe
-//    server. The probe's own spawn log confirmed the FULL MCP handshake —
-//    `initialize` -> `notifications/initialized` -> `tools/list` — fired
-//    during ordinary TUI startup, before any prompt was submitted.
+//    `-c mcp_servers.probe.command/args/env_vars` pointing at a stdio
+//    probe server. The probe's own spawn log confirmed the FULL MCP
+//    handshake — `initialize` -> `notifications/initialized` ->
+//    `tools/list` — fired during ordinary TUI startup, before any prompt
+//    was submitted.
 // 2. The captured terminal output reached Codex's normal ready-for-input
 //    screen with NO additional trust/consent dialog for the MCP server —
 //    unlike hooks.json's `/hooks` gate, there is no equivalent one-time
 //    review step for `-c`-configured MCP servers.
-// 3. A parent-env var (`MULLION_HOOK_TOKEN` set in the invoking shell) was
-//    NOT inherited by the spawned server (`env vars: []` in `codex mcp
-//    list --json`'s own transport field, i.e. no forwarding by name
-//    happens implicitly) — confirming secrets must be passed via an
-//    explicit `mcp_servers.mullion.env` table, the same "session-scoped
-//    hook token only, never MULLION_AUTH_TOKEN" posture
-//    `buildClaudeMcpConfig` (claude-code.ts) and `mergeAgyMcpConfig`
-//    (agy.ts) already use — confirmed this DOES work when set explicitly.
+// 3. Hermes review, PR #930 — the first revision of this function put the
+//    hook token's VALUE inline in an `env={...}` table, which stayed
+//    readable in this session's own long-lived `/proc/<dtach|shell>/cmdline`
+//    for the session's entire lifetime (`finalCommand` is passed to
+//    `dtach -n <sock> $SHELL -lc <finalCommand>`, pty-manager.ts), not just
+//    at the spawn instant — a real regression versus claude-code.ts's/
+//    agy.ts's own MCP config, which never puts a secret in argv at all.
+//    Fixed by using `env_vars` (an ARRAY OF ENV VAR **NAMES**, confirmed
+//    empirically to forward the CURRENT VALUE of each named var from
+//    Codex's own process environment into the spawned server — Codex's own
+//    `codex mcp list --json` reports this as a `transport.env_vars` field,
+//    distinct from `env`) instead of an inline `env={...}` table. This
+//    works because `sessionEnv.MULLION_HOOK_SOCKET`/`MULLION_HOOK_TOKEN`/
+//    `MULLION_SOCKET_PATH` (launch-plan.ts) are ALREADY unconditionally set
+//    on every session's environment, before any hook adapter ever runs —
+//    Codex's own process therefore already carries them by the time it
+//    starts, and `env_vars` just tells it to re-forward three CONSTANT,
+//    non-secret NAME strings, never a value, into the MCP server's env.
+//    The plain env inheritance this replaces a guess about (a parent-env
+//    var was NOT automatically visible to a spawned server with no `env`/
+//    `env_vars` entry at all — confirmed empirically) is exactly why an
+//    explicit forwarding mechanism is required here, not a coincidence
+//    `env_vars` happens to paper over.
 //
 // Never calls `smol-toml`'s stringifier — these are new, synthesized `-c`
 // arguments, not an edit to a user's existing file, so there is nothing to
 // round-trip or preserve; each override is built as a small, independently
 // valid TOML literal and escaped via `escapeTomlBasicString` (shared.js,
 // hoisted from codex-skills.ts's own identical need) before being
-// shell-quoted as one argument.
+// shell-quoted as one argument. `escapeTomlBasicString` is applied to the
+// three env var names too even though they're compile-time-constant ASCII
+// identifiers that never need it — one code path, no special case.
+const CODEX_MCP_ENV_VAR_NAMES = [
+  "MULLION_HOOK_SOCKET",
+  "MULLION_HOOK_TOKEN",
+  "MULLION_SOCKET_PATH",
+] as const;
+
 export function buildCodexMcpFlags(
   mcpServerPath: string,
-  hookSocketPath: string,
-  hookToken: string,
-  controlSocketPath: string,
   execPath: string = process.execPath,
 ): string {
   const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
-  const envTable = [
-    `MULLION_HOOK_SOCKET=${tomlString(hookSocketPath)}`,
-    `MULLION_HOOK_TOKEN=${tomlString(hookToken)}`,
-    `MULLION_SOCKET_PATH=${tomlString(controlSocketPath)}`,
-  ].join(", ");
+  const envVarNames = CODEX_MCP_ENV_VAR_NAMES.map(tomlString).join(", ");
   const overrides = [
     `mcp_servers.mullion.command=${tomlString(execPath)}`,
     `mcp_servers.mullion.args=[${tomlString(mcpServerPath)}]`,
-    `mcp_servers.mullion.env={${envTable}}`,
+    `mcp_servers.mullion.env_vars=[${envVarNames}]`,
   ];
   return overrides.map((override) => `-c ${shellQuote(override)}`).join(" ");
 }
@@ -495,12 +512,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
         ? command
         : `${command} --add-dir .git`;
       if (SHELL_METACHARACTERS_RE.test(command.trim())) return withGitDir;
-      return `${withGitDir} ${buildCodexMcpFlags(
-        resolveMcpServerPath(),
-        ctx.hookSocketPath,
-        ctx.hookToken,
-        ctx.controlSocketPath,
-      )}`;
+      return `${withGitDir} ${buildCodexMcpFlags(resolveMcpServerPath())}`;
     },
     // async, not a plain arrow wrapping a sync call: a synchronous throw
     // from any step below must become a REJECTED PROMISE here, not an

@@ -498,13 +498,13 @@ trust grant persists across every future Mullion-launched Codex session**
 and Codex works exactly as it does today.
 
 **MCP** (issue #880): unlike hooks above, this half of the adapter IS
-ephemeral — `-c mcp_servers.mullion.command/args/env` overrides are appended
-to the launch command itself (`commandTransform`, this adapter's first-ever
-argv edit), registering Mullion's own MCP server (`src/mcp/server.mjs`) so
-the `mcp__mullion__*` tools are available in a Codex session too.
-Unconditional, like Claude Code's `--mcp-config` and agy's managed
-`mcp_config.json` merge, not gated on any setting. Two reasons this is
-ephemeral rather than a managed write into `~/.codex/config.toml`
+ephemeral — `-c mcp_servers.mullion.command/args/env_vars` overrides are
+appended to the launch command itself (`commandTransform`, this adapter's
+first-ever argv edit), registering Mullion's own MCP server
+(`src/mcp/server.mjs`) so the `mcp__mullion__*` tools are available in a
+Codex session too. Unconditional, like Claude Code's `--mcp-config` and
+agy's managed `mcp_config.json` merge, not gated on any setting. Two reasons
+this is ephemeral rather than a managed write into `~/.codex/config.toml`
 (`codex-skills.ts` is the precedent for writing that file, but for a
 different key): a managed write goes through `managedInstall`, which
 `applyHookAdapters` runs fire-and-forget — Codex reads `config.toml` at
@@ -521,6 +521,22 @@ probe server logged the full `initialize` → `notifications/initialized` →
 dialog analogous to `/hooks`'s gate. That last point is also why "Removing
 managed hooks" below has no Codex-MCP entry: `-c` persists nothing to
 `config.toml`, so there is nothing to grant and nothing to remove.
+
+**No secret value ever appears in this session's argv (Hermes review, PR
+#930).** An earlier revision of this feature put the hook token's actual
+value inline in an `env={...}` TOML table — that stayed readable in this
+session's own long-lived `/proc/<dtach|shell>/cmdline` for the whole
+session (`dtach -n <sock> $SHELL -lc <finalCommand>`), not just the spawn
+instant, unlike Claude Code's/agy's own MCP config, which never puts a
+secret in argv at all. Fixed with `env_vars`, an array of env var **NAMES**
+(confirmed empirically to forward the current value of each named var from
+Codex's own process environment into the spawned MCP server — distinct from
+`env`, which sets literal inline values). Only three constant, non-secret
+name strings (`MULLION_HOOK_SOCKET`/`MULLION_HOOK_TOKEN`/
+`MULLION_SOCKET_PATH`) ever appear in the `-c` flags; the actual values are
+already present in Codex's own environment before it even starts (every
+session's env carries them unconditionally, `launch-plan.ts`), and never
+touch argv at all.
 
 **Upgrading from a pre-shim release (one-time cost):** Codex's `/hooks`
 trust is granted per hook-group command string — `trusted_hash` in

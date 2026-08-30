@@ -13,33 +13,39 @@ import {
   escapeTomlBasicString,
 } from "../../../src/services/hook-adapters/shared.js";
 
-// Issue #880 — pins buildCodexMcpFlags' exact TOML/argv output shape, with
-// only the glue text (`-c `, `mcp_servers.mullion.command=`, the inline
-// `{...}` table for env) hand-written — not derived from the function
-// under test. The commandTransform test below computes its own
-// expectation by calling buildCodexMcpFlags again, which only proves
-// prepareLaunch forwards the builder's output unmodified; it would stay
-// green even if the builder's own shape drifted (e.g. dropping quoting, or
-// emitting `mcp_servers.mullion.env.MULLION_HOOK_TOKEN=...` dotted-key
-// style instead of one inline table). This test catches that — including
-// escapeTomlBasicString's actual escaping on a socket path containing a
-// double quote and a backslash, since a real path/token is arbitrary text.
+// Issue #880 (revised after Hermes review, PR #930) — pins
+// buildCodexMcpFlags' exact TOML/argv output shape, with only the glue
+// text (`-c `, `mcp_servers.mullion.command=`, `env_vars=[...]`)
+// hand-written — not derived from the function under test. The
+// commandTransform test below computes its own expectation by calling
+// buildCodexMcpFlags again, which only proves prepareLaunch forwards the
+// builder's output unmodified; it would stay green even if the builder's
+// own shape drifted (e.g. reverting to an inline `env={...}` table
+// carrying an actual secret VALUE — the exact regression Hermes caught:
+// the first revision of this function put the hook token's value inline
+// in argv, which stayed readable in this session's own long-lived
+// `/proc/<pid>/cmdline` for the whole session, not just the spawn instant.
+// `env_vars` forwards three CONSTANT, non-secret NAME strings instead —
+// this test asserts no secret VALUE ever appears in the flags string, not
+// just that the three names do).
 describe("buildCodexMcpFlags (issue #880)", () => {
-  it("builds three shell-quoted -c overrides in valid TOML syntax", () => {
-    const socketPath = '/h"o\\ok.sock';
-    const flags = buildCodexMcpFlags("/srv.mjs", socketPath, "tok", "/c.sock", "/usr/bin/node");
-    const escapedSocket = escapeTomlBasicString(socketPath);
+  it("builds two shell-quoted -c overrides using env_vars name-forwarding, not an inline env table", () => {
+    const flags = buildCodexMcpFlags("/srv.mjs", "/usr/bin/node");
     expect(flags).toBe(
       [
         `-c 'mcp_servers.mullion.command="/usr/bin/node"'`,
         `-c 'mcp_servers.mullion.args=["/srv.mjs"]'`,
-        `-c 'mcp_servers.mullion.env={MULLION_HOOK_SOCKET="${escapedSocket}", MULLION_HOOK_TOKEN="tok", MULLION_SOCKET_PATH="/c.sock"}'`,
+        `-c 'mcp_servers.mullion.env_vars=["MULLION_HOOK_SOCKET", "MULLION_HOOK_TOKEN", "MULLION_SOCKET_PATH"]'`,
       ].join(" "),
     );
-    // Escaping actually happened, not a pass-through — otherwise this
-    // assertion would be vacuous against an already-safe fixture value.
-    expect(escapedSocket).not.toBe(socketPath);
-    expect(escapedSocket).toBe('/h\\"o\\\\ok.sock');
+  });
+
+  it("escapes a mcpServerPath containing a double quote and a backslash — a real install path is arbitrary text", () => {
+    const path_ = '/opt/mull"ion\\dist/server.mjs';
+    const flags = buildCodexMcpFlags(path_, "/usr/bin/node");
+    const escaped = escapeTomlBasicString(path_);
+    expect(escaped).not.toBe(path_);
+    expect(flags).toContain(`args=["${escaped}"]`);
   });
 });
 
@@ -241,15 +247,7 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
   // is unconditional (safe on any command shape) while the MCP flags are
   // metacharacter-gated.
   describe("commandTransform (issue #906 + issue #880)", () => {
-    const mcpFlags = () => {
-      const c = ctx();
-      return buildCodexMcpFlags(
-        resolveMcpServerPath(),
-        c.hookSocketPath,
-        c.hookToken,
-        c.controlSocketPath,
-      );
-    };
+    const mcpFlags = () => buildCodexMcpFlags(resolveMcpServerPath());
 
     it("appends --add-dir .git, then the MCP -c flags, to the command", () => {
       const plan = codexAdapter.prepareLaunch(ctx());
@@ -259,9 +257,18 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
       );
     });
 
-    it("appends --add-dir .git and the MCP flags to a simple codex command", () => {
+    // Hermes review, PR #930 — no session-specific secret value (the
+    // ctx() fixture's hookToken/hookSocketPath/controlSocketPath) may ever
+    // appear in the transformed command string; only the constant env var
+    // NAMES do, via env_vars.
+    it("appends --add-dir .git and the MCP flags to a simple codex command, with no secret value in the result", () => {
       const plan = codexAdapter.prepareLaunch(ctx());
-      expect(plan.commandTransform!("codex")).toBe(`codex --add-dir .git ${mcpFlags()}`);
+      const transformed = plan.commandTransform!("codex");
+      expect(transformed).toBe(`codex --add-dir .git ${mcpFlags()}`);
+      const c = ctx();
+      expect(transformed).not.toContain(c.hookToken);
+      expect(transformed).not.toContain(c.hookSocketPath);
+      expect(transformed).not.toContain(c.controlSocketPath);
     });
 
     it("appends --add-dir .git alongside other flags", () => {

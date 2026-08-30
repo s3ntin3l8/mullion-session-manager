@@ -6399,12 +6399,7 @@ describe("PtyManager", () => {
           // first, then the MCP -c flags, then the shell-quoted prompt
           // (commandTransform runs before initialPromptArgs — see
           // launch-plan.ts's own ordering comment).
-          const mcpFlags = buildCodexMcpFlags(
-            resolveMcpServerPath(),
-            manager.hookSocketPath,
-            session.hookToken,
-            manager.controlSocketPath,
-          );
+          const mcpFlags = buildCodexMcpFlags(resolveMcpServerPath());
           expect(args[args.length - 1]).toBe(
             `codex --add-dir .git ${mcpFlags} ${quotedDangerousPrompt}`,
           );
@@ -6426,12 +6421,7 @@ describe("PtyManager", () => {
             .mocked(spawnChildProcess)
             .mock.calls.findLast(([file]) => file === "systemd-run");
           const args = call?.[1] as string[];
-          const mcpFlags = buildCodexMcpFlags(
-            resolveMcpServerPath(),
-            manager.hookSocketPath,
-            session.hookToken,
-            manager.controlSocketPath,
-          );
+          const mcpFlags = buildCodexMcpFlags(resolveMcpServerPath());
           expect(args[args.length - 1]).toBe(
             `codex --add-dir .git ${mcpFlags} --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
           );
@@ -6679,12 +6669,7 @@ describe("PtyManager", () => {
         // mechanisms on the same adapter; this is the one test proving all
         // three fire from a single real spawn, not just each in isolation
         // via its own adapter-level unit test.
-        const mcpFlags = buildCodexMcpFlags(
-          resolveMcpServerPath(),
-          manager.hookSocketPath,
-          session.hookToken,
-          manager.controlSocketPath,
-        );
+        const mcpFlags = buildCodexMcpFlags(resolveMcpServerPath());
         expect(args[args.length - 1]).toBe(`codex --add-dir .git ${mcpFlags}`);
       });
     });
