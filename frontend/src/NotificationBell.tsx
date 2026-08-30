@@ -53,7 +53,7 @@ const EVENT_ROW_ESTIMATE_HEIGHT = 60;
 // Making notifications relevant/scannable — the panel is a fixed-width
 // popover (see the portal's inline style below), so this is a character
 // budget calibrated by eye against that width, not a measured pixel value.
-const NOTIF_ROW_TEXT_MAX = 72;
+const NOTIF_ROW_TEXT_MAX = 90;
 
 interface FeedHeaderItem {
   type: "header";
