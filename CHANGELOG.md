@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.5](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.4...v0.3.5) (2026-08-30)
+
+
+### Features
+
+* **ssh-agent:** add --json-events to helper run ([#917](https://github.com/s3ntin3l8/mullion-session-manager/issues/917)) ([4a5b060](https://github.com/s3ntin3l8/mullion-session-manager/commit/4a5b060ebe8d1b274512de48769b97a73e85a761))
+* **ssh-agent:** enforce the sign-only filter on the laptop, not just the primary ([#915](https://github.com/s3ntin3l8/mullion-session-manager/issues/915)) ([b237041](https://github.com/s3ntin3l8/mullion-session-manager/commit/b2370413550e08a5cf813d223ff8991d26cd0156))
+* **ssh-agent:** minimal macOS .pkg installer ([#918](https://github.com/s3ntin3l8/mullion-session-manager/issues/918)) ([dfbd9d0](https://github.com/s3ntin3l8/mullion-session-manager/commit/dfbd9d08cbe38c760e88b56f5764e56a7ffd77f2))
+* **ssh-agent:** ship the sign-only filter's conformance table as JSON ([#913](https://github.com/s3ntin3l8/mullion-session-manager/issues/913)) ([e3da641](https://github.com/s3ntin3l8/mullion-session-manager/commit/e3da641f2a07a6de266417d2eee3aea355c11a92))
+* **ssh-agent:** support the helper SEA on macOS, not just Windows ([#916](https://github.com/s3ntin3l8/mullion-session-manager/issues/916)) ([1092f97](https://github.com/s3ntin3l8/mullion-session-manager/commit/1092f9798fe323df04bfb0b90fbeadb6aece9b33))
+
+
+### Bug Fixes
+
+* **test:** replace no-op app.ready() with cross-process readiness poll ([#922](https://github.com/s3ntin3l8/mullion-session-manager/issues/922)) ([d11e899](https://github.com/s3ntin3l8/mullion-session-manager/commit/d11e8994c88703d392ff60630bee11183ab0e441))
+
 ## [0.3.4](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.3...v0.3.4) (2026-08-29)
 
 
