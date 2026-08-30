@@ -872,19 +872,31 @@ const projectCommands = {
       const result = await client.request("projects.get_tooling", { projectId });
       return { json: result };
     }
-    // Write mode: read each file, send as strings
+    // Write mode: read each file, send as strings.
+    // Only one flag may use "-" (stdin); read it once and reuse.
+    const stdinFlags = [flags.briefing, flags.skill, flags.reviewer].filter(
+      (f) => f === "-",
+    ).length;
+    if (stdinFlags > 1) {
+      throw new CliUsageError("only one flag may read from stdin (-)");
+    }
+    const stdinContent = stdinFlags === 1 ? await readStdin() : undefined;
+    const readInput = (flag) => {
+      if (flag === undefined) return undefined;
+      if (flag === "-") return stdinContent;
+      try {
+        return fs.readFileSync(flag, "utf8");
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          throw new CliUsageError(`file not found: ${flag}`);
+        }
+        throw err;
+      }
+    };
     const body = { projectId };
-    if (flags.briefing !== undefined) {
-      body.briefing =
-        flags.briefing === "-" ? await readStdin() : fs.readFileSync(flags.briefing, "utf8");
-    }
-    if (flags.skill !== undefined) {
-      body.skill = flags.skill === "-" ? await readStdin() : fs.readFileSync(flags.skill, "utf8");
-    }
-    if (flags.reviewer !== undefined) {
-      body.reviewerAgent =
-        flags.reviewer === "-" ? await readStdin() : fs.readFileSync(flags.reviewer, "utf8");
-    }
+    if (flags.briefing !== undefined) body.briefing = readInput(flags.briefing);
+    if (flags.skill !== undefined) body.skill = readInput(flags.skill);
+    if (flags.reviewer !== undefined) body.reviewerAgent = readInput(flags.reviewer);
     const result = await client.request("projects.set_tooling", body);
     return { json: result };
   },

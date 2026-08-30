@@ -1063,6 +1063,7 @@ const OPS: Record<string, OpSpec> = {
       // Forward each field that was explicitly provided. The REST routes
       // each handle their own validation and upsert independently.
       const results: Record<string, unknown> = {};
+      let allOk = true;
       const base = `/api/projects/${encodeURIComponent(id)}/tooling`;
       const headers = buildAuthHeaders(app);
       const b = body ?? {};
@@ -1073,6 +1074,7 @@ const OPS: Record<string, OpSpec> = {
           headers,
           payload: { briefing: b.briefing },
         });
+        if ((results.briefing as { ok?: boolean })?.ok === false) allOk = false;
       }
       if (b.skill !== undefined) {
         results.skill = await injectAndShape(app, {
@@ -1081,6 +1083,7 @@ const OPS: Record<string, OpSpec> = {
           headers,
           payload: { skill: b.skill },
         });
+        if ((results.skill as { ok?: boolean })?.ok === false) allOk = false;
       }
       if (b.reviewerAgent !== undefined) {
         results.reviewerAgent = await injectAndShape(app, {
@@ -1089,8 +1092,9 @@ const OPS: Record<string, OpSpec> = {
           headers,
           payload: { reviewerAgent: b.reviewerAgent },
         });
+        if ((results.reviewerAgent as { ok?: boolean })?.ok === false) allOk = false;
       }
-      reply({ ok: true, ...results });
+      reply({ ok: allOk, ...results });
     },
   },
   // Full scope only — same posture as sessions.create: an agent inside a
