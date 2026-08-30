@@ -36,7 +36,9 @@ describe("Settings -> Skills", () => {
       mockFetch(() => jsonResponse(200, [])),
     );
     render(<Settings onClose={vi.fn()} initialSection="skills" />);
-    expect(await screen.findByText(/No skills found/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No skills, subagents, or slash commands found/),
+    ).toBeInTheDocument();
   });
 
   it("lists discovered global/builtin skills", async () => {
@@ -45,6 +47,7 @@ describe("Settings -> Skills", () => {
       description: "Install curated skills",
       sourceDir: "/home/x/.codex/skills/.system/skill-installer",
       scope: "global",
+      kind: "skill",
       agents: ["codex"],
       enabledByAgent: { codex: true },
     };

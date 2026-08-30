@@ -726,6 +726,34 @@ and would show such a skill as toggleable-to-enabled when it isn't. Left as a
 follow-up rather than widening the frontmatter parser for one more field
 here.
 
+### Skills Manager also discovers subagents and slash commands (issue #885)
+
+Alongside skills, the Skills Manager discovers Claude Code/opencode
+**subagents** (`SkillInfo.kind: "agent"`) and Claude Code **slash commands**
+(`kind: "command"`) — `.claude/agents`/`.claude/commands` at project and
+global (`resolveClaudeConfigDir()`-relative) scope, `<installPath>/agents`/
+`<installPath>/commands` for an installed Claude Code plugin, and opencode's
+own singular `<CONFIG_DIR>/agent` directory. Codex and agy have no
+subagent/command concept at all and never contribute either kind. Both are
+**discovery-only, permanently** — not "not implemented yet": no writer exists
+or is planned, and `enabledByAgent[agent]` is unconditionally `null` for
+every agent/command row regardless of ambiguity or scope, the same way agy's
+skills are permanently read-only above.
+
+Unlike a skill (`<dir>/<name>/SKILL.md`, a subdirectory), an agent/command is
+a single loose `.md` FILE directly inside its directory — `sourceDir` points
+at that file, not a containing directory. A slash command's frontmatter
+commonly has no `name:` key at all (Claude Code names a command by its
+filename, not its frontmatter — verified against real `~/.claude/commands/`
+files), so command discovery falls back to the filename when frontmatter
+supplies none; a subagent requires both `name` and `description`, same as a
+skill. Every skill-vs-skill ambiguity/collision check
+(`attachEnabledByAgent`'s `ambiguousNames`/`shadowedBasenames`, plus
+`skillsSharingName`/`claudeCodeSkillsSharingBasename`) is scoped to
+`kind === "skill"`, so a subagent or command sharing a name or directory
+basename with an unrelated skill can never make that skill spuriously
+non-toggleable.
+
 ## The review gate (issue #178, rescoped by #264)
 
 **Originally a `PreToolUse`/`Bash` gate, replaced entirely.** The first

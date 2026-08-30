@@ -111,14 +111,27 @@ export interface NotificationEvent {
 
 export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
 export type SkillScope = "builtin" | "global" | "project";
+// Issue #885 — a "skill" is a `SKILL.md`-carrying directory (as before); an
+// "agent" is a Claude Code/opencode subagent definition file; a "command" is
+// a Claude Code slash-command file. Both of the latter two are discovery-only
+// — never toggleable, and never write-eligible through toggleSkillEnabled
+// (skills.ts's attachEnabledByAgent forces `enabledByAgent[agent] = null` for
+// every non-"skill" row unconditionally).
+export type SkillKind = "skill" | "agent" | "command";
 
 // No `content`/body field, deliberately — the backend never reads a skill's
 // body past its frontmatter, only name/description.
 export interface SkillInfo {
   name: string;
   description: string;
+  // A skill's directory (`<dir>/<name>/SKILL.md`'s parent) for kind
+  // "skill", but the single `.md` FILE itself (`<dir>/<name>.md`) for kind
+  // "agent"/"command" — those have no per-item subdirectory. Still the
+  // unique dedup/selector key either way (skills.ts's scanSkillDirs/
+  // scanFileDirs each merge on this exact string, never cross the two kinds).
   sourceDir: string;
   scope: SkillScope;
+  kind: SkillKind;
   agents: SkillAgent[];
   // `null` means "not toggleable for this skill/agent pair." Reasons vary by
   // agent: agy never supports a write at all; codex/opencode are null when
@@ -127,7 +140,8 @@ export interface SkillInfo {
   // null for a builtin-scope (plugin-sourced) skill, a directory-basename
   // collision across scopes, or when read from the cwd-less global route. A
   // config-read failure degrades to "not toggleable" for that one agent — it
-  // never fails the whole request.
+  // never fails the whole request. Always `null` for every agent when `kind`
+  // is "agent"/"command" — issue #885 is discovery-only, no writer exists.
   enabledByAgent: Partial<Record<SkillAgent, boolean | null>>;
 }
 

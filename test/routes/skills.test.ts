@@ -76,6 +76,21 @@ describe("skills routes", () => {
     );
   }
 
+  // Issue #885 — writes a single loose `.md` file (a subagent/command),
+  // rather than writeSkill's own SKILL.md-in-a-subdirectory shape.
+  function writeAgentOrCommandFile(
+    dir: string,
+    fileName: string,
+    name: string,
+    description: string,
+  ) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, fileName),
+      `---\nname: ${name}\ndescription: ${description}\n---\n`,
+    );
+  }
+
   async function createProject() {
     const app = await buildApp();
     const created = await app.inject({
@@ -453,6 +468,20 @@ describe("skills routes", () => {
         "remote-proj-skill",
         "x",
       );
+      // Issue #885 — also proves `kind` (and a "agent"-kind row generally)
+      // survives the full primary <- remote-agent HTTP round trip, not just
+      // a direct listProjectSkills() call: neither /internal/skills nor
+      // /api/projects/:id/skills declares a Fastify response schema, but
+      // that's an invariant worth pinning with a real request, not just
+      // reading the route source — a schema added later that omits `kind`
+      // would silently strip it via fast-json-stringify and this is the one
+      // test that would catch it.
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "agents"),
+        "remote-reviewer.md",
+        "remote-reviewer",
+        "reviews things remotely",
+      );
       const { agentApp, port } = await startAgent(os.tmpdir());
 
       const primary = await buildApp();
@@ -476,7 +505,11 @@ describe("skills routes", () => {
         url: `/api/projects/${project.json().id}/skills`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().map((s: { name: string }) => s.name)).toContain("remote-proj-skill");
+      const rows = res.json() as Array<{ name: string; kind?: string }>;
+      const skillRow = rows.find((s) => s.name === "remote-proj-skill");
+      expect(skillRow?.kind).toBe("skill");
+      const agentRow = rows.find((s) => s.name === "remote-reviewer");
+      expect(agentRow?.kind).toBe("agent");
 
       await primary.close();
       await agentApp.close();
