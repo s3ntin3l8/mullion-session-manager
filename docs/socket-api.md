@@ -130,7 +130,7 @@ particular).
 | `projects.list`        | full          | `GET /api/projects`                                      |
 | `projects.actions`     | full, session | `GET /api/projects/:id/actions`                          |
 | `projects.dock`        | full          | `GET /api/projects/:id/dock`                             |
-| `projects.get_tooling` | full          | `GET /api/projects/:id/tooling`                          |
+| `projects.get_tooling` | full, session | `GET /api/projects/:id/tooling`                          |
 | `projects.set_tooling` | full          | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
 | `previews.create`      | full          | `POST /api/previews`                                     |
 | `previews.get`         | full          | `GET /api/previews/:slug`                                |
@@ -193,10 +193,19 @@ upserts each field independently against the matching `PUT
 `{ok, briefing?, skill?, reviewerAgent?}` where each per-field entry is the
 full `injectAndShape` wrapper around its PUT (`{ok, status, result}` on
 success, `{ok: false, status, error}` on failure). The top-level `ok` is
-**`false` if any individual field's upsert returned an error** — per-field
-results are returned alongside so a partial failure is inspectable, but a
-caller that only checks the top-level `ok` will at least not silently treat
-a half-failed call as success.
+**`false` if any individual field's upsert returned an error** — a caller
+that only checks the top-level `ok` will at least not silently treat a
+half-failed call as success.
+
+**The per-field diagnostics are only directly accessible to callers
+running their own control-socket client.** The `mullion` CLI surfaces
+them as JSON (the whole reply is printed via the standard `--json`
+output path); the `MullionClient` wrapper used by the MCP server, in
+contrast, collapses any `ok: false` reply into a generic
+`MullionSocketError`, so the MCP `set_project_tooling` tool surfaces
+"request failed" with no per-field breakdown — the CLI is the right
+surface if a partial-failure caller needs to know which field rejected
+and why.
 
 `previews.list` takes no body and returns every preview registered on the
 host — previews are host-global (no session/user scoping column exists on

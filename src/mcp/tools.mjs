@@ -430,7 +430,13 @@ const setProjectTooling = {
   description:
     "Set a project's Mullion tooling configuration. Only provided fields are updated " +
     "(partial update). Requires full scope (MULLION_AUTH_TOKEN) — 403s from inside a " +
-    "normal agent session when authentication is enabled.",
+    "normal agent session when authentication is enabled. On a partial-failure upsert " +
+    "(any supplied field's PUT returns ok:false, e.g. an oversized briefing or a skill " +
+    "that fails frontmatter validation), this tool surfaces a generic tool-level error — " +
+    "per-field diagnostics are not exposed through this tool. If a partial-failure caller " +
+    "needs to know which field rejected and why, use the CLI instead: " +
+    "`mullion project tooling <id> --briefing ... --skill ...` prints the full reply, " +
+    "including the per-field ok/status/error for any field that failed.",
   inputSchema: {
     type: "object",
     required: ["projectId"],

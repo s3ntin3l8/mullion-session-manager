@@ -113,8 +113,12 @@ session scope, same posture `list_projects` already takes):
   ordinary "not authored yet" case per field, not a missing row).
 - `set_project_tooling(projectId, briefing?, skill?, reviewerAgent?)` —
   upserts whichever fields are passed; the top-level `ok` is `false` if
-  any individual field's upsert failed (per-field results are returned
-  alongside so a partial failure is inspectable).
+  any individual field's upsert failed. The MCP tool surfaces that as a
+  generic tool error — per-field diagnostics (which field rejected and
+  why) are not exposed through this tool. If a partial-failure caller
+  needs that detail, use the CLI: `mullion project tooling <id>
+--briefing ... --skill ...` prints the full reply including each
+  per-field result.
 
 Both are thin wrappers over the matching control-socket ops — see
 [`socket-api.md`](socket-api.md)'s `projects.get_tooling`/`projects.set_tooling`

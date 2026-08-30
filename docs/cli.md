@@ -170,12 +170,17 @@ $M browser screenshot $S --out /tmp/shot.png
   (see `mullion dock start` below).
 - `project tooling <id> [--briefing <path|->] [--skill <path|->] [--reviewer <path|->]`
   — full scope only. Without any of the write flags, reads the project's
-  `project_tooling` row (`{exists, briefing?, skill?, reviewerAgent?}`).
-  Passing any of `--briefing`/`--skill`/`--reviewer` upserts that field;
-  the file content is read from the given path, or from stdin if `-` is
-  passed (only one flag may read from stdin per invocation). Each field is
-  independent. See [`docs/project-briefing.md`](project-briefing.md) for
-  what each field does and how the resolved values reach spawned sessions.
+  `project_tooling` row and prints `{briefing, skill, reviewerAgent}`
+  (each a string or `null`). Passing any of `--briefing`/`--skill`/`--reviewer`
+  upserts that field; the file content is read from the given path, or
+  from stdin if `-` is passed (only one flag may read from stdin per
+  invocation). Each field is independent. On a partial-failure upsert
+  the CLI prints the full reply, including the per-field `ok`/`status`/
+  `error` for any field that rejected — this is the one surface that
+  exposes the per-field diagnostics (the MCP `set_project_tooling` tool
+  collapses them to a generic error). See
+  [`docs/project-briefing.md`](project-briefing.md) for what each field
+  does and how the resolved values reach spawned sessions.
 
 ### preview
 
@@ -262,7 +267,10 @@ Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
 (`src/mcp/tools.mjs`). The two `*_project_tooling` tools are full-scope only
 — they're operator-side, for automating the same per-project row the
 Mullion Briefing panel edits in the UI; see
-[`docs/project-briefing.md`](project-briefing.md).
+[`docs/project-briefing.md`](project-briefing.md). Note: the
+`set_project_tooling` MCP tool surfaces a partial-failure upsert as a
+generic tool error — the CLI is the right surface if a caller needs to
+see which field rejected (the per-field `ok`/`status`/`error`).
 
 **Scope applies here too.** Claude Code's auto-injected MCP config
 (`buildClaudeMcpConfig`) only ever carries the session-scoped
