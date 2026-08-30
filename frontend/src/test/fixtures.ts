@@ -94,6 +94,8 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     maxAutoReturnRounds: null,
     conventionalCommitTitles: null,
     autoTagRelease: null,
+    injectAgentGuide: null,
+    injectProjectBriefing: null,
     ...overrides,
   };
 }

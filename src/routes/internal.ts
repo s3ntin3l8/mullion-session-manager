@@ -1603,8 +1603,10 @@ export async function internalRoutes(app: FastifyInstance) {
         briefingOverride,
         projectSkill,
         projectReviewerAgent,
+        injectAgentGuide,
+        injectProjectBriefing,
       } = request.body;
-      app.pty.getOrCreate({
+      const session = app.pty.getOrCreate({
         id,
         cwd: expandHome(cwd),
         command,
@@ -1618,6 +1620,8 @@ export async function internalRoutes(app: FastifyInstance) {
         briefingOverride,
         projectSkill,
         projectReviewerAgent,
+        injectAgentGuide,
+        injectProjectBriefing,
       });
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's
@@ -1634,9 +1638,17 @@ export async function internalRoutes(app: FastifyInstance) {
       // an old build's route handler has no idea this field exists, so it
       // simply never appears — task-claim.ts's callers use that omission to
       // downgrade seedDelivered instead of trusting a local guess.
+      // Issue #884 — same "echoed back, not assumed" posture as
+      // initialPromptApplied above, read straight off the resulting Session
+      // rather than the request body: a session id this process already
+      // tracked (a reattach, not a fresh spawn) keeps its ORIGINAL
+      // spawn-time values, which may differ from what this request asked
+      // for — see LocalBackend.spawn's identical comment (session-backend.ts).
       return {
         ok: true,
         initialPromptApplied: initialPrompt !== undefined && adapterHasInitialPromptArgs(command),
+        injectAgentGuide: session.injectAgentGuide,
+        injectProjectBriefing: session.injectProjectBriefing,
       };
     },
   );

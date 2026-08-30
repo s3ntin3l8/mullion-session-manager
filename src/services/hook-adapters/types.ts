@@ -31,21 +31,27 @@ export interface HookAdapterContext {
   /** Absolute path to the shared forwarder script every shell-command-hook
    * adapter's generated config invokes — see hook-adapters/shared.ts. */
   forwarderPath: string;
-  /** Mirrors the live `sessions.injectAgentGuide` setting (default on, see
-   * settings.ts) at the moment THIS session is spawned. Every other
-   * consumer of this setting (hooks.ts's session_start branch) re-reads it
-   * fresh on every hook fire, live; an adapter has no equivalent live round
-   * trip to re-check against, so this is necessarily a spawn-time snapshot
-   * — a toggle after this session starts won't retroactively affect it.
-   * Issue #437c (opencode) is the first and, by construction, only adapter
-   * that can use this: every other agent's guide pointer is gated inside
+  /** The resolved value of `sessions.injectAgentGuide` (default on, see
+   * settings.ts), possibly overridden per-project (issue #884), AT THE
+   * MOMENT THIS SESSION IS SPAWNED — an adapter has no live hook round trip
+   * to re-check against, so this is necessarily a spawn-time snapshot, a
+   * toggle after this session starts won't retroactively affect it. Issue
+   * #437c (opencode) is the first and, by construction, only ADAPTER that
+   * can use this — every other agent's guide pointer is gated inside
    * hooks.ts itself, not here, because their SessionStart is a live hook
-   * round trip this context has no equivalent of. */
+   * round trip this context has no equivalent of. Issue #884 WEAKENED, not
+   * worsened, that distinction: hooks.ts's session_start branch used to
+   * re-derive the (global-only) setting fresh on every hook fire; it now
+   * reads this SAME spawn-time-resolved value straight off the Session
+   * object (`app.pty.get(sessionId)?.injectAgentGuide`) instead, since only
+   * a value resolved on the primary and threaded through the spawn body
+   * can ever reflect a per-project override on a multi-host agent role
+   * (which has no settings DB of its own to read at all). Every consumer of
+   * this setting is now spawn-time-snapshotted, not just opencode's. */
   injectAgentGuide: boolean;
-  /** Same spawn-time-snapshot caveat as `injectAgentGuide` immediately
-   * above, for the same reason: opencode's adapter has no live hook round
-   * trip to re-check `sessions.injectProjectBriefing` against, so this is a
-   * snapshot taken at spawn time. Mirrors that setting, not
+  /** Same spawn-time-snapshot posture and issue #884 history as
+   * `injectAgentGuide` immediately above, for the independent
+   * `sessions.injectProjectBriefing` setting. Mirrors that setting, not
    * `injectAgentGuide` — a project's own briefing and Mullion's guide are
    * gated independently (see settings.ts's own comment on why they're
    * separate keys). */

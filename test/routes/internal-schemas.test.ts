@@ -82,6 +82,10 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           // own doc comments (pty-manager.ts).
           projectSkill: { type: "string", maxLength: 8192 },
           projectReviewerAgent: { type: "string", maxLength: 8192 },
+          // Issue #884 — see CreateSessionOptions.injectAgentGuide/
+          // injectProjectBriefing's own doc comments (pty-manager.ts).
+          injectAgentGuide: { type: "boolean" },
+          injectProjectBriefing: { type: "boolean" },
         },
       },
     });

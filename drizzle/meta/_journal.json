@@ -379,6 +379,13 @@
       "when": 1787993834895,
       "tag": "0053_sharp_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1788095752069,
+      "tag": "0054_new_switch",
+      "breakpoints": true
     }
   ]
 }

@@ -529,7 +529,28 @@ export async function createSessionRecord(
   const resolvedProjectReviewerAgent =
     projectReviewerAgent ?? readProjectReviewerAgent(app.db, project.id) ?? undefined;
 
-  let spawnResult: { initialPromptApplied?: boolean };
+  // Issue #884 — per-project override of sessions.injectAgentGuide/
+  // injectProjectBriefing (settings.ts), resolved HERE on the primary for
+  // the identical multi-host reason resolvedBriefingOverride is: an
+  // agent-role host has no settings DB of its own (app.db is absent there
+  // — plugins/hooks.ts's own comment), so this must already be a definite
+  // boolean by the time it reaches spawn(), never re-derived downstream.
+  // `project.injectAgentGuide`/`injectProjectBriefing` (this project's own
+  // nullable override columns, schema.ts) win when non-null; otherwise
+  // fall through to the global setting. Unlike briefingOverride/
+  // projectSkill above, there is no caller-supplied override concept here
+  // — every session for this project gets the same resolved value.
+  const globalSessionSettings = getStoredSettings(app.db).sessions;
+  const resolvedInjectAgentGuide =
+    project.injectAgentGuide ?? globalSessionSettings.injectAgentGuide;
+  const resolvedInjectProjectBriefing =
+    project.injectProjectBriefing ?? globalSessionSettings.injectProjectBriefing;
+
+  let spawnResult: {
+    initialPromptApplied?: boolean;
+    injectAgentGuide?: boolean;
+    injectProjectBriefing?: boolean;
+  };
   try {
     spawnResult = await resolveBackend(app, project.hostId).spawn({
       id: String(created.id),
@@ -545,8 +566,48 @@ export async function createSessionRecord(
       briefingOverride: resolvedBriefingOverride,
       projectSkill: resolvedProjectSkill,
       projectReviewerAgent: resolvedProjectReviewerAgent,
+      injectAgentGuide: resolvedInjectAgentGuide,
+      injectProjectBriefing: resolvedInjectProjectBriefing,
       env,
     });
+    // Version-skew safety net — same "echoed back, not assumed" posture as
+    // initialPromptApplied (SpawnResult's own doc comment), but logged
+    // rather than threaded all the way up into CreateSessionResult: nothing
+    // downstream of session-lifecycle.ts currently needs to REACT to this
+    // (unlike seedDelivered, which task-claim.ts actively downgrades on a
+    // mismatch), so a warning here — actionable by an operator, cheap to
+    // add — covers it without growing the public API surface for a
+    // diagnostic-only signal. A remote agent build too old to echo these
+    // fields at all (`undefined`) is silently assumed correct, same as
+    // every other optional SpawnResult field's absence.
+    if (
+      spawnResult.injectAgentGuide !== undefined &&
+      spawnResult.injectAgentGuide !== resolvedInjectAgentGuide
+    ) {
+      app.log.warn(
+        {
+          sessionId: created.id,
+          hostId: project.hostId,
+          requested: resolvedInjectAgentGuide,
+          applied: spawnResult.injectAgentGuide,
+        },
+        "injectAgentGuide: remote agent applied a different value than requested — possible version skew",
+      );
+    }
+    if (
+      spawnResult.injectProjectBriefing !== undefined &&
+      spawnResult.injectProjectBriefing !== resolvedInjectProjectBriefing
+    ) {
+      app.log.warn(
+        {
+          sessionId: created.id,
+          hostId: project.hostId,
+          requested: resolvedInjectProjectBriefing,
+          applied: spawnResult.injectProjectBriefing,
+        },
+        "injectProjectBriefing: remote agent applied a different value than requested — possible version skew",
+      );
+    }
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):
     // leaving the row behind would be DB litter for a session that was

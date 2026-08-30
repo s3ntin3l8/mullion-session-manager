@@ -140,6 +140,23 @@ export const projects = sqliteTable("projects", {
   // server, or haven't configured one yet.
   devServerUrl: text("dev_server_url"),
   autoFetch: integer("auto_fetch", { mode: "boolean" }),
+  // Issue #884 — per-project override of the two global session-injection
+  // settings (settings.sessions.injectAgentGuide/injectProjectBriefing,
+  // settings.ts). Same nullable-column shape/precedent as autoFetch above:
+  // null = inherit the global setting, true/false = explicit override.
+  // Deliberately does NOT extend to sessions.injectMullionBundle — that
+  // setting gates a materially bigger thing (the whole plugin-dir/
+  // managed-install delivery mechanism, not a single SessionStart text
+  // injection), and per-project support for it would need to reach
+  // codex.ts's/agy.ts's host-level managed installs too. See these two
+  // fields' own resolution: session-lifecycle.ts's createSessionRecord
+  // resolves the effective boolean on the PRIMARY (where this table lives)
+  // and threads it through the spawn body exactly like briefingOverride
+  // already is — never read downstream via `app.db`, which is absent on a
+  // multi-host agent-role process (the same constraint that shaped
+  // briefingOverride's own design, plugins/hooks.ts's own comment).
+  injectAgentGuide: integer("inject_agent_guide", { mode: "boolean" }),
+  injectProjectBriefing: integer("inject_project_briefing", { mode: "boolean" }),
   // Phase 6 Task Master (6.2/#215) — optional per-project override of
   // launchers.defaultAgent for autonomous task claims. Nullable: unset
   // falls through to the global default. Resolution precedence (6.2's

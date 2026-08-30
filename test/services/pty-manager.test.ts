@@ -6456,6 +6456,49 @@ describe("PtyManager", () => {
       expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "1.opencode-config"));
     });
 
+    // Issue #884 — session-lifecycle.ts's createSessionRecord threads a
+    // per-project-resolved value through getOrCreate() as an explicit opt;
+    // this is the direct, adapter-independent proof that opt wins over the
+    // manager's own live getInjectAgentGuide()/getInjectProjectBriefing()
+    // closures, which is what makes that threading meaningful at all.
+    it("getOrCreate()'s explicit injectAgentGuide/injectProjectBriefing opts win over the manager's own live closures", async () => {
+      const overrideManager = new PtyManager({
+        sessionsDir,
+        getInjectAgentGuide: () => true,
+        getInjectProjectBriefing: () => true,
+      });
+      const session = overrideManager.getOrCreate({
+        id: "9001",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        injectAgentGuide: false,
+        injectProjectBriefing: false,
+      });
+      expect(session.injectAgentGuide).toBe(false);
+      expect(session.injectProjectBriefing).toBe(false);
+      overrideManager.killAll();
+    });
+
+    it("getOrCreate() falls back to the manager's live closures when the opts are omitted (unchanged pre-#884 behavior)", async () => {
+      const fallbackManager = new PtyManager({
+        sessionsDir,
+        getInjectAgentGuide: () => false,
+        getInjectProjectBriefing: () => false,
+      });
+      const session = fallbackManager.getOrCreate({
+        id: "9002",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      expect(session.injectAgentGuide).toBe(false);
+      expect(session.injectProjectBriefing).toBe(false);
+      fallbackManager.killAll();
+    });
+
     it("injects OPENCODE_CONFIG_CONTENT pointing at this session's own agent-guide copy when injectAgentGuide is on (issue #437c, default manager — getInjectAgentGuide defaults to () => true)", async () => {
       const session = manager.getOrCreate({
         id: "1",

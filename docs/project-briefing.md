@@ -180,3 +180,14 @@ See also **Inject agent guide** (`docs/agent-guide.md`'s own injection,
 independent of both settings above) and `docs/configuration.md` for every
 `@fastify/env`-validated setting — these three toggles are DB-backed runtime
 Settings, not environment variables, so they don't appear in that table.
+
+**Per-project overrides (issue #884):** the agent-guide and project-briefing
+toggles — but not the tooling-bundle one, which gates a materially bigger
+mechanism (managed host-level installs for codex/agy, not just a
+SessionStart text injection) — can also be set per project, from the
+project's own settings panel (`ProjectBriefingPanel.tsx`'s "Session
+injection for this project" row). `null` (the default) inherits the global
+setting above; an explicit true/false overrides it for every session under
+that project. Resolved once, on the primary, at session-creation time — a
+toggle flip (global or per-project) takes effect on the session's _next_
+spawn, not retroactively for one already running.

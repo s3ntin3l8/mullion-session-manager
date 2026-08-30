@@ -33,6 +33,29 @@
    raw source editor on the right. Reuses .github-panel-* / .git-panel-* /
    .cmux-scroll classes above for the shared shell/row/button look rather
    than redefining them. */
+/* ProjectBriefingPanel.tsx (issue #884) — a fixed-height notice bar above
+   the existing two-pane .agent-rules-panel, for the per-project session-
+   injection override toggles. `.agent-rules-panel` keeps its own
+   `height: 100%`; this outer shell is what actually fills the dockview
+   panel now, with the two-pane area taking whatever's left. */
+.agent-rules-panel-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.agent-rules-panel-shell > .agent-rules-panel {
+  flex: 1;
+  min-height: 0;
+}
+.project-briefing-inject-overrides {
+  flex-shrink: 0;
+  margin: 12px 14px 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
 .agent-rules-panel {
   height: 100%;
   display: flex;

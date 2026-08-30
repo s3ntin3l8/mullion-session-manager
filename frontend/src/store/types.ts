@@ -94,6 +94,8 @@ export interface ProjectsSlice {
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
         | "autoTagRelease"
+        | "injectAgentGuide"
+        | "injectProjectBriefing"
       >
     > &
       CreateProjectDirOptions,

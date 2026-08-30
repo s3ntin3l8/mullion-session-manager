@@ -120,6 +120,12 @@ export interface Project {
   // #744 — off by default: task PR merges don't automatically trigger
   // release-please. Mirrors src/db/schema.ts's projects.autoTagRelease.
   autoTagRelease: boolean | null;
+  // Issue #884 — per-project override of settings.sessions.injectAgentGuide/
+  // injectProjectBriefing. Null means "inherit the global setting" — same
+  // nullable-override shape as autoFetch above. Mirrors
+  // src/db/schema.ts's projects.injectAgentGuide/injectProjectBriefing.
+  injectAgentGuide: boolean | null;
+  injectProjectBriefing: boolean | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary, plus the live

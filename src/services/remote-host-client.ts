@@ -204,6 +204,12 @@ export interface SessionTarget {
   // comments (pty-manager.ts).
   projectSkill?: string;
   projectReviewerAgent?: string;
+  // Issue #884 — for spawn() only, same "meaningless for openAttach"
+  // posture as seedPrompt/briefingOverride above. See
+  // CreateSessionOptions.injectAgentGuide/injectProjectBriefing's own doc
+  // comments (pty-manager.ts) for the full multi-host reasoning.
+  injectAgentGuide?: boolean;
+  injectProjectBriefing?: boolean;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
@@ -231,6 +237,13 @@ export type SpawnSessionOptions = SessionTarget;
 // host may have silently failed to honor.
 export interface SpawnResult {
   initialPromptApplied?: boolean;
+  // Issue #884 — same "echoed back, not assumed" posture as
+  // initialPromptApplied above: the resolved value THIS agent build
+  // actually applied, absent entirely on a build too old to know these
+  // fields exist. session-lifecycle.ts logs a warning on a mismatch
+  // against what it requested.
+  injectAgentGuide?: boolean;
+  injectProjectBriefing?: boolean;
 }
 export type OpenAttachOptions = SessionTarget;
 
