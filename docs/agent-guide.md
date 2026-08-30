@@ -102,6 +102,8 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | `session spawn-child` / `spawn_child_session`      | full or session |
 | `project actions`                                  | full or session |
 | `project list`, `project dock`                     | **full only**   |
+| `project get_tooling`                              | full or session |
+| `project set_tooling`                              | **full only**   |
 | `preview create/get/delete/list`                   | **full only**   |
 | `dock start/stop/list`                             | **full only**   |
 | `agents list`                                      | **full only**   |
