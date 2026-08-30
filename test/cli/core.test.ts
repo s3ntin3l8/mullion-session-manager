@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import {
   extractFlags,
   parseGlobalFlags,
@@ -1297,6 +1297,160 @@ describe("runCommand", () => {
       const io = fakeIo();
       await runCommand(["dock", "stop", "5"], { client, io });
       expect(client.request).toHaveBeenCalledWith("sessions.kill", { sessionId: "5" });
+    });
+  });
+
+  describe("project tooling (issue #938)", () => {
+    let tmpDir: string;
+    beforeEach(() => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-tooling-"));
+    });
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("read mode: forwards to projects.get_tooling with positional projectId", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["project", "tooling", "7"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("projects.get_tooling", { projectId: "7" });
+    });
+
+    it("read mode: --project flag also accepted (overrides positional if both)", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["project", "tooling", "--project", "7"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("projects.get_tooling", { projectId: "7" });
+    });
+
+    it("read mode: missing project id is a usage error (exit 2)", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["project", "tooling"], { client: fakeClient(), io })).toBe(2);
+      expect(io.stderr.write).toHaveBeenCalledWith(
+        expect.stringContaining("project id is required"),
+      );
+    });
+
+    it("write mode: --briefing reads file content and forwards it", async () => {
+      const filePath = path.join(tmpDir, "briefing.md");
+      writeFileSync(filePath, "run tests before commit");
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["project", "tooling", "3", "--briefing", filePath], { client, io });
+      expect(client.request).toHaveBeenCalledWith("projects.set_tooling", {
+        projectId: "3",
+        briefing: "run tests before commit",
+      });
+    });
+
+    it("write mode: --skill reads file content and forwards it as 'skill'", async () => {
+      const filePath = path.join(tmpDir, "SKILL.md");
+      writeFileSync(filePath, "---\nname: x\ndescription: y\n---\nbody");
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["project", "tooling", "3", "--skill", filePath], { client, io });
+      expect(client.request).toHaveBeenCalledWith("projects.set_tooling", {
+        projectId: "3",
+        skill: "---\nname: x\ndescription: y\n---\nbody",
+      });
+    });
+
+    it("write mode: --reviewer reads file content and forwards it as 'reviewerAgent'", async () => {
+      const filePath = path.join(tmpDir, "reviewer.md");
+      writeFileSync(filePath, "---\nname: r\ndescription: d\n---\nbody");
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["project", "tooling", "3", "--reviewer", filePath], { client, io });
+      expect(client.request).toHaveBeenCalledWith("projects.set_tooling", {
+        projectId: "3",
+        reviewerAgent: "---\nname: r\ndescription: d\n---\nbody",
+      });
+    });
+
+    it("write mode: all three flags at once — every field forwarded", async () => {
+      const briefing = path.join(tmpDir, "b.md");
+      const skill = path.join(tmpDir, "s.md");
+      const reviewer = path.join(tmpDir, "r.md");
+      writeFileSync(briefing, "briefing-body");
+      writeFileSync(skill, "skill-body");
+      writeFileSync(reviewer, "reviewer-body");
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        [
+          "project",
+          "tooling",
+          "3",
+          "--briefing",
+          briefing,
+          "--skill",
+          skill,
+          "--reviewer",
+          reviewer,
+        ],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("projects.set_tooling", {
+        projectId: "3",
+        briefing: "briefing-body",
+        skill: "skill-body",
+        reviewerAgent: "reviewer-body",
+      });
+    });
+
+    it("write mode: nonexistent file is a usage error (exit 2)", async () => {
+      const io = fakeIo();
+      const code = await runCommand(
+        ["project", "tooling", "3", "--briefing", path.join(tmpDir, "does-not-exist.md")],
+        { client: fakeClient(), io },
+      );
+      expect(code).toBe(2);
+      expect(io.stderr.write).toHaveBeenCalledWith(expect.stringContaining("file not found"));
+    });
+
+    it("write mode: multiple stdin flags is a usage error (exit 2)", async () => {
+      const io = fakeIo();
+      const code = await runCommand(
+        ["project", "tooling", "3", "--briefing", "-", "--skill", "-"],
+        { client: fakeClient(), io },
+      );
+      expect(code).toBe(2);
+      expect(io.stderr.write).toHaveBeenCalledWith(
+        expect.stringContaining("only one flag may read from stdin"),
+      );
+    });
+
+    it("write mode: --briefing - reads stdin once and reuses for any other - flag combination (only one allowed)", async () => {
+      // Drive process.stdin manually. We pause the existing readable stream,
+      // push our data, and emit end. Restore in afterEach.
+      const stdin = process.stdin as NodeJS.ReadStream & {
+        isPaused?: () => boolean;
+        resume: () => void;
+        pause: () => void;
+      };
+      const wasPaused = stdin.isPaused ? stdin.isPaused() : true;
+      stdin.pause();
+      const writeAndEnd = () =>
+        new Promise<void>((resolve) => {
+          setImmediate(() => {
+            stdin.emit("data", "piped-briefing-body");
+            stdin.emit("end");
+            resolve();
+          });
+        });
+      const writePromise = writeAndEnd();
+      try {
+        const client = fakeClient();
+        const io = fakeIo();
+        await runCommand(["project", "tooling", "3", "--briefing", "-"], { client, io });
+        await writePromise;
+        expect(client.request).toHaveBeenCalledWith("projects.set_tooling", {
+          projectId: "3",
+          briefing: "piped-briefing-body",
+        });
+      } finally {
+        if (!wasPaused) stdin.resume();
+      }
     });
   });
 

@@ -458,5 +458,97 @@ describe("MullionClient (issue #271)", () => {
         message: "not permitted for this connection's scope",
       });
     });
+
+    it("getProjectTooling sends projects.get_tooling with the given projectId", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("projects.get_tooling");
+        expect(msg.body).toEqual({ projectId: "3" });
+        socket.write(
+          `${JSON.stringify({
+            id: msg.id,
+            ok: true,
+            status: 200,
+            result: { briefing: "hi", skill: null, reviewerAgent: null },
+          })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      expect(await client.getProjectTooling("3")).toEqual({
+        briefing: "hi",
+        skill: null,
+        reviewerAgent: null,
+      });
+    });
+
+    it("getProjectTooling omits projectId from the body when not given", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("projects.get_tooling");
+        expect(msg.body).toEqual({ projectId: undefined });
+        socket.write(
+          `${JSON.stringify({
+            id: msg.id,
+            ok: true,
+            status: 200,
+            result: { briefing: null, skill: null, reviewerAgent: null },
+          })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.getProjectTooling(undefined);
+    });
+
+    it("setProjectTooling sends only the provided fields", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("projects.set_tooling");
+        expect(msg.body).toEqual({ projectId: "3", briefing: "x" });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200 })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.setProjectTooling({ projectId: "3", briefing: "x" });
+    });
+
+    it("setProjectTooling forwards all three fields when all are provided", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("projects.set_tooling");
+        expect(msg.body).toEqual({
+          projectId: "3",
+          briefing: "b",
+          skill: "s",
+          reviewerAgent: "r",
+        });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200 })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.setProjectTooling({
+        projectId: "3",
+        briefing: "b",
+        skill: "s",
+        reviewerAgent: "r",
+      });
+    });
+
+    it("setProjectTooling rejects on ok:false (the control client surfaces that as a generic error)", async () => {
+      // The control client's _route rejects on `ok: false` so the MCP
+      // tool sees a MullionSocketError; the per-field results that the
+      // control-socket op attaches for partial-failure diagnostics are
+      // intentionally NOT exposed through the MCP client (that pathway
+      // is exercised at the control-socket layer instead). This is the
+      // MCP-client contract; if a caller needs per-field detail, the
+      // CLI is the right surface.
+      const socketPath = await startControlServer((msg, socket) => {
+        socket.write(
+          `${JSON.stringify({
+            id: msg.id,
+            ok: false,
+            status: 400,
+            error: "validation failed",
+          })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await expect(
+        client.setProjectTooling({ projectId: "3", briefing: "x" }),
+      ).rejects.toMatchObject({ status: 400, message: "validation failed" });
+    });
   });
 });
