@@ -8,6 +8,8 @@ import type * as ChildProcess from "node:child_process";
 import type { HookMessage } from "../../src/services/hook-protocol.js";
 import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
+import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
+import { resolveMcpServerPath } from "../../src/services/hook-adapters/shared.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -6464,14 +6466,21 @@ describe("PtyManager", () => {
       // checkout genuinely ships src/bundle/ — the payload carries
       // skills.paths alongside instructions, same as claude-code's
       // --plugin-dir composing with --settings/--mcp-config
-      // (pty-manager.test.ts's own claude-code describe above).
+      // (pty-manager.test.ts's own claude-code describe above). Issue
+      // #881 — mcp.mullion is now unconditional, so it's present here too.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
         instructions: [sessionAgentGuidePath(sessionsDir, "1")],
         skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
+        mcp: buildOpenCodeMcpConfig(
+          resolveMcpServerPath(),
+          manager.hookSocketPath,
+          session.hookToken,
+          manager.controlSocketPath,
+        ),
       });
     });
 
-    it("omits OPENCODE_CONFIG_CONTENT when the manager's getInjectAgentGuide reports the setting off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (issue #437c)", async () => {
+    it("omits the guide pointer from instructions when the manager's getInjectAgentGuide reports the setting off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (issue #437c; OPENCODE_CONFIG_CONTENT itself stays present for the unconditional mcp entry, issue #881)", async () => {
       // getInjectMullionBundle: () => false too — this test is specifically
       // about the injectAgentGuide gate; the bundle's own independent gate
       // has its own coverage in "Mullion tooling bundle" below.
@@ -6493,7 +6502,14 @@ describe("PtyManager", () => {
         .mocked(spawnChildProcess)
         .mock.calls.findLast(([file]) => file === "systemd-run");
       const opts = call?.[2] as { env?: Record<string, string> };
-      expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+      expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        mcp: buildOpenCodeMcpConfig(
+          resolveMcpServerPath(),
+          ungatedManager.hookSocketPath,
+          session.hookToken,
+          ungatedManager.controlSocketPath,
+        ),
+      });
       // The plugin/OPENCODE_CONFIG_DIR mechanism is unaffected by this gate.
       expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "2.opencode-config"));
 
@@ -6538,9 +6554,16 @@ describe("PtyManager", () => {
       const opts = call?.[2] as { env?: Record<string, string> };
       expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
       // injectAgentGuide is off on this manager, so only the seed path
-      // should be present — proves the gate is independent of that setting.
+      // should be present alongside the unconditional mcp entry (issue
+      // #881) — proves the gate is independent of that setting.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
         instructions: [seedPath],
+        mcp: buildOpenCodeMcpConfig(
+          resolveMcpServerPath(),
+          ungatedManager.hookSocketPath,
+          session.hookToken,
+          ungatedManager.controlSocketPath,
+        ),
       });
 
       ungatedManager.killAll();
@@ -6566,8 +6589,15 @@ describe("PtyManager", () => {
       const opts = call?.[2] as { env?: Record<string, string> };
       // injectAgentGuide still defaults to true on this manager, so
       // OPENCODE_CONFIG_CONTENT is still present — just without skills.
+      // mcp.mullion is unconditional (issue #881), so it's present too.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
         instructions: [sessionAgentGuidePath(sessionsDir, "4")],
+        mcp: buildOpenCodeMcpConfig(
+          resolveMcpServerPath(),
+          bundlelessManager.hookSocketPath,
+          session.hookToken,
+          bundlelessManager.controlSocketPath,
+        ),
       });
 
       bundlelessManager.killAll();

@@ -243,6 +243,17 @@ a flag to the wrong part of it), Mullion:
    review-gate section below for why the one that used to be conditional,
    `PreToolUse` on `Bash`, was removed rather than kept opt-in).
 2. Appends `--settings <that file>` to the command actually spawned.
+3. Writes a second ephemeral file, `<sessionId>.mcp.json`, registering
+   Mullion's own MCP server (`src/mcp/server.mjs`) as `mullion`, and appends
+   `--mcp-config <that file>` alongside `--settings` above
+   (`hook-adapters/claude-code.ts`'s `buildClaudeMcpConfig`). This is what
+   makes the `mcp__mullion__*` tools (session/project/preview control, see
+   `src/mcp/tools.mjs`) available inside the session — unconditional, not
+   gated on any setting, since it's core Mullion functionality rather than an
+   optional nudge. The config file carries only the session-scoped hook
+   token, never the operator's own credential, so those tools stay
+   session-scoped for an in-session agent (full-scope-only ops correctly
+   403).
 
 As of this writing (issue #264 rescope — rewritten here since the previous
 revision described a conditionally-registered `PreToolUse`/`Bash` gate that
@@ -319,6 +330,22 @@ As of the promote-flow first-turn fix, the promote-flow seed (issue
 as `--prompt <text>` argv instead, via `initialPromptArgs`, verified
 against the installed CLI to actually submit a turn rather than just add
 context — see `hook-adapters/opencode.ts`'s own comment.
+
+**MCP** (issue #881): the same `OPENCODE_CONFIG_CONTENT` payload also
+carries an `mcp.mullion` entry, registering Mullion's own MCP server
+(`src/mcp/server.mjs`) so the `mcp__mullion__*` tools are available inside
+an OpenCode session too — unconditional, like Claude Code's `--mcp-config`
+above, not gated on any setting. The shape differs from Claude Code's
+`mcpServers.<name>` in two ways confirmed empirically against the installed
+OpenCode CLI (never against a user's real config): `command` is a single
+array **including** the executable (Claude Code splits `command`/`args`),
+and the env key is `environment`, not `env`. Verified two ways: config
+resolution via `opencode debug config`, and — the stronger check — a real
+`opencode mcp list` against a stdio probe server, which reported
+`mullion  connected`, confirming the server is actually spawned and
+initialized rather than merely present in resolved config. Same
+additive-merge and session-scoped-token-only posture as everything else on
+this channel — see `hook-adapters/opencode.ts`'s `buildOpenCodeMcpConfig`.
 
 That's only the no-transfer path, though. As of the full-context
 carryover (PR #696), an opencode promote goes further when it can: for a
