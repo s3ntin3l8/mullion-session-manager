@@ -363,6 +363,13 @@ export function resolveCodexAgentsSkillsDir(): string {
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
+    // Issue #906 — Codex's workspace-write sandbox marks .git read-only,
+    // causing every git worktree add/remove and git stash push to require an
+    // escalated permission (PermissionRequest gate). --add-dir .git grants
+    // .git write access inside the sandbox, reducing escalations at the
+    // source. Verified against installed codex-cli 0.151.0's own --help
+    // output.
+    commandTransform: (command: string) => `${command} --add-dir .git`,
     // async, not a plain arrow wrapping a sync call: a synchronous throw
     // from any step below must become a REJECTED PROMISE here, not an
     // exception thrown out of this function call itself —

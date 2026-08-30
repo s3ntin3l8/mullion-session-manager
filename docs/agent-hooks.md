@@ -538,6 +538,15 @@ what carries the agent-guide pointer described in `docs/agent-guide.md`'s
 section — subject to the same `/hooks` trust gate as every other Codex hook
 above.
 
+**Sandbox `.git` writability (issue #906):** Codex's `workspace-write` sandbox
+marks `.git` as read-only by default, causing every `git worktree add/remove`
+and `git stash push` to require an escalated permission. Mullion's Codex
+adapter injects `--add-dir .git` via `commandTransform` to grant `.git` write
+access inside the sandbox, reducing permission escalations at the source.
+Verified against installed `codex-cli 0.151.0`'s own `--help` output. This
+flag is appended before the skip-permissions flag, so it's harmless when
+`--dangerously-bypass-approvals-and-sandbox` bypasses the sandbox entirely.
+
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
 `terminationReason === "error"`), `PreToolUse` on `run_command`
