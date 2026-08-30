@@ -47,6 +47,14 @@ const primaryDb = path.join(
   `multi-host-preview-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`,
 );
 
+async function waitUntil(check: () => boolean | Promise<boolean>) {
+  for (let i = 0; i < 100; i++) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("condition never became true");
+}
+
 async function buildAndListen(env: Record<string, string>) {
   // Every call builds a genuinely separate, real buildApp() instance — two
   // (or more) of them would otherwise default to the SAME SESSIONS_DIR
@@ -201,6 +209,17 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
       method: "PATCH",
       url: `/api/projects/${projectId}`,
       payload: { devServerUrl: String(stubPort) },
+    });
+
+    // Hermes review, PR #921 — same cross-process readiness concern as
+    // multi-host.test.ts: poll until the primary's proxy to the agent
+    // actually succeeds, rather than racing the first request.
+    await waitUntil(async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/hosts/${hostId}/ping`,
+      });
+      return res.statusCode === 200;
     });
   });
 

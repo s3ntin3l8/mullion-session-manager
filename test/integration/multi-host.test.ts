@@ -227,6 +227,21 @@ describe("multi-host proxy (issue #26)", () => {
       payload: { name: "remote", cwd: "/tmp/remote-project", hostId },
     });
     projectId = projectRes.json().id;
+
+    // Hermes review, PR #921 — Fastify 5.12.1's listen() already awaits
+    // ready() internally, so a post-listen app.ready() is a no-op. The real
+    // cross-process readiness the test depends on is the primary's HTTP proxy
+    // to the agent (a real fetch() over loopback, not an app.inject), which
+    // can lag behind listen() under parallel test pressure. Poll until the
+    // proxy actually succeeds so every downstream test starts from a known-
+    // good state rather than racing the first request.
+    await waitUntil(async () => {
+      const res = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/discover?hostId=${hostId}`,
+      });
+      return res.statusCode === 200;
+    });
   });
 
   afterAll(async () => {
