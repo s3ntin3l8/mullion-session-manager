@@ -546,6 +546,12 @@ access inside the sandbox, reducing permission escalations at the source.
 Verified against installed `codex-cli 0.151.0`'s own `--help` output. This
 flag is appended before the skip-permissions flag, so it's harmless when
 `--dangerously-bypass-approvals-and-sandbox` bypasses the sandbox entirely.
+Guarded against double-append if the user already supplies `--add-dir .git`.
+**Worktree caveat:** in a git worktree, `.git` is a plain `gitdir:` pointer
+file, not a directory — `--add-dir .git` makes that pointer writable but does
+not grant write access to the real object store under the main repo's
+`.git/worktrees`. This still helps normal checkouts but may not fully resolve
+escalations for worktree sessions.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
