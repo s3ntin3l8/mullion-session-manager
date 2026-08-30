@@ -171,6 +171,7 @@ async function buildAndListen(env: Record<string, string>, port = 0) {
     else process.env[key] = prev[key];
   }
   await app.listen({ port, host: "127.0.0.1" });
+  await app.ready();
   const address = app.server.address();
   if (address === null || typeof address === "string") {
     throw new Error("expected a real bound address");
