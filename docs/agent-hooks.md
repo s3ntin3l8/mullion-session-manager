@@ -347,6 +347,17 @@ initialized rather than merely present in resolved config. Same
 additive-merge and session-scoped-token-only posture as everything else on
 this channel — see `hook-adapters/opencode.ts`'s `buildOpenCodeMcpConfig`.
 
+**The `--pure` caveat:** opencode's `--pure` flag ("run without external
+plugins") disables the JS plugin loading mechanism. Mullion's
+`opencode-plugin.js` — which provides the hook forwarder, the
+`promote_to_worktree` tool, and all event forwarding — is loaded via that
+mechanism, so `--pure` voids it entirely. However,
+`OPENCODE_CONFIG_CONTENT` (instructions, skills.paths) and
+`OPENCODE_CONFIG_DIR` are env-var-based, not plugin-loaded; confirmed
+empirically to survive `--pure`. Avoid `--pure` in launcher commands unless
+you deliberately want a stripped-down session without Mullion's hook
+integration.
+
 That's only the no-transfer path, though. As of the full-context
 carryover (PR #696), an opencode promote goes further when it can: for a
 **local** opencode session whose live opencode session id is known (the
