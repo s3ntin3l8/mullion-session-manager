@@ -195,9 +195,9 @@ describe("skills service", () => {
       expect(matches[0].agents.sort()).toEqual(["agy", "codex", "opencode"]);
     });
 
-    it("discovers agy's documented global skills dir, ~/.gemini/antigravity-cli/skills (issue #467)", async () => {
+    it("discovers agy's documented global skills dir, ~/.gemini/config/skills (issue #888)", async () => {
       writeSkill(
-        path.join(fakeHome, ".gemini", "antigravity-cli", "skills", "agy-global-skill"),
+        path.join(fakeHome, ".gemini", "config", "skills", "agy-global-skill"),
         "agy-global-skill",
         "all-workspaces agy skill",
       );
