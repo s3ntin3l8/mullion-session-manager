@@ -32,6 +32,7 @@ import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { resolveCodexHome } from "./codex.js";
 import { assertSafeSkillName, isDangerousSkillName, InvalidSkillNameError } from "./skill-name.js";
+import { escapeTomlBasicString } from "./shared.js";
 
 // Hermes review, PR #469 — flagged that a user-authored comment reading
 // exactly this string, immediately above the user's own `[[skills.config]]`
@@ -206,10 +207,6 @@ function scanSkillConfigBlocks(lines: string[]): SkillConfigBlock[] {
 
 function unescapeTomlBasicString(raw: string): string {
   return raw.replace(/\\(.)/g, "$1");
-}
-
-function escapeTomlBasicString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 /** Flips `enabled` in place inside the WINNING Mullion-marked block for

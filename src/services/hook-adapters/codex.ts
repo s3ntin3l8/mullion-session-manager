@@ -2,14 +2,19 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { shellQuote } from "./shared.js";
+import {
+  shellQuote,
+  escapeTomlBasicString,
+  resolveMcpServerPath,
+  SHELL_METACHARACTERS_RE,
+} from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
 import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js";
 
-// Codex adapter (issue #252). Unlike Claude Code/OpenCode, this is NOT an
-// ephemeral, per-session injection — verified this PR against the real
-// installed Codex CLI and its own hook documentation, both facts the
-// original plan got wrong:
+// Codex adapter (issue #252). Unlike Claude Code/OpenCode, its HOOKS
+// wiring is NOT an ephemeral, per-session injection — verified this PR
+// against the real installed Codex CLI and its own hook documentation,
+// both facts the original plan got wrong:
 //
 // 1. `CODEX_HOME` is not a surgical "relocate just the hooks" knob like
 //    OpenCode's `OPENCODE_CONFIG_DIR` — it relocates EVERYTHING (auth,
@@ -30,10 +35,12 @@ import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js"
 //    repos). Not used here, on purpose — see issue #252 for the fuller
 //    writeup.
 //
-// Given both, this follows the SAME "managed, reversible install" pattern
+// Given both, hooks follow the SAME "managed, reversible install" pattern
 // the plan already approved for agy/OpenCode-fallback (not the plan's
 // original "pure env, no argv edit, no managed install" bullet for Codex,
-// which was written before either fact above was verified): an idempotent,
+// which was written before either fact above was verified — see issue #880
+// below for the ONE thing that bullet still turned out right about: the
+// MCP server, added later, genuinely is ephemeral argv): an idempotent,
 // Mullion-owned merge into the user's REAL `~/.codex/hooks.json` (never a
 // throwaway scratch file), keyed off a fixed forwarder-shim path
 // (forwarder-shim.ts) so re-running this on every launch only ever replaces
@@ -57,6 +64,16 @@ import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js"
 // effect described here (Codex behaves as it does without Mullion hooks)
 // now genuinely holds for attention detection too, not just for the hooks
 // themselves.
+//
+// Issue #880 — the MCP server (`mcp__mullion__*` tools) is the ONE part of
+// this adapter that IS ephemeral, and deliberately so: see
+// buildCodexMcpFlags' own doc comment for the two reasons (the
+// managedInstall/config-read-at-startup race, and not wanting a per-session
+// token in the user's persistent config.toml) it doesn't follow hooks.json's
+// managed-write pattern. No `/hooks`-equivalent trust gate exists for it —
+// confirmed live against a real interactive session — so there is nothing
+// to grant and nothing to remove; `### Removing managed hooks`
+// (docs/agent-hooks.md) has no Codex-MCP entry for exactly that reason.
 //
 // `Stop`, `SessionStart`, `SessionEnd`, `PermissionRequest`, `UserPromptSubmit`,
 // `PostToolUse` (apply_patch + Bash matchers), `PreCompact`, `PostCompact`,
@@ -86,6 +103,12 @@ import { installBundleSkills, uninstallBundleSkills } from "./mullion-bundle.js"
 // now applied to mapCodexEvent's output too).
 
 const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
+// SHELL_METACHARACTERS_RE (shared.js) — unlike claude-code.ts's matcher,
+// this one is NOT applied in `matches()` below. It gates only
+// `commandTransform`'s MCP `-c` flags (issue #880) — see that function's
+// own comment for why a chained/piped/redirected command should still
+// match this adapter (and still get hooks.json/bundle-skills) even when
+// it's not safe to also append an argv flag.
 
 export interface CodexHookGroup {
   matcher?: string;
@@ -361,6 +384,79 @@ export function resolveCodexAgentsSkillsDir(): string {
   return path.join(os.homedir(), ".agents", "skills");
 }
 
+// Issue #880 — exposes Mullion's own MCP server (src/mcp/server.mjs) to
+// Codex, via `-c mcp_servers.mullion.*` overrides on the command line —
+// NOT a managed write into the user's real `~/.codex/hooks.json`/
+// `config.toml`, unlike this file's own `mergeCodexHooks`. That asymmetry
+// is deliberate, not an oversight:
+//
+// - `applyHookAdapters` runs `managedInstall` fire-and-forget
+//   (hook-adapters/index.ts, `Promise.resolve().then(...)`), and Codex
+//   reads `config.toml` at process STARTUP. `hooks.json` tolerates the
+//   fire-and-forget race because Codex re-reads it when a hook fires,
+//   well after startup; an `mcp_servers` table written after Codex has
+//   already booted would silently no-op for that launch. `-c` has no such
+//   race — it's parsed before Codex starts at all.
+// - It also avoids writing a per-SESSION hook token into the user's
+//   PERSISTENT, hand-edited `config.toml` on every launch (the pattern
+//   `mergeAgyMcpConfig`, agy.ts, already accepts for agy — not one to
+//   extend here when a cleaner channel exists for Codex).
+//
+// Verified empirically this PR, at the bar this repo requires for a new
+// per-CLI mechanism — not just "the flag is accepted," but a REAL
+// interactive `codex` (the actual TUI Mullion launches, not `codex mcp
+// list`/`codex debug prompt-input`, which are separate code paths per
+// `feedback_verify_actual_cli_subcommand_not_sibling`'s own lesson):
+//
+// 1. Launched a real `codex` (bare, no subcommand) in a PTY, in a scratch
+//    CODEX_HOME seeded with a COPY of a real `auth.json`/`config.toml`
+//    (never the user's real `~/.codex` — redirecting CODEX_HOME itself is
+//    the file-header-documented "breaks Codex outright" mistake; a copy
+//    sidesteps that while still exercising real auth), with
+//    `-c mcp_servers.probe.command/args/env` pointing at a stdio probe
+//    server. The probe's own spawn log confirmed the FULL MCP handshake —
+//    `initialize` -> `notifications/initialized` -> `tools/list` — fired
+//    during ordinary TUI startup, before any prompt was submitted.
+// 2. The captured terminal output reached Codex's normal ready-for-input
+//    screen with NO additional trust/consent dialog for the MCP server —
+//    unlike hooks.json's `/hooks` gate, there is no equivalent one-time
+//    review step for `-c`-configured MCP servers.
+// 3. A parent-env var (`MULLION_HOOK_TOKEN` set in the invoking shell) was
+//    NOT inherited by the spawned server (`env vars: []` in `codex mcp
+//    list --json`'s own transport field, i.e. no forwarding by name
+//    happens implicitly) — confirming secrets must be passed via an
+//    explicit `mcp_servers.mullion.env` table, the same "session-scoped
+//    hook token only, never MULLION_AUTH_TOKEN" posture
+//    `buildClaudeMcpConfig` (claude-code.ts) and `mergeAgyMcpConfig`
+//    (agy.ts) already use — confirmed this DOES work when set explicitly.
+//
+// Never calls `smol-toml`'s stringifier — these are new, synthesized `-c`
+// arguments, not an edit to a user's existing file, so there is nothing to
+// round-trip or preserve; each override is built as a small, independently
+// valid TOML literal and escaped via `escapeTomlBasicString` (shared.js,
+// hoisted from codex-skills.ts's own identical need) before being
+// shell-quoted as one argument.
+export function buildCodexMcpFlags(
+  mcpServerPath: string,
+  hookSocketPath: string,
+  hookToken: string,
+  controlSocketPath: string,
+  execPath: string = process.execPath,
+): string {
+  const tomlString = (value: string) => `"${escapeTomlBasicString(value)}"`;
+  const envTable = [
+    `MULLION_HOOK_SOCKET=${tomlString(hookSocketPath)}`,
+    `MULLION_HOOK_TOKEN=${tomlString(hookToken)}`,
+    `MULLION_SOCKET_PATH=${tomlString(controlSocketPath)}`,
+  ].join(", ");
+  const overrides = [
+    `mcp_servers.mullion.command=${tomlString(execPath)}`,
+    `mcp_servers.mullion.args=[${tomlString(mcpServerPath)}]`,
+    `mcp_servers.mullion.env={${envTable}}`,
+  ];
+  return overrides.map((override) => `-c ${shellQuote(override)}`).join(" ");
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
     // Issue #906 — Codex's workspace-write sandbox marks .git read-only,
@@ -373,8 +469,39 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // (gitdir: pointer), not a directory — this still helps normal checkouts
     // but may not fully resolve escalations for worktree sessions (see
     // docs/agent-hooks.md).
-    commandTransform: (command: string) =>
-      command.includes("--add-dir .git") ? command : `${command} --add-dir .git`,
+    //
+    // Issue #880 — combined with the Mullion MCP server below in the same
+    // commandTransform (only one may exist per adapter): always registered
+    // (mirroring claude-code.ts's unconditional --mcp-config and agy.ts's
+    // unconditional mergeAgyMcpConfig, and now opencode.ts's unconditional
+    // mcp.mullion entry — none of the four is gated on any setting, since
+    // the tools it exposes are core Mullion functionality, not an optional
+    // nudge). See buildCodexMcpFlags' own doc comment for why this rides
+    // `commandTransform`, an ephemeral argv edit, rather than a fourth
+    // managedInstall step alongside mergeCodexHooks below.
+    //
+    // The metacharacter check applies ONLY to the MCP flags, not to
+    // --add-dir .git above — a chained/piped/redirected codex command
+    // (`codex && npm test`) still matches this adapter and still gets
+    // hooks.json/bundle-skills via managedInstall below, which doesn't care
+    // about the command string at all. It just doesn't ALSO get the MCP
+    // flags appended, the same "degrade this one flag, not the whole
+    // adapter" posture getSkipPermissionFlag() already has (launch-plan.ts)
+    // — appending `-c ...` to one piece of a chain could attach it to the
+    // wrong command entirely, but that's a reason to skip the flag, not to
+    // drop hooks too.
+    commandTransform: (command) => {
+      const withGitDir = command.includes("--add-dir .git")
+        ? command
+        : `${command} --add-dir .git`;
+      if (SHELL_METACHARACTERS_RE.test(command.trim())) return withGitDir;
+      return `${withGitDir} ${buildCodexMcpFlags(
+        resolveMcpServerPath(),
+        ctx.hookSocketPath,
+        ctx.hookToken,
+        ctx.controlSocketPath,
+      )}`;
+    },
     // async, not a plain arrow wrapping a sync call: a synchronous throw
     // from any step below must become a REJECTED PROMISE here, not an
     // exception thrown out of this function call itself —
@@ -442,9 +569,17 @@ const CODEX_EMITS = [
 
 export const codexAdapter: HookAgentAdapter = {
   name: "codex",
-  // No commandTransform (unlike Claude Code) — see the file header for why
-  // an argv edit isn't the right tool here even though one exists
-  // (`--dangerously-bypass-hook-trust`).
+  // Deliberately NOT gated on SHELL_METACHARACTERS_RE the way Claude
+  // Code's matches() is (issue #880 follow-up correction): this adapter's
+  // primary mechanism is `managedInstall` (mergeCodexHooks), which writes
+  // a REAL, host-level config file and doesn't care what the launch
+  // command looks like — unlike Claude Code, whose entire integration IS
+  // the argv/settings-file edit. Gating the whole adapter on that check
+  // would silently drop hooks, the review gate, and bundle-skill install
+  // for any chained/piped/redirected codex launch, not just the new MCP
+  // `-c` flags below — a materially bigger regression than the metacharacter
+  // guard is meant to prevent. The guard belongs on the flag it protects,
+  // not the adapter; see commandTransform's own check.
   matches: (command) => CODEX_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: CODEX_EMITS,

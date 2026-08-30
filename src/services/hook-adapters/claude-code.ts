@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { resolveMcpServerPath, shellQuote } from "./shared.js";
+import { resolveMcpServerPath, shellQuote, SHELL_METACHARACTERS_RE } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
@@ -87,11 +87,11 @@ export function resolveClaudePluginCacheDir(): string {
 // this is deliberately narrower than "the command contains claude somewhere"
 // so `--settings` is only ever appended to a simple, unchained invocation.
 const CLAUDE_COMMAND_RE = /^(?:\S*\/)?claude(?:\s|$)/;
-// Any of these anywhere in the command means it's not a simple invocation
-// (a pipeline, a chain, redirection, or a second command) — appending
-// `--settings <path>` to the raw string in that case could attach the flag
-// to the wrong part of the chain instead of to `claude` itself.
-const SHELL_METACHARACTERS_RE = /[;&|<>]/;
+// SHELL_METACHARACTERS_RE (shared.js) — any of `;&|<>` anywhere in the
+// command means it's not a simple invocation (a pipeline, a chain,
+// redirection, or a second command) — appending `--settings <path>` to the
+// raw string in that case could attach the flag to the wrong part of the
+// chain instead of to `claude` itself.
 
 // Issue #264 — a blocking permission decision needs long enough for an
 // actual human to notice the amber review indicator and click

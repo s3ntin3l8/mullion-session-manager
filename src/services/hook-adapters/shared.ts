@@ -84,3 +84,26 @@ export function resolveMcpServerPath(): string {
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
+
+/** Any of these anywhere in a command means it's not a simple invocation (a
+ * pipeline, a chain, redirection, or a second command) — appending a flag to
+ * the raw string in that case could attach it to the wrong part of the
+ * chain instead of to the agent binary itself. Originally private to
+ * claude-code.ts; hoisted here (issue #880) once codex.ts's own
+ * `commandTransform` needed the identical guard — a second independent copy
+ * of a security-relevant regex is a drift risk this module exists to avoid
+ * (see resolveMcpServerPath's own comment on the same rationale). */
+export const SHELL_METACHARACTERS_RE = /[;&|<>]/;
+
+/** Escapes `value` for use inside a TOML basic string (`"..."`) — backslash
+ * first, then double-quote, so an embedded backslash doesn't get
+ * re-escaped by the quote replacement that follows it. Originally private
+ * to codex-skills.ts (which writes `~/.codex/config.toml`'s
+ * `[[skills.config]]` blocks by hand rather than through a TOML
+ * stringifier, to avoid dropping the user's own comments/formatting — see
+ * that file's own header); hoisted here once codex.ts's MCP `-c` flags
+ * (issue #880) needed the identical escaping for a different `config.toml`
+ * key, so both call sites can't drift out of sync. */
+export function escapeTomlBasicString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}

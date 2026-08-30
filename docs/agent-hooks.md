@@ -463,9 +463,10 @@ Claude Code's own PostCompact, which carries none) and `SubagentStart`/
 equivalent is registered — Codex's hook surface still hasn't been verified
 to have one. Codex has no `Notification` event at all. See
 `hook-adapters/codex.ts`'s `CODEX_EMITS` for the capability list this
-adapter reports. Unlike every other adapter, this is **not
+adapter reports. Unlike every other adapter, its HOOKS wiring is **not
 ephemeral** — two facts verified against the real installed Codex CLI during
-the original PR contradict what the plan before that assumed:
+the original PR contradict what the plan before that assumed (the MCP
+server, added later, is a deliberate exception — see below):
 
 1. **`CODEX_HOME` is not a surgical knob.** Unlike OpenCode's
    `OPENCODE_CONFIG_DIR`, it relocates auth, model config, MCP servers,
@@ -495,6 +496,31 @@ overwritten). Because trust is recorded against the real, stable
 trust grant persists across every future Mullion-launched Codex session**
 — it just isn't automatic. Until granted, these hooks are silently skipped
 and Codex works exactly as it does today.
+
+**MCP** (issue #880): unlike hooks above, this half of the adapter IS
+ephemeral — `-c mcp_servers.mullion.command/args/env` overrides are appended
+to the launch command itself (`commandTransform`, this adapter's first-ever
+argv edit), registering Mullion's own MCP server (`src/mcp/server.mjs`) so
+the `mcp__mullion__*` tools are available in a Codex session too.
+Unconditional, like Claude Code's `--mcp-config` and agy's managed
+`mcp_config.json` merge, not gated on any setting. Two reasons this is
+ephemeral rather than a managed write into `~/.codex/config.toml`
+(`codex-skills.ts` is the precedent for writing that file, but for a
+different key): a managed write goes through `managedInstall`, which
+`applyHookAdapters` runs fire-and-forget — Codex reads `config.toml` at
+process **startup**, so a write landing after boot would silently no-op for
+that launch, a race `hooks.json` never has to worry about since Codex
+re-reads it live when a hook actually fires; and it avoids putting a
+per-session hook token into the user's persistent, hand-edited config file
+on every launch. Verified two ways, not one: `codex mcp list --json` proved
+the TOML shape resolves correctly, and — the stronger check, matching this
+repo's "verify the actual invocation, not a sibling subcommand" bar — a real
+interactive `codex` (bare, no subcommand) launched in a PTY against a stdio
+probe server logged the full `initialize` → `notifications/initialized` →
+`tools/list` handshake during ordinary startup, with **no** trust/consent
+dialog analogous to `/hooks`'s gate. That last point is also why "Removing
+managed hooks" below has no Codex-MCP entry: `-c` persists nothing to
+`config.toml`, so there is nothing to grant and nothing to remove.
 
 **Upgrading from a pre-shim release (one-time cost):** Codex's `/hooks`
 trust is granted per hook-group command string — `trusted_hash` in

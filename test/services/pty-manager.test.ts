@@ -9,6 +9,7 @@ import type { HookMessage } from "../../src/services/hook-protocol.js";
 import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
 import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
+import { buildCodexMcpFlags } from "../../src/services/hook-adapters/codex.js";
 import { resolveMcpServerPath } from "../../src/services/hook-adapters/shared.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
@@ -6379,7 +6380,7 @@ describe("PtyManager", () => {
           else process.env.HOME = originalHome;
         });
 
-        it("appends the shell-quoted prompt as a trailing positional, with skipPermissions off", async () => {
+        it("appends the shell-quoted prompt after the MCP -c flags, with skipPermissions off", async () => {
           const session = manager.getOrCreate({
             id: "13",
             cwd: "/tmp",
@@ -6394,10 +6395,22 @@ describe("PtyManager", () => {
             .mocked(spawnChildProcess)
             .mock.calls.findLast(([file]) => file === "systemd-run");
           const args = call?.[1] as string[];
-          expect(args[args.length - 1]).toBe(`codex --add-dir .git ${quotedDangerousPrompt}`);
+          // Issue #906 + issue #880 — --add-dir .git (unconditional) lands
+          // first, then the MCP -c flags, then the shell-quoted prompt
+          // (commandTransform runs before initialPromptArgs — see
+          // launch-plan.ts's own ordering comment).
+          const mcpFlags = buildCodexMcpFlags(
+            resolveMcpServerPath(),
+            manager.hookSocketPath,
+            session.hookToken,
+            manager.controlSocketPath,
+          );
+          expect(args[args.length - 1]).toBe(
+            `codex --add-dir .git ${mcpFlags} ${quotedDangerousPrompt}`,
+          );
         });
 
-        it("appends the skip-permissions flag before the shell-quoted prompt, with skipPermissions on", async () => {
+        it("appends the skip-permissions flag between the MCP -c flags and the shell-quoted prompt, with skipPermissions on", async () => {
           const session = manager.getOrCreate({
             id: "14",
             cwd: "/tmp",
@@ -6413,8 +6426,14 @@ describe("PtyManager", () => {
             .mocked(spawnChildProcess)
             .mock.calls.findLast(([file]) => file === "systemd-run");
           const args = call?.[1] as string[];
+          const mcpFlags = buildCodexMcpFlags(
+            resolveMcpServerPath(),
+            manager.hookSocketPath,
+            session.hookToken,
+            manager.controlSocketPath,
+          );
           expect(args[args.length - 1]).toBe(
-            `codex --add-dir .git --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
+            `codex --add-dir .git ${mcpFlags} --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
           );
         });
       });
@@ -6629,7 +6648,7 @@ describe("PtyManager", () => {
         else process.env.HOME = originalHome;
       });
 
-      it("spawns a matching (codex) command with --add-dir .git appended, merging a managed hooks.json into $CODEX_HOME (not sessionsDir)", async () => {
+      it("merges a managed hooks.json into $CODEX_HOME (not sessionsDir), and appends --add-dir .git + the MCP -c flags to the command (issue #906 + issue #880)", async () => {
         const session = manager.getOrCreate({
           id: "1",
           cwd: "/tmp",
@@ -6655,7 +6674,18 @@ describe("PtyManager", () => {
           .mocked(spawnChildProcess)
           .mock.calls.findLast(([file]) => file === "systemd-run");
         const args = call?.[1] as string[];
-        expect(args[args.length - 1]).toBe("codex --add-dir .git");
+        // Issue #880 — the managed hooks.json write (above) and the
+        // ephemeral --add-dir .git + MCP -c flags (here) are independent
+        // mechanisms on the same adapter; this is the one test proving all
+        // three fire from a single real spawn, not just each in isolation
+        // via its own adapter-level unit test.
+        const mcpFlags = buildCodexMcpFlags(
+          resolveMcpServerPath(),
+          manager.hookSocketPath,
+          session.hookToken,
+          manager.controlSocketPath,
+        );
+        expect(args[args.length - 1]).toBe(`codex --add-dir .git ${mcpFlags}`);
       });
     });
   });
