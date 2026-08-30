@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { resolveOpenCodePluginPath, shellQuote } from "./shared.js";
+import { resolveOpenCodePluginPath, resolveMcpServerPath, shellQuote } from "./shared.js";
 import { sessionAgentGuidePath } from "../agent-guide.js";
 import { sessionBriefingPath } from "../project-briefing.js";
 import {
@@ -97,6 +97,56 @@ export const OPENCODE_EMITS = [
   // Wire opencode v2 session diff events from session.diff
   "session_diff",
 ] as const;
+
+// Issue #881 — exposes Mullion's own MCP server (src/mcp/server.mjs) to
+// OpenCode, mirroring claude-code.ts's buildClaudeMcpConfig (the same three
+// env vars, the same "session-scoped hook token only, never
+// MULLION_AUTH_TOKEN" reasoning — see that function's own comment for the
+// full explanation, which applies verbatim here: this config rides
+// OPENCODE_CONFIG_CONTENT, an env var readable by the very agent it's
+// spawned for). Kept as its own exported builder, not inlined into
+// prepareLaunch, for the same "provably the same bytes across call sites"
+// reason buildClaudeMcpConfig is its own function.
+//
+// The shape is OpenCode's own, verified empirically this PR — first via
+// `OPENCODE_CONFIG_CONTENT` + `opencode debug config` for the resolved
+// shape (never against the user's real `~/.config/opencode/opencode.json`
+// — see the plan doc's S11/S12 spike notes), THEN via `opencode mcp list`
+// against a real stdio probe server, which reported `mullion  connected`
+// — confirming the entry is actually spawned and initialized, not merely
+// resolved into config (the same two-step bar `skills.paths`'s own comment
+// above sets: config resolution alone doesn't prove a live session can
+// reach it). `mcp.<name>` is `{ type: "local", command: [...],
+// environment: {...}, enabled: true }`. Two things differ
+// from Claude Code's `mcpServers.<name>` shape and are NOT typos:
+// `command` is a single array INCLUDING the executable (Claude Code splits
+// `command`/`args`), and the env key is `environment`, not `env`.
+export function buildOpenCodeMcpConfig(
+  mcpServerPath: string,
+  hookSocketPath: string,
+  hookToken: string,
+  controlSocketPath: string,
+  execPath: string = process.execPath,
+) {
+  return {
+    mullion: {
+      type: "local",
+      command: [execPath, mcpServerPath],
+      environment: {
+        MULLION_HOOK_SOCKET: hookSocketPath,
+        MULLION_HOOK_TOKEN: hookToken,
+        // Same posture as buildClaudeMcpConfig's identical field — this
+        // config is an env var readable by the agent it's spawned for, so
+        // only the session-scoped hook token goes in, never
+        // MULLION_AUTH_TOKEN. That token also authenticates the control
+        // socket at session scope, so the full-scope-only ops the MCP
+        // tools call correctly 403 rather than silently escalating.
+        MULLION_SOCKET_PATH: controlSocketPath,
+      },
+      enabled: true,
+    },
+  };
+}
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const configDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-config`);
@@ -278,12 +328,24 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     }
   }
 
-  if (instructions.length > 0 || skillsPaths.length > 0) {
-    const configContent: Record<string, unknown> = {};
-    if (instructions.length > 0) configContent.instructions = instructions;
-    if (skillsPaths.length > 0) configContent.skills = { paths: skillsPaths };
-    envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify(configContent);
-  }
+  // Issue #881 — the Mullion MCP server, always registered (mirroring
+  // claude-code.ts's unconditional --mcp-config and agy.ts's unconditional
+  // mergeAgyMcpConfig — neither is gated on any setting, since the tools it
+  // exposes are core Mullion functionality, not an optional nudge). This is
+  // the one addition that makes `configContent` unconditional: previously
+  // OPENCODE_CONFIG_CONTENT was only set when instructions/skillsPaths had
+  // content, but `mcp` now always does.
+  const mcpConfig = buildOpenCodeMcpConfig(
+    resolveMcpServerPath(),
+    ctx.hookSocketPath,
+    ctx.hookToken,
+    ctx.controlSocketPath,
+  );
+
+  const configContent: Record<string, unknown> = { mcp: mcpConfig };
+  if (instructions.length > 0) configContent.instructions = instructions;
+  if (skillsPaths.length > 0) configContent.skills = { paths: skillsPaths };
+  envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify(configContent);
 
   return {
     settingsFiles,

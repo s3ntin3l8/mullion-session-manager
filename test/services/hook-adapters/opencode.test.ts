@@ -2,10 +2,63 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openCodeAdapter } from "../../../src/services/hook-adapters/opencode.js";
+import {
+  openCodeAdapter,
+  buildOpenCodeMcpConfig,
+} from "../../../src/services/hook-adapters/opencode.js";
+import { resolveMcpServerPath } from "../../../src/services/hook-adapters/shared.js";
 import { sessionAgentGuidePath } from "../../../src/services/agent-guide.js";
 import { sessionBriefingPath } from "../../../src/services/project-briefing.js";
 import { resolveMullionBundleDir } from "../../../src/services/hook-adapters/mullion-bundle.js";
+
+// Issue #881 — the mcp.mullion entry is now unconditional (see
+// opencode.ts's own comment on why), so every OPENCODE_CONFIG_CONTENT
+// payload in this file carries it alongside whatever else is under test.
+// This helper computes the exact expected value from a given ctx, the same
+// way opencode.ts itself builds it, so assertions stay effect-under-test
+// rather than re-deriving the mcp shape by hand at each call site.
+function expectedMcp(ctx: {
+  hookSocketPath: string;
+  hookToken: string;
+  controlSocketPath: string;
+}) {
+  return buildOpenCodeMcpConfig(
+    resolveMcpServerPath(),
+    ctx.hookSocketPath,
+    ctx.hookToken,
+    ctx.controlSocketPath,
+  );
+}
+
+// Issue #881 — pins buildOpenCodeMcpConfig's exact output literally, with
+// no helper in between. Every other test in this file computes its
+// expectation via expectedMcp()/buildOpenCodeMcpConfig itself, which only
+// proves prepareLaunch forwards the builder's output — it would stay green
+// even if the builder's own shape drifted (e.g. `environment` renamed to
+// `env`, or `command` split into `command`/`args` to match
+// buildClaudeMcpConfig's differently-shaped Claude Code output). This is
+// the one test that actually catches that: the literal shape below is
+// OpenCode's own, confirmed against the real CLI (`opencode mcp list`
+// reporting `mullion  connected` against a stdio probe server — see this
+// function's own doc comment for the two-step verification).
+describe("buildOpenCodeMcpConfig (issue #881)", () => {
+  it("uses OpenCode's own mcp shape, not Claude Code's", () => {
+    expect(
+      buildOpenCodeMcpConfig("/srv.mjs", "/h.sock", "tok", "/c.sock", "/usr/bin/node"),
+    ).toEqual({
+      mullion: {
+        type: "local",
+        command: ["/usr/bin/node", "/srv.mjs"],
+        environment: {
+          MULLION_HOOK_SOCKET: "/h.sock",
+          MULLION_HOOK_TOKEN: "tok",
+          MULLION_SOCKET_PATH: "/c.sock",
+        },
+        enabled: true,
+      },
+    });
+  });
+});
 
 describe("openCodeAdapter.matches (issue #175)", () => {
   it("matches a bare opencode invocation", () => {
@@ -62,15 +115,26 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
 
   it("points OPENCODE_CONFIG_DIR at the same ephemeral directory", () => {
     const plan = openCodeAdapter.prepareLaunch(ctx);
-    expect(plan.envAdditions).toEqual({
-      OPENCODE_CONFIG_DIR: "/tmp/mullion-sessions/42.opencode-config",
-    });
+    expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe("/tmp/mullion-sessions/42.opencode-config");
   });
 
-  it("never rewrites the command — OPENCODE_CONFIG_DIR is env-only", () => {
+  it("never rewrites the command — OPENCODE_CONFIG_DIR/OPENCODE_CONFIG_CONTENT are env-only", () => {
     const plan = openCodeAdapter.prepareLaunch(ctx);
     expect(plan.commandTransform).toBeUndefined();
     expect(plan.managedInstall).toBeUndefined();
+  });
+
+  // Issue #881 — the Mullion MCP server is registered unconditionally,
+  // independently of every other gate in this file (agent-guide, briefing,
+  // bundle, project skill/reviewer) — mirroring claude-code.ts's
+  // unconditional --mcp-config and agy.ts's unconditional
+  // mergeAgyMcpConfig. Neither is gated on a setting; the tools it exposes
+  // are core Mullion functionality.
+  it("registers the Mullion MCP server unconditionally via OPENCODE_CONFIG_CONTENT", () => {
+    const plan = openCodeAdapter.prepareLaunch(ctx);
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(ctx),
+    });
   });
 });
 
@@ -120,6 +184,7 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
     expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeDefined();
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       instructions: [sessionAgentGuidePath(sessionsDir, "42")],
+      mcp: expectedMcp(baseCtx),
     });
   });
 
@@ -131,13 +196,15 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
     );
   });
 
-  it("omits OPENCODE_CONFIG_CONTENT entirely when the setting is off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent", () => {
+  it("omits the guide pointer from instructions when the setting is off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (OPENCODE_CONFIG_CONTENT itself stays present for the unconditional mcp entry, issue #881)", () => {
     writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: false });
-    expect(plan.envAdditions).toEqual({
-      OPENCODE_CONFIG_DIR: path.join(sessionsDir, "42.opencode-config"),
+    expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe(
+      path.join(sessionsDir, "42.opencode-config"),
+    );
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
     });
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
   });
 
   // Issue #437c, Hermes review on PR #457 — the dangling-path corner case:
@@ -145,12 +212,14 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
   // would report true), but writeSessionAgentGuide's own copy write never
   // happened (or failed) for this session, so the per-session copy this
   // adapter would reference genuinely isn't there.
-  it("omits OPENCODE_CONFIG_CONTENT when the setting is on but the per-session guide copy doesn't exist (e.g. writeSessionAgentGuide's write failed)", () => {
+  it("omits the guide pointer from instructions when the setting is on but the per-session guide copy doesn't exist (e.g. writeSessionAgentGuide's write failed)", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: true });
-    expect(plan.envAdditions).toEqual({
-      OPENCODE_CONFIG_DIR: path.join(sessionsDir, "42.opencode-config"),
+    expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe(
+      path.join(sessionsDir, "42.opencode-config"),
+    );
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
     });
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
   });
 });
 
@@ -176,32 +245,35 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills.paths 
     expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeDefined();
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
+      mcp: expectedMcp(ctx),
     });
   });
 
-  it("omits OPENCODE_CONFIG_CONTENT entirely when the setting is off", () => {
+  it("omits skills.paths when the setting is off (mcp entry is unaffected — issue #881, it's gated independently)", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: false });
-    expect(plan.envAdditions).toEqual({
-      OPENCODE_CONFIG_DIR: "/tmp/mullion-sessions/42.opencode-config",
+    expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe("/tmp/mullion-sessions/42.opencode-config");
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(ctx),
     });
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
   });
 
   it("composes with instructions from the agent-guide gate into one OPENCODE_CONFIG_CONTENT payload", () => {
     const sessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-bundle-"));
     try {
       writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
-      const plan = openCodeAdapter.prepareLaunch({
+      const scopedCtx = {
         ...ctx,
         sessionsDir,
         hookSocketPath: path.join(sessionsDir, "hooks.sock"),
         controlSocketPath: path.join(sessionsDir, "mullion.sock"),
         injectAgentGuide: true,
         injectMullionBundle: true,
-      });
+      };
+      const plan = openCodeAdapter.prepareLaunch(scopedCtx);
       expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
         instructions: [sessionAgentGuidePath(sessionsDir, "42")],
         skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
+        mcp: expectedMcp(scopedCtx),
       });
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
@@ -335,18 +407,23 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectProjectBriefing: true });
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       instructions: [sessionBriefingPath(sessionsDir, "42")],
+      mcp: expectedMcp(baseCtx),
     });
   });
 
-  it("omits OPENCODE_CONFIG_CONTENT entirely when the setting is off", () => {
+  it("omits the briefing pointer from instructions when the setting is off (mcp entry unaffected, issue #881)", () => {
     writeFileSync(sessionBriefingPath(sessionsDir, "42"), "briefing content");
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectProjectBriefing: false });
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
   });
 
-  it("omits OPENCODE_CONFIG_CONTENT when the setting is on but the per-session briefing copy doesn't exist (no briefing for this project, or writeSessionBriefing unlinked a stale one)", () => {
+  it("omits the briefing pointer from instructions when the setting is on but the per-session briefing copy doesn't exist (no briefing for this project, or writeSessionBriefing unlinked a stale one)", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectProjectBriefing: true });
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
   });
 
   it("exact instructions order is [guide, briefing, seed] when all three are present", () => {
@@ -364,6 +441,7 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
         sessionBriefingPath(sessionsDir, "42"),
         path.join(sessionsDir, "42.opencode-seed.md"),
       ],
+      mcp: expectedMcp(baseCtx),
     });
   });
 });
@@ -411,6 +489,7 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     expect(seedFile?.contents).toBe("resume the refactor");
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       instructions: [seedPath()],
+      mcp: expectedMcp(baseCtx),
     });
   });
 
@@ -431,19 +510,24 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     });
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       instructions: [sessionAgentGuidePath(sessionsDir, "42"), seedPath()],
+      mcp: expectedMcp(baseCtx),
     });
   });
 
-  it("omits the seed entirely when seedPrompt is an empty string", () => {
+  it("omits the seed from instructions when seedPrompt is an empty string (mcp entry unaffected, issue #881)", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, seedPrompt: "" });
     expect(plan.settingsFiles).toHaveLength(1);
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
   });
 
-  it("omits the seed entirely when seedPrompt is absent (existing agent-guide-only behavior unaffected)", () => {
+  it("omits the seed from instructions when seedPrompt is absent (existing agent-guide-only behavior unaffected)", () => {
     const plan = openCodeAdapter.prepareLaunch(baseCtx);
     expect(plan.settingsFiles).toHaveLength(1);
-    expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
   });
 });
 

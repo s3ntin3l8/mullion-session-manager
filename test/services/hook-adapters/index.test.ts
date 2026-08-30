@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, chmodSync, statSync } fr
 import path from "node:path";
 import os from "node:os";
 import { applyHookAdapters } from "../../../src/services/hook-adapters/index.js";
+import { buildOpenCodeMcpConfig } from "../../../src/services/hook-adapters/opencode.js";
+import { resolveMcpServerPath } from "../../../src/services/hook-adapters/shared.js";
 
 describe("applyHookAdapters (issue #174)", () => {
   let dir: string;
@@ -123,9 +125,21 @@ describe("applyHookAdapters (issue #174)", () => {
         "mullion-hook-emitter.js",
       );
       expect(existsSync(pluginPath)).toBe(true);
+      // Issue #881 — mcp.mullion is unconditional, so OPENCODE_CONFIG_CONTENT
+      // is always present now, not just OPENCODE_CONFIG_DIR.
       expect(result).toEqual({
         command: "opencode",
-        envAdditions: { OPENCODE_CONFIG_DIR: path.join(c.sessionsDir, "1.opencode-config") },
+        envAdditions: {
+          OPENCODE_CONFIG_DIR: path.join(c.sessionsDir, "1.opencode-config"),
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            mcp: buildOpenCodeMcpConfig(
+              resolveMcpServerPath(),
+              c.hookSocketPath,
+              c.hookToken,
+              c.controlSocketPath,
+            ),
+          }),
+        },
         matched: true,
         emits: expect.any(Array) as unknown,
       });
