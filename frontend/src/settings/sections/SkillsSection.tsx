@@ -23,7 +23,13 @@ export function SkillsSection() {
   useEffect(() => {
     api
       .listGlobalSkills()
-      .then(setSkills)
+      // Hermes review, PR #935 — this route is served by the SAME process
+      // rendering this component, so `kind` can't actually be absent today.
+      // Normalized anyway, for symmetry with SkillsPanel.tsx's own
+      // version-skew guard (a remote-hosted project's /internal/skills CAN
+      // hit a pre-#885 peer build) and so the two panels don't silently
+      // diverge if this route is ever proxied to a remote host later.
+      .then((result) => setSkills(result.map((s) => ({ ...s, kind: s.kind ?? "skill" }))))
       .catch(() => setSkills(null));
   }, []);
 
