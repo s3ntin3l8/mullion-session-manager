@@ -6394,7 +6394,7 @@ describe("PtyManager", () => {
             .mocked(spawnChildProcess)
             .mock.calls.findLast(([file]) => file === "systemd-run");
           const args = call?.[1] as string[];
-          expect(args[args.length - 1]).toBe(`codex ${quotedDangerousPrompt}`);
+          expect(args[args.length - 1]).toBe(`codex --add-dir .git ${quotedDangerousPrompt}`);
         });
 
         it("appends the skip-permissions flag before the shell-quoted prompt, with skipPermissions on", async () => {
@@ -6414,7 +6414,7 @@ describe("PtyManager", () => {
             .mock.calls.findLast(([file]) => file === "systemd-run");
           const args = call?.[1] as string[];
           expect(args[args.length - 1]).toBe(
-            `codex --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
+            `codex --add-dir .git --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
           );
         });
       });
@@ -6629,7 +6629,7 @@ describe("PtyManager", () => {
         else process.env.HOME = originalHome;
       });
 
-      it("spawns a matching (codex) command completely unchanged, merging a managed hooks.json into $CODEX_HOME (not sessionsDir)", async () => {
+      it("spawns a matching (codex) command with --add-dir .git appended, merging a managed hooks.json into $CODEX_HOME (not sessionsDir)", async () => {
         const session = manager.getOrCreate({
           id: "1",
           cwd: "/tmp",
@@ -6655,7 +6655,7 @@ describe("PtyManager", () => {
           .mocked(spawnChildProcess)
           .mock.calls.findLast(([file]) => file === "systemd-run");
         const args = call?.[1] as string[];
-        expect(args[args.length - 1]).toBe("codex");
+        expect(args[args.length - 1]).toBe("codex --add-dir .git");
       });
     });
   });

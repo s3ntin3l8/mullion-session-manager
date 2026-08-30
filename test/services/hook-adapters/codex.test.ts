@@ -174,11 +174,51 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(readFileSync(path.join(codexHome, "hooks.json"), "utf8")).toBe("not json at all");
   });
 
-  it("never rewrites the command — Codex needs no argv edit", () => {
+  it("does not emit settingsFiles or envAdditions", () => {
     const plan = codexAdapter.prepareLaunch(ctx());
-    expect(plan.commandTransform).toBeUndefined();
     expect(plan.settingsFiles).toBeUndefined();
     expect(plan.envAdditions).toBeUndefined();
+  });
+
+  describe("commandTransform (issue #906)", () => {
+    it("appends --add-dir .git to the command", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform).toBeDefined();
+      expect(plan.commandTransform!("codex --sandbox workspace-write")).toBe(
+        "codex --sandbox workspace-write --add-dir .git",
+      );
+    });
+
+    it("appends --add-dir .git to a simple codex command", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform!("codex")).toBe("codex --add-dir .git");
+    });
+
+    it("appends --add-dir .git alongside other flags", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform!("codex -m o3 --sandbox workspace-write")).toBe(
+        "codex -m o3 --sandbox workspace-write --add-dir .git",
+      );
+    });
+
+    it("appends --add-dir .git to a path-qualified codex command", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform!("/usr/local/bin/codex -s workspace-write")).toBe(
+        "/usr/local/bin/codex -s workspace-write --add-dir .git",
+      );
+    });
+
+    it("does not double-append --add-dir .git when already present", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform!("codex --add-dir .git")).toBe("codex --add-dir .git");
+    });
+
+    it("does not double-append when --add-dir .git appears mid-command", () => {
+      const plan = codexAdapter.prepareLaunch(ctx());
+      expect(plan.commandTransform!("codex --add-dir .git -m o3")).toBe(
+        "codex --add-dir .git -m o3",
+      );
+    });
   });
 
   it("prunes a stale group from a previous release, not just the current forwarder path (issue #460)", async () => {
