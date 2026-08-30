@@ -26,6 +26,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "create_preview",
       "delete_preview",
       "list_previews",
+      "get_project_tooling",
+      "set_project_tooling",
     ]);
   });
 
@@ -235,5 +237,92 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const text = await tool.handler({}, { listPreviews });
     expect(listPreviews).toHaveBeenCalledWith();
     expect(JSON.parse(text)).toEqual([{ slug: "abc" }]);
+  });
+
+  it("get_project_tooling calls client.getProjectTooling with the projectId", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_project_tooling")!;
+    const getProjectTooling = vi.fn().mockResolvedValue({
+      briefing: "hi",
+      skill: null,
+      reviewerAgent: null,
+    });
+    const text = await tool.handler({ projectId: "3" }, { getProjectTooling });
+    expect(getProjectTooling).toHaveBeenCalledWith("3");
+    expect(JSON.parse(text)).toEqual({
+      briefing: "hi",
+      skill: null,
+      reviewerAgent: null,
+    });
+  });
+
+  it("get_project_tooling defaults projectId to undefined (session-scope defaulting is the op's job)", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_project_tooling")!;
+    const getProjectTooling = vi.fn().mockResolvedValue({
+      briefing: null,
+      skill: null,
+      reviewerAgent: null,
+    });
+    const text = await tool.handler({}, { getProjectTooling });
+    expect(getProjectTooling).toHaveBeenCalledWith(undefined);
+    expect(JSON.parse(text)).toEqual({
+      briefing: null,
+      skill: null,
+      reviewerAgent: null,
+    });
+  });
+
+  it("get_project_tooling inputSchema is non-required with optional projectId", () => {
+    const tool = TOOLS.find((t) => t.name === "get_project_tooling")!;
+    expect(tool.inputSchema).toMatchObject({
+      type: "object",
+      properties: { projectId: { type: "string" } },
+    });
+    // Not required — session scope may omit it.
+    expect(tool.inputSchema.required).toBeUndefined();
+  });
+
+  it("set_project_tooling forwards all fields and returns JSON-stringified result", async () => {
+    const tool = TOOLS.find((t) => t.name === "set_project_tooling")!;
+    const setProjectTooling = vi.fn().mockResolvedValue({
+      briefing: { ok: true, status: 200 },
+    });
+    const text = await tool.handler(
+      { projectId: "3", briefing: "x", skill: "s", reviewerAgent: "r" },
+      { setProjectTooling },
+    );
+    expect(setProjectTooling).toHaveBeenCalledWith({
+      projectId: "3",
+      briefing: "x",
+      skill: "s",
+      reviewerAgent: "r",
+    });
+    expect(JSON.parse(text)).toEqual({ briefing: { ok: true, status: 200 } });
+  });
+
+  it("set_project_tooling forwards undefined for omitted fields (matches the partial-update contract)", async () => {
+    const tool = TOOLS.find((t) => t.name === "set_project_tooling")!;
+    const setProjectTooling = vi.fn().mockResolvedValue({ ok: true });
+    const text = await tool.handler({ projectId: "3", briefing: "x" }, { setProjectTooling });
+    expect(setProjectTooling).toHaveBeenCalledWith({
+      projectId: "3",
+      briefing: "x",
+      skill: undefined,
+      reviewerAgent: undefined,
+    });
+    expect(JSON.parse(text)).toEqual({ ok: true });
+  });
+
+  it("set_project_tooling inputSchema requires projectId", () => {
+    const tool = TOOLS.find((t) => t.name === "set_project_tooling")!;
+    expect(tool.inputSchema).toMatchObject({
+      type: "object",
+      required: ["projectId"],
+      properties: {
+        projectId: { type: "string" },
+        briefing: { type: "string" },
+        skill: { type: "string" },
+        reviewerAgent: { type: "string" },
+      },
+    });
   });
 });

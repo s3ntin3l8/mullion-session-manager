@@ -277,4 +277,16 @@ export class MullionClient {
   deletePreview(slug) {
     return this.controlRequest("previews.delete", { slug });
   }
+
+  getProjectTooling(projectId) {
+    return this.controlRequest("projects.get_tooling", { projectId });
+  }
+
+  setProjectTooling({ projectId, briefing, skill, reviewerAgent }) {
+    const body = { projectId };
+    if (briefing !== undefined) body.briefing = briefing;
+    if (skill !== undefined) body.skill = skill;
+    if (reviewerAgent !== undefined) body.reviewerAgent = reviewerAgent;
+    return this.controlRequest("projects.set_tooling", body);
+  }
 }

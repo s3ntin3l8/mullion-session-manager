@@ -2437,6 +2437,270 @@ describe("controlSocketPlugin (issue #185)", () => {
         });
       });
 
+      describe("projects.get_tooling", () => {
+        it("full scope: returns the project's tooling row (nulls for fields not yet authored)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
+          });
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "projects.get_tooling", body: { projectId: project.json().id } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(reply.result).toEqual({
+            briefing: null,
+            skill: null,
+            reviewerAgent: null,
+          });
+          socket.destroy();
+        });
+
+        it("full scope: returns the written fields when a row exists", async () => {
+          app = await buildApp();
+          await app.ready();
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
+          });
+          const projectId = project.json().id;
+          await app.inject({
+            method: "PUT",
+            url: `/api/projects/${projectId}/tooling`,
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { briefing: "run tests before commit" },
+          });
+          await app.inject({
+            method: "PUT",
+            url: `/api/projects/${projectId}/tooling/skill`,
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: {
+              skill: "---\nname: x\ndescription: y\n---\nbody",
+            },
+          });
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "projects.get_tooling", body: { projectId } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(reply.result).toEqual({
+            briefing: "run tests before commit",
+            skill: "---\nname: x\ndescription: y\n---\nbody",
+            reviewerAgent: null,
+          });
+          socket.destroy();
+        });
+
+        it("full scope: 400s with no projectId", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.get_tooling" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 400,
+            error: "'projectId' is required",
+          });
+          socket.destroy();
+        });
+
+        it("full scope: 404s on unknown project id", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "projects.get_tooling", body: { projectId: 9999 } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(false);
+          expect(reply.status).toBe(404);
+          socket.destroy();
+        });
+
+        it("session scope: returns the pinned session's project's tooling with no projectId", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.get_tooling" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(reply.result).toEqual({
+            briefing: null,
+            skill: null,
+            reviewerAgent: null,
+          });
+          socket.destroy();
+        });
+      });
+
+      describe("projects.set_tooling", () => {
+        it("full scope: upserts all three fields and returns the per-field PUT results", async () => {
+          app = await buildApp();
+          await app.ready();
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
+          });
+          const projectId = project.json().id;
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "projects.set_tooling",
+              body: {
+                projectId,
+                briefing: "don't run on Fridays",
+                skill: "---\nname: s\ndescription: d\n---\nbody",
+                reviewerAgent: "---\nname: r\ndescription: d\n---\nbody",
+              },
+            })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.id).toBe(1);
+          expect(reply.ok).toBe(true);
+          // Per-field PUTs are spread at the top level alongside `ok`,
+          // not nested under a `result` key.
+          expect(reply.briefing).toEqual({
+            ok: true,
+            status: 200,
+            result: { briefing: "don't run on Fridays" },
+          });
+          expect(reply.skill).toEqual({
+            ok: true,
+            status: 200,
+            result: { skill: "---\nname: s\ndescription: d\n---\nbody" },
+          });
+          expect(reply.reviewerAgent).toEqual({
+            ok: true,
+            status: 200,
+            result: { reviewerAgent: "---\nname: r\ndescription: d\n---\nbody" },
+          });
+          // Round-trip via get_tooling to confirm persistence.
+          socket.write(
+            `${JSON.stringify({ id: 2, op: "projects.get_tooling", body: { projectId } })}\n`,
+          );
+          const getReply = await waitForReply(socket);
+          expect(getReply.result).toEqual({
+            briefing: "don't run on Fridays",
+            skill: "---\nname: s\ndescription: d\n---\nbody",
+            reviewerAgent: "---\nname: r\ndescription: d\n---\nbody",
+          });
+          socket.destroy();
+        });
+
+        it("full scope: partial upsert — only the provided fields are forwarded", async () => {
+          app = await buildApp();
+          await app.ready();
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
+          });
+          const projectId = project.json().id;
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "projects.set_tooling",
+              body: { projectId, briefing: "only briefing" },
+            })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.id).toBe(1);
+          expect(reply.ok).toBe(true);
+          // Per-field results are spread at the top level alongside `ok`,
+          // not nested under a `result` key.
+          expect(reply.briefing).toEqual({
+            ok: true,
+            status: 200,
+            result: { briefing: "only briefing" },
+          });
+          // skill and reviewerAgent were not sent, so no entries.
+          expect(reply).not.toHaveProperty("skill");
+          expect(reply).not.toHaveProperty("reviewerAgent");
+          socket.destroy();
+        });
+
+        it("full scope: top-level ok is false when any individual field PUT fails", async () => {
+          app = await buildApp();
+          await app.ready();
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { createDir: true, name: "p", cwd: "/tmp" },
+          });
+          const projectId = project.json().id;
+          const socket = await fullScopeSocket();
+          // Oversized briefing exceeds MAX_PROJECT_BRIEFING_BYTES (8 KiB),
+          // and an invalid skill frontmatter is rejected by the PUT route.
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "projects.set_tooling",
+              body: {
+                projectId,
+                briefing: "x".repeat(10_000),
+                skill: "not-valid-frontmatter",
+              },
+            })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.id).toBe(1);
+          expect(reply.ok).toBe(false);
+          expect(reply.briefing.ok).toBe(false);
+          expect(reply.briefing.status).toBeGreaterThanOrEqual(400);
+          expect(reply.skill.ok).toBe(false);
+          expect(reply.skill.status).toBeGreaterThanOrEqual(400);
+          socket.destroy();
+        });
+
+        it("full scope: 400s with no projectId", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.set_tooling" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 400,
+            error: "'projectId' is required",
+          });
+          socket.destroy();
+        });
+
+        it("session scope: rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.set_tooling" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
+      });
+
       describe("previews.create / .get / .delete", () => {
         beforeEach(() => {
           process.env.PREVIEW_BASE_HOST = "preview.example.com";

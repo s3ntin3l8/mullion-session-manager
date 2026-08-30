@@ -146,6 +146,8 @@ describe("mcp/server.mjs (issue #271)", () => {
       "create_preview",
       "delete_preview",
       "list_previews",
+      "get_project_tooling",
+      "set_project_tooling",
     ]);
   });
 

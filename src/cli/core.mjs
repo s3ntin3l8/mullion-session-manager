@@ -11,6 +11,17 @@ import fs from "node:fs";
 import net from "node:net";
 import { MullionSocketError } from "./client.mjs";
 
+/** Read all of stdin as a string. Used for --flag/- piped input. */
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => resolve(chunks.join("")));
+    process.stdin.on("error", reject);
+  });
+}
+
 export class CliUsageError extends Error {}
 
 // ---------------------------------------------------------------------------
@@ -841,6 +852,52 @@ const projectCommands = {
   async dock(client, args) {
     const projectId = requireOne(args, "project id");
     const result = await client.request("projects.dock", { projectId });
+    return { json: result };
+  },
+  async tooling(client, args) {
+    const { flags } = extractFlags(args, {
+      project: "string",
+      briefing: "string",
+      skill: "string",
+      reviewer: "string",
+    });
+    const projectId = flags.project ?? args[0];
+    if (!projectId) {
+      throw new CliUsageError(
+        "project id is required: mullion project tooling <projectId> [flags]",
+      );
+    }
+    // Read mode: no write flags provided
+    if (!flags.briefing && !flags.skill && !flags.reviewer) {
+      const result = await client.request("projects.get_tooling", { projectId });
+      return { json: result };
+    }
+    // Write mode: read each file, send as strings.
+    // Only one flag may use "-" (stdin); read it once and reuse.
+    const stdinFlags = [flags.briefing, flags.skill, flags.reviewer].filter(
+      (f) => f === "-",
+    ).length;
+    if (stdinFlags > 1) {
+      throw new CliUsageError("only one flag may read from stdin (-)");
+    }
+    const stdinContent = stdinFlags === 1 ? await readStdin() : undefined;
+    const readInput = (flag) => {
+      if (flag === undefined) return undefined;
+      if (flag === "-") return stdinContent;
+      try {
+        return fs.readFileSync(flag, "utf8");
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          throw new CliUsageError(`file not found: ${flag}`);
+        }
+        throw err;
+      }
+    };
+    const body = { projectId };
+    if (flags.briefing !== undefined) body.briefing = readInput(flags.briefing);
+    if (flags.skill !== undefined) body.skill = readInput(flags.skill);
+    if (flags.reviewer !== undefined) body.reviewerAgent = readInput(flags.reviewer);
+    const result = await client.request("projects.set_tooling", body);
     return { json: result };
   },
 };

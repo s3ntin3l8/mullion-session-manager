@@ -106,35 +106,37 @@ condensed for an in-session agent, alongside the scope caveats most likely
 to trip one up (the auth-disabled full-scope-for-everyone mode in
 particular).
 
-| Op                     | Scope         | REST equivalent                       |
-| ---------------------- | ------------- | ------------------------------------- |
-| `ping`                 | full, session | — (answered in-process, no REST call) |
-| `sessions.list`        | full          | `GET /api/sessions`                   |
-| `sessions.get`         | full, session | `GET /api/sessions/:id`               |
-| `sessions.create`      | full          | `POST /api/sessions`                  |
-| `sessions.spawn_child` | full, session | `POST /api/sessions`                  |
-| `sessions.kill`        | full          | `DELETE /api/sessions/:id`            |
-| `sessions.rename`      | full, session | `PATCH /api/sessions/:id`             |
-| `sessions.scrollback`  | full, session | `GET /api/sessions/:id/scrollback`    |
-| `sessions.attach`      | full, session | stream — see below                    |
-| `sessions.input`       | full, session | stream — see below                    |
-| `sessions.resize`      | full, session | stream — see below                    |
-| `sessions.detach`      | full, session | stream — see below                    |
-| `events.subscribe`     | full, session | stream — see below                    |
-| `events.seen`          | full, session | stream — see below                    |
-| `events.unsubscribe`   | full, session | stream — see below                    |
-| `events.query`         | full, session | `GET /api/events`                     |
-| `browser.action`       | full, session | `POST /api/sessions/:id/browser`      |
-| `browser.find`         | full, session | `POST /api/sessions/:id/browser/find` |
-| `browser.bindings`     | full, session | `GET /api/sessions/:id/browser`       |
-| `projects.list`        | full          | `GET /api/projects`                   |
-| `projects.actions`     | full, session | `GET /api/projects/:id/actions`       |
-| `projects.dock`        | full          | `GET /api/projects/:id/dock`          |
-| `previews.create`      | full          | `POST /api/previews`                  |
-| `previews.get`         | full          | `GET /api/previews/:slug`             |
-| `previews.delete`      | full          | `DELETE /api/previews/:slug`          |
-| `previews.list`        | full          | `GET /api/previews`                   |
-| `agents.list`          | full          | `GET /api/agents`                     |
+| Op                     | Scope         | REST equivalent                                          |
+| ---------------------- | ------------- | -------------------------------------------------------- |
+| `ping`                 | full, session | — (answered in-process, no REST call)                    |
+| `sessions.list`        | full          | `GET /api/sessions`                                      |
+| `sessions.get`         | full, session | `GET /api/sessions/:id`                                  |
+| `sessions.create`      | full          | `POST /api/sessions`                                     |
+| `sessions.spawn_child` | full, session | `POST /api/sessions`                                     |
+| `sessions.kill`        | full          | `DELETE /api/sessions/:id`                               |
+| `sessions.rename`      | full, session | `PATCH /api/sessions/:id`                                |
+| `sessions.scrollback`  | full, session | `GET /api/sessions/:id/scrollback`                       |
+| `sessions.attach`      | full, session | stream — see below                                       |
+| `sessions.input`       | full, session | stream — see below                                       |
+| `sessions.resize`      | full, session | stream — see below                                       |
+| `sessions.detach`      | full, session | stream — see below                                       |
+| `events.subscribe`     | full, session | stream — see below                                       |
+| `events.seen`          | full, session | stream — see below                                       |
+| `events.unsubscribe`   | full, session | stream — see below                                       |
+| `events.query`         | full, session | `GET /api/events`                                        |
+| `browser.action`       | full, session | `POST /api/sessions/:id/browser`                         |
+| `browser.find`         | full, session | `POST /api/sessions/:id/browser/find`                    |
+| `browser.bindings`     | full, session | `GET /api/sessions/:id/browser`                          |
+| `projects.list`        | full          | `GET /api/projects`                                      |
+| `projects.actions`     | full, session | `GET /api/projects/:id/actions`                          |
+| `projects.dock`        | full          | `GET /api/projects/:id/dock`                             |
+| `projects.get_tooling` | full, session | `GET /api/projects/:id/tooling`                          |
+| `projects.set_tooling` | full          | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` |
+| `previews.create`      | full          | `POST /api/previews`                                     |
+| `previews.get`         | full          | `GET /api/previews/:slug`                                |
+| `previews.delete`      | full          | `DELETE /api/previews/:slug`                             |
+| `previews.list`        | full          | `GET /api/previews`                                      |
+| `agents.list`          | full          | `GET /api/agents`                                        |
 
 `events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
 over the _persisted_ `session_events` table — distinct from `events.subscribe`
@@ -169,6 +171,42 @@ is transparent to every existing consumer of this op: the MCP
 start purely by `id` off this same list, so they start a compose log
 monitor with no code change on their side. `previews.get`/`.delete` take
 `body.slug`.
+
+`projects.get_tooling` and `projects.set_tooling` are how the per-project
+`project_tooling` row is read and written (the same row the Mullion Briefing
+panel edits in the UI). They're operator-facing surfaces — see
+[`docs/project-briefing.md`](project-briefing.md) — and `set_tooling` is
+**full-scope only**; `get_tooling` is reachable at both scopes (an agent
+inside a session can read its own project's tooling, just not edit it).
+
+`get_tooling` returns `{briefing, skill, reviewerAgent}`, each either a
+string or `null` — `null` is the ordinary "not authored yet" case per
+field, not a 404 (404 is reserved for an unknown project id). The op always
+requires `body.projectId`; at session scope, omitting it defaults to the
+connection's own pinned session's project, the same posture
+`projects.actions` already has.
+
+`set_tooling` is full-scope only and always requires `body.projectId`. It
+takes any subset of `{briefing, skill, reviewerAgent}` in the body and
+upserts each field independently against the matching `PUT
+/api/projects/:id/tooling[/skill|/reviewer-agent]` route. The response is
+`{ok, briefing?, skill?, reviewerAgent?}` where each per-field entry is the
+full `injectAndShape` wrapper around its PUT (`{ok, status, result}` on
+success, `{ok: false, status, error}` on failure). The top-level `ok` is
+**`false` if any individual field's upsert returned an error** — a caller
+that only checks the top-level `ok` will at least not silently treat a
+half-failed call as success.
+
+**The per-field diagnostics are only directly accessible to callers
+running their own control-socket client.** The `mullion` CLI surfaces
+them as JSON (the whole reply is printed via the standard `--json`
+output path); the `MullionClient` wrapper used by the MCP server, in
+contrast, collapses any `ok: false` reply into a generic
+`MullionSocketError`, so the MCP `set_project_tooling` tool surfaces
+"request failed" with no per-field breakdown — the CLI is the right
+surface if a partial-failure caller needs to know which field rejected
+and why.
+
 `previews.list` takes no body and returns every preview registered on the
 host — previews are host-global (no session/user scoping column exists on
 the table), which is also why this op is full-scope only: a session-scoped

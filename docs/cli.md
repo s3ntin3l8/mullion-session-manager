@@ -168,6 +168,19 @@ $M browser screenshot $S --out /tmp/shot.png
   project (session scope); full scope must pass it explicitly.
 - `project dock <id>` — full scope only; lists this project's dock controls
   (see `mullion dock start` below).
+- `project tooling <id> [--briefing <path|->] [--skill <path|->] [--reviewer <path|->]`
+  — full scope only. Without any of the write flags, reads the project's
+  `project_tooling` row and prints `{briefing, skill, reviewerAgent}`
+  (each a string or `null`). Passing any of `--briefing`/`--skill`/`--reviewer`
+  upserts that field; the file content is read from the given path, or
+  from stdin if `-` is passed (only one flag may read from stdin per
+  invocation). Each field is independent. On a partial-failure upsert
+  the CLI prints the full reply, including the per-field `ok`/`status`/
+  `error` for any field that rejected — this is the one surface that
+  exposes the per-field diagnostics (the MCP `set_project_tooling` tool
+  collapses them to a generic error). See
+  [`docs/project-briefing.md`](project-briefing.md) for what each field
+  does and how the resolved values reach spawned sessions.
 
 ### preview
 
@@ -248,9 +261,16 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
 (both hook-socket, see [`docs/agent-hooks.md`](agent-hooks.md)):
 `list_sessions`, `start_dock_session`, `stop_dock_session`, `get_scrollback`,
-`list_projects`, `list_actions`, `create_preview`, `delete_preview`,
+`list_projects`, `list_actions`, `get_project_tooling`, `set_project_tooling`,
+`create_preview`, `delete_preview`,
 `list_previews` — each a thin wrapper over the matching control-socket op
-(`src/mcp/tools.mjs`).
+(`src/mcp/tools.mjs`). The two `*_project_tooling` tools are full-scope only
+— they're operator-side, for automating the same per-project row the
+Mullion Briefing panel edits in the UI; see
+[`docs/project-briefing.md`](project-briefing.md). Note: the
+`set_project_tooling` MCP tool surfaces a partial-failure upsert as a
+generic tool error — the CLI is the right surface if a caller needs to
+see which field rejected (the per-field `ok`/`status`/`error`).
 
 **Scope applies here too.** Claude Code's auto-injected MCP config
 (`buildClaudeMcpConfig`) only ever carries the session-scoped
@@ -260,7 +280,8 @@ full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
 agent read its own operator credential straight off disk. So from inside a
 normal agent session **when authentication is enabled**, `list_sessions`/
 `start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
-`delete_preview`/`list_previews` reply with a scope error (same message as the CLI's own,
+`delete_preview`/`list_previews`/`get_project_tooling`/`set_project_tooling`
+reply with a scope error (same message as the CLI's own,
 above) rather than succeeding — they're for a client that sets
 `MULLION_AUTH_TOKEN` itself (e.g. `mullion mcp` run directly by an operator).
 `get_scrollback` (defaults to the caller's own session) and `list_actions`

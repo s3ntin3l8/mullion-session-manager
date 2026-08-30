@@ -81,6 +81,49 @@ multi-host: an **agent**-role process has no DB of its own, so anything
 resolved from it would otherwise silently resolve to nothing on a
 remote-hosted project.
 
+## Authoring it from the CLI / MCP
+
+For automation, the same per-project row is reachable from the CLI and MCP
+servers without going through the UI. Both surfaces default to reading
+(equivalent to the panel's initial fetch); passing one of `--briefing`,
+`--skill`, or `--reviewer` switches each to an upsert, and any subset of
+the three is independent — the same "clear one, leave the others" guarantee
+the UI gives.
+
+CLI:
+
+```sh
+# Read (all three fields + whether the row exists)
+mullion project tooling <projectId>
+
+# Write: any of --briefing / --skill / --reviewer, each takes a path
+# or "-" for stdin. Only one flag may read from stdin per invocation.
+mullion project tooling <projectId> \
+  --briefing ./briefing.md \
+  --skill ./SKILL.md \
+  --reviewer ./reviewer.md
+```
+
+MCP tools (full scope only — these are operator-side, not available at
+session scope, same posture `list_projects` already takes):
+
+- `get_project_tooling(projectId)` — returns
+  `{briefing?, skill?, reviewerAgent?}`, each a string or `null` (the same
+  shape the REST `GET /api/projects/:id/tooling` returns — `null` is the
+  ordinary "not authored yet" case per field, not a missing row).
+- `set_project_tooling(projectId, briefing?, skill?, reviewerAgent?)` —
+  upserts whichever fields are passed; the top-level `ok` is `false` if
+  any individual field's upsert failed. The MCP tool surfaces that as a
+  generic tool error — per-field diagnostics (which field rejected and
+  why) are not exposed through this tool. If a partial-failure caller
+  needs that detail, use the CLI: `mullion project tooling <id>
+--briefing ... --skill ...` prints the full reply including each
+  per-field result.
+
+Both are thin wrappers over the matching control-socket ops — see
+[`socket-api.md`](socket-api.md)'s `projects.get_tooling`/`projects.set_tooling`
+entries.
+
 ## How the skill and reviewer actually reach a session
 
 Delivery is per-CLI, since none of the four agents share a config format or
