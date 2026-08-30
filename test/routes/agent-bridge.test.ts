@@ -100,6 +100,50 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       // plain sight.
       expect(body.pairing_payload).not.toContain(decoded!.code);
     });
+
+    it("reflects https when X-Forwarded-Proto is https (behind a TLS-terminating proxy)", async () => {
+      const { app } = await buildAndListen();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/bridges",
+        headers: {
+          "x-forwarded-proto": "https",
+          host: "mullion.dev-01.in.s3ntin3l8.de",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        bridge_id: string;
+        pairing_payload: string;
+        expires_at: string;
+      };
+
+      const decoded = decodePairingPayload(body.pairing_payload);
+      expect(decoded).not.toBeNull();
+      expect(decoded!.baseUrl).toBe("https://mullion.dev-01.in.s3ntin3l8.de");
+    });
+
+    it("uses only the first hop's X-Forwarded-Proto value with comma-separated proxies", async () => {
+      const { app } = await buildAndListen();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/bridges",
+        headers: {
+          "x-forwarded-proto": "https, http",
+          host: "mullion.dev-01.in.s3ntin3l8.de",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        bridge_id: string;
+        pairing_payload: string;
+        expires_at: string;
+      };
+
+      const decoded = decodePairingPayload(body.pairing_payload);
+      expect(decoded).not.toBeNull();
+      expect(decoded!.baseUrl).toBe("https://mullion.dev-01.in.s3ntin3l8.de");
+    });
   });
 
   describe("GET /ws/agent-bridge — pair handshake", () => {

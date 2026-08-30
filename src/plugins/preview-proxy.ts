@@ -10,6 +10,7 @@ import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
+import { requestScheme } from "../services/request-scheme.js";
 import {
   buildUpstreamRequestBody,
   buildUpstreamRequestHeaders,
@@ -511,20 +512,6 @@ const PREVIEW_AUTH_UNAUTHORIZED_HTML =
   "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
   "<body><h1>401 Unauthorized</h1><p>This preview requires authentication.</p></body></html>";
 
-// Traefik terminates TLS and talks plain HTTP to this process internally
-// (this app's standard deployment model — see routes/auth.ts's own comment
-// on the session cookie's `secure` flag), and this app doesn't enable
-// Fastify's trustProxy option, so `request.protocol` never consults
-// X-Forwarded-Proto on its own and would read "http" even in production.
-// Reading the header directly (falling back to request.protocol for a
-// deployment that terminates TLS in this process itself, with no reverse
-// proxy in front at all) is what actually reflects what scheme the *browser*
-// saw, which is what the Secure/SameSite=None cookie attributes below need
-// to track.
-function isHttpsRequest(request: FastifyRequest): boolean {
-  return request.headers["x-forwarded-proto"] === "https" || request.protocol === "https";
-}
-
 // No `domain` attribute, ever — host-only by design, so each
 // "preview-<slug>.<PREVIEW_BASE_HOST>" subdomain gets its own independent
 // cookie jar (defense in depth on top of the cookie payload's own slug
@@ -542,7 +529,7 @@ function buildPreviewCookieOptions(request: FastifyRequest): CookieSerializeOpti
     path: "/",
     maxAge: PREVIEW_COOKIE_MAX_AGE_SECONDS,
   };
-  if (isHttpsRequest(request)) {
+  if (requestScheme(request) === "https") {
     return { ...base, secure: true, sameSite: "none", partitioned: true };
   }
   return { ...base, sameSite: "lax" };

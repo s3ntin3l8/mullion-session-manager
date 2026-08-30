@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import { buildPreviewHostPattern, isPreviewHost } from "../services/preview-host.js";
 import { hasValidBearerToken, hasValidSessionCookie, isAuthEnabled } from "../services/auth.js";
+import { requestScheme } from "../services/request-scheme.js";
 
 // request.url includes the query string, and onRequest fires before
 // Fastify's own routing/query parsing runs — this is the cheapest correct
@@ -11,33 +12,6 @@ import { hasValidBearerToken, hasValidSessionCookie, isAuthEnabled } from "../se
 // trick routes/internal.ts's resolveLoopbackPreviewUrl uses.
 function requestPathname(url: string): string {
   return new URL(url, "http://placeholder").pathname;
-}
-
-// Same scheme-detection reasoning as preview-proxy.ts's isHttpsRequest:
-// Traefik terminates TLS and talks plain HTTP to this process internally,
-// and this app doesn't enable Fastify's trustProxy option, so
-// request.protocol never consults X-Forwarded-Proto on its own and would
-// read "http" even in production. Reading the header directly (falling back
-// to request.protocol for a deployment with no reverse proxy in front at
-// all) is what actually reflects the scheme the *browser* saw — exactly
-// what a same-origin comparison against the browser-supplied Origin header
-// needs.
-//
-// Unlike isHttpsRequest's own `=== "https"` exact-match (safe there — a
-// misread there only downgrades a cookie to a weaker but still-working
-// sameSite), an exact-match here is unsafe: with two proxies in front
-// (e.g. a CDN in front of Traefik), Node joins duplicate X-Forwarded-Proto
-// headers into a single comma-joined string ("https, http"), and Fastify
-// itself passes an array through unchanged if the header appeared as
-// multiple wire-level lines — either shape would fail `=== "https"`,
-// fall back to request.protocol's "http", and then reject every
-// cookie-authenticated write with a 403 (a full write outage, not just a
-// weaker check) — so only the first hop's value is read here, same as how
-// a trustProxy-enabled Fastify itself would only trust the outermost.
-function requestScheme(request: FastifyRequest): string {
-  const forwarded = request.headers["x-forwarded-proto"];
-  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
-  return first === "https" ? "https" : request.protocol;
 }
 
 const DEFAULT_PORT: Record<string, string> = { https: "443", http: "80" };
