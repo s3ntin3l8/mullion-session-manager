@@ -91,6 +91,7 @@ import {
   OpenCodeConfigParseError,
   OpenCodeSkillUserAuthoredError,
 } from "./hook-adapters/opencode-skills.js";
+import { resolveAgyGlobalSkillsDir } from "./hook-adapters/agy.js";
 import {
   readClaudeCodeSkillEnabledMap,
   writeClaudeCodeSkillEnabled,
@@ -380,17 +381,13 @@ function globalSkillDirs(): SkillSourceDir[] {
     { dir: path.join(resolveOpenCodeConfigHome(), "skills"), agent: "opencode", scope: "global" },
     { dir: claudeSkills, agent: "opencode", scope: "global" },
     { dir: agentsSkills, agent: "opencode", scope: "global" },
-    // Issue #467 — antigravity's own docs list this as agy's global skill
-    // root (all workspaces), alongside the project-scope `.agents/skills`
-    // added to projectSkillDirs above. Deliberately NOT also scanning
-    // `~/.gemini/antigravity-cli/plugins/*/skills`: on the investigating
-    // host it duplicated `~/.gemini/extensions/*/skills` byte-for-byte (an
-    // imported plugin's skills directory and its extension counterpart are
-    // the same content under two different paths), so scanning it too would
-    // produce duplicate rows under different `sourceDir`s for the same
-    // actual skill.
+    // Issue #888 — agy's REAL global skill root is ~/.gemini/config/skills,
+    // not ~/.gemini/antigravity-cli/skills (verified empirically; agy's own
+    // docs and bundled strings confirm ~/.gemini/config/ as the global
+    // customization root). The project-scope .agents/skills is handled by
+    // projectSkillDirs above.
     {
-      dir: path.join(os.homedir(), ".gemini", "antigravity-cli", "skills"),
+      dir: resolveAgyGlobalSkillsDir(),
       agent: "agy",
       scope: "global",
     },

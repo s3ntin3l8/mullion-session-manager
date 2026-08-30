@@ -267,13 +267,11 @@ function resolveAgyMcpConfigPath(): string {
 // — the same root resolveAgyHooksPath/resolveAgyMcpConfigPath already write
 // to. Verified this session (S6 spike, plan doc) that a skill placed at
 // `~/.agents/skills` — the path skills.ts's own globalSkillDirs table
-// lists for agy — is NEVER actually loaded by the installed agy binary
+// listed for agy — is NEVER actually loaded by the installed agy binary
 // (its strings only reference a workspace-relative `.agents/skills`); a
-// skill placed here, at `~/.gemini/config/skills`, IS loaded. See
-// mullion-bundle.ts's installBundleSkills doc comment and this plan's
-// backlog issue #888 (skills.ts's own table is wrong and tracked
-// separately — not fixed by this file).
-function resolveAgyGlobalSkillsDir(): string {
+// skill placed here, at `~/.gemini/config/skills`, IS loaded. Now used
+// directly by skills.ts's globalSkillDirs() (fixed in #888).
+export function resolveAgyGlobalSkillsDir(): string {
   return path.join(os.homedir(), ".gemini", "config", "skills");
 }
 
@@ -458,6 +456,5 @@ export const __testing = {
   resolveAgyMcpConfigPath,
   mergeAgyTrustedWorkspace,
   resolveAgyTrustedWorkspacesPath,
-  resolveAgyGlobalSkillsDir,
   MULLION_HOOK_NAME,
 };

@@ -2,16 +2,14 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { agyAdapter, __testing } from "../../../src/services/hook-adapters/agy.js";
+import {
+  agyAdapter,
+  resolveAgyGlobalSkillsDir,
+  __testing,
+} from "../../../src/services/hook-adapters/agy.js";
 import { forwarderHookCommand } from "../../../src/services/hook-adapters/forwarder-shim.js";
 
-const {
-  mergeAgyHooks,
-  mergeAgyMcpConfig,
-  mergeAgyTrustedWorkspace,
-  resolveAgyGlobalSkillsDir,
-  MULLION_HOOK_NAME,
-} = __testing;
+const { mergeAgyHooks, mergeAgyMcpConfig, mergeAgyTrustedWorkspace, MULLION_HOOK_NAME } = __testing;
 
 describe("agyAdapter.matches (issue #253)", () => {
   it("matches a bare agy invocation", () => {
