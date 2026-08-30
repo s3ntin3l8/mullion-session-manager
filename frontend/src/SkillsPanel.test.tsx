@@ -12,6 +12,7 @@ function makeSkill(overrides: Partial<SkillInfo> = {}): SkillInfo {
     description: "does a thing",
     sourceDir: "/repo/.claude/skills/my-skill",
     scope: "project",
+    kind: "skill",
     agents: ["claude-code"],
     enabledByAgent: { "claude-code": null },
     ...overrides,
@@ -93,7 +94,9 @@ describe("SkillsPanel", () => {
       mockFetch(() => jsonResponse(200, [])),
     );
     render(<SkillsPanel params={{ projectId: 1 }} />);
-    expect(await screen.findByText(/No skills found/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No skills, subagents, or slash commands found/),
+    ).toBeInTheDocument();
   });
 
   it("groups skills by scope", async () => {
@@ -144,7 +147,7 @@ describe("SkillsPanel", () => {
       mockFetch(() => jsonResponse(200, [makeSkill({ agents: ["claude-code", "opencode"] })])),
     );
     render(<SkillsPanel params={{ projectId: 1 }} />);
-    expect(await screen.findByText("Claude Code, opencode")).toBeInTheDocument();
+    expect(await screen.findByText("Skill · Claude Code, opencode")).toBeInTheDocument();
   });
 
   describe("enable/disable toggle (issue #463)", () => {

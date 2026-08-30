@@ -20,7 +20,14 @@ import {
 import { writeClaudeCodeSkillEnabled } from "../../src/services/hook-adapters/claude-code-skills.js";
 import { InvalidSkillNameError } from "../../src/services/hook-adapters/skill-name.js";
 
-const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
+const {
+  parseSkillFrontmatter,
+  parseAgentOrCommandFrontmatter,
+  scanSkillDirs,
+  scanFileDirs,
+  withReadDeadline,
+  FS_READ_DEADLINE_MS,
+} = __testing;
 
 function writeSkill(dir: string, name: string, description: string, body = "# body\n") {
   mkdirSync(dir, { recursive: true });
@@ -28,6 +35,22 @@ function writeSkill(dir: string, name: string, description: string, body = "# bo
     path.join(dir, "SKILL.md"),
     `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`,
   );
+}
+
+// Issue #885 — writes a single loose `.md` file directly inside `dir` (no
+// per-item subdirectory), the shape scanFileDirs/readMdFilesSafe scans for
+// subagents and commands. `frontmatter` is the raw block between the `---`
+// markers, verbatim — callers decide whether to include a `name:` key at
+// all, since that's exactly the thing under test (a command's name commonly
+// falls back to its filename).
+function writeAgentOrCommandFile(
+  dir: string,
+  fileName: string,
+  frontmatter: string,
+  body = "# body\n",
+) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, fileName), `---\n${frontmatter}\n---\n\n${body}`);
 }
 
 // Every global/builtin dir this module scans resolves off os.homedir() (and
@@ -493,6 +516,254 @@ describe("skills service", () => {
       expect(agentsSkillsRow).toBeDefined();
       expect(claudeSkillsRow?.agents).toContain("claude-code");
       expect(agentsSkillsRow?.agents).toContain("codex");
+    });
+  });
+
+  describe("parseAgentOrCommandFrontmatter (issue #885)", () => {
+    it("requires both name and description for kind 'agent', same as a skill", () => {
+      expect(
+        parseAgentOrCommandFrontmatter(
+          "---\nname: reviewer\ndescription: reviews things\n---\n",
+          "agent",
+          "fallback",
+        ),
+      ).toEqual({ name: "reviewer", description: "reviews things" });
+      expect(
+        parseAgentOrCommandFrontmatter(
+          "---\ndescription: reviews things\n---\n",
+          "agent",
+          "fallback",
+        ),
+      ).toBeNull();
+    });
+
+    it("falls back to the given filename when kind 'command' has no name key", () => {
+      const parsed = parseAgentOrCommandFrontmatter(
+        "---\ndescription: does a thing\n---\n",
+        "command",
+        "my-command",
+      );
+      expect(parsed).toEqual({ name: "my-command", description: "does a thing" });
+    });
+
+    it("prefers an explicit name over the fallback for kind 'command'", () => {
+      const parsed = parseAgentOrCommandFrontmatter(
+        "---\nname: explicit-name\ndescription: does a thing\n---\n",
+        "command",
+        "my-command",
+      );
+      expect(parsed).toEqual({ name: "explicit-name", description: "does a thing" });
+    });
+
+    it("returns null for kind 'command' with no description, even with a fallback name available", () => {
+      expect(
+        parseAgentOrCommandFrontmatter("---\nname: x\n---\n", "command", "my-command"),
+      ).toBeNull();
+    });
+  });
+
+  // Issue #885 — discovers Claude Code/opencode subagents and Claude Code
+  // slash commands alongside skills. `listProjectSkills`'s project/global/
+  // builtin dir tables each grow a sibling agent/command entry, scanned by
+  // scanFileDirs (a loose `.md` FILE per item, not a subdirectory).
+  describe("agents and commands (issue #885)", () => {
+    it("discovers a project-scope Claude Code subagent under .claude/agents", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "agents"),
+        "reviewer.md",
+        "name: reviewer\ndescription: reviews PRs",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "reviewer");
+      expect(found).toBeDefined();
+      expect(found?.kind).toBe("agent");
+      expect(found?.scope).toBe("project");
+      expect(found?.agents).toEqual(["claude-code"]);
+      expect(found?.sourceDir).toBe(path.join(projectCwd, ".claude", "agents", "reviewer.md"));
+      expect(found?.enabledByAgent["claude-code"]).toBeNull();
+    });
+
+    it("discovers a project-scope Claude Code command under .claude/commands, named by filename", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "commands"),
+        "od-contribute.md",
+        'description: "Open a first-contribution PR"',
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.sourceDir.endsWith("od-contribute.md"));
+      expect(found).toBeDefined();
+      expect(found?.kind).toBe("command");
+      expect(found?.name).toBe("od-contribute");
+      expect(found?.enabledByAgent["claude-code"]).toBeNull();
+    });
+
+    it("uses an explicit frontmatter name for a command when one is present", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "commands"),
+        "deploy.md",
+        "name: deploy-prod\ndescription: deploys to production",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.find((s) => s.sourceDir.endsWith("deploy.md"))?.name).toBe("deploy-prod");
+    });
+
+    it("skips a subagent file missing a name (no filename fallback for kind 'agent')", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "agents"),
+        "unnamed.md",
+        "description: has no name key",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.find((s) => s.sourceDir.endsWith("unnamed.md"))).toBeUndefined();
+    });
+
+    it("skips a command file with no description at all", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "commands"),
+        "broken.md",
+        "name: broken",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.find((s) => s.sourceDir.endsWith("broken.md"))).toBeUndefined();
+    });
+
+    it("ignores a non-.md file sitting in an agents/commands directory", async () => {
+      mkdirSync(path.join(projectCwd, ".claude", "agents"), { recursive: true });
+      writeFileSync(path.join(projectCwd, ".claude", "agents", "README.txt"), "not a subagent");
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.find((s) => s.sourceDir.endsWith("README.txt"))).toBeUndefined();
+    });
+
+    it("discovers a global Claude Code subagent under CLAUDE_CONFIG_DIR/agents", async () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-claude-config-"));
+      const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        writeAgentOrCommandFile(
+          path.join(configDir, "agents"),
+          "global-reviewer.md",
+          "name: global-reviewer\ndescription: a global subagent",
+        );
+        const skills = await listProjectSkills(projectCwd);
+        const found = skills.find((s) => s.name === "global-reviewer");
+        expect(found?.kind).toBe("agent");
+        expect(found?.scope).toBe("global");
+      } finally {
+        if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+
+    it("discovers a global opencode subagent under the singular agent/ dir, not agents/", async () => {
+      writeAgentOrCommandFile(
+        path.join(fakeHome, ".config", "opencode", "agent"),
+        "oc-reviewer.md",
+        "name: oc-reviewer\ndescription: an opencode subagent",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "oc-reviewer");
+      expect(found?.kind).toBe("agent");
+      expect(found?.agents).toEqual(["opencode"]);
+    });
+
+    it("discovers an installed Claude Code plugin's agents and commands as builtin scope", async () => {
+      const installPath = path.join(
+        fakeHome,
+        ".claude",
+        "plugins",
+        "cache",
+        "acme",
+        "widgets",
+        "1.0.0",
+      );
+      writeAgentOrCommandFile(
+        path.join(installPath, "agents"),
+        "plugin-agent.md",
+        "name: plugin-agent\ndescription: from a plugin",
+      );
+      writeAgentOrCommandFile(
+        path.join(installPath, "commands"),
+        "plugin-cmd.md",
+        "description: also from a plugin",
+      );
+      mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
+      writeFileSync(
+        path.join(fakeHome, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({
+          version: 2,
+          plugins: { "widgets@acme": [{ scope: "user", installPath }] },
+        }),
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const agentRow = skills.find((s) => s.name === "plugin-agent");
+      expect(agentRow?.kind).toBe("agent");
+      expect(agentRow?.scope).toBe("builtin");
+      const commandRow = skills.find((s) => s.sourceDir.endsWith("plugin-cmd.md"));
+      expect(commandRow?.kind).toBe("command");
+      expect(commandRow?.scope).toBe("builtin");
+      expect(commandRow?.name).toBe("plugin-cmd");
+    });
+
+    it("never emits a codex or agy agent/command row — neither CLI has the concept", async () => {
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "agents"),
+        "reviewer.md",
+        "name: reviewer\ndescription: reviews PRs",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "reviewer");
+      expect(found?.agents).not.toContain("codex");
+      expect(found?.agents).not.toContain("agy");
+    });
+
+    // Regression guard for the exact hazard the plan calls out: without
+    // kind-scoping, an agent/command sharing a skill's frontmatter name (or,
+    // for claude-code, its directory-basename-turned-filename) would
+    // spuriously make an otherwise-unambiguous SKILL degrade to
+    // non-toggleable.
+    it("does not make an unrelated skill ambiguous or non-toggleable when a subagent shares its name", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "reviewer"), "reviewer", "a real skill");
+      writeAgentOrCommandFile(
+        path.join(projectCwd, ".claude", "agents"),
+        "reviewer.md",
+        "name: reviewer\ndescription: an unrelated subagent",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const skillRow = skills.find((s) => s.kind === "skill" && s.name === "reviewer");
+      const agentRow = skills.find((s) => s.kind === "agent" && s.name === "reviewer");
+      expect(skillRow?.enabledByAgent.codex).toBe(true);
+      expect(agentRow?.enabledByAgent["claude-code"]).toBeNull();
+    });
+
+    it("is discovered as kind 'agent' via .claude/agents/mullion-reviewer.md in this real checkout", async () => {
+      const skills = await listProjectSkills(process.cwd());
+      const found = skills.find(
+        (s) =>
+          s.kind === "agent" &&
+          s.sourceDir.endsWith(path.join(".claude", "agents", "mullion-reviewer.md")),
+      );
+      expect(found).toBeDefined();
+      expect(found?.name).toBe("mullion-reviewer");
+      expect(found?.description.length).toBeGreaterThan(0);
+      expect(found?.enabledByAgent["claude-code"]).toBeNull();
+    });
+  });
+
+  describe("scanFileDirs merge behavior (issue #885)", () => {
+    it("prefers project scope over global on merge, regardless of scan order, mirroring scanSkillDirs", async () => {
+      writeAgentOrCommandFile(
+        projectCwd,
+        "shared.md",
+        "name: shared\ndescription: reachable both ways",
+      );
+      const files = await scanFileDirs([
+        { dir: projectCwd, agent: "opencode", scope: "global", kind: "agent" },
+        { dir: projectCwd, agent: "claude-code", scope: "project", kind: "agent" },
+      ]);
+      const found = files.find((f) => f.name === "shared");
+      expect(found?.scope).toBe("project");
+      expect(found?.agents).toEqual(["opencode", "claude-code"]);
     });
   });
 

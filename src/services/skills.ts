@@ -68,6 +68,26 @@
 // — would be a surprising thing to do from what looks like a single-skill
 // switch, so agy's `enabledByAgent` stays `null` unconditionally rather than
 // wiring up that coarser, riskier operation.
+//
+// Issue #885 — this module also discovers two more kinds alongside skills:
+// Claude Code/opencode SUBAGENTS and Claude Code slash COMMANDS
+// (`SkillInfo.kind`). Both are pure discovery, no writer of any kind exists
+// or is planned here — `attachEnabledByAgent` forces `enabledByAgent[agent]
+// = null` for every non-"skill" row unconditionally, same posture as agy's
+// permanent read-only status above. Codex and agy have no subagent/command
+// concept at all (confirmed against both CLIs' own docs — see
+// docs/project-briefing.md's coverage table), so neither ever contributes an
+// "agent"/"command" row. Unlike a skill (`<dir>/<name>/SKILL.md`), an
+// agent/command is a single loose `.md` FILE directly inside its directory
+// (`<dir>/<name>.md`) — scanned by the sibling `scanFileDirs`/
+// `readMdFilesSafe`, never `scanSkillDirs`/`readDirSafe`. A command file's
+// frontmatter is commonly missing `name:` entirely (verified against real
+// `~/.claude/commands/*.md` files on this host — Claude Code's own slash
+// commands are named by FILENAME, not frontmatter), so command discovery
+// falls back to the filename (sans `.md`) when frontmatter has no name; a
+// subagent, like a skill, requires both fields, matching Claude Code's own
+// subagent file format (`.claude/agents/mullion-reviewer.md` in this repo,
+// itself both name- and description-carrying).
 
 import { readdir as readdirAsync, open as openAsync, stat as statAsync } from "node:fs/promises";
 import os from "node:os";
@@ -106,9 +126,9 @@ import { assertSafeSkillName, InvalidSkillNameError } from "./hook-adapters/skil
 // (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
 // module keeps working unchanged.
-import type { SkillAgent, SkillScope, SkillInfo } from "../shared/types.js";
+import type { SkillAgent, SkillScope, SkillKind, SkillInfo } from "../shared/types.js";
 
-export type { SkillAgent, SkillScope, SkillInfo };
+export type { SkillAgent, SkillScope, SkillKind, SkillInfo };
 
 // Kept in one place so skills.ts, the routes, and the writer-selection
 // switch never drift apart on which agents actually support a write. agy is
@@ -131,6 +151,14 @@ const MAX_FRONTMATTER_READ_BYTES = 64 * 1024;
 // config file — even a large plugin list is a handful of KB) rather than
 // an unbounded read, for the same reason SKILL.md's own cap exists.
 const MAX_INSTALLED_PLUGINS_READ_BYTES = 1024 * 1024;
+// Issue #885 — one shared budget across ALL THREE kinds (skill/agent/
+// command), not one each: `scanSkillDirs` and `scanFileDirs` both take the
+// same `ScanBudget` reference. 500 total read attempts is still generous for
+// the combined case (a host with 500 skills+subagents+commands across every
+// scanned directory is not a realistic target for this cap to protect
+// against), and a single shared number is simpler to reason about than three
+// independent ones that could each individually look fine while their sum
+// still runs away.
 const MAX_SKILLS = 500;
 
 // Same reasoning as agent-rules.ts's FS_READ_DEADLINE_MS: a project-scope
@@ -200,6 +228,44 @@ async function readDirSafe(dir: string): Promise<string[]> {
   return names;
 }
 
+// Issue #885 — sibling of readDirSafe above, for agent/command discovery: a
+// subagent or slash command is a single loose `.md` FILE directly inside its
+// directory (`.claude/agents/mullion-reviewer.md`), not a subdirectory
+// containing one, so this lists FILES rather than directories. Identical
+// guard set (ENOENT/ENOTDIR/EACCES/EPERM -> [], deadline-raced, symlinks
+// resolved by an explicit stat since Dirent never follows one) — see
+// readDirSafe's own comments for why each of those exists.
+async function readMdFilesSafe(dir: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await withReadDeadline(readdirAsync(dir, { withFileTypes: true }), dir);
+  } catch (err) {
+    if (err instanceof SkillsTimeoutError) throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || isTransientReadError(err)) return [];
+    throw err;
+  }
+
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".md")) continue;
+    if (entry.isFile()) {
+      names.push(entry.name);
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      const entryPath = path.join(dir, entry.name);
+      try {
+        const stat = await withReadDeadline(statAsync(entryPath), entryPath);
+        if (stat.isFile()) names.push(entry.name);
+      } catch (err) {
+        if (err instanceof SkillsTimeoutError) throw err;
+      }
+    }
+  }
+  return names;
+}
+
 interface ParsedFrontmatter {
   name: string;
   description: string;
@@ -216,21 +282,22 @@ function stripYamlScalarQuotes(value: string): string {
 }
 
 // A deliberately minimal, hand-rolled parser for exactly the two flat
-// scalar fields SKILL.md's frontmatter is required to carry (name,
+// scalar fields a SKILL.md/agent/command frontmatter block can carry (name,
 // description — see the plan's verified format: "YAML frontmatter (name,
 // description required) plus a Markdown body"). Not a general YAML parser:
 // this repo has no YAML dependency, and pulling one in for two string
 // fields would be the wrong trade for a read-only discovery slice. A
 // block-scalar description (`description: |` / `description: >`) is
 // deliberately treated as unparseable rather than mis-captured as the
-// literal "|"/">" character — such a skill is skipped (see the caller),
-// same as any other malformed frontmatter.
-// Exported so a guard test can assert Mullion's own shipped bundle skills
-// (src/bundle/skills/) actually parse under this exact parser, rather than
-// just "looking like" valid frontmatter — a bundle edit that silently broke
-// discovery would otherwise only surface live, against a real Claude Code
-// session.
-export function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
+// literal "|"/">" character — such an entry is skipped (see the callers),
+// same as any other malformed frontmatter. Returns `{name, description}`
+// with either possibly `null` — callers (parseSkillFrontmatter,
+// parseAgentOrCommandFrontmatter) decide which fields are actually required
+// for their kind; a command's `name` is optional (see the latter's own
+// comment), everything else requires both.
+function parseFlatFrontmatterFields(
+  raw: string,
+): { name: string | null; description: string | null } | null {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
   if (!match) return null;
 
@@ -256,8 +323,39 @@ export function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
     if (kv[1] === "name" && name === null) name = unquoted;
     if (kv[1] === "description" && description === null) description = unquoted;
   }
-  if (!name || !description) return null;
   return { name, description };
+}
+
+// Exported so a guard test can assert Mullion's own shipped bundle skills
+// (src/bundle/skills/) actually parse under this exact parser, rather than
+// just "looking like" valid frontmatter — a bundle edit that silently broke
+// discovery would otherwise only surface live, against a real Claude Code
+// session.
+export function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
+  const parsed = parseFlatFrontmatterFields(raw);
+  if (!parsed?.name || !parsed.description) return null;
+  return { name: parsed.name, description: parsed.description };
+}
+
+// Issue #885 — a subagent file (kind "agent") needs both fields, same as a
+// skill (Claude Code's own `.claude/agents/*.md` format is name+description
+// frontmatter, verified against this repo's own `mullion-reviewer.md`). A
+// command file (kind "command") does NOT: verified against real
+// `~/.claude/commands/*.md` files that a slash command's own `name:` key is
+// commonly just absent — Claude Code names a command by its FILENAME, not
+// its frontmatter — so `fallbackName` (the file's basename, sans `.md`) is
+// used whenever frontmatter carries no name of its own. `description` is
+// still required either way; a command/agent file with no description at
+// all is skipped, same as a skill with malformed frontmatter.
+export function parseAgentOrCommandFrontmatter(
+  raw: string,
+  kind: "agent" | "command",
+  fallbackName: string,
+): ParsedFrontmatter | null {
+  const parsed = parseFlatFrontmatterFields(raw);
+  if (!parsed?.description) return null;
+  if (kind === "agent" && !parsed.name) return null;
+  return { name: parsed.name ?? fallbackName, description: parsed.description };
 }
 
 // Reads only the first `maxBytes` bytes of `filePath` via one bounded
@@ -318,10 +416,43 @@ async function readSkillFrontmatter(skillMdPath: string): Promise<ParsedFrontmat
   return raw === null ? null : parseSkillFrontmatter(raw);
 }
 
+async function readAgentOrCommandFrontmatter(
+  filePath: string,
+  kind: "agent" | "command",
+  fallbackName: string,
+): Promise<ParsedFrontmatter | null> {
+  const raw = await readBoundedPrefix(filePath, MAX_FRONTMATTER_READ_BYTES);
+  return raw === null ? null : parseAgentOrCommandFrontmatter(raw, kind, fallbackName);
+}
+
 interface SkillSourceDir {
   dir: string;
   agent: SkillAgent;
   scope: SkillScope;
+}
+
+// Issue #885 — sibling of SkillSourceDir for agent/command discovery: `dir`
+// is scanned for loose `.md` FILES directly inside it (readMdFilesSafe),
+// never a subdirectory tree (readDirSafe). Kept as a distinct type rather
+// than an optional `kind` on SkillSourceDir so a caller can't accidentally
+// pass a skill-shaped source into scanFileDirs (or vice versa) and have it
+// silently scan the wrong way.
+interface FileSourceDir {
+  dir: string;
+  agent: SkillAgent;
+  scope: SkillScope;
+  kind: "agent" | "command";
+}
+
+// Issue #885 — one mutable counter shared by scanSkillDirs and scanFileDirs
+// (see MAX_SKILLS's own comment on why the budget is shared across kinds
+// rather than per-kind) — a plain object rather than a closure/module-level
+// variable so a fresh budget is trivial to construct per top-level listing
+// call (listProjectSkills/listGlobalSkills) without any reset step, and so
+// __testing's exported scanSkillDirs/scanFileDirs stay independently
+// callable with their own budget in existing tests, unaffected by this.
+interface ScanBudget {
+  count: number;
 }
 
 /** Project-scope directories, relative to a trusted project cwd — see the
@@ -390,6 +521,64 @@ function globalSkillDirs(): SkillSourceDir[] {
       dir: resolveAgyGlobalSkillsDir(),
       agent: "agy",
       scope: "global",
+    },
+  ];
+}
+
+/** Issue #885 — project-scope subagent/command directories. Claude Code
+ * only: codex and agy have no subagent/command concept at all, and opencode
+ * has no project-scope agent directory of its own (only the global,
+ * singular `agent/` dir below — see globalAgentAndCommandDirs's comment). */
+function projectAgentAndCommandDirs(cwd: string): FileSourceDir[] {
+  return [
+    {
+      dir: path.join(cwd, ".claude", "agents"),
+      agent: "claude-code",
+      scope: "project",
+      kind: "agent",
+    },
+    {
+      dir: path.join(cwd, ".claude", "commands"),
+      agent: "claude-code",
+      scope: "project",
+      kind: "command",
+    },
+  ];
+}
+
+/** Issue #885 — global subagent/command directories. Claude Code's two hang
+ * off the same `resolveClaudeConfigDir()` CLAUDE_CONFIG_DIR-aware root as its
+ * global skills dir above (same reasoning, issue #470). opencode's own
+ * `<CONFIG_DIR>/agent/<name>.md` convention (singular `agent`, not `agents`)
+ * hangs off `resolveOpenCodeConfigHome()`, the same XDG-aware root as its
+ * global skills dir — the singular-`agent/` directory name itself was
+ * live-verified only for the EPHEMERAL `OPENCODE_CONFIG_DIR` case
+ * (mullion-bundle.ts's `deriveOpenCodeReviewerAgentFile`), not this real
+ * config-home root; applying the same convention here is a reasonable but
+ * unverified inference, not a repeated spike. Fails closed if wrong — the
+ * directory simply won't exist and this scan finds nothing, same as any
+ * other absent directory in this file. opencode has no slash-command
+ * concept Mullion discovers here. */
+function globalAgentAndCommandDirs(): FileSourceDir[] {
+  const claudeConfigDir = resolveClaudeConfigDir();
+  return [
+    {
+      dir: path.join(claudeConfigDir, "agents"),
+      agent: "claude-code",
+      scope: "global",
+      kind: "agent",
+    },
+    {
+      dir: path.join(claudeConfigDir, "commands"),
+      agent: "claude-code",
+      scope: "global",
+      kind: "command",
+    },
+    {
+      dir: path.join(resolveOpenCodeConfigHome(), "agent"),
+      agent: "opencode",
+      scope: "global",
+      kind: "agent",
     },
   ];
 }
@@ -469,27 +658,66 @@ async function builtinSkillDirs(): Promise<SkillSourceDir[]> {
   return dirs;
 }
 
+/** Issue #885 — builtin (plugin-sourced) subagent/command directories:
+ * Claude Code plugin marketplace installs only, same
+ * `listInstalledClaudePluginDirs()` source as builtinSkillDirs above. Never
+ * includes Mullion's own session-scoped `--plugin-dir` bundle
+ * (`src/bundle/`) — that bundle is never registered in
+ * `installed_plugins.json` at all (mullion-bundle.ts's own header on why a
+ * session-only plugin dir is invisible to Claude Code's own plugin
+ * bookkeeping), so it can't appear here even once it ships an `agents/`/
+ * `commands/` directory of its own; this is what "no synthetic bundle rows"
+ * means in practice, not a separate exclusion this function has to encode.
+ * agy/codex have no subagent/command concept, so neither contributes a
+ * builtin row here either. */
+async function builtinAgentAndCommandDirs(): Promise<FileSourceDir[]> {
+  const dirs: FileSourceDir[] = [];
+  for (const installPath of await listInstalledClaudePluginDirs()) {
+    dirs.push({
+      dir: path.join(installPath, "agents"),
+      agent: "claude-code",
+      scope: "builtin",
+      kind: "agent",
+    });
+    dirs.push({
+      dir: path.join(installPath, "commands"),
+      agent: "claude-code",
+      scope: "builtin",
+      kind: "command",
+    });
+  }
+  return dirs;
+}
+
 /** Scans every `SkillSourceDir`'s immediate subdirectories for a
  * `SKILL.md`, merging entries that resolve to the exact same absolute
  * `sourceDir` (e.g. opencode and Claude Code both reading `~/.claude/skills`
  * — the same shared-file situation agent-rules.ts's own header comment
  * describes for AGENTS.md) into one SkillInfo with a combined `agents` list,
- * rather than reporting the same on-disk skill twice. */
-async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]> {
+ * rather than reporting the same on-disk skill twice.
+ *
+ * `budget` defaults to a fresh `{count: 0}` so every existing direct caller
+ * (this module's own tests, via `__testing`) keeps working unchanged; the
+ * real listing entry points (listProjectSkills/listGlobalSkills) pass one
+ * explicit budget shared with the sibling `scanFileDirs` call below — see
+ * ScanBudget's own comment for why. */
+async function scanSkillDirs(
+  sourceDirs: SkillSourceDir[],
+  budget: ScanBudget = { count: 0 },
+): Promise<SkillInfo[]> {
   const byPath = new Map<string, SkillInfo>();
-  let scanned = 0;
 
   for (const source of sourceDirs) {
-    if (scanned >= MAX_SKILLS) break;
+    if (budget.count >= MAX_SKILLS) break;
     const names = await readDirSafe(source.dir);
     for (const name of names) {
-      if (scanned >= MAX_SKILLS) break;
+      if (budget.count >= MAX_SKILLS) break;
       // Hermes review, PR #459 — incremented before the frontmatter-validity
       // check, so MAX_SKILLS bounds every SKILL.md read ATTEMPT (the actual
       // cost this cap exists to bound), not just successfully-parsed ones. A
       // directory full of malformed/missing-frontmatter entries used to
       // never count against the cap at all.
-      scanned++;
+      budget.count++;
       const skillDir = path.join(source.dir, name);
       const frontmatter = await readSkillFrontmatter(path.join(skillDir, "SKILL.md"));
       if (!frontmatter) continue;
@@ -513,6 +741,54 @@ async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]>
         description: frontmatter.description,
         sourceDir: skillDir,
         scope: source.scope,
+        kind: "skill",
+        agents: [source.agent],
+        enabledByAgent: {},
+      });
+    }
+  }
+
+  return [...byPath.values()];
+}
+
+/** Issue #885 — sibling of scanSkillDirs for agent/command discovery: scans
+ * every `FileSourceDir`'s immediate `.md` FILES (readMdFilesSafe, never a
+ * per-item subdirectory) rather than subdirectories containing a `SKILL.md`.
+ * Merges on the exact file path the same way scanSkillDirs merges on a
+ * skill's directory path (e.g. Claude Code's own `.claude/agents` dir could
+ * in principle be scanned under more than one `agent` entry the way skills
+ * dirs are, even though today only claude-code/opencode ever appear here).
+ * `budget` is the SAME counter scanSkillDirs already advanced when both are
+ * called from one listing — see ScanBudget's own comment. */
+async function scanFileDirs(
+  sourceDirs: FileSourceDir[],
+  budget: ScanBudget = { count: 0 },
+): Promise<SkillInfo[]> {
+  const byPath = new Map<string, SkillInfo>();
+
+  for (const source of sourceDirs) {
+    if (budget.count >= MAX_SKILLS) break;
+    const names = await readMdFilesSafe(source.dir);
+    for (const fileName of names) {
+      if (budget.count >= MAX_SKILLS) break;
+      budget.count++;
+      const filePath = path.join(source.dir, fileName);
+      const fallbackName = fileName.slice(0, -".md".length);
+      const frontmatter = await readAgentOrCommandFrontmatter(filePath, source.kind, fallbackName);
+      if (!frontmatter) continue;
+
+      const existing = byPath.get(filePath);
+      if (existing) {
+        if (!existing.agents.includes(source.agent)) existing.agents.push(source.agent);
+        if (source.scope === "project") existing.scope = "project"; // see scanSkillDirs's own comment
+        continue;
+      }
+      byPath.set(filePath, {
+        name: frontmatter.name,
+        description: frontmatter.description,
+        sourceDir: filePath,
+        scope: source.scope,
+        kind: source.kind,
         agents: [source.agent],
         enabledByAgent: {},
       });
@@ -527,9 +803,18 @@ async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]>
  * and `resolveSkillForToggle`'s write-time validation, so a name that reads
  * as toggleable in a GET response is guaranteed to resolve to exactly the
  * same single skill a following PUT would act on (same discovery result,
- * no second pass — no TOCTOU between the two). */
+ * no second pass — no TOCTOU between the two).
+ *
+ * Issue #885 — scoped to `kind === "skill"`: an agent/command row can share
+ * a frontmatter name with an unrelated skill (e.g. a subagent and a skill
+ * both named "reviewer") without that skill spuriously degrading to
+ * "ambiguous" — the two kinds have entirely separate toggle mechanisms (a
+ * skill's is real; an agent/command's doesn't exist), so they must never be
+ * compared against each other here. */
 function skillsSharingName(skills: SkillInfo[], agent: SkillAgent, name: string): SkillInfo[] {
-  return skills.filter((skill) => skill.agents.includes(agent) && skill.name === name);
+  return skills.filter(
+    (skill) => skill.kind === "skill" && skill.agents.includes(agent) && skill.name === name,
+  );
 }
 
 /** Every discovered skill sharing `agent`'s toggle selector with `skill`
@@ -537,10 +822,14 @@ function skillsSharingName(skills: SkillInfo[], agent: SkillAgent, name: string)
  * everyone else) — used only to compute claude-code's basename-collision
  * hazard, kept separate from `skillsSharingName`'s name-based check since
  * the two agents key on different things entirely (see
- * claude-code-skills.ts's header for why). */
+ * claude-code-skills.ts's header for why). Scoped to `kind === "skill"` for
+ * the same reason skillsSharingName is (issue #885) — an agent/command file
+ * living in a directory with the same basename as an unrelated skill's
+ * directory must not spuriously collide with it. */
 function claudeCodeSkillsSharingBasename(skills: SkillInfo[], basename: string): SkillInfo[] {
   return skills.filter(
     (skill) =>
+      skill.kind === "skill" &&
       skill.agents.includes("claude-code") &&
       skill.scope !== "builtin" &&
       path.basename(skill.sourceDir) === basename,
@@ -565,7 +854,15 @@ function claudeCodeSkillsSharingBasename(skills: SkillInfo[], basename: string):
  * so every claude-code skill degrades to `null` from the global route
  * rather than reporting a boolean the project-scoped route could
  * contradict. Codex/opencode have no such asymmetry (their config is
- * global-only), so this only applies to claude-code. */
+ * global-only), so this only applies to claude-code.
+ *
+ * Issue #885 — every one of the four collision/toggleability computations
+ * below (ambiguousNames, shadowedBasenames, the enabledMaps gate, and the
+ * final assignment loop) is scoped to `kind === "skill"` — a discovered
+ * agent/command row is discovery-only (see this file's own header) and must
+ * never participate in, or be affected by, a skill's ambiguity/collision
+ * math; it always gets `enabledByAgent[agent] = null` unconditionally,
+ * handled by its own branch at the top of the final loop below. */
 function attachEnabledByAgent(skills: SkillInfo[], cwd: string | null): SkillInfo[] {
   const ambiguousNames = new Map<SkillAgent, Set<string>>();
   for (const agent of TOGGLEABLE_SKILL_AGENTS) {
@@ -573,7 +870,7 @@ function attachEnabledByAgent(skills: SkillInfo[], cwd: string | null): SkillInf
     const namesSeen = new Set<string>();
     const namesAmbiguous = new Set<string>();
     for (const skill of skills) {
-      if (!skill.agents.includes(agent)) continue;
+      if (skill.kind !== "skill" || !skill.agents.includes(agent)) continue;
       if (namesSeen.has(skill.name)) namesAmbiguous.add(skill.name);
       namesSeen.add(skill.name);
     }
@@ -594,7 +891,12 @@ function attachEnabledByAgent(skills: SkillInfo[], cwd: string | null): SkillInf
   {
     const basenamesSeen = new Set<string>();
     for (const skill of skills) {
-      if (!skill.agents.includes("claude-code") || skill.scope === "builtin") continue;
+      if (
+        skill.kind !== "skill" ||
+        !skill.agents.includes("claude-code") ||
+        skill.scope === "builtin"
+      )
+        continue;
       const base = path.basename(skill.sourceDir);
       if (basenamesSeen.has(base)) shadowedBasenames.add(base);
       basenamesSeen.add(base);
@@ -603,7 +905,7 @@ function attachEnabledByAgent(skills: SkillInfo[], cwd: string | null): SkillInf
 
   const enabledMaps = new Map<SkillAgent, Map<string, boolean | null> | null>();
   for (const agent of TOGGLEABLE_SKILL_AGENTS) {
-    if (!skills.some((skill) => skill.agents.includes(agent))) continue;
+    if (!skills.some((skill) => skill.kind === "skill" && skill.agents.includes(agent))) continue;
     if (agent === "claude-code") {
       if (cwd === null) continue; // see this function's own doc comment
       try {
@@ -639,6 +941,10 @@ function attachEnabledByAgent(skills: SkillInfo[], cwd: string | null): SkillInf
 
   for (const skill of skills) {
     for (const agent of skill.agents) {
+      if (skill.kind !== "skill") {
+        skill.enabledByAgent[agent] = null; // agent/command rows are discovery-only — see issue #885
+        continue;
+      }
       if (!TOGGLEABLE_SKILL_AGENTS.includes(agent)) {
         skill.enabledByAgent[agent] = null;
         continue;
@@ -724,8 +1030,22 @@ export function resolveSkillForToggle(
  * primary, resolveWithinRoots on an agent). */
 export async function listProjectSkills(cwd: string): Promise<SkillInfo[]> {
   const resolved = path.resolve(cwd);
-  const dirs = [...projectSkillDirs(resolved), ...globalSkillDirs(), ...(await builtinSkillDirs())];
-  return attachEnabledByAgent(await scanSkillDirs(dirs), resolved);
+  const skillDirs = [
+    ...projectSkillDirs(resolved),
+    ...globalSkillDirs(),
+    ...(await builtinSkillDirs()),
+  ];
+  const fileDirs = [
+    ...projectAgentAndCommandDirs(resolved),
+    ...globalAgentAndCommandDirs(),
+    ...(await builtinAgentAndCommandDirs()),
+  ];
+  // Issue #885 — one shared ScanBudget across both calls, not one each; see
+  // MAX_SKILLS's own comment.
+  const budget: ScanBudget = { count: 0 };
+  const skills = await scanSkillDirs(skillDirs, budget);
+  const files = await scanFileDirs(fileDirs, budget);
+  return attachEnabledByAgent([...skills, ...files], resolved);
 }
 
 /** Global + builtin skills only, no project context — GET /api/skills,
@@ -735,8 +1055,12 @@ export async function listProjectSkills(cwd: string): Promise<SkillInfo[]> {
  * `cwd: null` here is what makes claude-code skills degrade to `null` in
  * `attachEnabledByAgent` — see that function's own comment. */
 export async function listGlobalSkills(): Promise<SkillInfo[]> {
-  const dirs = [...globalSkillDirs(), ...(await builtinSkillDirs())];
-  return attachEnabledByAgent(await scanSkillDirs(dirs), null);
+  const skillDirs = [...globalSkillDirs(), ...(await builtinSkillDirs())];
+  const fileDirs = [...globalAgentAndCommandDirs(), ...(await builtinAgentAndCommandDirs())];
+  const budget: ScanBudget = { count: 0 };
+  const skills = await scanSkillDirs(skillDirs, budget);
+  const files = await scanFileDirs(fileDirs, budget);
+  return attachEnabledByAgent([...skills, ...files], null);
 }
 
 class SkillNotFoundError extends Error {
@@ -897,8 +1221,10 @@ export function classifySkillToggleError(err: unknown): SkillToggleErrorClassifi
 
 export const __testing = {
   parseSkillFrontmatter,
+  parseAgentOrCommandFrontmatter,
   withReadDeadline,
   FS_READ_DEADLINE_MS,
   scanSkillDirs,
+  scanFileDirs,
   attachEnabledByAgent,
 };
