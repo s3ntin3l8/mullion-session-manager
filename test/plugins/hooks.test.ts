@@ -221,6 +221,8 @@ describe("hooksPlugin (issue #172)", () => {
     app = await buildApp();
     await app.ready();
 
+    const warnSpy = vi.spyOn(app.log, "warn");
+
     const socket = await connect(app.pty.hookSocketPath);
     // No trailing newline — deliberately never completes a line, so this
     // only ever hits the byte-cap guard, not JSON parsing.
@@ -228,6 +230,21 @@ describe("hooksPlugin (issue #172)", () => {
 
     await waitForClose(socket);
     expect(socket.destroyed).toBe(true);
+
+    // Issue #907 — the warn log must include diagnostic context so a
+    // recurrence is diagnosable without timestamp correlation.
+    const oversizedWarn = warnSpy.mock.calls.find(
+      (call) =>
+        typeof call[1] === "string" && call[1].includes("oversized line without a terminator"),
+    );
+    expect(oversizedWarn).toBeDefined();
+    // pino-style: warn({…}, "msg") — first arg is structured fields, second
+    // is the message string.
+    const fields = oversizedWarn![0];
+    expect(fields).toMatchObject({
+      bytesReceived: expect.any(Number),
+    });
+    expect(fields.bytesReceived).toBeGreaterThan(64 * 1024);
   });
 
   it("a token stops resolving (and a fresh connection using it is closed) once its session is killed", async () => {

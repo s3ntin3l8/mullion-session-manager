@@ -294,7 +294,13 @@ function handleConnection(
     try {
       buffer += chunk.toString("utf8");
       if (buffer.length > MAX_LINE_BYTES) {
-        app.log.warn("hook connection sent an oversized line without a terminator, closing");
+        app.log.warn(
+          {
+            bytesReceived: Buffer.byteLength(buffer, "utf8"),
+            remoteAddress: socket.remoteAddress ?? "unix",
+          },
+          "hook connection sent an oversized line without a terminator, closing",
+        );
         socket.destroy();
         return;
       }
