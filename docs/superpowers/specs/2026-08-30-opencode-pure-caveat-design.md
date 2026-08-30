@@ -44,8 +44,9 @@ are still read and merged by opencode even under `--pure`.
 
 ### Documentation Changes
 
-**`docs/agent-hooks.md`** — add after line 291 (after the agent-guide
-auto-inject paragraph):
+**`docs/agent-hooks.md`** — add after the opencode-MCP section
+(~line 348, after `buildOpenCodeMcpConfig`), before the full-context
+carryover section:
 
 > **The `--pure` caveat:** opencode's `--pure` flag ("run without external
 > plugins") disables the JS plugin loading mechanism. Mullion's
