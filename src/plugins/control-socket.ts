@@ -1031,6 +1031,68 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Full scope only — project tooling is operator-authored config, not
+  // something an agent inside a session should modify about an unrelated
+  // project. GET is session-scoped (agents can read their own project's
+  // tooling); SET is full-scope only.
+  "projects.get_tooling": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetProjectId(app, conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: `/api/projects/${encodeURIComponent(target.id)}/tooling`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  "projects.set_tooling": {
+    scopes: ["full"],
+    handler: async ({ app, conn: _conn, body, reply }) => {
+      const id = extractProjectId(body);
+      if (id === null) {
+        reply({ ok: false, status: 400, error: "'projectId' is required" });
+        return;
+      }
+      // Forward each field that was explicitly provided. The REST routes
+      // each handle their own validation and upsert independently.
+      const results: Record<string, unknown> = {};
+      const base = `/api/projects/${encodeURIComponent(id)}/tooling`;
+      const headers = buildAuthHeaders(app);
+      const b = body ?? {};
+      if (b.briefing !== undefined) {
+        results.briefing = await injectAndShape(app, {
+          method: "PUT",
+          url: base,
+          headers,
+          payload: { briefing: b.briefing },
+        });
+      }
+      if (b.skill !== undefined) {
+        results.skill = await injectAndShape(app, {
+          method: "PUT",
+          url: `${base}/skill`,
+          headers,
+          payload: { skill: b.skill },
+        });
+      }
+      if (b.reviewerAgent !== undefined) {
+        results.reviewerAgent = await injectAndShape(app, {
+          method: "PUT",
+          url: `${base}/reviewer-agent`,
+          headers,
+          payload: { reviewerAgent: b.reviewerAgent },
+        });
+      }
+      reply({ ok: true, ...results });
+    },
+  },
   // Full scope only — same posture as sessions.create: an agent inside a
   // session has no business minting a preview subdomain for an unrelated
   // project or arbitrary external URL through this socket.

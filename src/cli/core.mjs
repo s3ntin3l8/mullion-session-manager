@@ -11,6 +11,17 @@ import fs from "node:fs";
 import net from "node:net";
 import { MullionSocketError } from "./client.mjs";
 
+/** Read all of stdin as a string. Used for --flag/- piped input. */
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => resolve(chunks.join("")));
+    process.stdin.on("error", reject);
+  });
+}
+
 export class CliUsageError extends Error {}
 
 // ---------------------------------------------------------------------------
@@ -841,6 +852,40 @@ const projectCommands = {
   async dock(client, args) {
     const projectId = requireOne(args, "project id");
     const result = await client.request("projects.dock", { projectId });
+    return { json: result };
+  },
+  async tooling(client, args) {
+    const { flags } = extractFlags(args, {
+      project: "string",
+      briefing: "string",
+      skill: "string",
+      reviewer: "string",
+    });
+    const projectId = flags.project ?? args[0];
+    if (!projectId) {
+      throw new CliUsageError(
+        "project id is required: mullion project tooling <projectId> [flags]",
+      );
+    }
+    // Read mode: no write flags provided
+    if (!flags.briefing && !flags.skill && !flags.reviewer) {
+      const result = await client.request("projects.get_tooling", { projectId });
+      return { json: result };
+    }
+    // Write mode: read each file, send as strings
+    const body = { projectId };
+    if (flags.briefing !== undefined) {
+      body.briefing =
+        flags.briefing === "-" ? await readStdin() : fs.readFileSync(flags.briefing, "utf8");
+    }
+    if (flags.skill !== undefined) {
+      body.skill = flags.skill === "-" ? await readStdin() : fs.readFileSync(flags.skill, "utf8");
+    }
+    if (flags.reviewer !== undefined) {
+      body.reviewerAgent =
+        flags.reviewer === "-" ? await readStdin() : fs.readFileSync(flags.reviewer, "utf8");
+    }
+    const result = await client.request("projects.set_tooling", body);
     return { json: result };
   },
 };

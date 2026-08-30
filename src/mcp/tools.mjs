@@ -404,6 +404,65 @@ const listPreviews = {
   },
 };
 
+const getProjectTooling = {
+  name: "get_project_tooling",
+  description:
+    "Get a project's Mullion tooling configuration (briefing, skill, reviewer agent). " +
+    "Omit projectId to use the calling session's own project (works from inside a normal " +
+    "agent session).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: {
+        type: "string",
+        description: "The project id. Defaults to the calling session's own project.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.getProjectTooling(args?.projectId);
+    return JSON.stringify(result);
+  },
+};
+
+const setProjectTooling = {
+  name: "set_project_tooling",
+  description:
+    "Set a project's Mullion tooling configuration. Only provided fields are updated " +
+    "(partial update). Requires full scope (MULLION_AUTH_TOKEN) — 403s from inside a " +
+    "normal agent session when authentication is enabled.",
+  inputSchema: {
+    type: "object",
+    required: ["projectId"],
+    properties: {
+      projectId: { type: "string", description: "The project id." },
+      briefing: {
+        type: "string",
+        description: "The project briefing text. Omit to leave unchanged.",
+      },
+      skill: {
+        type: "string",
+        description:
+          "The project skill content (YAML frontmatter + body). Omit to leave unchanged.",
+      },
+      reviewerAgent: {
+        type: "string",
+        description:
+          "The project reviewer subagent content (YAML frontmatter + body). Omit to leave unchanged.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.setProjectTooling({
+      projectId: args?.projectId,
+      briefing: args?.briefing,
+      skill: args?.skill,
+      reviewerAgent: args?.reviewerAgent,
+    });
+    return JSON.stringify(result);
+  },
+};
+
 export const TOOLS = [
   promoteToWorktree,
   useBrowser,
@@ -418,4 +477,6 @@ export const TOOLS = [
   createPreview,
   deletePreview,
   listPreviews,
+  getProjectTooling,
+  setProjectTooling,
 ];
