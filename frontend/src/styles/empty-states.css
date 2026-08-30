@@ -1858,7 +1858,8 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
-  width: 60px;
+  min-width: 60px;
+  white-space: nowrap;
 }
 .session-timeline-row-kind.kind-attention {
   color: var(--ring);
