@@ -17,5 +17,5 @@ import type { FastifyRequest } from "fastify";
 export function requestScheme(request: FastifyRequest): string {
   const forwarded = request.headers["x-forwarded-proto"];
   const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
-  return first === "https" ? "https" : request.protocol;
+  return first?.toLowerCase() === "https" ? "https" : request.protocol;
 }
