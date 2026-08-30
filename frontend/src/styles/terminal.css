@@ -362,7 +362,7 @@
    panel itself is now a fixed-height flex column (header pinned, only the
    feed body scrolls/virtualizes) rather than the whole panel scrolling. */
 .notif-panel {
-  width: 320px;
+  width: 380px;
   max-height: 380px;
   display: flex;
   flex-direction: column;
