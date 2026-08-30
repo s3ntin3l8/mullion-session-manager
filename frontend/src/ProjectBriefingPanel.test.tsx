@@ -4,6 +4,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectBriefingPanel } from "./ProjectBriefingPanel.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { makeProject } from "./test/fixtures.js";
+import { useDashboardStore } from "./store/index.js";
 
 // Same "route a mocked fetch by URL/method, unhandled requests reject
 // loudly" convention as AgentRulesPanel.test.tsx's own mockFetch — this
@@ -413,6 +415,95 @@ describe("ProjectBriefingPanel", () => {
       await user.type(textarea, " edited");
 
       expect(screen.getByRole("button", { name: /Skill/ })).toBeDisabled();
+    });
+  });
+
+  // Issue #884 — the per-project injectAgentGuide/injectProjectBriefing
+  // override row, reusing GitPanel.tsx's own toggle+inherited+reset
+  // pattern. Reads project/settings straight off the dashboard store
+  // (no fetch of its own), so these tests seed the store directly rather
+  // than mocking a network call for this part.
+  describe("session injection overrides", () => {
+    const originalState = useDashboardStore.getState();
+
+    afterEach(() => {
+      useDashboardStore.setState(originalState, true);
+    });
+
+    it("shows both fields as inherited when the project has no override", async () => {
+      useDashboardStore.setState({ projects: [makeProject({ id: 1 })] });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Agent guide");
+      // Two inherited chips — one per field — since neither is overridden.
+      expect(screen.getAllByTitle("Inherited from the global setting")).toHaveLength(2);
+    });
+
+    it("shows an explicit override with a reset button, not the inherited chip", async () => {
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, injectAgentGuide: false })],
+      });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Agent guide");
+      // Only the OTHER field (injectProjectBriefing, still null) is inherited.
+      expect(screen.getAllByTitle("Inherited from the global setting")).toHaveLength(1);
+      expect(screen.getByTitle("Reset to the global default")).toBeInTheDocument();
+    });
+
+    it("clicking the toggle calls updateProject with the new explicit value", async () => {
+      useDashboardStore.setState({ projects: [makeProject({ id: 1 })] });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Agent guide");
+      // Both toggles default to "on" (inherited true) — clicking flips to
+      // an explicit false, the opposite of the current effective value.
+      const toggles = screen.getAllByRole("button", { name: /Agent guide|Project briefing/ });
+      await user.click(toggles[0]);
+
+      expect(updateProject).toHaveBeenCalledWith(1, { injectAgentGuide: false });
+    });
+
+    it("clicking the reset button calls updateProject with null", async () => {
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, injectProjectBriefing: true })],
+      });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByText("Project briefing");
+      await user.click(screen.getByTitle("Reset to the global default"));
+
+      expect(updateProject).toHaveBeenCalledWith(1, { injectProjectBriefing: null });
     });
   });
 });

@@ -79,6 +79,12 @@ export interface SpawnSessionBody {
   // briefingOverride's.
   projectSkill?: string;
   projectReviewerAgent?: string;
+  // Issue #884 — see CreateSessionOptions.injectAgentGuide/
+  // injectProjectBriefing's own doc comments (pty-manager.ts). Already
+  // resolved to a definite boolean on the primary; no maxLength needed,
+  // just a boolean type below.
+  injectAgentGuide?: boolean;
+  injectProjectBriefing?: boolean;
 }
 
 export const spawnSessionSchema = {
@@ -127,6 +133,8 @@ export const spawnSessionSchema = {
       // calculation to duplicate here.
       projectSkill: { type: "string", maxLength: 8192 },
       projectReviewerAgent: { type: "string", maxLength: 8192 },
+      injectAgentGuide: { type: "boolean" },
+      injectProjectBriefing: { type: "boolean" },
     },
   },
 };

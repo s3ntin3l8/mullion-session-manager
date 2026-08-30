@@ -55,6 +55,8 @@ const PROJECT_A: Project = {
   maxAutoReturnRounds: null,
   conventionalCommitTitles: null,
   autoTagRelease: null,
+  injectAgentGuide: null,
+  injectProjectBriefing: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -75,6 +77,8 @@ const PROJECT_B: Project = {
   maxAutoReturnRounds: null,
   conventionalCommitTitles: null,
   autoTagRelease: null,
+  injectAgentGuide: null,
+  injectProjectBriefing: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 

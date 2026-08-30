@@ -2745,7 +2745,12 @@ describe("internal routes (agent role, issue #26)", () => {
       },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({ ok: true, initialPromptApplied: true });
+    expect(res.json()).toEqual({
+      ok: true,
+      initialPromptApplied: true,
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+    });
     await app.close();
   });
 
@@ -2769,7 +2774,12 @@ describe("internal routes (agent role, issue #26)", () => {
       },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    expect(res.json()).toEqual({
+      ok: true,
+      initialPromptApplied: false,
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+    });
     await app.close();
   });
 
@@ -2782,7 +2792,12 @@ describe("internal routes (agent role, issue #26)", () => {
       payload: { id: "506", cwd: "/tmp", command: "claude", cols: 80, rows: 24 },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    expect(res.json()).toEqual({
+      ok: true,
+      initialPromptApplied: false,
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+    });
     await app.close();
   });
 

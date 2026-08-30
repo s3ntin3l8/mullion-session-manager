@@ -15,7 +15,6 @@ import {
   resolveSearchRoot,
 } from "../routes/browser-automation.js";
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
-import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import {
   agentGuideSourceExists,
   readAgentGuideExcerpt,
@@ -458,13 +457,37 @@ function handleConnection(
           // promote-to-worktree flow above, so this pointer is generated
           // fresh on every call instead of being stashed/consumed itself.
           //
-          // `app.db` is absent on a multi-host "agent" role process (see
-          // app.ts's role branch — hooksPlugin registers there too, with no
-          // dbPlugin ahead of it), which has no settings DB of its own to
-          // read; DEFAULT_SETTINGS.sessions.injectAgentGuide (true) is what
-          // that role effectively always uses, regardless of what an
-          // operator configured on the primary.
-          const settings = app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS;
+          // Issue #884 — reads the SESSION's own already-resolved
+          // injectAgentGuide/injectProjectBriefing (pty-manager.ts) rather
+          // than independently re-deriving the global setting via
+          // getStoredSettings, as this used to. That's the only way a
+          // per-project override (projects.injectAgentGuide/
+          // injectProjectBriefing, schema.ts) can reach this gate on ANY
+          // host — an agent-role process has no settings DB of its own to
+          // read at all (app.db is absent there; see app.ts's role branch),
+          // so the OLD code's `app.db ? getStoredSettings(app.db) :
+          // DEFAULT_SETTINGS` always silently used DEFAULT_SETTINGS on a
+          // remote host regardless of what an operator configured on the
+          // primary — session-lifecycle.ts's createSessionRecord now
+          // resolves the effective value ONCE, on the primary, and threads
+          // it through the spawn body to every host, closing that gap as a
+          // side effect. Trade-off, accepted: a global toggle flipped
+          // mid-session no longer applies without a respawn (previously
+          // true only on the primary anyway, never on a remote host).
+          // `?? true`: fails open, matching the pre-#884 default — but a
+          // miss here means `session_start` outraced `app.pty` losing track
+          // of the session between the hook handshake and this message (the
+          // session was killed in that window), not a normal case, so it's
+          // logged rather than silently assumed impossible.
+          const session = app.pty.get(sessionId);
+          if (!session) {
+            app.log.warn(
+              { sessionId },
+              "session_start fired for a session app.pty no longer tracks — falling back to the default inject settings",
+            );
+          }
+          const effectiveInjectAgentGuide = session?.injectAgentGuide ?? true;
+          const effectiveInjectProjectBriefing = session?.injectProjectBriefing ?? true;
           const sessionsDir = path.dirname(app.pty.hookSocketPath);
           const guidePath = sessionAgentGuidePath(sessionsDir, sessionId);
           // agentGuideSourceExists(), not just the setting: a checkout/
@@ -476,7 +499,7 @@ function handleConnection(
           // SessionStart reply race on different clocks; the source's
           // presence doesn't).
           const guideBlock =
-            settings.sessions.injectAgentGuide && agentGuideSourceExists()
+            effectiveInjectAgentGuide && agentGuideSourceExists()
               ? buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, isAuthEnabled(app.config))
               : null;
           // Independent of injectAgentGuide — a different owner (the
@@ -487,7 +510,7 @@ function handleConnection(
           // project-briefing.ts). Placed last in additionalContext: it's
           // the project's operative instruction set, and recency in a
           // small context block favors it.
-          const briefing = settings.sessions.injectProjectBriefing
+          const briefing = effectiveInjectProjectBriefing
             ? readSessionBriefing(sessionsDir, sessionId)
             : null;
           const additionalContext = [seed, guideBlock, briefing].filter(Boolean).join("\n\n");

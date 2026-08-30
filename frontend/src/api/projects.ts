@@ -44,6 +44,8 @@ export const projectsApi = {
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
         | "autoTagRelease"
+        | "injectAgentGuide"
+        | "injectProjectBriefing"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>

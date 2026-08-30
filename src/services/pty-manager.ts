@@ -167,6 +167,21 @@ export interface CreateSessionOptions {
    * (hook-adapters/types.ts). Same producer/multi-host reasoning as
    * `briefingOverride` above. */
   projectReviewerAgent?: string;
+  /** Issue #884 — the per-project-resolved value of
+   * sessions.injectAgentGuide (settings.ts), already merged with this
+   * project's own nullable override column (projects.injectAgentGuide,
+   * schema.ts) by session-lifecycle.ts's createSessionRecord, on the
+   * PRIMARY, for the same multi-host reason `briefingOverride` above
+   * exists. When set, wins over the live `getInjectAgentGuide()` closure
+   * below (see getOrCreate()) — a caller that omits this (any getOrCreate()
+   * call outside session-lifecycle.ts's producer, e.g. a dock/reconciler
+   * respawn) keeps today's global-settings-only behavior exactly as
+   * before. */
+  injectAgentGuide?: boolean;
+  /** Same producer/multi-host reasoning and "wins over the live closure
+   * when set" posture as `injectAgentGuide` immediately above, for the
+   * independent sessions.injectProjectBriefing setting. */
+  injectProjectBriefing?: boolean;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the
@@ -947,20 +962,31 @@ export class Session {
   // field it hands to buildLaunchPlan(), which reads it back out and injects
   // it into the session's own SSH_AUTH_SOCK.
   private readonly sshAuthSock: string;
-  // Issue #437c — the live sessions.injectAgentGuide setting's value AT
-  // THIS SESSION'S CREATION (PtyManager.getOrCreate calls
-  // getInjectAgentGuide() fresh per session, then passes the resolved
-  // boolean here — see that field's own doc comment on PtyManager for why
-  // a spawn-time snapshot is the correct semantics here, unlike hooks.ts's
-  // per-hook-fire live read for every other agent). Threaded into
-  // applyHookAdapters' ctx in bootstrapMaster() below; the opencode adapter
-  // is currently the only consumer.
-  private readonly injectAgentGuide: boolean;
-  // Same spawn-time-snapshot posture as injectAgentGuide immediately above,
-  // for the independent sessions.injectProjectBriefing setting — see that
-  // setting's own doc comment (settings.ts) for why it's a separate key
-  // rather than reusing injectAgentGuide.
-  private readonly injectProjectBriefing: boolean;
+  // Issue #437c, revised by issue #884 — the resolved value of
+  // sessions.injectAgentGuide AT THIS SESSION'S CREATION
+  // (PtyManager.getOrCreate() passes `opts.injectAgentGuide` when the
+  // caller resolved a per-project override, else calls
+  // getInjectAgentGuide() fresh for the global-only fallback — see that
+  // field's own doc comment on PtyManager). Public (not private) since
+  // issue #884: plugins/hooks.ts's SessionStart handler now reads this
+  // directly (`app.pty.get(sessionId)?.injectAgentGuide`) instead of
+  // independently re-deriving the GLOBAL setting via getStoredSettings —
+  // the only way a per-project override can reach that gate on ANY host,
+  // including a multi-host agent role with no settings DB of its own to
+  // read at all. This does trade away hooks.ts's previous "live re-read on
+  // every hook fire" semantics for claude-code/codex/agy (a global toggle
+  // flipped mid-session no longer applies without a respawn) — an accepted
+  // cost: that live-ness was already illusory on a remote agent host,
+  // which always saw DEFAULT_SETTINGS regardless of what the operator
+  // configured. Threaded into applyHookAdapters' ctx in bootstrapMaster()
+  // below, where opencode's adapter is the other consumer.
+  readonly injectAgentGuide: boolean;
+  // Same spawn-time-snapshot posture and public visibility as
+  // injectAgentGuide immediately above, for the independent
+  // sessions.injectProjectBriefing setting — see that setting's own doc
+  // comment (settings.ts) for why it's a separate key rather than reusing
+  // injectAgentGuide.
+  readonly injectProjectBriefing: boolean;
   // Same spawn-time-snapshot posture as injectAgentGuide above, for the
   // independent sessions.injectMullionBundle setting (see settings.ts's own
   // doc comment for why this gates a different mechanism entirely — Claude
@@ -3744,9 +3770,14 @@ export class PtyManager {
         sshAuthSock: this.sshAuthSock,
         // Called now, at this session's own creation — see getInjectAgentGuide's
         // own doc comment for why this must be a fresh call, not a value
-        // cached at PtyManager-construction/boot time.
-        injectAgentGuide: this.getInjectAgentGuide(),
-        injectProjectBriefing: this.getInjectProjectBriefing(),
+        // cached at PtyManager-construction/boot time. Issue #884 — an
+        // explicit `opts.injectAgentGuide` (session-lifecycle.ts's
+        // createSessionRecord, already merged with this project's own
+        // override) wins when present; a caller that omits it (any
+        // getOrCreate() outside that producer) falls through to the live
+        // global-settings-only closure exactly as before.
+        injectAgentGuide: opts.injectAgentGuide ?? this.getInjectAgentGuide(),
+        injectProjectBriefing: opts.injectProjectBriefing ?? this.getInjectProjectBriefing(),
         injectMullionBundle: this.getInjectMullionBundle(),
         skipPermissions: opts.skipPermissions,
         initialPrompt: opts.initialPrompt,

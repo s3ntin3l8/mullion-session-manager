@@ -70,6 +70,13 @@ export interface SessionBackend {
     // verbatim" posture as briefingOverride above.
     projectSkill?: string;
     projectReviewerAgent?: string;
+    // Issue #884 — see CreateSessionOptions.injectAgentGuide/
+    // injectProjectBriefing's own doc comments (pty-manager.ts). Already
+    // resolved to a definite boolean by session-lifecycle.ts before this is
+    // ever called — same "forwarded to a remote host verbatim, never
+    // re-derived" posture as briefingOverride above.
+    injectAgentGuide?: boolean;
+    injectProjectBriefing?: boolean;
   }): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
@@ -269,6 +276,8 @@ class LocalBackend implements SessionBackend {
     briefingOverride?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
+    injectAgentGuide?: boolean;
+    injectProjectBriefing?: boolean;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
     // throw synchronously (getOrCreate() is sync by design; a spawn failure
@@ -287,9 +296,17 @@ class LocalBackend implements SessionBackend {
     await session.spawnOutcome();
     // No version-skew risk for a local spawn — same process/build as the
     // caller, so this is computed directly rather than echoed back.
+    // injectAgentGuide/injectProjectBriefing are read straight off the
+    // resulting Session (issue #884) rather than echoing `opts` back
+    // verbatim — a session id already tracked by this PtyManager (a
+    // reattach, not a fresh spawn) keeps its ORIGINAL spawn-time values,
+    // which may differ from what this particular call requested; the
+    // Session itself is the only source of truth for what's actually live.
     return {
       initialPromptApplied:
         opts.initialPrompt !== undefined && adapterHasInitialPromptArgs(opts.command),
+      injectAgentGuide: session.injectAgentGuide,
+      injectProjectBriefing: session.injectProjectBriefing,
     };
   }
 
@@ -469,6 +486,8 @@ class RemoteBackend implements SessionBackend {
     briefingOverride?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
+    injectAgentGuide?: boolean;
+    injectProjectBriefing?: boolean;
   }): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment

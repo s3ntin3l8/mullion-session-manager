@@ -3,6 +3,8 @@ import { api, ApiError } from "./api/index.js";
 import { FileTextIcon } from "./ui/icons.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { Toggle } from "./ui/primitives.js";
+import { useDashboardStore } from "./store/index.js";
 
 export interface ProjectBriefingPanelParams {
   projectId: number;
@@ -123,6 +125,45 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
     remove: (projectId) => api.deleteProjectReviewerAgent(projectId),
   },
 ];
+
+interface InjectOverrideRowProps {
+  label: string;
+  // The project's own override column value (null = inherit).
+  value: boolean | null;
+  globalValue: boolean;
+  onChange: (value: boolean | null) => void;
+}
+
+// Issue #884 — reuses GitPanel.tsx's own toggle + "inherited" label + reset-
+// to-default pattern verbatim (same CSS classes, same three-state shape:
+// null = inherit the global setting, true/false = explicit per-project
+// override) rather than inventing a new tri-state control for what's
+// structurally the identical shape as that panel's own autoFetch override.
+function InjectOverrideRow({ label, value, globalValue, onChange }: InjectOverrideRowProps) {
+  const effective = value ?? globalValue;
+  const isInherited = value === null;
+  return (
+    <span className="git-panel-toggle-wrapper">
+      <Toggle size="small" on={effective} onChange={(next) => onChange(next)} ariaLabel={label} />
+      {isInherited ? (
+        <span className="git-panel-toggle-inherited" title="Inherited from the global setting">
+          {label}
+        </span>
+      ) : (
+        <>
+          <span className="git-panel-toggle-label">{label}</span>
+          <button
+            className="git-panel-toggle-reset"
+            onClick={() => onChange(null)}
+            title="Reset to the global default"
+          >
+            ×
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
 
 interface FieldEditorProps {
   config: ToolingFieldConfig;
@@ -301,6 +342,19 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
   const [activeField, setActiveField] = useState<ToolingFieldKey>("briefing");
   const [activeFieldDirty, setActiveFieldDirty] = useState(false);
 
+  // Issue #884 — per-project override of the two global session-injection
+  // settings. Read from the project list already in the store (same
+  // "cheap enough to ride along" posture as every other project field —
+  // no separate fetch needed) rather than `tooling`'s own
+  // project_tooling-backed state, since these two live on the `projects`
+  // table itself, not project_tooling.
+  const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
+  const globalInjectAgentGuide = useDashboardStore((s) => s.settings.sessions.injectAgentGuide);
+  const globalInjectProjectBriefing = useDashboardStore(
+    (s) => s.settings.sessions.injectProjectBriefing,
+  );
+  const updateProject = useDashboardStore((s) => s.updateProject);
+
   const fetchTooling = useCallback(
     async (cancelledRef?: { current: boolean }) => {
       try {
@@ -343,43 +397,62 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
   const activeConfig = FIELD_CONFIGS.find((c) => c.key === activeField) ?? FIELD_CONFIGS[0];
 
   return (
-    <div className="agent-rules-panel">
-      <div className="agent-rules-panel-list cmux-scroll">
-        {FIELD_CONFIGS.map((config) => (
-          <button
-            key={config.key}
-            className={`agent-rules-panel-row${activeField === config.key ? " selected" : ""}`}
-            onClick={() => setActiveField(config.key)}
-            disabled={activeFieldDirty && config.key !== activeField}
-            title={
-              activeFieldDirty && config.key !== activeField
-                ? "Save or discard your changes first"
-                : undefined
-            }
-          >
-            <span
-              className={`github-panel-ci-dot ${tooling[config.key] !== null ? "good" : "none"}`}
-            />
-            <span className="agent-rules-panel-row-name">{config.label}</span>
-            <span className="agent-rules-panel-row-meta">
-              {tooling[config.key] !== null ? "set" : "not set"}
-            </span>
-          </button>
-        ))}
+    <div className="agent-rules-panel-shell">
+      <div className="agent-rules-panel-notice project-briefing-inject-overrides">
+        <span>Session injection for this project:</span>
+        <InjectOverrideRow
+          label="Agent guide"
+          value={project?.injectAgentGuide ?? null}
+          globalValue={globalInjectAgentGuide}
+          onChange={(value) => void updateProject(params.projectId, { injectAgentGuide: value })}
+        />
+        <InjectOverrideRow
+          label="Project briefing"
+          value={project?.injectProjectBriefing ?? null}
+          globalValue={globalInjectProjectBriefing}
+          onChange={(value) =>
+            void updateProject(params.projectId, { injectProjectBriefing: value })
+          }
+        />
       </div>
-      <ToolingFieldEditor
-        key={activeConfig.key}
-        config={activeConfig}
-        projectId={params.projectId}
-        savedValue={tooling[activeConfig.key]}
-        onSaved={(value) =>
-          setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: value } : prev))
-        }
-        onDeleted={() =>
-          setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: null } : prev))
-        }
-        onDirtyChange={setActiveFieldDirty}
-      />
+      <div className="agent-rules-panel">
+        <div className="agent-rules-panel-list cmux-scroll">
+          {FIELD_CONFIGS.map((config) => (
+            <button
+              key={config.key}
+              className={`agent-rules-panel-row${activeField === config.key ? " selected" : ""}`}
+              onClick={() => setActiveField(config.key)}
+              disabled={activeFieldDirty && config.key !== activeField}
+              title={
+                activeFieldDirty && config.key !== activeField
+                  ? "Save or discard your changes first"
+                  : undefined
+              }
+            >
+              <span
+                className={`github-panel-ci-dot ${tooling[config.key] !== null ? "good" : "none"}`}
+              />
+              <span className="agent-rules-panel-row-name">{config.label}</span>
+              <span className="agent-rules-panel-row-meta">
+                {tooling[config.key] !== null ? "set" : "not set"}
+              </span>
+            </button>
+          ))}
+        </div>
+        <ToolingFieldEditor
+          key={activeConfig.key}
+          config={activeConfig}
+          projectId={params.projectId}
+          savedValue={tooling[activeConfig.key]}
+          onSaved={(value) =>
+            setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: value } : prev))
+          }
+          onDeleted={() =>
+            setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: null } : prev))
+          }
+          onDirtyChange={setActiveFieldDirty}
+        />
+      </div>
     </div>
   );
 }

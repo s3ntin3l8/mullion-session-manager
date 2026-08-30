@@ -400,15 +400,16 @@ fallback, for a caller that sets `seedPrompt` without also requesting
 also carries a caller-supplied seed on the transfer path as static
 context alongside the imported transcript.
 
-Gated on the live
-`sessions.injectAgentGuide` setting's value _at this session's own spawn
-time_ (`HookAdapterContext.injectAgentGuide`, threaded from
-`PtyManager`/`Session` in `pty-manager.ts` down to
-`hook-adapters/opencode.ts`'s `prepareLaunch`) — necessarily a spawn-time
-snapshot, since unlike hooks.ts's per-hook-fire live read for every other
-agent, there is no later moment for OpenCode to re-check the setting
-against. See
-`prepareLaunch`'s own doc comment for the full reasoning.
+Gated on the resolved `sessions.injectAgentGuide` value — possibly
+per-project-overridden, issue #884 — _at this session's own spawn time_
+(`HookAdapterContext.injectAgentGuide`, threaded from `PtyManager`/`Session`
+in `pty-manager.ts` down to `hook-adapters/opencode.ts`'s `prepareLaunch`) —
+necessarily a spawn-time snapshot, since there is no later moment for
+OpenCode to re-check the setting against. As of issue #884, `hooks.ts`'s
+SessionStart branch reads this SAME spawn-time-resolved value too (straight
+off the `Session` object), not just OpenCode — see that section's own doc
+comment below for why, and `prepareLaunch`'s own doc comment for the full
+reasoning here.
 
 No write to opencode's resolved global config dir (`$XDG_CONFIG_HOME/opencode`
 when set, else `~/.config/opencode` — see

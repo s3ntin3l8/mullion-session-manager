@@ -932,6 +932,80 @@ describe("hooksPlugin (issue #172)", () => {
       socket.destroy();
     });
 
+    // Issue #884 — a per-project override (simulated here the same way
+    // session-lifecycle.ts's createSessionRecord actually resolves and
+    // threads it: as an explicit getOrCreate() opt) must win over the LIVE
+    // global setting, proving this gate now reads the session's own
+    // spawn-time-resolved value (pty-manager.ts) rather than independently
+    // re-deriving the global setting via getStoredSettings as it used to.
+    // The global setting is left ON here specifically so a false positive
+    // (the gate coincidentally reading the global default) can't slip by.
+    it("a per-project override (threaded as an explicit getOrCreate opt) wins over the live global setting", async () => {
+      app = await buildApp();
+      await app.ready();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { injectAgentGuide: true, injectProjectBriefing: true } },
+      });
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        injectAgentGuide: false,
+      });
+      app.pty.stashSeed("1", "picks up where the last session left off");
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+      // Only the seed, no guide block — the per-project override, not the
+      // (still-on) global setting, decided this.
+      expect(JSON.parse(await replyPromise)).toEqual({
+        additionalContext: "picks up where the last session left off",
+      });
+      socket.destroy();
+    });
+
+    it("keeps injecting the guide for a session already spawned when the global setting is later flipped off (issue #884 spawn-time snapshot)", async () => {
+      app = await buildApp();
+      await app.ready();
+      // Global default is injectAgentGuide: true, so this session's own
+      // Session.injectAgentGuide snapshots `true` at getOrCreate() time —
+      // before the PATCH below ever runs.
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { injectAgentGuide: false } },
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+      // The guide block is still present: hooks.ts reads the SESSION's own
+      // already-resolved injectAgentGuide, never a live re-read of the
+      // global setting, so a toggle flipped after spawn only affects the
+      // session's NEXT spawn, not this already-running one.
+      const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+      expect(JSON.parse(await replyPromise)).toEqual({
+        additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false),
+      });
+      socket.destroy();
+    });
+
     describe("project briefing (agent-briefing follow-up to #405)", () => {
       let projectDir: string;
 

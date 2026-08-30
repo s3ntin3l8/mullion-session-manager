@@ -282,6 +282,11 @@ short pointer to it — see below); the other three inject a separate,
 shorter pointer sentence, so seeing this file at all doesn't by itself
 confirm which path got you here.
 
+Since issue #884, this setting can also be overridden per project — see the
+project's own settings panel. The resolved value (project override, or the
+global setting when unset) is what's actually threaded to whichever agent
+your session runs, exactly the same way for all four.
+
 - **Claude Code, Codex** — a short pointer sentence (built by
   `buildAgentGuidePointer` in `src/plugins/hooks.ts`, composed fresh on
   every `SessionStart`, alongside a promote-flow seed when one is pending)
@@ -305,10 +310,15 @@ confirm which path got you here.
   `instructions`) directly at your on-disk guide copy, so its **full
   content** loads into your context at startup, not a pointer to go read
   it yourself. See `hook-adapters/opencode.ts`'s `prepareLaunch` for the
-  full reasoning, including why this can only reflect the
-  `injectAgentGuide` setting's value at the moment your session was
-  spawned, not live like the other three agents. A promote-flow seed no
-  longer rides this channel, though: it's delivered as `--prompt <text>`
+  full reasoning behind reflecting only the `injectAgentGuide` value
+  resolved at the moment your session was spawned. As of issue #884, this
+  is no longer opencode-specific — Claude Code/Codex/agy's `SessionStart`
+  reply now reads that same spawn-time-resolved value too, rather than
+  re-checking the global setting live on every hook fire as it used to: a
+  per-project override (or a global toggle flip) after a session starts
+  needs a fresh session to take effect, for all four agents alike. A
+  promote-flow seed no longer rides this channel, though: it's delivered
+  as `--prompt <text>`
   argv instead — a real submitted first turn, not more static context —
   since opencode gained `initialPromptArgs`; see that field's own comment.
   For an opencode promote, Mullion goes further: it first attempts to

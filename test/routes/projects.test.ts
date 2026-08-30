@@ -941,6 +941,64 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Issue #884 — same nullable-override contract as autoFetch/autoTagRelease
+    // above: null = inherit the global setting, true/false = explicit
+    // per-project override.
+    it("sets, then clears, injectAgentGuide/injectProjectBriefing", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "inject-overrides-p", cwd: "/tmp/inject-overrides-p" },
+      });
+      const { id } = created.json();
+      expect(created.json().injectAgentGuide).toBeNull();
+      expect(created.json().injectProjectBriefing).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { injectAgentGuide: false, injectProjectBriefing: true },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toMatchObject({ injectAgentGuide: false, injectProjectBriefing: true });
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { injectAgentGuide: null, injectProjectBriefing: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().injectAgentGuide).toBeNull();
+      expect(cleared.json().injectProjectBriefing).toBeNull();
+
+      await app.close();
+    });
+
+    it("accepts a PATCH carrying only injectAgentGuide", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "inject-agent-guide-only-field",
+          cwd: "/tmp/inject-agent-guide-only-field",
+        },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { injectAgentGuide: false },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().injectAgentGuide).toBe(false);
+
+      await app.close();
+    });
+
     it("accepts a PATCH carrying only autoApprove", async () => {
       const app = await buildApp();
       const created = await app.inject({
