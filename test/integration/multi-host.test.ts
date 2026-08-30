@@ -137,8 +137,9 @@ const primaryDb = path.join(
   `multi-host-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`,
 );
 
-async function waitUntil(check: () => boolean | Promise<boolean>) {
-  for (let i = 0; i < 100; i++) {
+async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (await check()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -228,20 +229,21 @@ describe("multi-host proxy (issue #26)", () => {
     });
     projectId = projectRes.json().id;
 
-    // Hermes review, PR #921 — Fastify 5.12.1's listen() already awaits
+    // Hermes review, PR #922 — Fastify 5.12.1's listen() already awaits
     // ready() internally, so a post-listen app.ready() is a no-op. The real
     // cross-process readiness the test depends on is the primary's HTTP proxy
-    // to the agent (a real fetch() over loopback, not an app.inject), which
-    // can lag behind listen() under parallel test pressure. Poll until the
-    // proxy actually succeeds so every downstream test starts from a known-
-    // good state rather than racing the first request.
+    // to the agent: app.inject into the primary's route handler still
+    // triggers the real loopback fetch to the agent (which can lag behind
+    // listen() under parallel test pressure), unlike a bare app.ready().
+    // Probe via the non-rate-limited ping route (discover carries a
+    // max:10/minute rate limit that waitUntil would exhaust).
     await waitUntil(async () => {
       const res = await primary.app.inject({
-        method: "GET",
-        url: `/api/projects/discover?hostId=${hostId}`,
+        method: "POST",
+        url: `/api/hosts/${hostId}/ping`,
       });
-      return res.statusCode === 200;
-    });
+      return res.statusCode === 200 && res.json().online === true;
+    }, 5_000);
   });
 
   afterAll(async () => {
