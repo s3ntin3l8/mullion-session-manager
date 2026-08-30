@@ -12,6 +12,7 @@ import {
   verifyBridgeSession,
 } from "../services/bridge-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import { requestScheme } from "../services/request-scheme.js";
 
 // Issue #820 — the primary-side half of the SSH-agent bridge's laptop-
 // facing surface (see the design plan). Five routes:
@@ -197,7 +198,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
     { config: { rateLimit: PAIR_RATE_LIMIT } },
     async (request): Promise<PairResponse> => {
       const pairing = issuePairingCode(app);
-      const baseUrl = `${request.protocol}://${request.headers.host}`;
+      const baseUrl = `${requestScheme(request)}://${request.headers.host}`;
       return {
         bridge_id: pairing.bridgeId,
         pairing_payload: encodePairingPayload({ baseUrl, code: pairing.code }),
