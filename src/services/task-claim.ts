@@ -25,6 +25,7 @@ import {
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
 import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-resolve.js";
+import { commandIsOpencode } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 
@@ -363,17 +364,19 @@ export async function dispatchClaimedTask(
           )
         : undefined,
     });
-    const model =
-      resolveOpenCodeModel(app, {
-        taskModel: task.model ?? null,
-        issueBody: task.body,
-        role: "implementer",
-      }) ?? undefined;
-    const smallModel =
-      resolveOpenCodeSmallModel(app, {
-        taskSmallModel: task.smallModel ?? null,
-        issueBody: task.body,
-      }) ?? undefined;
+    const model = commandIsOpencode(command)
+      ? (resolveOpenCodeModel(app, {
+          taskModel: task.model ?? null,
+          issueBody: task.body,
+          role: "implementer",
+        }) ?? undefined)
+      : undefined;
+    const smallModel = commandIsOpencode(command)
+      ? (resolveOpenCodeSmallModel(app, {
+          taskSmallModel: task.smallModel ?? null,
+          issueBody: task.body,
+        }) ?? undefined)
+      : undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,

@@ -3,6 +3,7 @@ import { shellQuote } from "../../../src/services/hook-adapters/shared.js";
 import {
   getAdapterInitialPromptArgs,
   adapterHasInitialPromptArgs,
+  commandIsOpencode,
 } from "../../../src/services/hook-adapters/index.js";
 
 // Task Master's fix for the claimed-task-never-starts-a-turn bug: a prompt
@@ -99,5 +100,32 @@ describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
 
   it("path-qualified commands still match, mirroring matches()'s own anchoring", () => {
     expect(getAdapterInitialPromptArgs("/usr/local/bin/claude", "hi")).toBe("-- 'hi'");
+  });
+});
+
+// Issue #957 follow-up — `commandIsOpencode` is the gating predicate the
+// manual-spawn route and the Task Master worker/review spawns use to decide
+// whether resolving the install-wide opencode default makes sense. True only
+// for the opencode adapter specifically (a generic "some adapter matches"
+// check would also fire for Claude Code/Codex/agy, whose agents will never
+// actually read `model`/`small_model` — handing them one renders a misleading
+// model badge on a row whose agent ignores the field).
+describe("commandIsOpencode", () => {
+  it("returns true for opencode commands", () => {
+    expect(commandIsOpencode("opencode")).toBe(true);
+    expect(commandIsOpencode("opencode --foo")).toBe(true);
+    expect(commandIsOpencode("/usr/local/bin/opencode")).toBe(true);
+  });
+
+  it("returns false for non-opencode commands, even ones with their own adapter", () => {
+    expect(commandIsOpencode("claude")).toBe(false);
+    expect(commandIsOpencode("codex")).toBe(false);
+    expect(commandIsOpencode("agy")).toBe(false);
+  });
+
+  it("returns false for commands with no adapter at all", () => {
+    expect(commandIsOpencode("bash")).toBe(false);
+    expect(commandIsOpencode("ssh user@host")).toBe(false);
+    expect(commandIsOpencode("")).toBe(false);
   });
 });

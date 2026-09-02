@@ -17,7 +17,11 @@ describe("listOpenCodeModels", () => {
   it("parses the output of `opencode models` into a sorted, de-duplicated string array", async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: REAL_OUTPUT, stderr: "" });
     const result = await listOpenCodeModels({ exec });
-    expect(exec).toHaveBeenCalledWith("opencode", ["models"]);
+    expect(exec).toHaveBeenCalledWith(
+      "opencode",
+      ["models"],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(result).toEqual([
       "anthropic/claude-sonnet-4-5",
       "opencode-go/deepseek-v4-pro",
@@ -86,5 +90,39 @@ describe("listOpenCodeModels", () => {
       .mockResolvedValue({ stdout: "\n\nmodel-a/b\n\nmodel-c/d\n\n", stderr: "" });
     const result = await listOpenCodeModels({ exec });
     expect(result).toEqual(["model-a/b", "model-c/d"]);
+  });
+
+  it("passes an AbortController signal to the exec call", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: REAL_OUTPUT, stderr: "" });
+    await listOpenCodeModels({ exec });
+    expect(exec).toHaveBeenCalledWith(
+      "opencode",
+      ["models"],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("rejects with a timeout error and does NOT cache the empty result", async () => {
+    let tick = 1000;
+    const exec = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ stdout: string; stderr: string }>(() => {
+          // never resolves — simulates a hung provider
+        }),
+    );
+    // The first call hits the timeout and resolves to [].
+    const first = await listOpenCodeModels({ exec, now: () => tick });
+    expect(first).toEqual([]);
+    // The next call must NOT reuse the cached "[]" — it should retry the
+    // exec. We resolve the second call promptly so it can succeed.
+    exec.mockResolvedValueOnce({ stdout: REAL_OUTPUT, stderr: "" });
+    tick += 60 * 60 * 1000 + 1; // well past the TTL
+    const second = await listOpenCodeModels({ exec, now: () => tick });
+    expect(second).toEqual([
+      "anthropic/claude-sonnet-4-5",
+      "opencode-go/deepseek-v4-pro",
+      "opencode-go/minimax-m3",
+    ]);
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 });

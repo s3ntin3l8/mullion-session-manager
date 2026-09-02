@@ -26,7 +26,7 @@ import {
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "../services/task-model-resolve.js";
-import { adapterHasResumeSessionArgs } from "../services/hook-adapters/index.js";
+import { adapterHasResumeSessionArgs, commandIsOpencode } from "../services/hook-adapters/index.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
   withLiveInfo,
@@ -389,10 +389,15 @@ export async function sessionsRoute(app: FastifyInstance) {
     { schema: createSessionSchema },
     async (request, reply) => {
       // Issue #957 — when the caller doesn't supply a model, resolve the
-      // install-wide default so manual spawns also pick it up (same as
-      // Task Master spawns do via task-claim/task-reconciler).
+      // install-wide default so manual opencode spawns also pick it up (same
+      // as Task Master spawns do via task-claim/task-reconciler). Gated to
+      // opencode commands only — opencode-specific config (model/small_model)
+      // is meaningless for a non-opencode command, and an unguarded stamp
+      // renders a misleading model badge on a row whose agent will never
+      // read it (Hermes review warning, PR #961 round 2).
+      const isOpencode = commandIsOpencode(request.body.command);
       const body =
-        request.body.model === undefined || request.body.smallModel === undefined
+        isOpencode && (request.body.model === undefined || request.body.smallModel === undefined)
           ? {
               ...request.body,
               model:

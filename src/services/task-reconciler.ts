@@ -25,6 +25,7 @@ import {
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
 import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-resolve.js";
+import { commandIsOpencode } from "./hook-adapters/index.js";
 import {
   syncTaskTransition,
   computeTaskDiffStat,
@@ -498,17 +499,19 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         // network call.
         if (reviewCommand === null) continue;
 
-        const reviewModel =
-          resolveOpenCodeModel(app, {
-            taskModel: task.model ?? null,
-            issueBody: task.body,
-            role: "reviewer",
-          }) ?? undefined;
-        const reviewSmallModel =
-          resolveOpenCodeSmallModel(app, {
-            taskSmallModel: task.smallModel ?? null,
-            issueBody: task.body,
-          }) ?? undefined;
+        const reviewModel = commandIsOpencode(reviewCommand)
+          ? (resolveOpenCodeModel(app, {
+              taskModel: task.model ?? null,
+              issueBody: task.body,
+              role: "reviewer",
+            }) ?? undefined)
+          : undefined;
+        const reviewSmallModel = commandIsOpencode(reviewCommand)
+          ? (resolveOpenCodeSmallModel(app, {
+              taskSmallModel: task.smallModel ?? null,
+              issueBody: task.body,
+            }) ?? undefined)
+          : undefined;
 
         const ci = await resolveReviewCi(
           app,
