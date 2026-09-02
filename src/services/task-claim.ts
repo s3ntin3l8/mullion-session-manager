@@ -24,6 +24,7 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
+import { resolveOpenCodeModel } from "./task-model-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 
@@ -362,6 +363,10 @@ export async function dispatchClaimedTask(
           )
         : undefined,
     });
+    const model = resolveOpenCodeModel(app, {
+      taskModel: task.model ?? null,
+      issueBody: task.body,
+    }) ?? undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
@@ -379,6 +384,7 @@ export async function dispatchClaimedTask(
       // OSC update would defeat.
       name: `Task #${task.id} · worker`,
       nameLocked: true,
+      model,
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -408,6 +414,7 @@ export async function dispatchClaimedTask(
         worktreePath: result.row.cwd,
         branchName,
         agentCommand: command,
+        model,
         baseSha,
         seedDelivered,
       })

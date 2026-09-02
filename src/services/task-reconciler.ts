@@ -24,6 +24,7 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
+import { resolveOpenCodeModel } from "./task-model-resolve.js";
 import {
   syncTaskTransition,
   computeTaskDiffStat,
@@ -116,6 +117,7 @@ async function spawnReviewAgentNow(
   skipPermissions: boolean,
   reviewCommand: string,
   ci: ReviewCiInfo | undefined,
+  model: string | undefined,
 ): Promise<void> {
   if (!task.worktreePath) return;
   // Hoisted out of the `try` (Hermes review, PR #742) — a throw AFTER
@@ -175,6 +177,7 @@ async function spawnReviewAgentNow(
       // task-claim.ts's own worker-spawn comment for the full reasoning.
       name: `Task #${task.id} · review`,
       nameLocked: true,
+      model,
     });
     if (!result.ok) {
       app.log.warn(
@@ -493,6 +496,11 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         // network call.
         if (reviewCommand === null) continue;
 
+        const reviewModel = resolveOpenCodeModel(app, {
+          taskModel: task.model ?? null,
+          issueBody: task.body,
+        }) ?? undefined;
+
         const ci = await resolveReviewCi(
           app,
           task,
@@ -537,6 +545,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           resolvedTaskMaster.skipPermissions,
           reviewCommand,
           ci,
+          reviewModel,
         );
       }
     }),
