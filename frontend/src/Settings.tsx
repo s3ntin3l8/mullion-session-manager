@@ -30,6 +30,7 @@ import { TaskMasterSection } from "./settings/sections/TaskMasterSection.js";
 import { IntegrationsSection } from "./settings/sections/IntegrationsSection.js";
 import { SkillsSection } from "./settings/sections/SkillsSection.js";
 import { ServerInfoSection } from "./settings/sections/ServerInfoSection.js";
+import { ModelsSection } from "./settings/sections/ModelsSection.js";
 
 export type SettingsSection =
   | "appearance"
@@ -43,7 +44,8 @@ export type SettingsSection =
   | "tasks"
   | "integrations"
   | "skills"
-  | "server";
+  | "server"
+  | "models";
 
 const SECTIONS: Array<{
   id: SettingsSection;
@@ -80,6 +82,12 @@ const SECTIONS: Array<{
     title: "Launchers & agents",
     desc: "Detected CLIs and session defaults.",
     icon: (size) => <BoltIcon size={size} />,
+  },
+  {
+    id: "models",
+    title: "Models",
+    desc: "Default model for opencode sessions.",
+    icon: (size) => <BotIcon size={size} />,
   },
   {
     id: "notifications",
@@ -411,6 +419,7 @@ export function Settings({
               {section === "projects" && <ProjectsSection />}
               {section === "hosts" && <HostsSection />}
               {section === "launchers" && <LaunchersSection />}
+              {section === "models" && <ModelsSection />}
               {section === "notifications" && <NotificationsSection />}
               {section === "dock" && <DockSection />}
               {section === "sessions" && <SessionsSection />}

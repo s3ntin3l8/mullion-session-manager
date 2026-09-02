@@ -345,6 +345,8 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const configContent: Record<string, unknown> = { mcp: mcpConfig };
   if (instructions.length > 0) configContent.instructions = instructions;
   if (skillsPaths.length > 0) configContent.skills = { paths: skillsPaths };
+  if (ctx.model) configContent.model = ctx.model;
+  if (ctx.smallModel) configContent.small_model = ctx.smallModel;
   envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify(configContent);
 
   return {

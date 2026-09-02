@@ -25,7 +25,8 @@ import {
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
-import { adapterHasResumeSessionArgs } from "../services/hook-adapters/index.js";
+import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "../services/task-model-resolve.js";
+import { adapterHasResumeSessionArgs, commandIsOpencode } from "../services/hook-adapters/index.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
   withLiveInfo,
@@ -85,6 +86,8 @@ const createSessionSchema = {
         maxProperties: MAX_SESSION_ENV_ENTRIES,
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
+      model: { type: "string" },
+      smallModel: { type: "string" },
     },
   },
 };
@@ -385,7 +388,32 @@ export async function sessionsRoute(app: FastifyInstance) {
     "/api/sessions",
     { schema: createSessionSchema },
     async (request, reply) => {
-      const result = await createSessionRecord(app, request.body);
+      // Issue #957 — when the caller doesn't supply a model, resolve the
+      // install-wide default so manual opencode spawns also pick it up (same
+      // as Task Master spawns do via task-claim/task-reconciler). Gated to
+      // opencode commands only — opencode-specific config (model/small_model)
+      // is meaningless for a non-opencode command, and an unguarded stamp
+      // renders a misleading model badge on a row whose agent will never
+      // read it (Hermes review warning, PR #961 round 2).
+      const isOpencode = commandIsOpencode(request.body.command);
+      const body =
+        isOpencode && (request.body.model === undefined || request.body.smallModel === undefined)
+          ? {
+              ...request.body,
+              model:
+                request.body.model ??
+                resolveOpenCodeModel(app, {
+                  issueBody: null,
+                  role: "implementer",
+                }) ??
+                undefined,
+              smallModel:
+                request.body.smallModel ??
+                resolveOpenCodeSmallModel(app, { issueBody: null }) ??
+                undefined,
+            }
+          : request.body;
+      const result = await createSessionRecord(app, body);
       if (!result.ok) {
         if (result.reason === "unknown-project") return reply.badRequest("Unknown projectId");
         if (result.reason === "worktree-failed") {

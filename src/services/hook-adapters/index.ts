@@ -111,6 +111,23 @@ export function adapterHasResumeSessionArgs(command: string): boolean {
 }
 
 /**
+ * Issue #957 follow-up — whether `command` would resolve to the opencode
+ * adapter specifically. Distinct from a generic "some adapter matches"
+ * check (which would be true for Claude Code/Codex/agy too), because
+ * opencode-specific config (the `OPENCODE_CONFIG_CONTENT.model` and
+ * `OPENCODE_CONFIG_CONTENT.small_model` keys, issue #957 + #958) is only
+ * meaningful when the spawned agent is opencode — handing Claude Code a
+ * `model` field renders a misleading model badge for an agent that won't
+ * actually use it. Used by the manual-spawn route and by Task Master
+ * worker/review spawns to gate the opencode default-model resolution.
+ * Pure lookup, no I/O.
+ */
+export function commandIsOpencode(command: string): boolean {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter === openCodeAdapter;
+}
+
+/**
  * Finds the first adapter matching `command`, runs its launch plan's I/O
  * side effects (settings-file writes, managed installs), and returns the
  * possibly-transformed command plus any env additions. Deliberately

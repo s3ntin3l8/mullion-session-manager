@@ -177,6 +177,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },
+  opencode: {
+    implementerModel: null,
+    reviewerModel: null,
+    defaultSmallModel: null,
+  },
   taskMaster: {
     autoClaimPaused: false,
     enabled: "inherit",

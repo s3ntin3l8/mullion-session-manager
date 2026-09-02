@@ -320,6 +320,23 @@ export interface AppSettings {
   // rate-limit tradeoff nobody tunes from a browser, and making it live
   // would require timer-lifecycle churn (a reconfigure decorator) that isn't
   // worth it for the value.
+  // Issue #957 — install-wide default opencode model per role, each a
+  // `provider/model` string (e.g. "openrouter/minimax-m3",
+  // "anthropic/claude-sonnet-4-5"). Applied at spawn time to
+  // OPENCODE_CONFIG_CONTENT.model by the opencode adapter's prepareLaunch.
+  // The lowest tier of resolveOpenCodeModel's precedence chain
+  // (src/services/task-model-resolve.ts). `null` means "no override; let
+  // opencode pick via its own priority chain (last-used / first model)" —
+  // today's behavior, unchanged.
+  opencode: {
+    implementerModel: string | null;
+    reviewerModel: string | null;
+    // Issue #958 — opencode's `small_model` config key, used for
+    // lightweight tasks (title generation, summarization) that don't
+    // need the full model. Single setting, not per-role — it's a
+    // property of the model itself, not the task.
+    defaultSmallModel: string | null;
+  };
   taskMaster: {
     autoClaimPaused: boolean;
     enabled: "inherit" | "on" | "off";
@@ -408,6 +425,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultAgent: "claude",
     hiddenAgents: [],
     skipPermissionsAgents: [],
+  },
+  opencode: {
+    implementerModel: null,
+    reviewerModel: null,
+    defaultSmallModel: null,
   },
   notifications: {
     channels: {

@@ -42,6 +42,7 @@ export interface HeaderProps {
   agentLogo: string | null;
   showAgentFallback: boolean;
   agentBinary: string;
+  model?: string | null;
   dot: ReactNode;
   statusLabel: ReactNode;
   gitStatus: GitStatus | null | undefined;
@@ -74,6 +75,7 @@ export function Header({
   agentLogo,
   showAgentFallback,
   agentBinary,
+  model,
   dot,
   statusLabel,
   gitStatus,
@@ -117,6 +119,11 @@ export function Header({
         <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
       )}
       {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
+      {model && (
+        <span className="session-model-badge" title={`Model: ${model}`}>
+          {model.split("/").pop()}
+        </span>
+      )}
       {renaming ? (
         <input
           ref={renameInputRef}

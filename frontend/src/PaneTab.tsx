@@ -348,6 +348,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       )}
       {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
       {!narrow && badge}
+      {!narrow && session?.model && (
+        <span className="pane-tab-model-badge" title={`Model: ${session.model}`}>
+          {session.model.split("/").pop()}
+        </span>
+      )}
       {unreadCount > 0 && unreadIconKind && (
         <span
           className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}

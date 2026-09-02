@@ -362,6 +362,14 @@ export interface Session {
   // true, so an auto-launch name stays overridable while a real rename doesn't.
   nameLocked: boolean;
   command: string;
+  // Issue #957 — the opencode model this session was launched with (e.g.
+  // "anthropic/claude-sonnet-4-20250514"), resolved from the task issue body's
+  // `Model:` directive, the global default, or null when unset/irrelevant.
+  model?: string | null;
+  // Issue #958 — same shape as `model` above, for opencode's `small_model`
+  // config key. Resolved from the task issue body's `SmallModel:` directive,
+  // the global default, or null.
+  smallModel?: string | null;
   cwd: string | null;
   // Issue #822 — extra env vars this session was launched with (a dock
   // control's own `env`, or a direct API caller's), parsed back into an
@@ -1314,6 +1322,17 @@ export interface AppSettings {
   // override, use the env default" (see taskConfig.ts's resolveTaskMaster,
   // the frontend mirror of the backend's own resolver). Surfaced in
   // Settings.tsx's Task Master section.
+  // Issue #957 — install-wide default opencode model per role, each a
+  // `provider/model` string (e.g. "openrouter/minimax-m3",
+  // "anthropic/claude-sonnet-4-5"). `null` means "no override; let opencode
+  // pick via its own priority chain".
+  opencode: {
+    implementerModel: string | null;
+    reviewerModel: string | null;
+    // Issue #958 — opencode's `small_model` config key, used for
+    // lightweight tasks (title generation, summarization).
+    defaultSmallModel: string | null;
+  };
   taskMaster: {
     autoClaimPaused: boolean;
     enabled: "inherit" | "on" | "off";

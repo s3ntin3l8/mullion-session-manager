@@ -167,6 +167,16 @@ export interface CreateSessionOptions {
    * (hook-adapters/types.ts). Same producer/multi-host reasoning as
    * `briefingOverride` above. */
   projectReviewerAgent?: string;
+  /** Issue #957 — see HookAdapterContext.model's own doc comment
+   * (hook-adapters/types.ts). Same producer/multi-host reasoning as
+   * `projectReviewerAgent` above. Resolved on the primary by
+   * createSessionRecord and forwarded into `applyHookAdapters` →
+   * `HookAdapterContext.model` for the opencode adapter. */
+  model?: string;
+  /** Issue #958 — same threading posture as `model` above, for
+   * opencode's `small_model` config key. Forwarded into
+   * `HookAdapterContext.smallModel`. */
+  smallModel?: string;
   /** Issue #884 — the per-project-resolved value of
    * sessions.injectAgentGuide (settings.ts), already merged with this
    * project's own nullable override column (projects.injectAgentGuide,
@@ -1024,6 +1034,8 @@ export class Session {
   // posture as briefingOverride immediately above.
   private readonly projectSkill: string | undefined;
   private readonly projectReviewerAgent: string | undefined;
+  private readonly model: string | undefined;
+  private readonly smallModel: string | undefined;
   // Issue #822 — see CreateSessionOptions.env's own doc comment. Unlike
   // initialPrompt/seedPrompt/resumeAgentSessionId above, this IS re-read on
   // every bootstrapMaster() call for this instance, including a later
@@ -1387,6 +1399,8 @@ export class Session {
     briefingOverride?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
+    model?: string;
+    smallModel?: string;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -1413,6 +1427,8 @@ export class Session {
     this.briefingOverride = opts.briefingOverride;
     this.projectSkill = opts.projectSkill;
     this.projectReviewerAgent = opts.projectReviewerAgent;
+    this.model = opts.model;
+    this.smallModel = opts.smallModel;
     this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
@@ -1971,6 +1987,8 @@ export class Session {
       briefingOverride: this.briefingOverride,
       projectSkill: this.projectSkill,
       projectReviewerAgent: this.projectReviewerAgent,
+      model: this.model,
+      smallModel: this.smallModel,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -3788,6 +3806,8 @@ export class PtyManager {
         briefingOverride: opts.briefingOverride,
         projectSkill: opts.projectSkill,
         projectReviewerAgent: opts.projectReviewerAgent,
+        model: opts.model,
+        smallModel: opts.smallModel,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

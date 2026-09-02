@@ -265,6 +265,14 @@ export const sessions = sqliteTable(
     // Shell command line to run, e.g. "claude", "codex", "bash" — see the
     // plan's CLI-agnostic design; PtyManager treats this as an opaque string.
     command: text("command").notNull(),
+    // Issue #957 — the resolved opencode model the session is configured
+    // to use, recorded by createSessionRecord at spawn time for display
+    // in the session header. Source priority: tasks.model -> issue `Model:`
+    // line -> settings.opencode.defaultModel -> null (opencode fallback).
+    model: text("model"),
+    // Issue #958 — same shape as `model` above, for opencode's `small_model`
+    // config key (used for lightweight tasks like title generation).
+    smallModel: text("small_model"),
     // Optional override of the parent project's cwd — lets a launcher/action
     // (src/services/project-config.ts) or dock control target a subdirectory
     // (e.g. a monorepo package) without needing its own project row. Falls
@@ -609,6 +617,15 @@ export const tasks = sqliteTable(
     // panel can show which agent a task ran under without re-deriving
     // precedence after any of those inputs later change.
     agentCommand: text("agent_command"),
+    // Issue #957 — the resolved opencode model the worker actually ran
+    // under (tasks.model -> issue `Model:` line -> settings.opencode.defaultModel),
+    // recorded once at claim time for display in the panel, same posture as
+    // `agentCommand` above. `null` means opencode's own fallback (priority
+    // 3/4 — last-used or first model) ran.
+    model: text("model"),
+    // Issue #958 — same shape as `model` above, for opencode's `small_model`
+    // config key. Recorded at claim time alongside `model`.
+    smallModel: text("small_model"),
     // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
     // (durable/shareable) list. Set once Task -> PR promotion succeeds.
     prUrl: text("pr_url"),

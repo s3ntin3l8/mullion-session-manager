@@ -70,6 +70,13 @@ export interface SessionBackend {
     // verbatim" posture as briefingOverride above.
     projectSkill?: string;
     projectReviewerAgent?: string;
+    // Issue #957 — see CreateSessionOptions.model's own doc comment
+    // (pty-manager.ts). Forwarded to a remote host verbatim, same as
+    // projectReviewerAgent above.
+    model?: string;
+    // Issue #958 — same posture as `model` above, for opencode's
+    // `small_model` config key.
+    smallModel?: string;
     // Issue #884 — see CreateSessionOptions.injectAgentGuide/
     // injectProjectBriefing's own doc comments (pty-manager.ts). Already
     // resolved to a definite boolean by session-lifecycle.ts before this is
@@ -276,6 +283,12 @@ class LocalBackend implements SessionBackend {
     briefingOverride?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
+    // Issue #957 — see CreateSessionOptions.model's own doc comment
+    // (pty-manager.ts). Forwarded to PtyManager.getOrCreate() verbatim.
+    model?: string;
+    // Issue #958 — same posture as `model` above, for opencode's
+    // `small_model` config key.
+    smallModel?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
   }): Promise<SpawnResult> {
@@ -486,6 +499,13 @@ class RemoteBackend implements SessionBackend {
     briefingOverride?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
+    // Issue #957 — see CreateSessionOptions.model's own doc comment
+    // (pty-manager.ts). Forwarded to a remote host verbatim, same as
+    // projectReviewerAgent above.
+    model?: string;
+    // Issue #958 — same posture as `model` above, for opencode's
+    // `small_model` config key.
+    smallModel?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
   }): Promise<SpawnResult> {

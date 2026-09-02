@@ -124,6 +124,19 @@ export interface HookAdapterContext {
    * the whole session, not just that one skill). Undefined/absent for codex
    * and agy, same reason as `projectSkill`. */
   projectReviewerAgent?: string;
+  /** Issue #957 — the resolved opencode model the session is configured
+   * to use, threaded from createSessionRecord (where resolveOpenCodeModel
+   * has already run) all the way to the opencode adapter's prepareLaunch,
+   * which lands it in OPENCODE_CONFIG_CONTENT.model. `undefined` for
+   * any non-opencode adapter and for an opencode session with no model
+   * resolution anywhere (opencode's own fallback then runs). The opencode
+   * adapter is the only consumer; every other adapter ignores this
+   * field, same posture as `seedPrompt`/`projectSkill`/etc. */
+  model?: string;
+  /** Issue #958 — same threading posture as `model` above, but for
+   * opencode's `small_model` config key (used for lightweight tasks).
+   * Lands in OPENCODE_CONFIG_CONTENT.small_model. */
+  smallModel?: string;
 }
 
 export interface HookLaunchPlan {
