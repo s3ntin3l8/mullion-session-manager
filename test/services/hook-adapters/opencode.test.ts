@@ -632,4 +632,35 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
       rmSync(realSessionsDir, { recursive: true, force: true });
     }
   });
+
+  // Hermes review, PR #966 — regression guard for the opencode
+  // `OPENCODE_CONFIG_CONTENT.permission` deep-merge posture
+  // (verified empirically in issue #968 against opencode v1.18.26).
+  //
+  // The contract this test pins down: the adapter sets
+  // `permission.skill.<name>: "deny"` and NOTHING ELSE under the
+  // top-level `permission` key. The deep-merge property (verified
+  // above: a user's `permission.bash: "ask"` and
+  // `permission.skill.user-only-skill: "ask"` survive an
+  // unattended-worker spawn intact) depends on the adapter not
+  // asserting any other permission keys — adding `bash: "..."` or
+  // `edit: "..."` here would still deep-merge correctly today, but
+  // would silently lock those keys to whatever the adapter chose,
+  // and any future opencode release that flips to shallow-replacement
+  // semantics would then CLOBBER the user's matching keys.
+  //
+  // Keep this block a one-key `permission: { skill: {...} }` shape
+  // unless a follow-up issue justifies widening it (with its own
+  // live-spike verification).
+  it('sets ONLY `permission.skill.<name>: "deny"` under the permission block — no other permission keys, to preserve the deep-merge posture empirically verified in issue #968', () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 348423 });
+    const config = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(Object.keys(config.permission)).toEqual(["skill"]);
+    expect(Object.keys(config.permission.skill).sort()).toEqual(
+      ["brainstorming", "finishing-a-development-branch", "writing-plans"].sort(),
+    );
+    for (const value of Object.values(config.permission.skill)) {
+      expect(value).toBe("deny");
+    }
+  });
 });

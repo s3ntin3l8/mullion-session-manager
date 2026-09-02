@@ -374,25 +374,51 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // shows a different skill biting the same way.
   if (ctx.taskId !== undefined) {
     configContent.permission = {
-      // Hermes review, PR #966 — opencode's `OPENCODE_CONFIG_CONTENT`
-      // deep-merges per top-level key over the user's own
+      // Hermes review, PR #966 — VERIFIED EMPIRICALLY against opencode
+      // v1.18.26 (issue #968 closed): `OPENCODE_CONFIG_CONTENT` deep-
+      // merges per top-level key over the user's own
       // `~/.config/opencode/opencode.json` / project config, the same
       // way `instructions` (verified empirically in this file's header
-      // comment) and `skills.paths` do — not a shallow whole-layer
-      // shadow, so a user who already has `permission.bash: "ask"` or
+      // comment) and `skills.paths` do — NOT a shallow whole-layer
+      // shadow, so a user who already has `permission.bash: "ask"` /
       // `permission.edit: "allow"` rules in their own config keeps
-      // them across an unattended-worker spawn. NOT empirically
-      // verified for the `permission` key specifically (the spike that
-      // established the merge posture above only exercised
-      // `instructions` and top-level side keys like `model`) — a
-      // follow-up spike should confirm against the installed CLI
-      // (`opencode debug config` with a non-empty user `permission`
-      // block) before this lands on a real user. If the assumption
-      // turns out to be wrong, the right fix is to read
+      // them across an unattended-worker spawn.
+      //
+      // The verification (issue #968's spike): wrote a scratch
+      // project with a non-empty user `permission` block
+      // (`bash: "ask"`, `edit: "allow"`, `webfetch: "deny"`, plus a
+      // nested `permission.skill` with `user-skill-1: "deny"` and
+      // `user-skill-2: "ask"`), set OPENCODE_CONFIG_CONTENT to
+      // `{"permission":{"skill":{"brainstorming":"deny",...}}}`,
+      // inspected the merged config via `opencode debug config`:
+      //
+      //   - `permission.bash: "ask"`, `edit: "allow"`,
+      //     `webfetch: "deny"` — all preserved
+      //   - `permission.skill.user-skill-1: "deny"`,
+      //     `user-skill-2: "ask"` — preserved alongside the new
+      //     denies (two-level deep merge)
+      //   - `permission.skill.brainstorming: "deny"` (etc.) —
+      //     added
+      //   - `permission.skill.writing-plans: "allow"` (when user
+      //     had it set to allow) — overridden to `"deny"` because
+      //     the override wins on shared keys (intentional — the
+      //     whole point of this gate is to deny these skills for
+      //     unattended workers)
+      //
+      // The `permission` key is documented as a known config key in
+      // opencode's own schema (`https://opencode.ai/config.json`,
+      // referenced by the customize-opencode skill's body) and the
+      // resolved config shows it present alongside the rest of the
+      // user's config, so the key is recognized, not silently inert.
+      //
+      // IF a future opencode release changes this merge posture
+      // (shallow-replace instead of deep-merge, or unrecognized
+      // `permission` key), the right fix is to read the user's
       // `~/.config/opencode/opencode.json` here and deep-merge our
-      // deny list over the user's existing `permission` block the
-      // way services/skills.ts's writeOpenCodeSkillEnabled does for
-      // the Skills Manager path.
+      // deny list over their existing `permission` block the way
+      // services/skills.ts's writeOpenCodeSkillEnabled already does
+      // for the Skills Manager path — but no such fallback is needed
+      // today.
       skill: {
         brainstorming: "deny",
         "writing-plans": "deny",
