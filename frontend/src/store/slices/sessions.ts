@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import { api, AuthExpiredError } from "../../api/index.js";
+import { api, AuthExpiredError, RateLimitedError } from "../../api/index.js";
 import { BACKEND_UNREACHABLE_THRESHOLD, LIVE_REFRESH_INTERVAL_MS } from "../constants.js";
 import { pruneDismissedEventKeys, pruneSessionKeyedRecord } from "../helpers.js";
 import type { DashboardState, SessionsSlice } from "../types.js";
@@ -11,6 +11,31 @@ import type { DashboardState, SessionsSlice } from "../types.js";
 // onSessionEnded flows), and all of them should share one counter/recovery
 // signal rather than each tracking its own.
 let consecutiveSessionFetchFailures = 0;
+
+// Earliest wall-clock time the live poll may fire its next tick
+// (issue #959). Set when refreshSessions catches a RateLimitedError, so
+// the cascade (refreshSessions + refreshGitStatuses + refreshGitDiffStats
+// — three endpoints on the same 100/min bucket) is skipped wholesale for
+// the server's Retry-After window. A 429 is NOT a transport failure: it
+// does not increment consecutiveSessionFetchFailures, so the
+// genuine-outage banner never flips on rate-limit pressure alone. Read
+// by startLiveRefresh's tick (this file) and by the /ws/events push
+// throttle (store/slices/events.ts) so the push channel can't bypass the
+// backoff the live poll already established.
+let sessionRefreshBlockedUntil = 0;
+
+export function getSessionRefreshBlockedUntil(): number {
+  return sessionRefreshBlockedUntil;
+}
+
+// Visible for tests: a tiny helper to reset the module-scoped state
+// without `vi.resetModules()` (which would also wipe every other
+// module-level in the test file). The api/client.ts breaker has the
+// same shape — see __resetRateLimitBreakerForTests there.
+export function __resetSessionRefreshBlockForTests(): void {
+  sessionRefreshBlockedUntil = 0;
+  consecutiveSessionFetchFailures = 0;
+}
 
 export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsSlice> = (
   set,
@@ -48,6 +73,24 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
       // banner shouldn't keep asserting a problem that's already resolved.
       if (get().sessionExpired) set({ sessionExpired: false });
     } catch (err) {
+      // A 429 (issue #959) is a "back off and retry" signal, not a
+      // transport failure. Distinct from the AuthExpiredError branch
+      // (which is the gateway forward-auth signal and the genuine-
+      // outage path below: the breaker in api/client.ts owns the
+      // "wait Retry-After" semantics; this slice just records the
+      // window so the next live-poll tick skips the entire cascade
+      // (refreshSessions + refreshGitStatuses + refreshGitDiffStats)
+      // instead of hammering the same bucket. Do NOT fold into
+      // consecutiveSessionFetchFailures — that counter is for genuine
+      // transport/process failures, and the genuine-outage banner's
+      // "Mullion server unreachable" subtext is wrong here.
+      if (err instanceof RateLimitedError) {
+        sessionRefreshBlockedUntil = Math.max(
+          sessionRefreshBlockedUntil,
+          Date.now() + err.retryAfterMs,
+        );
+        throw err;
+      }
       // A gateway forward-auth session expiry (see api/client.ts) is
       // neither "backend down" nor something this same fetch retrying can
       // ever fix — keep it entirely out of the backendReachable/
@@ -121,15 +164,47 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
     const TASKS_REFRESH_EVERY_N_TICKS = 15;
 
     const tick = () => {
-      void get().refreshSessions();
-      void get().refreshGitStatuses();
-      void get().refreshGitDiffStats();
+      // 429 backoff (issue #959): while a Retry-After window is still in
+      // the future, the entire cascade is skipped. The three calls below
+      // all share the same 100/min bucket behind a Traefik-fronted
+      // deployment, so hammering one (or all of them) on the next tick
+      // would only extend the block — refreshSessions's own
+      // RateLimitedError catch already updated sessionRefreshBlockedUntil
+      // to the server's Retry-After when the 429 landed. Reads the
+      // module-scoped timestamp rather than store state so the events WS
+      // throttle (store/slices/events.ts) and any other caller can
+      // observe the same window without subscribing to a re-rendering
+      // slice.
+      if (Date.now() < sessionRefreshBlockedUntil) {
+        return;
+      }
+      // `.catch(() => {})` on each call site (not a global suppression) is
+      // load-bearing: these are fire-and-forget from the tick's
+      // perspective, and a RateLimitedError — or any other transient
+      // failure — would otherwise surface as an unhandled rejection.
+      // refreshSessions() already records what it needs in its own catch
+      // (the breaker entry, sessionRefreshBlockedUntil, the
+      // consecutiveSessionFetchFailures counter); there's nothing for
+      // this tick to do with the rejection.
+      void get()
+        .refreshSessions()
+        .catch(() => {});
+      void get()
+        .refreshGitStatuses()
+        .catch(() => {});
+      void get()
+        .refreshGitDiffStats()
+        .catch(() => {});
       tickCount++;
       if (tickCount % GIT_REFS_REFRESH_EVERY_N_TICKS === 0) {
-        void get().refreshGitRefs();
+        void get()
+          .refreshGitRefs()
+          .catch(() => {});
       }
       if (tickCount % TASKS_REFRESH_EVERY_N_TICKS === 0) {
-        void get().refreshTasks();
+        void get()
+          .refreshTasks()
+          .catch(() => {});
       }
     };
 

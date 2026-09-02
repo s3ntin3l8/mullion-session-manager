@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import { connectEventsStream, type EventsClientHandle } from "../../eventsClient.js";
 import { addEvent, eventKey } from "../helpers.js";
 import { EVENTS_REFRESH_THROTTLE_MS } from "../constants.js";
+import { getSessionRefreshBlockedUntil } from "./sessions.js";
 import type { DashboardState, EventsSlice } from "../types.js";
 import type { NotificationEvent } from "../../api/index.js";
 
@@ -41,6 +42,20 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
   let pendingDuringWindow = false;
 
   const scheduleRefresh = () => {
+    // 429 backoff (issue #959): the live poll already established a
+    // block window via sessionRefreshBlockedUntil (set when the
+    // cascade's refreshSessions caught a RateLimitedError). A
+    // status-bearing event from /ws/events would otherwise bypass that
+    // backoff — the breaker in api/client.ts would still short-circuit
+    // the actual fetch, but we'd still spin up the throw every event.
+    // Skip the call entirely here. The push channel's own backoff
+    // (EVENTS_REFRESH_THROTTLE_MS = 400ms) already handles the unrelated
+    // case of "lots of status events arriving faster than refresh can
+    // observe"; this guard handles the orthogonal case of "refresh is
+    // rate-limited, don't pile on."
+    if (Date.now() < getSessionRefreshBlockedUntil()) {
+      return;
+    }
     // refreshSessions() has no in-flight/overlap guard of its own (unlike
     // refreshGitStatuses/refreshTasks) — deliberately not adding one here.
     // Five mutations (createSession/renameSession/deleteSession/
