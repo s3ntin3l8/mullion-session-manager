@@ -1605,6 +1605,21 @@ export async function internalRoutes(app: FastifyInstance) {
         projectReviewerAgent,
         injectAgentGuide,
         injectProjectBriefing,
+        // Task Master marker — see CreateSessionOptions.taskId's own doc
+        // comment (pty-manager.ts). Forwarded verbatim to getOrCreate
+        // below; the opencode adapter reads it back off the resulting
+        // Session at applyHookAdapters time and uses it to deny
+        // superpowers skills that gate on a human in the loop.
+        // Hermes review, PR #966 — version-skewed, same posture as
+        // `initialPromptApplied` below: an older agent build (one that
+        // pre-dates the taskId field) strips this from the request body
+        // before the handler runs (Fastify's `removeAdditional` with the
+        // `additionalProperties: false` declared by spawnSessionSchema),
+        // so `taskId` here is `undefined` for that case — the resulting
+        // Session therefore has `taskId: undefined`, the opencode adapter
+        // sees no denial list, and the primary learns this via the
+        // `taskIdApplied` echo (below) being `false`.
+        taskId,
       } = request.body;
       const session = app.pty.getOrCreate({
         id,
@@ -1622,6 +1637,7 @@ export async function internalRoutes(app: FastifyInstance) {
         projectReviewerAgent,
         injectAgentGuide,
         injectProjectBriefing,
+        taskId,
       });
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's
@@ -1644,11 +1660,25 @@ export async function internalRoutes(app: FastifyInstance) {
       // tracked (a reattach, not a fresh spawn) keeps its ORIGINAL
       // spawn-time values, which may differ from what this request asked
       // for — see LocalBackend.spawn's identical comment (session-backend.ts).
+      // Hermes review, PR #966 — same posture for `taskId`. An old agent
+      // build that pre-dates this field strips it before the handler
+      // runs, the resulting Session has `taskId: undefined`, and the
+      // primary learns this via `taskIdApplied: false` (the field
+      // itself is still present, unlike initialPromptApplied's
+      // deliberate-omission posture — `false` here is the right value
+      // because the OPENCODE_CONFIG_CONTENT it produces is itself a
+      // known-shape object, never omitted). Forwarded through
+      // RemoteBackend.spawn's SpawnResult (session-backend.ts) so the
+      // primary's task-claim / task-reconciler / task-reseed sites can
+      // log a version-skew warning exactly like the injectAgentGuide
+      // loop in session-lifecycle.ts does (see createSessionRecord's
+      // own comment).
       return {
         ok: true,
         initialPromptApplied: initialPrompt !== undefined && adapterHasInitialPromptArgs(command),
         injectAgentGuide: session.injectAgentGuide,
         injectProjectBriefing: session.injectProjectBriefing,
+        taskIdApplied: taskId !== undefined && session.taskId === taskId,
       };
     },
   );

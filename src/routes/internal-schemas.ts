@@ -84,6 +84,16 @@ export interface SpawnSessionBody {
   // just a boolean type below.
   injectAgentGuide?: boolean;
   injectProjectBriefing?: boolean;
+  // Set ONLY by Task Master spawn sites (task-claim.ts /
+  // task-reconciler.ts / task-reseed.ts) to flag an unattended worker
+  // session, which the opencode adapter uses to deny superpowers skills
+  // that gate on a human in the loop (brainstorming / writing-plans /
+  // finishing-a-development-branch). See CreateSessionOptions.taskId's own
+  // doc comment (pty-manager.ts) for the full rationale — same posture
+  // as injectAgentGuide/injectProjectBriefing above: a primary-resolved
+  // value forwarded verbatim to a remote agent host. Spawn-time only, no
+  // maxLength needed (a positive integer).
+  taskId?: number;
 }
 
 export const spawnSessionSchema = {
@@ -143,6 +153,13 @@ export const spawnSessionSchema = {
       projectReviewerAgent: { type: "string", maxLength: 8192 },
       injectAgentGuide: { type: "boolean" },
       injectProjectBriefing: { type: "boolean" },
+      // Spawn-time-only Task Master marker, forwarded verbatim from
+      // SessionTarget (remote-host-client.ts) on the wire. See
+      // CreateSessionOptions.taskId's own doc comment (pty-manager.ts) for
+      // why the value is just `number` and there's no further min/max
+      // bound — it's an opaque positive task id, not a user-controlled
+      // field.
+      taskId: { type: "integer" },
     },
   },
 };

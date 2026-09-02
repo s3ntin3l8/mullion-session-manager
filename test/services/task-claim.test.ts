@@ -364,6 +364,84 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  // Hermes review, PR #966 — same version-skew safety net for `taskId`
+  // that the existing test above (PR #538) covers for `initialPrompt`.
+  // An old remote agent build (one that pre-dates this field) strips
+  // taskId from the request body before the handler runs
+  // (spawnSessionSchema's `additionalProperties: false` + Fastify's
+  // removeAdditional), so the resulting SpawnResult never includes the
+  // `taskIdApplied` echo — session-lifecycle.ts's own version-skew
+  // loop must warn, since the opencode brainstorming / writing-plans /
+  // finishing-a-development-branch denials are silently not in effect
+  // on that agent (branchdam-mobile #66 / #67 will recur there).
+  it("Hermes review, PR #966 — warns when a remote host pre-dates the taskId field, since the opencode skill denials are silently not in effect on that agent", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "taskid-skew-p", cwd, hostId: "remote-host-taskid" })
+      .returning()
+      .all();
+    const task = insertReadyTask(app, project.id, 168);
+
+    const fakeBackend = {
+      // Simulates an agent build too old to have `taskIdApplied` in its
+      // POST /internal/sessions response — the field was added in PR
+      // #966, so a build predating that PR simply never echoes it. The
+      // local-side taskId key is the only signal session-lifecycle.ts has
+      // that the request was honored, and it's missing here, so the
+      // version-skew warning should fire.
+      spawn: vi.fn().mockResolvedValue({
+        ok: true,
+        initialPromptApplied: true,
+        injectAgentGuide: true,
+        injectProjectBriefing: true,
+        // No taskIdApplied — the agent is too old to know the field.
+      }),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/tmp/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue({
+        created: true,
+        path: `${cwd}/.mullion-worktrees/mullion-task-${task.id}`,
+        branch: "x",
+      }),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    // The version-skew warning should fire with the exact text from
+    // session-lifecycle.ts's own loop, naming the field and the symptom
+    // (so a grep for "predates the Task Master skill-denial fix" finds
+    // every Task Master session silently running without denials on a
+    // version-skewed remote host).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: expect.anything(),
+        hostId: "remote-host-taskid",
+        requested: task.id,
+      }),
+      expect.stringContaining("predates the Task Master skill-denial fix"),
+    );
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("releases the reservation back to claimed (not ready) when worktree creation fails, recording a failureReason", async () => {
     const app = await buildApp();
     // Not a git repo at all — resolveDefaultBaseRef/createWorktree fail

@@ -327,6 +327,14 @@ class LocalBackend implements SessionBackend {
         opts.initialPrompt !== undefined && adapterHasInitialPromptArgs(opts.command),
       injectAgentGuide: session.injectAgentGuide,
       injectProjectBriefing: session.injectProjectBriefing,
+      // Hermes review, PR #966 — same "echoed back, not assumed" posture
+      // as the two injectAgentGuide fields above, but for taskId: read
+      // straight off the resulting Session rather than echoing `opts.taskId`
+      // back verbatim, so a reattach (session id already tracked by this
+      // PtyManager) reports the ORIGINAL spawn-time value, not whatever
+      // this particular call happened to request. The Session itself is
+      // the only source of truth for what's actually live.
+      taskIdApplied: opts.taskId !== undefined && session.taskId === opts.taskId,
     };
   }
 

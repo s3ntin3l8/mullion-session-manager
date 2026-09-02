@@ -374,6 +374,25 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // shows a different skill biting the same way.
   if (ctx.taskId !== undefined) {
     configContent.permission = {
+      // Hermes review, PR #966 — opencode's `OPENCODE_CONFIG_CONTENT`
+      // deep-merges per top-level key over the user's own
+      // `~/.config/opencode/opencode.json` / project config, the same
+      // way `instructions` (verified empirically in this file's header
+      // comment) and `skills.paths` do — not a shallow whole-layer
+      // shadow, so a user who already has `permission.bash: "ask"` or
+      // `permission.edit: "allow"` rules in their own config keeps
+      // them across an unattended-worker spawn. NOT empirically
+      // verified for the `permission` key specifically (the spike that
+      // established the merge posture above only exercised
+      // `instructions` and top-level side keys like `model`) — a
+      // follow-up spike should confirm against the installed CLI
+      // (`opencode debug config` with a non-empty user `permission`
+      // block) before this lands on a real user. If the assumption
+      // turns out to be wrong, the right fix is to read
+      // `~/.config/opencode/opencode.json` here and deep-merge our
+      // deny list over the user's existing `permission` block the
+      // way services/skills.ts's writeOpenCodeSkillEnabled does for
+      // the Skills Manager path.
       skill: {
         brainstorming: "deny",
         "writing-plans": "deny",

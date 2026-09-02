@@ -1058,7 +1058,18 @@ export class Session {
   // deny brainstorming/writing-plans/finishing-a-development-branch for
   // unattended worker sessions. See CreateSessionOptions.taskId's own
   // doc comment for the full rationale.
-  private readonly taskId: number | undefined;
+  //
+  // Public `readonly` (not `private`) — same posture as
+  // `injectAgentGuide`/`injectProjectBriefing` above. LocalBackend.spawn
+  // (session-backend.ts) reads it off the resulting Session to compute
+  // the `taskIdApplied` echo-back for version-skew detection (an older
+  // agent build that strips the field from the request body has a
+  // `taskId: undefined` Session, and the echo is the only signal a
+  // primary has to know that the opencode skill denials are not in
+  // effect for that spawn — see session-lifecycle.ts's own version-skew
+  // loop and PR #966's review thread). Not part of SessionInfo /
+  // toInfo()'s public surface, just as injectAgentGuide is not.
+  readonly taskId: number | undefined;
   // Issue #822 — see CreateSessionOptions.env's own doc comment. Unlike
   // initialPrompt/seedPrompt/resumeAgentSessionId above, this IS re-read on
   // every bootstrapMaster() call for this instance, including a later

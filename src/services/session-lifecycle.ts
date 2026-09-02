@@ -585,6 +585,12 @@ export async function createSessionRecord(
     initialPromptApplied?: boolean;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    // Hermes review, PR #966 — Task Master marker echo, same posture as
+    // the two injectAgentGuide-style fields above: a remote agent build
+    // that pre-dates this field never echoes the key, LocalBackend.spawn
+    // always echoes it (the value is computed from the resulting
+    // Session rather than the request body, same as injectAgentGuide).
+    taskIdApplied?: boolean;
   };
   try {
     spawnResult = await resolveBackend(app, project.hostId).spawn({
@@ -635,6 +641,33 @@ export async function createSessionRecord(
           `${field}: remote agent did not echo this field, and likely predates it — an old build's own \`?? true\` fallback means it probably injected this even though it was requested off`,
         );
       }
+    }
+    // Hermes review, PR #966 — same version-skew safety net for the
+    // `taskId` Task Master marker. Distinct semantics from the two
+    // injectAgentGuide-style fields above: `taskId` is set ONLY for
+    // Task Master spawns (never `false` in normal use), so the
+    // "requested false / echoed undefined" branch above is a
+    // misnomer here. The two failure modes worth a warning for are:
+    //   1. `taskIdApplied` is `undefined` on the response — the agent
+    //      pre-dates this field and the opencode skill denials are
+    //      silently not in effect (branchdam-mobile tasks #66/#67
+    //      will recur on this agent).
+    //   2. `taskIdApplied` is `false` even though `taskId` was sent —
+    //      the agent received the field but the resulting Session
+    //      ended up with `taskId: undefined` (a version-skewed agent
+    //      that knows the wire field but doesn't read it, OR a
+    //      reattach of a session whose original spawn predates this
+    //      change and is now reaching applyHookAdapters fresh).
+    if (taskId !== undefined && spawnResult.taskIdApplied === undefined) {
+      app.log.warn(
+        { sessionId: created.id, hostId: project.hostId, requested: taskId },
+        "taskId: remote agent did not echo taskIdApplied, and likely predates the Task Master skill-denial fix — opencode brainstorming / writing-plans / finishing-a-development-branch are NOT being denied on this agent",
+      );
+    } else if (taskId !== undefined && spawnResult.taskIdApplied === false) {
+      app.log.warn(
+        { sessionId: created.id, hostId: project.hostId, requested: taskId },
+        "taskId: remote agent received the taskId but the resulting Session has taskId: undefined — possible version skew or a reattach of a session whose original spawn predates this field",
+      );
     }
   } catch (err) {
     // Spawn rollback (issue #26 for the remote case; B6 for the local one):
