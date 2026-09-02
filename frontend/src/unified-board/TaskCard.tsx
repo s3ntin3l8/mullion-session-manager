@@ -379,10 +379,23 @@ export function TaskCard({
       )}
       {/* D5 — "sent back to the worker" is the single most useful fact
           about a task sitting in Reviewing (mirrors TaskDetail.tsx's own
-          round indicator in the drawer). */}
+          round indicator in the drawer).
+          Task 258971's investigation: "returned to worker" is only true
+          while a round is actually still cycling — once autoReturnCapped is
+          true, the task is genuinely parked (its round budget is spent and
+          nothing further happens automatically), and the badge must say so
+          rather than implying progress that isn't happening. */}
       {task.status === "reviewing" && task.autoReturnRounds > 0 && (
-        <div className="task-card-review-round">
-          Round {task.autoReturnRounds} · returned to worker
+        <div
+          className={
+            task.autoReturnCapped
+              ? "task-card-review-round task-card-review-round-capped"
+              : "task-card-review-round"
+          }
+        >
+          {task.autoReturnCapped
+            ? `Round ${task.autoReturnRounds} · round cap reached, needs a human`
+            : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
       {task.sessionId !== null && (

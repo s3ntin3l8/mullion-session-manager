@@ -3035,6 +3035,15 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // human ever learns the round cap was the reason nothing moved —
         // without it, a capped task looks identical to one that was never
         // going to auto-return in the first place.
+        //
+        // Task 258971's investigation: this note must be appended to
+        // `reviewSummary` too, not just `body` — `postReviewFindingsComment`
+        // posts `reviewSummary` as the review's own text whenever there are
+        // anchored findings (`params.findings !== undefined && anchored.length
+        // > 0`), which is the common case for a real changes-requested
+        // verdict. Appending only to `body` meant the note was silently
+        // dropped on every review that actually had findings to anchor —
+        // exactly the capped-and-parked case this exists to surface.
         const cappedNote =
           wantsAutoReturn && capReached
             ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
@@ -3046,7 +3055,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           parsed
             ? {
                 body: commentBody + cappedNote,
-                reviewSummary: `${roundLabel}\n\n${parsed.summary}`,
+                reviewSummary: `${roundLabel}\n\n${parsed.summary}${cappedNote}`,
                 findings: parsed.findings,
                 verdict,
               }

@@ -230,7 +230,16 @@ export function TaskDetail({
             target="_blank"
             rel="noreferrer"
           >
+            {/* Prefer matchedPr's number for the same reason the href above
+                does (PR #577/#582): it's the branch-matched CURRENT PR, so
+                on a closed-and-reopened branch it's also the more accurate
+                number to show, not just link to. Falls back to plain "Pull
+                request" (no "#null") on the rare row where prUrl is set but
+                prNumber isn't — see issue #972, a retryTask gap that can
+                leave that pair inconsistent. */}
             <GitHubIcon size={12} /> Pull request
+            {(matchedPr?.number ?? task.prNumber) !== null &&
+              ` #${matchedPr?.number ?? task.prNumber}`}
             {matchedPr && (
               <span className={`github-panel-ci-dot ${taskDetailPrDotClass(matchedPr.ciStatus)}`} />
             )}
@@ -431,13 +440,23 @@ export function TaskDetail({
         <div className="task-detail-section task-detail-review-section">
           <div className="task-detail-section-title">Review</div>
           <div className="task-detail-review-hint">
-            {task.autoReturnRounds > 0
-              ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
-              : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
+            {task.autoReturnRounds > 0 && task.autoReturnCapped
+              ? "It has already spent every automatic round this task is allowed — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
+              : task.autoReturnRounds > 0
+                ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
+                : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
           </div>
           {task.autoReturnRounds > 0 && (
-            <div className="task-detail-review-round">
-              Round {task.autoReturnRounds} sent back to the worker automatically
+            <div
+              className={
+                task.autoReturnCapped
+                  ? "task-detail-review-round task-detail-review-round-capped"
+                  : "task-detail-review-round"
+              }
+            >
+              {task.autoReturnCapped
+                ? `Round ${task.autoReturnRounds} — round cap reached, needs a human to take it from here`
+                : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
             </div>
           )}
           {task.reviewSeedDelivered === false && (

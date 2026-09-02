@@ -9,7 +9,7 @@ import { syncTaskTransition, isIssueStillTrackable } from "../services/task-gith
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
-import { resetMergeBackoff } from "../services/task-reconciler.js";
+import { resetMergeBackoff, resolveMaxAutoReturnRounds } from "../services/task-reconciler.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
@@ -164,6 +164,17 @@ const TASK_ROW_COLUMNS = {
   // which trigger most recently spent a round.
   autoReturnRounds: tasks.autoReturnRounds,
   lastAutoReturnReason: tasks.lastAutoReturnReason,
+  // Task 258971's investigation: declared on the frontend Task type
+  // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
+  // silent-drop that bit #816/#818 (see that PR's own doc comment above).
+  // Every read of `task.lastReviewVerdict` was `undefined` at runtime while
+  // typechecking as `string | null`.
+  lastReviewVerdict: tasks.lastReviewVerdict,
+  // Not surfaced directly — consumed by withAutoReturnCapped below to derive
+  // `autoReturnCapped`, then stripped, same treatment as blockedBy/
+  // withBlockedState just below. Raw per-project config has no reason to
+  // leak into a task response; the frontend only needs the yes/no answer.
+  projectMaxAutoReturnRounds: projects.maxAutoReturnRounds,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
@@ -240,6 +251,29 @@ function withBlockedState<
   };
 }
 
+// Task 258971's investigation: TaskCard's "Round {n} · returned to worker"
+// and TaskDetail's "Round {n} sent back to the worker automatically" both
+// render identically whether the task is genuinely mid-round or has spent
+// its every automatic round and is parked in "reviewing" for a human — the
+// exact state PR #136 sat in for hours. Deriving the cap here (rather than
+// recomputing `resolveMaxAutoReturnRounds` client-side) keeps the one
+// existing implementation as the only place that decides "is this task
+// capped," same reasoning as blockedState/dependencyGate above it.
+function withAutoReturnCapped<
+  T extends {
+    autoReturnRounds: number;
+    projectMaxAutoReturnRounds: number | null;
+  },
+>(row: T): Omit<T, "projectMaxAutoReturnRounds"> & { autoReturnCapped: boolean } {
+  const { projectMaxAutoReturnRounds, ...rest } = row;
+  return {
+    ...rest,
+    autoReturnCapped:
+      row.autoReturnRounds >=
+      resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }),
+  };
+}
+
 interface ListTasksQuery {
   status?: string;
   projectId?: string;
@@ -281,7 +315,7 @@ export async function tasksRoute(app: FastifyInstance) {
         // insertion order (Hermes review, PR #471).
         .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
         .all();
-      return rows.map(withBlockedState);
+      return rows.map((row) => withBlockedState(withAutoReturnCapped(row)));
     },
   );
 
@@ -297,7 +331,7 @@ export async function tasksRoute(app: FastifyInstance) {
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .where(eq(tasks.id, taskId))
       .all();
-    return row ? withBlockedState(row) : null;
+    return row ? withBlockedState(withAutoReturnCapped(row)) : null;
   }
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {

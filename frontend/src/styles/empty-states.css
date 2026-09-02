@@ -522,6 +522,12 @@
   font-size: 10.5px;
   color: var(--muted);
 }
+/* Task 258971's investigation: a task whose round budget is spent needs a
+   human, not a "things are progressing" muted tone — same red severity as
+   .task-card-failure-reason above. */
+.task-card-review-round-capped {
+  color: var(--r);
+}
 
 /* UnifiedBoard.tsx's TaskSessionSlot — a task card's nested worker/review
    session, compact (not SessionRow, see the component's own doc comment). */
@@ -774,6 +780,11 @@
   font-size: 10.5px;
   font-weight: 600;
   color: var(--y);
+}
+/* Task 258971's investigation: same escalation as the card's own
+   -capped modifier above. */
+.task-detail-review-round-capped {
+  color: var(--r);
 }
 .task-detail-review-findings {
   font-size: 11.5px;

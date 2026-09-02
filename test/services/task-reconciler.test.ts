@@ -5162,6 +5162,89 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Task 258971's investigation: the round-cap note must survive into
+    // `reviewSummary`, not just `body` — `postReviewFindingsComment` posts
+    // `reviewSummary` (not `body`) whenever there are inline anchors to
+    // attach, which is exactly the case for a real changes-requested verdict
+    // with structured findings (PR #136 had 8 of them across four rounds,
+    // and the note was silently missing from all four). The test above this
+    // one only asserts DB state; this one asserts the actual GitHub call.
+    it("includes the round-cap note in the review body even when findings are posted as inline anchors", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "p-bounded-anchored", cwd: "/tmp" },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "already at the round cap, with anchored findings",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          autoReturnRounds: 2,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          prNumber: 9,
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      mockFinishedSessionIds(app, reviewSession.json().id);
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+      });
+      writeFindings(
+        app,
+        task.id,
+        2,
+        JSON.stringify({
+          verdict: "changes-requested",
+          summary: "Still failing lint.",
+          findings: [{ path: "cmd/branchdam/main.go", line: 42, body: "unchecked error return" }],
+        }),
+      );
+
+      await reconcileTasks(app);
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+        "tok",
+        "o",
+        "r",
+        9,
+        expect.objectContaining({
+          body: expect.stringContaining("round cap (2)"),
+          comments: [
+            expect.objectContaining({
+              path: "cmd/branchdam/main.go",
+              line: 42,
+              body: expect.stringContaining("unchecked error return"),
+            }),
+          ],
+        }),
+      );
+
+      await app.close();
+    });
+
     // #756's whole point: a project with the default cap gets a SECOND
     // automatic round, where the pre-#756 behavior would have stalled in
     // "reviewing" after the first.

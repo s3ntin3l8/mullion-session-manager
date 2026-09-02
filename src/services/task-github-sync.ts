@@ -595,9 +595,19 @@ export async function isIssueStillTrackable(
  * transferred, a transient 5xx) doesn't also mean GitHub never hears about
  * this round at all.
  *
- * Same best-effort posture as every other write in this file: never
- * throws, logs and records `githubSyncError` on failure, clears it on
- * success.
+ * Same best-effort posture as every other write in this file: never throws,
+ * logs and records `githubSyncError` on failure. Unlike the rest of this
+ * file, does NOT clear `githubSyncError` on success (task 258971's
+ * investigation): an earlier, unrelated failure recorded by a DIFFERENT
+ * operation on this same task — most commonly `pushForPromotion`
+ * (task-promote.ts) recording a rejected push — must survive a successful
+ * comment/review post here, or the one durable signal a human has for "the
+ * push failed on Mullion's side" (see the worker preamble's own escape
+ * hatch) gets silently erased a couple of minutes later by the routine
+ * review-round comment that follows. This function's own failures are
+ * self-correcting anyway: they're logged, and the next successful promote
+ * operation (task-promote.ts has five `clearGithubSyncError` call sites of
+ * its own) clears whatever this recorded.
  */
 export async function postReviewFindingsComment(
   app: FastifyInstance,
@@ -731,7 +741,8 @@ export async function postReviewFindingsComment(
           throw err;
         }
       }
-      clearGithubSyncError(app, task.id);
+      // Deliberately does NOT clearGithubSyncError here — see this
+      // function's own doc comment (task 258971's investigation).
       return;
     } catch (err) {
       app.log.warn(
@@ -747,7 +758,8 @@ export async function postReviewFindingsComment(
       if (task.issueNumber !== null) {
         try {
           await createComment(token, repoRef.owner, repoRef.repo, task.issueNumber, params.body);
-          clearGithubSyncError(app, task.id);
+          // Deliberately does NOT clearGithubSyncError here — see this
+          // function's own doc comment (task 258971's investigation).
           return;
         } catch (fallbackErr) {
           app.log.warn(
@@ -771,7 +783,8 @@ export async function postReviewFindingsComment(
   if (commentTarget === null) return;
   try {
     await createComment(token, repoRef.owner, repoRef.repo, commentTarget, params.body);
-    clearGithubSyncError(app, task.id);
+    // Deliberately does NOT clearGithubSyncError here — see this function's
+    // own doc comment (task 258971's investigation).
   } catch (err) {
     app.log.warn(
       { taskId: task.id, commentTarget, err },
