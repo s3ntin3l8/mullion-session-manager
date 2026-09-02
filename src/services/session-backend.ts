@@ -84,6 +84,12 @@ export interface SessionBackend {
     // re-derived" posture as briefingOverride above.
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    // See CreateSessionOptions.taskId's own doc comment (pty-manager.ts) —
+    // Task Master spawn sites set this to flag an unattended worker
+    // session, which the opencode adapter uses to deny superpowers skills
+    // that gate on a human in the loop. Same "forwarded to a remote host
+    // verbatim" posture as briefingOverride above.
+    taskId?: number;
   }): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
@@ -291,6 +297,7 @@ class LocalBackend implements SessionBackend {
     smallModel?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    taskId?: number;
   }): Promise<SpawnResult> {
     // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
     // throw synchronously (getOrCreate() is sync by design; a spawn failure
@@ -508,6 +515,7 @@ class RemoteBackend implements SessionBackend {
     smallModel?: string;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
+    taskId?: number;
   }): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment

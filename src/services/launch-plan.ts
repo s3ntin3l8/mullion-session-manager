@@ -140,6 +140,14 @@ export interface LaunchPlanSession {
   /** Issue #958 — same pass-through posture as `model` above, for
    * opencode's `small_model` config key. */
   readonly smallModel: string | undefined;
+  /** See HookAdapterContext.taskId's own doc comment
+   * (hook-adapters/types.ts) — set ONLY for Task Master spawns, where the
+   * opencode adapter denies brainstorming/writing-plans/
+   * finishing-a-development-branch. Spawn-time snapshot, not re-read on
+   * later reattach (consistent with `initialPrompt`/`seedPrompt` above —
+   * the opencode config is set once, at first launch, and a reattach
+   * never re-applies it). */
+  readonly taskId: number | undefined;
 }
 
 export interface LaunchPlan {
@@ -329,6 +337,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     projectReviewerAgent: session.projectReviewerAgent,
     model: session.model,
     smallModel: session.smallModel,
+    taskId: session.taskId,
   });
   Object.assign(sessionEnv, envAdditions);
 

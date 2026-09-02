@@ -115,6 +115,15 @@ export async function reseedTaskIfSessionExited(
     cwd: task.worktreePath,
     initialPrompt: seedCapable ? prompt : undefined,
     skipPermissions: taskMasterConfig.skipPermissions,
+    // Mark this session as an unattended Task Master worker so the
+    // opencode adapter denies brainstorming / writing-plans /
+    // finishing-a-development-branch — same marker every other Task
+    // Master spawn site sets, see task-claim.ts's own worker-spawn
+    // comments. The re-seed worker is every bit as unattended as a fresh
+    // claim, and could hit the same failure mode (branchdam-mobile
+    // tasks #66 / #67) if the brainstorming skill gates on a clarifying
+    // question the worker can't answer.
+    taskId: task.id,
   });
   if (!result.ok) {
     app.log.warn(

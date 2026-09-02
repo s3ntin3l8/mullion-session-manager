@@ -319,6 +319,51 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  // Task Master — the opencode adapter denies the superpowers skills that
+  // gate on a human in the loop (brainstorming / writing-plans /
+  // finishing-a-development-branch) when it sees a positive `taskId` on
+  // the session's HookAdapterContext. The signal originates here:
+  // dispatchClaimedTask passes `taskId: task.id` to createSessionRecord,
+  // which threads it all the way through to the adapter. Verified failing
+  // in branchdam-mobile tasks #66 / #67.
+  it("passes the task's id to createSessionRecord as taskId, so the opencode adapter can deny brainstorming et al. for an unattended worker", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 167);
+
+    // Capture every call's taskId arg, but pass through to the real
+    // implementation so the rest of the dispatch flow (DB row insert,
+    // worktree creation, transition logging) still runs. `taskId` itself
+    // is spawn-time only and not persisted, so a pass-through mock is the
+    // only way to assert on it — the persisted row's name is asserted
+    // separately by the test above.
+    const originalCreate = sessionsModule.createSessionRecord;
+    const taskIdsSeen: Array<number | undefined> = [];
+    const createSpy = vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation((async (
+      app,
+      params,
+    ) => {
+      taskIdsSeen.push(params.taskId);
+      return originalCreate(app, params);
+    }) as typeof sessionsModule.createSessionRecord);
+
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    // At least one call must have carried our taskId, and every call must
+    // have carried the same value (no undefined / 0 / cross-task leakage
+    // from the rate-limit-storm task-dispatch opportunistic hook).
+    expect(taskIdsSeen.length).toBeGreaterThan(0);
+    for (const seen of taskIdsSeen) {
+      expect(seen).toBe(task.id);
+    }
+
+    createSpy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("releases the reservation back to claimed (not ready) when worktree creation fails, recording a failureReason", async () => {
     const app = await buildApp();
     // Not a git repo at all — resolveDefaultBaseRef/createWorktree fail

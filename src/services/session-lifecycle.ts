@@ -289,6 +289,18 @@ export type CreateSessionParams = CreateSessionBody & {
   // Issue #958 — same posture as `model` above, for opencode's
   // `small_model` config key.
   smallModel?: string;
+  // Set ONLY by the Task Master spawn sites (task-claim.ts's
+  // dispatchClaimedTask/retryTask, task-reconciler.ts's spawnReviewAgentNow,
+  // task-reseed.ts's reseedTaskIfSessionExited) to signal "this session is
+  // an unattended Task Master agent." Threaded all the way through to the
+  // opencode adapter's HookAdapterContext.taskId, which uses a positive
+  // value to deny superpowers skills that gate on a human in the loop
+  // (brainstorming / writing-plans / finishing-a-development-branch). See
+  // CreateSessionOptions.taskId's own doc comment (pty-manager.ts) for the
+  // full rationale, including why this is spawn-time only (no sessions
+  // column, no migration). Not part of CreateSessionBody, no public route
+  // sets this — same posture as briefingOverride/projectSkill above.
+  taskId?: number;
 };
 
 export type CreateSessionResult =
@@ -357,6 +369,7 @@ export async function createSessionRecord(
     projectReviewerAgent,
     model,
     smallModel,
+    taskId,
   } = params;
   let cwd = params.cwd;
 
@@ -593,6 +606,7 @@ export async function createSessionRecord(
       injectAgentGuide: resolvedInjectAgentGuide,
       injectProjectBriefing: resolvedInjectProjectBriefing,
       env,
+      taskId,
     });
     // Version-skew safety net — same "echoed back, not assumed" posture as
     // initialPromptApplied (SpawnResult's own doc comment), but logged

@@ -540,3 +540,96 @@ describe("OPENCODE_EMITS (issue #321)", () => {
     expect(openCodeAdapter.emits).toContain("subagent");
   });
 });
+
+// Task Master — when ctx.taskId is set (only for worker / review / retry /
+// re-seed sessions, see task-claim.ts and task-reconciler.ts's spawn sites),
+// prepareLaunch must add `permission.skill.<name>: "deny"` entries to
+// OPENCODE_CONFIG_CONTENT for the three superpowers skills that gate on a
+// human in the loop. Verified failing in branchdam-mobile tasks #66 / #67,
+// where the opencode worker invoked `brainstorming`, asked a clarifying
+// question the unattended session couldn't answer, then ended its turn with
+// no commits (the #722 "no commits ahead of base" gate correctly failed
+// the task).
+describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
+  const baseCtx = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+  };
+
+  it("denies brainstorming / writing-plans / finishing-a-development-branch when ctx.taskId is set", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 348423 });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+      permission: {
+        skill: {
+          brainstorming: "deny",
+          "writing-plans": "deny",
+          "finishing-a-development-branch": "deny",
+        },
+      },
+    });
+  });
+
+  it("omits the permission block entirely when ctx.taskId is not set (a non-Task-Master session of the same agent is unaffected)", () => {
+    const plan = openCodeAdapter.prepareLaunch(baseCtx);
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
+  });
+
+  it("treats ctx.taskId of 0 the same as any other defined value (the gate is `!== undefined`, not truthy, so a 0 task id is still a real Task Master session)", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 0 });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+      permission: {
+        skill: {
+          brainstorming: "deny",
+          "writing-plans": "deny",
+          "finishing-a-development-branch": "deny",
+        },
+      },
+    });
+  });
+
+  it("composes the permission block alongside other OPENCODE_CONFIG_CONTENT keys (agent-guide / skills / instructions / mcp) — none of the other gates interact with the deny list", () => {
+    // Need a real temp dir for the agent-guide file (prepareLaunch checks
+    // existsSync on the per-session copy, not agentGuideSourceExists() —
+    // see its own doc comment), unlike the bare-ctx tests above which
+    // don't exercise the agent-guide path at all.
+    const realSessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-taskid-"));
+    try {
+      writeFileSync(sessionAgentGuidePath(realSessionsDir, "42"), "guide content");
+      const plan = openCodeAdapter.prepareLaunch({
+        ...baseCtx,
+        sessionsDir: realSessionsDir,
+        hookSocketPath: path.join(realSessionsDir, "hooks.sock"),
+        controlSocketPath: path.join(realSessionsDir, "mullion.sock"),
+        injectAgentGuide: true,
+        taskId: 348423,
+      });
+      expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        instructions: [sessionAgentGuidePath(realSessionsDir, "42")],
+        mcp: expectedMcp({
+          hookSocketPath: path.join(realSessionsDir, "hooks.sock"),
+          hookToken: baseCtx.hookToken,
+          controlSocketPath: path.join(realSessionsDir, "mullion.sock"),
+        }),
+        permission: {
+          skill: {
+            brainstorming: "deny",
+            "writing-plans": "deny",
+            "finishing-a-development-branch": "deny",
+          },
+        },
+      });
+    } finally {
+      rmSync(realSessionsDir, { recursive: true, force: true });
+    }
+  });
+});
