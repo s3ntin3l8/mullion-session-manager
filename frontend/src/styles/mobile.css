@@ -116,10 +116,11 @@
   }
   /* CloseIcon's size prop is a fixed SVG width/height attribute, not
      something the 44px mobile target can grow on its own — scale the
-     glyph itself up to match, rather than leaving it small in a big box. */
+     glyph itself up to match the 44px touch target rather than leaving
+     it small in a big box. At 44px the 50%-wide path renders a ~22px X. */
   .kanban-detail-drawer-close svg {
-    width: 22px;
-    height: 22px;
+    width: 44px;
+    height: 44px;
   }
   /* The mobile drawer is a full-bleed fixed sheet (above) with no columns
      visible behind it to resize against, and mouse drag events don't fire
