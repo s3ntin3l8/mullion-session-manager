@@ -540,3 +540,127 @@ describe("OPENCODE_EMITS (issue #321)", () => {
     expect(openCodeAdapter.emits).toContain("subagent");
   });
 });
+
+// Task Master — when ctx.taskId is set (only for worker / review / retry /
+// re-seed sessions, see task-claim.ts and task-reconciler.ts's spawn sites),
+// prepareLaunch must add `permission.skill.<name>: "deny"` entries to
+// OPENCODE_CONFIG_CONTENT for the three superpowers skills that gate on a
+// human in the loop. Verified failing in branchdam-mobile tasks #66 / #67,
+// where the opencode worker invoked `brainstorming`, asked a clarifying
+// question the unattended session couldn't answer, then ended its turn with
+// no commits (the #722 "no commits ahead of base" gate correctly failed
+// the task).
+describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
+  const baseCtx = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+  };
+
+  it("denies brainstorming / writing-plans / finishing-a-development-branch when ctx.taskId is set", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 348423 });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+      permission: {
+        skill: {
+          brainstorming: "deny",
+          "writing-plans": "deny",
+          "finishing-a-development-branch": "deny",
+        },
+      },
+    });
+  });
+
+  it("omits the permission block entirely when ctx.taskId is not set (a non-Task-Master session of the same agent is unaffected)", () => {
+    const plan = openCodeAdapter.prepareLaunch(baseCtx);
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
+  });
+
+  it("treats ctx.taskId of 0 the same as any other defined value (the gate is `!== undefined`, not truthy, so a 0 task id is still a real Task Master session)", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 0 });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+      permission: {
+        skill: {
+          brainstorming: "deny",
+          "writing-plans": "deny",
+          "finishing-a-development-branch": "deny",
+        },
+      },
+    });
+  });
+
+  it("composes the permission block alongside other OPENCODE_CONFIG_CONTENT keys (agent-guide / skills / instructions / mcp) — none of the other gates interact with the deny list", () => {
+    // Need a real temp dir for the agent-guide file (prepareLaunch checks
+    // existsSync on the per-session copy, not agentGuideSourceExists() —
+    // see its own doc comment), unlike the bare-ctx tests above which
+    // don't exercise the agent-guide path at all.
+    const realSessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-taskid-"));
+    try {
+      writeFileSync(sessionAgentGuidePath(realSessionsDir, "42"), "guide content");
+      const plan = openCodeAdapter.prepareLaunch({
+        ...baseCtx,
+        sessionsDir: realSessionsDir,
+        hookSocketPath: path.join(realSessionsDir, "hooks.sock"),
+        controlSocketPath: path.join(realSessionsDir, "mullion.sock"),
+        injectAgentGuide: true,
+        taskId: 348423,
+      });
+      expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        instructions: [sessionAgentGuidePath(realSessionsDir, "42")],
+        mcp: expectedMcp({
+          hookSocketPath: path.join(realSessionsDir, "hooks.sock"),
+          hookToken: baseCtx.hookToken,
+          controlSocketPath: path.join(realSessionsDir, "mullion.sock"),
+        }),
+        permission: {
+          skill: {
+            brainstorming: "deny",
+            "writing-plans": "deny",
+            "finishing-a-development-branch": "deny",
+          },
+        },
+      });
+    } finally {
+      rmSync(realSessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  // Hermes review, PR #966 — regression guard for the opencode
+  // `OPENCODE_CONFIG_CONTENT.permission` deep-merge posture
+  // (verified empirically in issue #968 against opencode v1.18.26).
+  //
+  // The contract this test pins down: the adapter sets
+  // `permission.skill.<name>: "deny"` and NOTHING ELSE under the
+  // top-level `permission` key. The deep-merge property (verified
+  // above: a user's `permission.bash: "ask"` and
+  // `permission.skill.user-only-skill: "ask"` survive an
+  // unattended-worker spawn intact) depends on the adapter not
+  // asserting any other permission keys — adding `bash: "..."` or
+  // `edit: "..."` here would still deep-merge correctly today, but
+  // would silently lock those keys to whatever the adapter chose,
+  // and any future opencode release that flips to shallow-replacement
+  // semantics would then CLOBBER the user's matching keys.
+  //
+  // Keep this block a one-key `permission: { skill: {...} }` shape
+  // unless a follow-up issue justifies widening it (with its own
+  // live-spike verification).
+  it('sets ONLY `permission.skill.<name>: "deny"` under the permission block — no other permission keys, to preserve the deep-merge posture empirically verified in issue #968', () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, taskId: 348423 });
+    const config = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(Object.keys(config.permission)).toEqual(["skill"]);
+    expect(Object.keys(config.permission.skill).sort()).toEqual(
+      ["brainstorming", "finishing-a-development-branch", "writing-plans"].sort(),
+    );
+    for (const value of Object.values(config.permission.skill)) {
+      expect(value).toBe("deny");
+    }
+  });
+});

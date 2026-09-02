@@ -319,6 +319,129 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  // Task Master — the opencode adapter denies the superpowers skills that
+  // gate on a human in the loop (brainstorming / writing-plans /
+  // finishing-a-development-branch) when it sees a positive `taskId` on
+  // the session's HookAdapterContext. The signal originates here:
+  // dispatchClaimedTask passes `taskId: task.id` to createSessionRecord,
+  // which threads it all the way through to the adapter. Verified failing
+  // in branchdam-mobile tasks #66 / #67.
+  it("passes the task's id to createSessionRecord as taskId, so the opencode adapter can deny brainstorming et al. for an unattended worker", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 167);
+
+    // Capture every call's taskId arg, but pass through to the real
+    // implementation so the rest of the dispatch flow (DB row insert,
+    // worktree creation, transition logging) still runs. `taskId` itself
+    // is spawn-time only and not persisted, so a pass-through mock is the
+    // only way to assert on it — the persisted row's name is asserted
+    // separately by the test above.
+    const originalCreate = sessionsModule.createSessionRecord;
+    const taskIdsSeen: Array<number | undefined> = [];
+    const createSpy = vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation((async (
+      app,
+      params,
+    ) => {
+      taskIdsSeen.push(params.taskId);
+      return originalCreate(app, params);
+    }) as typeof sessionsModule.createSessionRecord);
+
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    // At least one call must have carried our taskId, and every call must
+    // have carried the same value (no undefined / 0 / cross-task leakage
+    // from the rate-limit-storm task-dispatch opportunistic hook).
+    expect(taskIdsSeen.length).toBeGreaterThan(0);
+    for (const seen of taskIdsSeen) {
+      expect(seen).toBe(task.id);
+    }
+
+    createSpy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  // Hermes review, PR #966 — same version-skew safety net for `taskId`
+  // that the existing test above (PR #538) covers for `initialPrompt`.
+  // An old remote agent build (one that pre-dates this field) strips
+  // taskId from the request body before the handler runs
+  // (spawnSessionSchema's `additionalProperties: false` + Fastify's
+  // removeAdditional), so the resulting SpawnResult never includes the
+  // `taskIdApplied` echo — session-lifecycle.ts's own version-skew
+  // loop must warn, since the opencode brainstorming / writing-plans /
+  // finishing-a-development-branch denials are silently not in effect
+  // on that agent (branchdam-mobile #66 / #67 will recur there).
+  it("Hermes review, PR #966 — warns when a remote host pre-dates the taskId field, since the opencode skill denials are silently not in effect on that agent", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "taskid-skew-p", cwd, hostId: "remote-host-taskid" })
+      .returning()
+      .all();
+    const task = insertReadyTask(app, project.id, 168);
+
+    const fakeBackend = {
+      // Simulates an agent build too old to have `taskIdApplied` in its
+      // POST /internal/sessions response — the field was added in PR
+      // #966, so a build predating that PR simply never echoes it. The
+      // local-side taskId key is the only signal session-lifecycle.ts has
+      // that the request was honored, and it's missing here, so the
+      // version-skew warning should fire.
+      spawn: vi.fn().mockResolvedValue({
+        ok: true,
+        initialPromptApplied: true,
+        injectAgentGuide: true,
+        injectProjectBriefing: true,
+        // No taskIdApplied — the agent is too old to know the field.
+      }),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/tmp/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue({
+        created: true,
+        path: `${cwd}/.mullion-worktrees/mullion-task-${task.id}`,
+        branch: "x",
+      }),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    // The version-skew warning should fire with the exact text from
+    // session-lifecycle.ts's own loop, naming the field and the symptom
+    // (so a grep for "predates the Task Master skill-denial fix" finds
+    // every Task Master session silently running without denials on a
+    // version-skewed remote host).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: expect.anything(),
+        hostId: "remote-host-taskid",
+        requested: task.id,
+      }),
+      expect.stringContaining("predates the Task Master skill-denial fix"),
+    );
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("releases the reservation back to claimed (not ready) when worktree creation fails, recording a failureReason", async () => {
     const app = await buildApp();
     // Not a git repo at all — resolveDefaultBaseRef/createWorktree fail

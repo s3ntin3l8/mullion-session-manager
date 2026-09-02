@@ -217,6 +217,12 @@ export interface SessionTarget {
   // comments (pty-manager.ts) for the full multi-host reasoning.
   injectAgentGuide?: boolean;
   injectProjectBriefing?: boolean;
+  // See CreateSessionOptions.taskId's own doc comment (pty-manager.ts) —
+  // Task Master spawn sites set this to flag an unattended worker
+  // session, which the opencode adapter uses to deny superpowers skills
+  // that gate on a human in the loop. Forwarded verbatim to the agent
+  // host, same posture as seedPrompt above.
+  taskId?: number;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
@@ -251,6 +257,24 @@ export interface SpawnResult {
   // against what it requested.
   injectAgentGuide?: boolean;
   injectProjectBriefing?: boolean;
+  // Hermes review, PR #966 — same "echoed back, not assumed" posture for
+  // `taskId`. The remote `/internal/sessions` handler echoes this so
+  // the primary can detect a version-skewed agent (an old build strips
+  // `taskId` from the request body before the handler runs — see
+  // spawnSessionSchema's `additionalProperties: false` and Fastify's
+  // `removeAdditional`) and warn that the opencode skill denials for
+  // Task Master sessions are not in effect on that agent. Optional, same
+  // reason as the other two fields above: an agent build that pre-dates
+  // this field simply never includes the key in its response. Note: the
+  // local / internal-session handler ALWAYS echoes it (even as `false`
+  // when the field was absent from the request), unlike
+  // initialPromptApplied which is omitted entirely — the receiving route
+  // sees `taskId: undefined` for an old-build request and reports
+  // `taskIdApplied: false` rather than omitting the field, because the
+  // OPENCODE_CONFIG_CONTENT it produces is itself a known-shape object
+  // (never omitted from the response, just empty). See
+  // routes/internal.ts's own comment for the full reasoning.
+  taskIdApplied?: boolean;
 }
 export type OpenAttachOptions = SessionTarget;
 

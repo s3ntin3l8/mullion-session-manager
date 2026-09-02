@@ -137,6 +137,19 @@ export interface HookAdapterContext {
    * opencode's `small_model` config key (used for lightweight tasks).
    * Lands in OPENCODE_CONFIG_CONTENT.small_model. */
   smallModel?: string;
+  /** Set ONLY for sessions spawned by Mullion's Task Master (worker, review
+   * agent, retry, reject/auto-return re-seed — see task-claim.ts and
+   * task-reconciler.ts's spawn sites). A positive value signals "this
+   * session is an unattended Task Master agent," which the opencode adapter
+   * uses to deny the superpowers skills that gate on a human in the loop
+   * (brainstorming / writing-plans / finishing-a-development-branch —
+   * verified failing in #66/#67, branchdam-mobile). Spawn-time-only: not
+   * persisted on the sessions row, so a `getOrCreate()` reattach of a
+   * already-live session sees `undefined` here, which is correct (the
+   * opencode config was set when the session was first spawned; a reattach
+   * never re-applies it). Absent for every other session kind — manual
+   * launches, dock controls, the promote flow's resumed target. */
+  taskId?: number;
 }
 
 export interface HookLaunchPlan {

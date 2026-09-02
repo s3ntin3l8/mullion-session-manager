@@ -2750,6 +2750,11 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: true,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      // No taskId in the payload, so the echo is `false` (the Session
+      // was created without a taskId, the value echoed is the
+      // post-creation state, not the absent request field). See
+      // routes/internal.ts's own comment on `taskIdApplied`.
+      taskIdApplied: false,
     });
     await app.close();
   });
@@ -2779,6 +2784,10 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: false,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      // Same `false` echo as the no-initialPrompt test below — neither
+      // payload carries taskId, so the resulting Session's `taskId`
+      // stays `undefined` and the echo reflects that.
+      taskIdApplied: false,
     });
     await app.close();
   });
@@ -2797,7 +2806,87 @@ describe("internal routes (agent role, issue #26)", () => {
       initialPromptApplied: false,
       injectAgentGuide: true,
       injectProjectBriefing: true,
+      // No taskId in the payload — same `false` echo as the `true` /
+      // `false` initialPromptApplied tests above.
+      taskIdApplied: false,
     });
+    await app.close();
+  });
+
+  // Hermes review, PR #966 — the agent-side counterpart of
+  // task-claim.ts's `taskId: task.id` set on every Task Master spawn.
+  // The wire schema accepts it, the handler threads it to getOrCreate,
+  // and the echo is `true` iff the resulting Session actually carries
+  // that taskId (a reattach of a pre-PR-#966 session would have
+  // `taskId: undefined` and the echo would be `false`). See
+  // routes/internal.ts's own comment.
+  it("threads taskId from the spawn body into the resulting Session and echoes taskIdApplied: true", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        // Numeric id (the agent-side /internal/sessions route's
+        // schema accepts alphanumeric, but PtyManager's constructor
+        // requires numeric — see pty-manager.ts's own check).
+        id: "506506",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+        taskId: 348423,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({
+      ok: true,
+      initialPromptApplied: false,
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+      taskIdApplied: true,
+    });
+
+    // The resulting Session must actually carry the taskId — proves
+    // the handler threaded it through getOrCreate rather than just
+    // echoing the request body. Public `readonly` field (matches
+    // injectAgentGuide's posture) on pty-manager.ts's Session.
+    const session = app.pty.get("506506");
+    expect(session?.taskId).toBe(348423);
+
+    await app.close();
+  });
+
+  // Same Hermes review — `taskIdApplied: false` echoes for a reattach
+  // of a session whose original spawn predates this field. The resulting
+  // Session has `taskId: undefined` (never set on creation), and the
+  // echo reflects that regardless of what THIS particular request body
+  // asks for (this request doesn't carry taskId at all, but the
+  // assertion is the same `false` value either way — the field is
+  // computed from the Session, not the request).
+  it("echoes taskIdApplied: false when the resulting Session has no taskId set, regardless of what's in the request", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "506507",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({
+      ok: true,
+      initialPromptApplied: false,
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+      taskIdApplied: false,
+    });
+    expect(app.pty.get("506507")?.taskId).toBeUndefined();
     await app.close();
   });
 

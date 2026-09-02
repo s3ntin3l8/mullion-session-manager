@@ -193,6 +193,21 @@ export interface CreateSessionOptions {
    * when set" posture as `injectAgentGuide` immediately above, for the
    * independent sessions.injectProjectBriefing setting. */
   injectProjectBriefing?: boolean;
+  /** Set ONLY for sessions spawned by Mullion's Task Master (worker, review
+   * agent, retry, reject/auto-return re-seed — see task-claim.ts and
+   * task-reconciler.ts's spawn sites). Threaded through to the opencode
+   * adapter's `HookAdapterContext.taskId` (opencode.ts's prepareLaunch),
+   * which uses a positive value to deny superpowers skills that gate on a
+   * human in the loop (brainstorming / writing-plans /
+   * finishing-a-development-branch). Spawn-time only: not persisted on
+   * `sessions` (no row column, no migration); a later reattach of a
+   * already-live session reads `undefined` here, which is correct since
+   * the opencode config was set when the session was first spawned.
+   * Producer: session-lifecycle.ts's createSessionRecord (called from the
+   * Task Master spawn sites). A caller that omits this leaves the adapter
+   * with no taskId, which is the desired "not a Task Master session"
+   * default. */
+  taskId?: number;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the
@@ -1036,6 +1051,25 @@ export class Session {
   private readonly projectReviewerAgent: string | undefined;
   private readonly model: string | undefined;
   private readonly smallModel: string | undefined;
+  // Set ONLY for Task Master worker/review/retry/re-seed sessions. Same
+  // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
+  // initialPrompt/seedPrompt/resumeAgentSessionId above; threaded through
+  // to HookAdapterContext.taskId, where the opencode adapter uses it to
+  // deny brainstorming/writing-plans/finishing-a-development-branch for
+  // unattended worker sessions. See CreateSessionOptions.taskId's own
+  // doc comment for the full rationale.
+  //
+  // Public `readonly` (not `private`) — same posture as
+  // `injectAgentGuide`/`injectProjectBriefing` above. LocalBackend.spawn
+  // (session-backend.ts) reads it off the resulting Session to compute
+  // the `taskIdApplied` echo-back for version-skew detection (an older
+  // agent build that strips the field from the request body has a
+  // `taskId: undefined` Session, and the echo is the only signal a
+  // primary has to know that the opencode skill denials are not in
+  // effect for that spawn — see session-lifecycle.ts's own version-skew
+  // loop and PR #966's review thread). Not part of SessionInfo /
+  // toInfo()'s public surface, just as injectAgentGuide is not.
+  readonly taskId: number | undefined;
   // Issue #822 — see CreateSessionOptions.env's own doc comment. Unlike
   // initialPrompt/seedPrompt/resumeAgentSessionId above, this IS re-read on
   // every bootstrapMaster() call for this instance, including a later
@@ -1401,6 +1435,7 @@ export class Session {
     projectReviewerAgent?: string;
     model?: string;
     smallModel?: string;
+    taskId?: number;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -1429,6 +1464,7 @@ export class Session {
     this.projectReviewerAgent = opts.projectReviewerAgent;
     this.model = opts.model;
     this.smallModel = opts.smallModel;
+    this.taskId = opts.taskId;
     this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
     // Built here (constructor body), not as a field initializer, so
@@ -1989,6 +2025,7 @@ export class Session {
       projectReviewerAgent: this.projectReviewerAgent,
       model: this.model,
       smallModel: this.smallModel,
+      taskId: this.taskId,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -3808,6 +3845,7 @@ export class PtyManager {
         projectReviewerAgent: opts.projectReviewerAgent,
         model: opts.model,
         smallModel: opts.smallModel,
+        taskId: opts.taskId,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

@@ -396,6 +396,12 @@ export async function dispatchClaimedTask(
       nameLocked: true,
       model,
       smallModel,
+      // Mark this session as an unattended Task Master worker so the
+      // opencode adapter denies superpowers skills that gate on a human in
+      // the loop (brainstorming / writing-plans /
+      // finishing-a-development-branch — verified failing in branchdam-
+      // mobile tasks #66 / #67).
+      taskId: task.id,
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -760,6 +766,12 @@ export async function retryTask(
       // #9 — see the claim spawn's own comment (above, in this same file).
       name: `Task #${task.id} · worker`,
       nameLocked: true,
+      // Same "this is an unattended Task Master worker" marker as
+      // dispatchClaimedTask's claim spawn above — see that block's own
+      // comment for why a retry worker needs the brainstorming / writing-
+      // plans / finishing-a-development-branch denials too (an opencode
+      // worker respawned mid-task can hit the same failure mode).
+      taskId: task.id,
     });
     if (!result.ok) {
       await release("session spawn failed", worktree);

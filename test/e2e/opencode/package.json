@@ -1,0 +1,10 @@
+{
+  "name": "mullion-opencode-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned opencode-ai install for test/e2e/opencode-permission-merge.e2e.test.ts",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "opencode-ai": "1.18.26"
+  }
+}

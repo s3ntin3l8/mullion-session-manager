@@ -181,6 +181,12 @@ async function spawnReviewAgentNow(
       nameLocked: true,
       model,
       smallModel,
+      // Review agents are also unattended (no human in the loop) and run
+      // in the same worktree as the worker, so they're just as exposed to
+      // the brainstorming-skill failure mode verified in branchdam-mobile
+      // tasks #66 / #67. Mark as a Task Master session so the opencode
+      // adapter denies the same three skills.
+      taskId: task.id,
     });
     if (!result.ok) {
       app.log.warn(
@@ -1261,6 +1267,11 @@ async function attemptAutoRebase(
     // worker-spawn comment).
     name: `Task #${task.id} · worker`,
     nameLocked: true,
+    // Same "this is an unattended Task Master worker" marker as the
+    // claim/retry spawns (see task-claim.ts's own worker-spawn comments).
+    // The auto-rebase worker is just as exposed to the brainstorming-skill
+    // failure mode as any other Task Master worker.
+    taskId: task.id,
   });
   if (!result.ok) {
     recordMergeError(
