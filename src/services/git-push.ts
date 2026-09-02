@@ -58,20 +58,29 @@
 // that prefix, and pushes normally otherwise (a hand-made or
 // promoted-session branch a human owns).
 //
-// The lease is taken against a `git fetch origin <branch>` done immediately
-// before the push, NOT against whatever `refs/remotes/origin/<branch>`
-// already happens to be in the worktree — nothing in the auto-return path
-// fetches on its own, so a stale remote-tracking ref would make the lease
-// reject a push it should allow (reproducing the exact stuck-in-review loop
-// this exists to fix). Honest limit: fetching immediately before every push
-// means this always leases against the freshest state it can see, so it
-// does NOT protect against a write that happened before that fetch — only
-// against one landing in the brief window between the fetch and the push
-// itself (still the direction we want to fail in, and the only case a bare
-// `--force` wouldn't cover at all). If the branch doesn't exist on the
-// remote yet (first push), the fetch finds nothing and the push proceeds
-// without `--force-with-lease` — there's nothing to lease against, and an
-// ordinary push already succeeds for a brand-new branch.
+// The lease reads `--force-with-lease=<branch>` with NO explicit `:<sha>` —
+// git fills that in from whatever `refs/remotes/origin/<branch>` already is
+// locally at push time. That's exactly why this fetches the branch
+// immediately beforehand: nothing in the auto-return path fetches on its
+// own, so a stale remote-tracking ref would make the (implicit) lease
+// reject a push it should allow, reproducing the exact stuck-in-review loop
+// this exists to fix. An earlier version of this fix resolved the sha with
+// an explicit `rev-parse` and passed it as `--force-with-lease=<branch>:<sha>`
+// — verified empirically (a real bare remote, three cases: a legitimate
+// rewrite, a genuinely stale/concurrently-moved branch, and a brand-new
+// branch with no tracking ref at all) to behave identically to the bare
+// form once the fetch above has already run, so the extra round-trip was
+// dropped as pure overhead.
+//
+// Honest limit: fetching immediately before every push means this always
+// leases against the freshest state it can see, so it does NOT protect
+// against a write that happened before that fetch — only against one
+// landing in the brief window between the fetch and the push itself (still
+// the direction we want to fail in, and the only case a bare `--force`
+// wouldn't cover at all). If the branch doesn't exist on the remote yet
+// (first push) the fetch fails to find it, `refs/remotes/origin/<branch>`
+// stays unresolved, and git treats the bare lease as an ordinary push in
+// that case (verified) — no separate no-lease fallback needed for it.
 import { spawn as spawnChild } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 
@@ -189,10 +198,10 @@ function runGitCommand(
  *
  * For a `mullion/task-*` branch (the only ones Mullion ever pushes to,
  * outside a human's own promoted-session branch), fetches the branch first
- * and force-pushes with `--force-with-lease` against the sha just fetched —
- * see this file's header comment for why a rewritten task branch needs this
- * and why the lease is taken fresh rather than trusting the worktree's own
- * remote-tracking ref. Any other branch is pushed exactly as before.
+ * and force-pushes with a bare `--force-with-lease` (no explicit sha —
+ * see this file's header comment for why that's equivalent here) so a
+ * rewritten task branch can still be delivered. Any other branch is pushed
+ * exactly as before, never forced.
  *
  * Never throws. Every failure path (spawn error, non-zero exit, timeout)
  * resolves `{ ok: false, detail }` with `detail` already redacted of the
@@ -202,10 +211,17 @@ function runGitCommand(
 export async function pushBranch(cwd: string, branch: string, token: string): Promise<PushResult> {
   const encodedCredential = Buffer.from(`x-access-token:${token}`).toString("base64");
   const headerValue = `AUTHORIZATION: basic ${encodedCredential}`;
+  const forceable = branch.startsWith(FORCEABLE_BRANCH_PREFIX);
 
-  let leaseArg: string | null = null;
-  if (branch.startsWith(FORCEABLE_BRANCH_PREFIX)) {
-    const fetchResult = await runGitCommand(
+  if (forceable) {
+    // Best-effort — freshens refs/remotes/origin/<branch> so the bare
+    // --force-with-lease below reads a value we just confirmed, not
+    // whatever this worktree's own tracking ref happened to hold. A
+    // failure here (network blip, or the branch genuinely doesn't exist on
+    // the remote yet) just means the lease falls back to whatever's
+    // already local — see this file's header comment for why that's still
+    // never worse than not fetching at all.
+    await runGitCommand(
       cwd,
       ["fetch", "--quiet", "origin", branch],
       headerValue,
@@ -213,31 +229,10 @@ export async function pushBranch(cwd: string, branch: string, token: string): Pr
       encodedCredential,
       GIT_FETCH_TIMEOUT_MS,
     );
-    // A fetch failure here (network blip, branch doesn't exist on the
-    // remote yet) just means there's nothing to lease against — fall
-    // through to an ordinary push rather than failing the whole operation
-    // over a step that's purely an optimization for the rewritten-branch
-    // case.
-    if (fetchResult.ok) {
-      const shaResult = await runGitCommand(
-        cwd,
-        ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`],
-        headerValue,
-        token,
-        encodedCredential,
-        GIT_FETCH_TIMEOUT_MS,
-      );
-      if (shaResult.ok) {
-        const sha = shaResult.stdout.trim();
-        if (sha) leaseArg = `--force-with-lease=${branch}:${sha}`;
-      }
-      // No remote-tracking ref resolved: the branch doesn't exist on the
-      // remote yet (first push) — push without a lease, same as always.
-    }
   }
 
   const pushArgs = ["push", "--no-verify", "-u", "origin", branch];
-  if (leaseArg) pushArgs.splice(1, 0, leaseArg);
+  if (forceable) pushArgs.splice(1, 0, `--force-with-lease=${branch}`);
 
   const result = await runGitCommand(
     cwd,
