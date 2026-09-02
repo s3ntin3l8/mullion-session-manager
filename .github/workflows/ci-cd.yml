@@ -109,6 +109,18 @@ jobs:
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+      # PR #966 — install the pinned opencode version the
+      # `test/e2e/opencode-permission-merge.e2e.test.ts` smoke test
+      # asserts against (the opencode merge posture this PR relies on
+      # was verified empirically in issue #968 against v1.18.26). A
+      # future opencode release that flips the `OPENCODE_CONFIG_CONTENT`
+      # `permission` key from deep-merge to shallow-replace will fail
+      # the test and force a re-verification before the version pin is
+      # bumped. Same posture as the Playwright install above: a real
+      # binary the test invokes via `opencode debug config`, not a
+      # mock.
+      - name: Install opencode
+        run: npm install -g opencode-ai@1.18.26
       - name: Run e2e suite
         run: npm run test:e2e
 

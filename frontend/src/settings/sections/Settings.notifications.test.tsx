@@ -137,6 +137,21 @@ describe("Settings -> Notifications", () => {
   });
 
   it("renders an awaiting_question row and round-trips its notify toggle (#551)", async () => {
+    // PR #966 — drove the 400ms settings PATCH debounce with fake timers
+    // (vi.useFakeTimers + userEvent.setup({ advanceTimers })), but the
+    // combination with React 19's render pipeline + testing-library's
+    // findBy waits caused a 5s test-timeout instead of fixing the flake
+    // (the findBy was waiting on real-timer scheduling that fake timers
+    // had suppressed). The flake only manifests under full-suite load
+    // (test-node / test-shard matrix in CI), not locally — and even there
+    // it's intermittent, not deterministic. Real fix: the waitFor below
+    // uses an explicit 2s timeout (vs. the default 1s) so the test has
+    // headroom against a slow CI runner or sharded-matrix load spike.
+    // The deeper fix — eliminating the cross-test mock-pollution that
+    // vitest's parallel test execution sometimes surfaces — is out of
+    // scope for this PR (would require either serializing the affected
+    // tests with `describe.concurrent = false` or refactoring the
+    // store-level debounce to expose a flush-during-test hook).
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="notifications" />);
 
@@ -149,20 +164,23 @@ describe("Settings -> Notifications", () => {
         ?.notify,
     ).toBe(false);
 
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({
-            notifications: {
-              notificationMatrix: {
-                awaiting_question: { notify: false, sound: false, autoFocus: false },
+    await waitFor(
+      () =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/settings",
+          expect.objectContaining({
+            method: "PATCH",
+            body: JSON.stringify({
+              notifications: {
+                notificationMatrix: {
+                  awaiting_question: { notify: false, sound: false, autoFocus: false },
+                },
               },
-            },
+            }),
           }),
-        }),
-      ),
+        ),
+      // SETTINGS_PATCH_DEBOUNCE_MS (400ms) + headroom for CI load.
+      { timeout: 2000 },
     );
   });
 
