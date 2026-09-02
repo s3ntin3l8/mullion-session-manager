@@ -957,14 +957,17 @@ export const projectUrls = sqliteTable("project_urls", {
 // briefingOverride channel PR #892 wired through (see
 // CreateSessionOptions.briefingOverride's own doc comment, pty-manager.ts).
 // One row per project, upserted via PUT /api/projects/:id/tooling.
-// Precedence (session-lifecycle.ts's createSessionRecord, the producer):
-// this row wins over a project's own committed AGENTS.md/CLAUDE.md briefing
-// region — it's the more recently and deliberately authored artifact, and
-// clearing this field (project-tooling.ts's deleteProjectBriefing, NOT just
-// writing an empty string) restores the committed file's region, if any.
-// Same autoincrement-id + unique-index-on-project_id shape as
-// webhookRegistrations above, not projectId-as-primary-key, for consistency
-// with the rest of this file's per-project 1:1 tables.
+// Issue #942 redesigned `briefing` from a full, precedence-based
+// alternate/override of a project's committed AGENTS.md region into a
+// short, live, ALWAYS-ADDITIVE pinned note: no precedence, no file
+// scanning. AGENTS.md is read natively by every CLI and is never
+// re-injected or competed with — when this column is set, its value is
+// pushed on top of whatever AGENTS.md already said; clearing it
+// (project-tooling.ts's deleteProjectBriefing, NOT just writing an empty
+// string) simply stops pushing anything extra. Same autoincrement-id +
+// unique-index-on-project_id shape as webhookRegistrations above, not
+// projectId-as-primary-key, for consistency with the rest of this file's
+// per-project 1:1 tables.
 //
 // PR-5 (per-project skills/reviewer, issue: apply Mullion tooling to other
 // repos) added `skill`/`reviewerAgent` alongside `briefing` on the SAME row
@@ -982,14 +985,15 @@ export const projectTooling = sqliteTable(
     projectId: integer("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    // Each of the three content columns below is capped at
-    // MAX_PROJECT_TOOLING_FIELD_BYTES (project-tooling.ts) — kept in sync
-    // with internal-schemas.ts's spawnSessionSchema `briefingOverride`/
-    // `projectSkill`/`projectReviewerAgent` maxLength (8192 each) by hand,
-    // the same "duplicated rather than imported across a DB-schema/DB-less-
-    // agent-schema boundary" posture internal-schemas.ts's own header
-    // comment documents for MAX_SESSION_ENV_ENTRIES/
-    // MAX_SESSION_ENV_VALUE_LENGTH.
+    // `skill`/`reviewerAgent` below are capped at
+    // MAX_PROJECT_TOOLING_FIELD_BYTES (project-tooling.ts); `briefing` (the
+    // pinned note, issue #942) has its own much smaller
+    // MAX_PROJECT_BRIEFING_FIELD_BYTES — kept in sync with
+    // internal-schemas.ts's spawnSessionSchema `briefingOverride`/
+    // `projectSkill`/`projectReviewerAgent` maxLength by hand, the same
+    // "duplicated rather than imported across a DB-schema/DB-less-agent-
+    // schema boundary" posture internal-schemas.ts's own header comment
+    // documents for MAX_SESSION_ENV_ENTRIES/MAX_SESSION_ENV_VALUE_LENGTH.
     briefing: text("briefing"),
     // Raw SKILL.md content (YAML frontmatter + Markdown body) for a
     // project-specific Claude Code/opencode skill — composed into a

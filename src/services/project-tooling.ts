@@ -4,39 +4,44 @@ import type { getDb } from "../db/client.js";
 
 // Issue: per-project Mullion briefing authored from the UI — the DB-backed
 // producer for the spawn-time briefingOverride channel PR #892 wired
-// through. See project_tooling's own schema.ts doc comment for the
-// precedence rule (this row wins over a project's committed AGENTS.md/
-// CLAUDE.md region) and session-lifecycle.ts's createSessionRecord for
-// where that precedence is actually applied.
+// through. See project_tooling's own schema.ts doc comment for what this
+// row is now (issue #942 redesign): a short, always-additive pinned note,
+// never a competing alternate to a project's committed AGENTS.md region —
+// and session-lifecycle.ts's createSessionRecord for where it's resolved.
 //
 // PR-5 extended the same row with `skill`/`reviewerAgent` — this module now
 // exposes three parallel read/write/clear triples, one per column, sharing
-// the same byte-cap validation and upsert-vs-insert logic
-// (upsertToolingField/clearToolingField below) rather than three
-// independently-hand-rolled copies of it. `readProjectBriefing`/
-// `writeProjectBriefing`/`deleteProjectBriefing`'s own signatures are
-// UNCHANGED from before this PR (session-lifecycle.ts's producer and
-// existing tests call them exactly as before) — they're now thin wrappers
-// over the shared helpers.
+// the same upsert-vs-insert logic (upsertToolingColumn/clearToolingColumn
+// below) rather than three independently-hand-rolled copies of it.
+// `readProjectBriefing`/`writeProjectBriefing`/`deleteProjectBriefing`'s own
+// signatures are UNCHANGED from before this PR (session-lifecycle.ts's
+// producer and existing tests call them exactly as before) — they're now
+// thin wrappers over the shared helpers.
 
 // Kept in sync by hand with internal-schemas.ts's spawnSessionSchema
-// `briefingOverride`/`projectSkill`/`projectReviewerAgent` maxLength (8192
-// each) — see that field's own comment for why this is a real,
-// operator-authored-config bound rather than agent-rules.ts's much larger
-// 512 KiB whole-FILE cap (MAX_RULE_FILE_BYTES): each of these three fields
-// is a short operating-instructions block, not an arbitrary rule file, and
-// the caps would silently diverge if one cap were reused across all of
-// agent-rules.ts/project-tooling.ts.
+// `projectSkill`/`projectReviewerAgent` maxLength (8192 each) — see that
+// field's own comment for why this is a real, operator-authored-config
+// bound rather than agent-rules.ts's much larger 512 KiB whole-FILE cap
+// (MAX_RULE_FILE_BYTES). `briefing` (the pinned note) does NOT share this
+// cap — see MAX_PROJECT_BRIEFING_FIELD_BYTES below for why it needs its own,
+// much smaller one.
 export const MAX_PROJECT_TOOLING_FIELD_BYTES = 8192;
-/** @deprecated kept as an alias — every existing caller of the byte cap
- * constant referred to it under this name before PR-5 generalized the
- * table to three fields. */
-export const MAX_PROJECT_BRIEFING_BYTES = MAX_PROJECT_TOOLING_FIELD_BYTES;
+
+// Issue #942 — the pinned note is a short, live, "pay attention to this"
+// note, not a document, so it gets its own (much smaller) save-time cap
+// rather than sharing skill/reviewerAgent's 8192-byte one. Matches
+// project-briefing.ts's own MAX_BRIEFING_BYTES (the spawn-time clamp
+// applied when writing a session's per-session copy) exactly, so rejecting
+// an over-cap save here means that clamp should never actually have to
+// truncate anything in practice — reject at save time, don't silently
+// truncate later at spawn time. Kept in sync by hand with
+// internal-schemas.ts's spawnSessionSchema `briefingOverride` maxLength.
+export const MAX_PROJECT_BRIEFING_FIELD_BYTES = 512;
 
 export class ProjectBriefingTooLargeError extends Error {
   constructor(byteLength: number) {
     super(
-      `Briefing is ${byteLength} bytes, exceeds the ${MAX_PROJECT_TOOLING_FIELD_BYTES}-byte limit`,
+      `Briefing is ${byteLength} bytes, exceeds the ${MAX_PROJECT_BRIEFING_FIELD_BYTES}-byte limit`,
     );
     this.name = "ProjectBriefingTooLargeError";
   }
@@ -56,6 +61,10 @@ export class ProjectToolingFieldTooLargeError extends Error {
 
 type ToolingColumn = "briefing" | "skill" | "reviewerAgent";
 const TOOLING_COLUMNS: readonly ToolingColumn[] = ["briefing", "skill", "reviewerAgent"];
+
+function capForColumn(column: ToolingColumn): number {
+  return column === "briefing" ? MAX_PROJECT_BRIEFING_FIELD_BYTES : MAX_PROJECT_TOOLING_FIELD_BYTES;
+}
 
 function readToolingColumn(
   db: ReturnType<typeof getDb>,
@@ -84,7 +93,7 @@ function upsertToolingColumn(
   value: string,
 ): void {
   const byteLength = Buffer.byteLength(value, "utf8");
-  if (byteLength > MAX_PROJECT_TOOLING_FIELD_BYTES) {
+  if (byteLength > capForColumn(column)) {
     throw column === "briefing"
       ? new ProjectBriefingTooLargeError(byteLength)
       : new ProjectToolingFieldTooLargeError(column, byteLength);
@@ -108,11 +117,10 @@ function upsertToolingColumn(
 
 /** Clears one column back to null — NOT the same as writing an empty
  * string (see deleteProjectBriefing's own doc comment for why that
- * distinction matters to a project's committed AGENTS.md/CLAUDE.md
- * region). Deletes the ROW ENTIRELY only once every OTHER column is also
- * null — clearing a project's skill must never discard a briefing or
- * reviewer agent set independently on the same row. A no-op when no row
- * exists yet. */
+ * distinction still matters). Deletes the ROW ENTIRELY only once every
+ * OTHER column is also null — clearing a project's skill must never discard
+ * a briefing or reviewer agent set independently on the same row. A no-op
+ * when no row exists yet. */
 function clearToolingColumn(
   db: ReturnType<typeof getDb>,
   projectId: number,
@@ -156,15 +164,15 @@ export function writeProjectBriefing(
 }
 
 /** Clears the project's briefing column — NOT the same as writing an empty
- * string. Restores the project's own committed AGENTS.md/CLAUDE.md briefing
- * region, if any (session-lifecycle.ts's createSessionRecord only overrides
- * when this column is non-null); writing an empty string would instead
- * override with an empty briefing, which writeSessionBriefing's own clamp/
- * write path would happily accept as "the operator wants a blank briefing"
- * — a materially different outcome the UI must not conflate with "I want
- * the committed file back". Leaves the row (and any skill/reviewerAgent set
- * on it) intact — see clearToolingColumn's own doc comment for why the row
- * is only actually deleted once every column is null. */
+ * string. This is the only way to stop the pinned note from being injected
+ * at all (session-lifecycle.ts's createSessionRecord only resolves a note
+ * when this column is non-null); writing an empty string would instead set
+ * a real, empty note, which writeSessionBriefing's own write path would
+ * happily accept as "the operator wants a blank pinned note" — a materially
+ * different outcome the UI must not conflate with "I want no note at all".
+ * Leaves the row (and any skill/reviewerAgent set on it) intact — see
+ * clearToolingColumn's own doc comment for why the row is only actually
+ * deleted once every column is null. */
 export function deleteProjectBriefing(db: ReturnType<typeof getDb>, projectId: number): void {
   clearToolingColumn(db, projectId, "briefing");
 }

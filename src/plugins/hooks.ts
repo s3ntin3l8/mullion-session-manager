@@ -503,13 +503,25 @@ function handleConnection(
               ? buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, isAuthEnabled(app.config))
               : null;
           // Independent of injectAgentGuide — a different owner (the
-          // PROJECT's own operating instructions, not Mullion's doc) and a
-          // different clock (this reads the per-session copy
-          // writeSessionBriefing already wrote at spawn time, same as the
-          // opencode adapter's own existsSync check does — see
-          // project-briefing.ts). Placed last in additionalContext: it's
-          // the project's operative instruction set, and recency in a
-          // small context block favors it.
+          // PROJECT's own pinned note, not Mullion's doc) and a different
+          // clock (this reads the per-session copy writeSessionBriefing
+          // already wrote at spawn time, same as the opencode adapter's own
+          // existsSync check does — see project-briefing.ts). Placed last
+          // in additionalContext: issue #942's pre-implementation gap
+          // review settled the full, eventual four-item order across
+          // #949/#937/#942 as `[seed, tier-0 push (#949), workflow-
+          // conventions (#937), pinned note]` — seed first (it's "what to
+          // do right now" for a promote-flow launch), tier-0 next (Mullion
+          // mechanics orientation), workflow-conventions next (stable "how
+          // we work" policy), the pinned note last. `guideBlock` above is
+          // exactly the slot #949's tier-0 push will replace; #937's
+          // workflow-conventions slot doesn't exist yet, so today's actual
+          // composition is `[seed, guideBlock, pinned note]` — the note is
+          // last either way, not because it's the operative instruction set
+          // (it never competes with AGENTS.md, which every CLI already
+          // reads natively) but because it's meant to be the MOST
+          // EMPHASIZED, timely note, and recency in a small context block
+          // favors that.
           const briefing = effectiveInjectProjectBriefing
             ? readSessionBriefing(sessionsDir, sessionId)
             : null;

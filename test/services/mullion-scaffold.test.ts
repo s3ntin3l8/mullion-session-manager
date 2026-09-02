@@ -7,6 +7,8 @@ import {
   computeScaffold,
   isValidScaffoldSlug,
   InvalidScaffoldSlugError,
+  POINTER_MARKER_START,
+  POINTER_MARKER_END,
 } from "../../src/services/mullion-scaffold.js";
 import { extractMarkedRegion } from "../../src/services/marked-region.js";
 import { MARKER_START, MARKER_END } from "../../src/services/project-briefing.js";
@@ -144,38 +146,94 @@ describe("computeScaffold", () => {
     });
   });
 
-  it("no mirrors, no dock config, no symlink by default", () => {
+  it("no mirrors, no CONTRIBUTING.md pointer, no dock config, no symlink by default", () => {
     const entries = computeScaffold({}, { slug: "demo" });
     expect(entries.some((e) => e.path === "GEMINI.md")).toBe(false);
     expect(entries.some((e) => e.path === "AGENTS.override.md")).toBe(false);
+    expect(entries.some((e) => e.path === "CONTRIBUTING.md")).toBe(false);
     expect(entries.some((e) => e.path.endsWith("check-briefing-sync.mjs"))).toBe(false);
     expect(entries.some((e) => e.path === ".crs/dock.json")).toBe(false);
     const agentsSkills = entries.find((e) => e.path === ".agents/skills/demo/SKILL.md");
     expect(agentsSkills?.kind).toBe("file");
   });
 
-  it("writes byte-identical regions to every requested mirror plus the sync script", () => {
-    const entries = computeScaffold(
-      {},
-      { slug: "demo", mirrors: ["GEMINI.md", "AGENTS.override.md"] },
-    );
-    const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
-    const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
-    const override = entries.find((e) => e.path === "AGENTS.override.md") as { contents: string };
-    const region = (c: string) => extractMarkedRegion(c, MARKER_START, MARKER_END);
-    expect(region(gemini.contents)).toBe(region(agentsMd.contents));
-    expect(region(override.contents)).toBe(region(agentsMd.contents));
-    expect(entries.some((e) => e.path === "scripts/check-briefing-sync.mjs")).toBe(true);
+  // Issue #942 — GEMINI.md is no longer a content mirror; AGENTS.override.md
+  // is no longer offered as an option at all.
+  describe("GEMINI.md pointer (issue #942)", () => {
+    it("writes a one-line pointer to AGENTS.md, not a copy of the briefing region, plus the sync script", () => {
+      const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
+      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
+      expect(gemini).toBeDefined();
+      const pointerRegion = extractMarkedRegion(
+        gemini.contents,
+        POINTER_MARKER_START,
+        POINTER_MARKER_END,
+      );
+      expect(pointerRegion).toContain("AGENTS.md");
+      // Never a copy of AGENTS.md's own briefing region.
+      expect(extractMarkedRegion(gemini.contents, MARKER_START, MARKER_END)).toBeNull();
+      expect(entries.some((e) => e.path === "scripts/check-briefing-sync.mjs")).toBe(true);
+    });
+
+    it("upserts the pointer in place without disturbing existing GEMINI.md content", () => {
+      const existingGemini = "# GEMINI.md\n\nSome existing prose.\n";
+      const entries = computeScaffold(
+        { "GEMINI.md": existingGemini },
+        { slug: "demo", mirrors: ["GEMINI.md"] },
+      );
+      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
+      expect(gemini.contents).toContain("Some existing prose.");
+      expect(gemini.contents).toContain("AGENTS.md");
+    });
+
+    it("replaces a stale pointer region on a re-run rather than duplicating it", () => {
+      const existingGemini = `${POINTER_MARKER_START}\nstale pointer text\n${POINTER_MARKER_END}`;
+      const entries = computeScaffold(
+        { "GEMINI.md": existingGemini },
+        { slug: "demo", mirrors: ["GEMINI.md"] },
+      );
+      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
+      expect(gemini.contents).not.toContain("stale pointer text");
+    });
   });
 
-  it("upserts an existing mirror's region in place too, not just AGENTS.md's", () => {
-    const existingGemini = `${MARKER_START}\nstale\n${MARKER_END}`;
-    const entries = computeScaffold(
-      { "GEMINI.md": existingGemini },
-      { slug: "demo", mirrors: ["GEMINI.md"] },
-    );
-    const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
-    expect(gemini.contents).not.toContain("stale");
+  // Issue #942 — new, optional, opt-in-only scaffold target.
+  describe("CONTRIBUTING.md pointer (issue #942)", () => {
+    it("creates a fresh, pointer-only CONTRIBUTING.md when the option is on and none exists", () => {
+      const entries = computeScaffold({}, { slug: "demo", includeContributingPointer: true });
+      const contributing = entries.find((e) => e.path === "CONTRIBUTING.md") as {
+        contents: string;
+      };
+      expect(contributing).toBeDefined();
+      const pointerRegion = extractMarkedRegion(
+        contributing.contents,
+        POINTER_MARKER_START,
+        POINTER_MARKER_END,
+      );
+      expect(pointerRegion).toContain("AGENTS.md");
+    });
+
+    it("upserts just the pointer paragraph into an existing CONTRIBUTING.md, leaving the rest alone", () => {
+      const existing = "# Contributing\n\n## Code of Conduct\n\nBe excellent to each other.\n";
+      const entries = computeScaffold(
+        { "CONTRIBUTING.md": existing },
+        { slug: "demo", includeContributingPointer: true },
+      );
+      const contributing = entries.find((e) => e.path === "CONTRIBUTING.md") as {
+        contents: string;
+      };
+      expect(contributing.contents).toContain("Code of Conduct");
+      expect(contributing.contents).toContain("Be excellent to each other.");
+      expect(contributing.contents).toContain("AGENTS.md");
+    });
+
+    it("never creates or touches CONTRIBUTING.md when the option is off, even if one exists", () => {
+      const entries = computeScaffold(
+        { "CONTRIBUTING.md": "# Contributing\n\nhand-authored" },
+        { slug: "demo" },
+      );
+      expect(entries.some((e) => e.path === "CONTRIBUTING.md")).toBe(false);
+    });
   });
 
   it("makes .agents/skills/<slug> a symlink into .claude/skills/<slug> when opted in", () => {
@@ -235,7 +293,7 @@ describe("computeScaffold", () => {
       }
     }
 
-    it("exits 0 when AGENTS.md/GEMINI.md carry identical regions", () => {
+    it("exits 0 when GEMINI.md carries only the plain pointer (no content-bearing region)", () => {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-ok-"));
       try {
         const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
@@ -253,7 +311,7 @@ describe("computeScaffold", () => {
       }
     });
 
-    it("exits 1 when GEMINI.md's region has drifted from AGENTS.md's", () => {
+    it("exits 1 when GEMINI.md re-acquires a content-bearing mullion:briefing region", () => {
       tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-mismatch-"));
       try {
         const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
@@ -264,12 +322,34 @@ describe("computeScaffold", () => {
         }
         writeFileSync(
           path.join(tmpDir, "GEMINI.md"),
-          `${MARKER_START}\nsomething different\n${MARKER_END}\n`,
+          `${MARKER_START}\nsomething copied back in\n${MARKER_END}\n`,
         );
         writeScript(entries);
         const result = runScript();
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain("does not match");
+        expect(result.stdout).toContain("single source of truth");
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("exits 1 when AGENTS.override.md carries a content-bearing mullion:briefing region", () => {
+      tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-override-"));
+      try {
+        const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
+        for (const entry of entries) {
+          if (entry.path === "AGENTS.md" || entry.path === "GEMINI.md") {
+            writeFileSync(path.join(tmpDir, entry.path), (entry as { contents: string }).contents);
+          }
+        }
+        writeFileSync(
+          path.join(tmpDir, "AGENTS.override.md"),
+          `${MARKER_START}\nshadowing AGENTS.md\n${MARKER_END}\n`,
+        );
+        writeScript(entries);
+        const result = runScript();
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("AGENTS.override.md");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

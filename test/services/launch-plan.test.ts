@@ -333,7 +333,7 @@ describe("buildLaunchPlan — agent guide injection", () => {
 });
 
 describe("buildLaunchPlan — project briefing injection", () => {
-  it("calls writeSessionBriefing with dirname(hookSocketPath), the session id, cwd, console, and no override by default", () => {
+  it("calls writeSessionBriefing with dirname(hookSocketPath), the session id, console, and no note by default", () => {
     buildLaunchPlan(
       baseSession({
         hookSocketPath: "/tmp/sessions/hooks.sock",
@@ -345,7 +345,6 @@ describe("buildLaunchPlan — project briefing injection", () => {
     expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
       "/tmp/sessions",
       "99",
-      "/tmp/project",
       console,
       undefined,
     );
@@ -367,27 +366,24 @@ describe("buildLaunchPlan — project briefing injection", () => {
     expect(mockWriteSessionBriefing).toHaveBeenCalledTimes(1);
   });
 
-  // Issue: per-project briefing storage (a follow-up PR) — this PR only
-  // wires the spawn-body channel through; no producer sets briefingOverride
-  // yet, but buildLaunchPlan must already thread it correctly for when one
-  // does.
-  it("passes session.briefingOverride through to writeSessionBriefing as { body, sourceLabel }", () => {
+  // Issue #942 — session.briefingOverride is passed straight through as the
+  // note body; buildLaunchPlan doesn't wrap it in any object anymore, since
+  // writeSessionBriefing's `note` param is a plain string | undefined now.
+  it("passes session.briefingOverride through to writeSessionBriefing as a plain string", () => {
     buildLaunchPlan(baseSession({ briefingOverride: "custom project instructions" }));
 
     expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.any(String),
       console,
-      { body: "custom project instructions", sourceLabel: "Mullion's per-project settings" },
+      "custom project instructions",
     );
   });
 
-  it("passes undefined (not an override object) when session.briefingOverride is undefined", () => {
+  it("passes undefined when session.briefingOverride is undefined", () => {
     buildLaunchPlan(baseSession({ briefingOverride: undefined }));
 
     expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
-      expect.any(String),
       expect.any(String),
       expect.any(String),
       console,

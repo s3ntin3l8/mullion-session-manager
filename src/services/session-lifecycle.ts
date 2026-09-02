@@ -529,15 +529,15 @@ export async function createSessionRecord(
     }
   }
 
-  // Issue: per-project Mullion briefing authored from the UI — resolved
-  // HERE, on the primary (where the DB lives), not by whichever host
-  // actually spawns. `params.briefingOverride` (an explicit caller-supplied
-  // value, currently unused by any caller) wins if ever set; otherwise this
-  // project's own DB row (project-tooling.ts) wins over its committed
-  // AGENTS.md/CLAUDE.md region — see that module's own doc comment for why.
-  // `null`/absent DB row falls through to `undefined`, letting
-  // writeSessionBriefing's existing resolveProjectBriefing(cwd) fallback
-  // apply exactly as it always has.
+  // Issue: per-project Mullion pinned note (#942 redesign) — resolved HERE,
+  // on the primary (where the DB lives), not by whichever host actually
+  // spawns. `params.briefingOverride` (an explicit caller-supplied value,
+  // currently unused by any caller) wins if ever set; otherwise this
+  // project's own DB row (project-tooling.ts) is used as-is — there is no
+  // committed-file fallback to compete with anymore, and AGENTS.md is never
+  // read or re-injected here. `null`/absent DB row falls through to
+  // `undefined`, which writeSessionBriefing treats as "no note for this
+  // session" (unlinking any stale per-session copy from a previous spawn).
   const resolvedBriefingOverride =
     briefingOverride ?? readProjectBriefing(app.db, project.id) ?? undefined;
   // PR-5 — same producer posture as resolvedBriefingOverride immediately

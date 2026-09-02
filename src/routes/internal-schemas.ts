@@ -64,13 +64,13 @@ export interface SpawnSessionBody {
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts).
   env?: Record<string, string>;
-  // Issue: per-project briefing storage (a follow-up PR) — see
+  // Issue: per-project briefing storage / #942 (pinned note) — see
   // CreateSessionOptions.briefingOverride's own doc comment
   // (pty-manager.ts). Bounded (unlike initialPrompt/seedPrompt above,
   // which carry unbounded issue/task text): this is operator-authored
-  // configuration, not arbitrary user content, so 2x
-  // project-briefing.ts's own MAX_BRIEFING_BYTES (4096) is a real bound,
-  // not a token gesture — see the schema's own maxLength below.
+  // configuration, resolved from project-tooling.ts's own save-time cap
+  // (MAX_PROJECT_BRIEFING_FIELD_BYTES) — see the schema's own maxLength
+  // below.
   briefingOverride?: string;
   // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's own
   // doc comments (pty-manager.ts). Same "operator-authored, bounded"
@@ -116,14 +116,14 @@ export const spawnSessionSchema = {
         maxProperties: MAX_SESSION_ENV_ENTRIES,
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
-      // Issue: per-project briefing storage (a follow-up PR) — unlike
+      // Issue: per-project briefing storage / #942 (pinned note) — unlike
       // initialPrompt/seedPrompt above (arbitrary issue/task text with no
       // sane upper bound), this is operator-authored config resolved on
-      // the primary, so a real maxLength is appropriate — 2x
-      // project-briefing.ts's own MAX_BRIEFING_BYTES (4096), covering the
-      // clamped body plus buildSessionBriefingContent's header with room
-      // to spare, without being unbounded.
-      briefingOverride: { type: "string", maxLength: 8192 },
+      // the primary. Mirrors project-tooling.ts's own
+      // MAX_PROJECT_BRIEFING_FIELD_BYTES directly — the DB write-side cap
+      // this value was read from is already exactly this size, so there's
+      // no separate headroom calculation to duplicate here.
+      briefingOverride: { type: "string", maxLength: 512 },
       // PR-5 — unlike briefingOverride's maxLength above (derived from
       // project-briefing.ts's own post-clamp/header-prepend file-write cap,
       // a different pipeline these two fields never go through), this
