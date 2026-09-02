@@ -1,6 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { __resetRateLimitBreakerForTests } from "./api/client.js";
+import { __resetSessionRefreshBlockForTests } from "./store/slices/sessions.js";
 
 // vitest.config.ts doesn't set `test.globals: true` (this repo's convention
 // is explicit `import { describe, it, ... } from "vitest"` everywhere), so
@@ -10,6 +12,23 @@ import { cleanup } from "@testing-library/react";
 // the next test in the same file, breaking any query that expects a single
 // match (e.g. getByLabelText across multiple `it()`s).
 afterEach(cleanup);
+
+// Issue #959 — the api/client.ts per-endpoint 429 breaker and the
+// store/slices/sessions.ts sessionRefreshBlockedUntil are module-scoped
+// state. A test that intentionally mocks a 429 (e.g. PromoteDialog.test.tsx's
+// "branches fetch fails" describe) leaves a breaker entry for
+// /api/projects/N/git-branches behind, and the *next* test in the same
+// file that doesn't mock a 429 would otherwise short-circuit at the
+// breaker and silently fail with no useful diagnostic. Reset both at the
+// end of every test as a defense-in-depth measure — the dedicated
+// __resetXxxForTests helpers exist for tests that need a mid-test
+// reset, but the per-test reset catches the common case (the 429 was
+// intentional in test N, irrelevant in test N+1) without every test
+// having to know about module-scoped state.
+afterEach(() => {
+  __resetRateLimitBreakerForTests();
+  __resetSessionRefreshBlockForTests();
+});
 
 // jsdom provides no window.matchMedia at all, unlike every real browser
 // target this app ships to — a real gap in the test environment, not

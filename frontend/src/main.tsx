@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AuthGate } from "./AuthGate.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 // B1 — self-hosted via @fontsource instead of a fonts.googleapis.com/
 // fonts.gstatic.com <link> in index.html: this is a self-hosted, typically
 // LAN/VPN-only dashboard, so a third-party font CDN is a render-blocking
@@ -54,8 +55,27 @@ if (import.meta.env.PROD) {
   void import("virtual:pwa-register").then(({ registerSW }) => registerSW());
 }
 
+// Root-level ErrorBoundary (issue #959). The existing ErrorBoundary
+// in App.tsx only wraps the dockview area (its own comment: "scope:
+// dockview only") — a 429 on a render-blocking fetch OUTSIDE that
+// scope (hydrateSettings, refreshWorkspaces, etc.) previously
+// produced a blank page with only chrome rendered. Wrapping root
+// catches a 429 anywhere in the render tree and surfaces it as the
+// "Too many requests — try again in N seconds" UI. `onReset` is a
+// full-page reload: the breaker is module-level state and the only
+// way to guarantee a clean slate (the count-down's auto-retry would
+// re-mount the subtree, but the breaker entry would still be live if
+// the user landed here mid-window).
+class RootErrorBoundary extends ErrorBoundary {}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <AuthGate />
+    <RootErrorBoundary
+      onReset={() => {
+        window.location.reload();
+      }}
+    >
+      <AuthGate />
+    </RootErrorBoundary>
   </StrictMode>,
 );
