@@ -1006,20 +1006,8 @@ describe("hooksPlugin (issue #172)", () => {
       socket.destroy();
     });
 
-    describe("project briefing (agent-briefing follow-up to #405)", () => {
-      let projectDir: string;
-
-      afterEach(() => {
-        if (projectDir) fs.rmSync(projectDir, { recursive: true, force: true });
-      });
-
-      it("composes seed, guide block, and briefing in that order when all three are present", async () => {
-        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
-        fs.writeFileSync(
-          path.join(projectDir, "AGENTS.md"),
-          "<!-- mullion:briefing:start -->\nbranch off origin/main\n<!-- mullion:briefing:end -->",
-        );
-
+    describe("pinned note (agent-briefing follow-up to #405, redesigned by #942)", () => {
+      it("composes seed, guide block, and pinned note in that order when all three are present", async () => {
         app = await buildApp();
         await app.ready();
         // Explicit, not relied-on-default: this test file shares one DB
@@ -1034,10 +1022,11 @@ describe("hooksPlugin (issue #172)", () => {
         });
         const session = app.pty.getOrCreate({
           id: "1",
-          cwd: projectDir,
+          cwd: "/tmp",
           command: "bash",
           cols: 80,
           rows: 24,
+          briefingOverride: "branch off origin/main",
         });
         app.pty.stashSeed("1", "picks up where the last session left off");
         await session.spawnOutcome();
@@ -1058,13 +1047,7 @@ describe("hooksPlugin (issue #172)", () => {
         socket.destroy();
       });
 
-      it("omits the briefing but keeps the guide block when sessions.injectProjectBriefing is disabled", async () => {
-        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
-        fs.writeFileSync(
-          path.join(projectDir, "AGENTS.md"),
-          "<!-- mullion:briefing:start -->\nbranch off origin/main\n<!-- mullion:briefing:end -->",
-        );
-
+      it("omits the pinned note but keeps the guide block when sessions.injectProjectBriefing is disabled", async () => {
         app = await buildApp();
         await app.ready();
         // Explicit about BOTH keys, not just the one under test — see the
@@ -1076,10 +1059,11 @@ describe("hooksPlugin (issue #172)", () => {
         });
         const session = app.pty.getOrCreate({
           id: "1",
-          cwd: projectDir,
+          cwd: "/tmp",
           command: "bash",
           cols: 80,
           rows: 24,
+          briefingOverride: "branch off origin/main",
         });
         await session.spawnOutcome();
 
@@ -1094,13 +1078,7 @@ describe("hooksPlugin (issue #172)", () => {
         socket.destroy();
       });
 
-      it("omits the guide block but keeps the briefing when sessions.injectAgentGuide is disabled", async () => {
-        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
-        fs.writeFileSync(
-          path.join(projectDir, "AGENTS.md"),
-          "<!-- mullion:briefing:start -->\nbranch off origin/main\n<!-- mullion:briefing:end -->",
-        );
-
+      it("omits the guide block but keeps the pinned note when sessions.injectAgentGuide is disabled", async () => {
         app = await buildApp();
         await app.ready();
         // Explicit about BOTH keys — see the "composes all three" test's
@@ -1112,10 +1090,11 @@ describe("hooksPlugin (issue #172)", () => {
         });
         const session = app.pty.getOrCreate({
           id: "1",
-          cwd: projectDir,
+          cwd: "/tmp",
           command: "bash",
           cols: 80,
           rows: 24,
+          briefingOverride: "branch off origin/main",
         });
         await session.spawnOutcome();
 
@@ -1130,10 +1109,7 @@ describe("hooksPlugin (issue #172)", () => {
         socket.destroy();
       });
 
-      it("reply is byte-identical to the no-briefing case when the project has no marked region", async () => {
-        projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hooks-briefing-"));
-        // No AGENTS.md/CLAUDE.md/.agents/briefing.md at all in this cwd.
-
+      it("reply is byte-identical to the no-note case when the project has no pinned note set", async () => {
         app = await buildApp();
         await app.ready();
         // Explicit — see the "composes all three" test's comment above.
@@ -1144,7 +1120,7 @@ describe("hooksPlugin (issue #172)", () => {
         });
         const session = app.pty.getOrCreate({
           id: "1",
-          cwd: projectDir,
+          cwd: "/tmp",
           command: "bash",
           cols: 80,
           rows: 24,
@@ -1159,6 +1135,41 @@ describe("hooksPlugin (issue #172)", () => {
         const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
         const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
         expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: guideBlock });
+        socket.destroy();
+      });
+
+      // Issue #942 — an empty-string note is a real, reachable state
+      // (select-all-delete in the UI, then Save), distinct from no note at
+      // all: it still gets written and injected, header-only. Pinning this
+      // end to end, not just at the writeSessionBriefing unit level, since
+      // this is what an agent's context actually looks like for it.
+      it("still injects a header-only block for an empty-string pinned note — not the same as no note at all", async () => {
+        app = await buildApp();
+        await app.ready();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: false, injectProjectBriefing: true } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          briefingOverride: "",
+        });
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const briefingPath = sessionBriefingPath(path.dirname(app.pty.hookSocketPath), "1");
+        const briefing = fs.readFileSync(briefingPath, "utf8");
+        expect(briefing).toContain("pinned note");
+        expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: briefing });
         socket.destroy();
       });
     });

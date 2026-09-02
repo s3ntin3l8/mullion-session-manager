@@ -8,13 +8,13 @@ import path from "node:path";
 import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 
-// Issue: per-project Mullion briefing authored from the UI — the DB-backed
-// producer for the spawn-time briefingOverride channel (PR #892). This file
-// exercises session-lifecycle.ts's createSessionRecord as the actual
-// producer, end to end through a real POST /api/sessions: does the DB row
-// (project-tooling.ts) really win over a project's own committed AGENTS.md
-// briefing region, and does a project with no DB row really still fall back
-// to that file exactly as it did before this feature existed?
+// Issue: per-project Mullion pinned note authored from the UI — the
+// DB-backed producer for the spawn-time briefingOverride channel (PR #892),
+// redesigned by issue #942 into a short, always-additive note with no file
+// fallback of its own. This file exercises session-lifecycle.ts's
+// createSessionRecord as the actual producer, end to end through a real
+// POST /api/sessions: is the DB row (project-tooling.ts) the ONLY source
+// now, with no committed-file mechanism to compete with or fall back to.
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 
@@ -37,7 +37,7 @@ async function waitUntil(check: () => boolean | Promise<boolean>) {
   throw new Error("condition never became true");
 }
 
-describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. committed file)", () => {
+describe("session-lifecycle.ts — per-project pinned note (issue #942, no file fallback)", () => {
   let projectDir: string;
 
   beforeAll(() => {
@@ -55,8 +55,13 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
     if (projectDir) fs.rmSync(projectDir, { recursive: true, force: true });
   });
 
-  async function createProjectWithCommittedBriefing(app: Awaited<ReturnType<typeof buildApp>>) {
+  async function createProject(app: Awaited<ReturnType<typeof buildApp>>) {
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "briefing-precedence-project-"));
+    // A committed AGENTS.md region is present here to prove it's NEVER
+    // read or re-injected by Mullion anymore — every CLI reads it
+    // natively instead. If any test below found this text in the
+    // per-session copy, that would mean the old file-scanning mechanism
+    // regressed back in.
     fs.writeFileSync(
       path.join(projectDir, "AGENTS.md"),
       [
@@ -74,9 +79,9 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
     return res.json().id as number;
   }
 
-  it("falls back to the project's committed AGENTS.md region when no DB row exists", async () => {
+  it("writes no per-session note when no DB row exists — AGENTS.md's committed region is never read", async () => {
     const app = await buildApp();
-    const projectId = await createProjectWithCommittedBriefing(app);
+    const projectId = await createProject(app);
 
     const res = await app.inject({
       method: "POST",
@@ -87,23 +92,21 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
     const sessionId = res.json().id as number;
     await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
 
-    const written = fs.readFileSync(
-      sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)),
-      "utf8",
+    expect(fs.existsSync(sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)))).toBe(
+      false,
     );
-    expect(written).toContain("committed repo instructions");
 
     await app.close();
   });
 
-  it("the DB row wins over the committed AGENTS.md region once one is authored via the UI", async () => {
+  it("writes the DB row's note once one is authored via the UI — never mixed with AGENTS.md's committed region", async () => {
     const app = await buildApp();
-    const projectId = await createProjectWithCommittedBriefing(app);
+    const projectId = await createProject(app);
 
     const putRes = await app.inject({
       method: "PUT",
       url: `/api/projects/${projectId}/tooling`,
-      payload: { briefing: "DB-authored briefing, should win" },
+      payload: { briefing: "DB-authored pinned note" },
     });
     expect(putRes.statusCode).toBe(200);
 
@@ -120,20 +123,20 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
       sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)),
       "utf8",
     );
-    expect(written).toContain("DB-authored briefing, should win");
+    expect(written).toContain("DB-authored pinned note");
     expect(written).not.toContain("committed repo instructions");
 
     await app.close();
   });
 
-  it("deleting the DB row restores the committed AGENTS.md region for the next spawn", async () => {
+  it("deleting the DB row removes the per-session note for the next spawn — nothing to restore", async () => {
     const app = await buildApp();
-    const projectId = await createProjectWithCommittedBriefing(app);
+    const projectId = await createProject(app);
 
     await app.inject({
       method: "PUT",
       url: `/api/projects/${projectId}/tooling`,
-      payload: { briefing: "temporary DB briefing" },
+      payload: { briefing: "temporary DB note" },
     });
     await app.inject({
       method: "DELETE",
@@ -149,27 +152,23 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
     const sessionId = res.json().id as number;
     await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
 
-    const written = fs.readFileSync(
-      sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)),
-      "utf8",
+    expect(fs.existsSync(sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)))).toBe(
+      false,
     );
-    expect(written).toContain("committed repo instructions");
-    expect(written).not.toContain("temporary DB briefing");
 
     await app.close();
   });
 
   // Hermes review, PR #893 — an empty-string DB row is a real, reachable
   // state (select-all-delete in the UI, then Save) and is NOT the same as
-  // deleting the row: `??` only falls through on null/undefined, so an
-  // empty string still wins over the committed region — the exact
-  // distinction deleteProjectBriefing's own doc comment (project-tooling.ts)
-  // documents as the reason DELETE exists as a separate action from a blank
-  // PUT. This pins that documented behavior down end to end rather than
-  // just asserting it in a comment.
-  it("an empty-string DB row still overrides the committed region — it is not the same as no row at all", async () => {
+  // deleting the row: `!== undefined` only excludes null/absent, so an
+  // empty string still produces a (header-only) per-session file — the
+  // exact distinction deleteProjectBriefing's own doc comment
+  // (project-tooling.ts) documents as the reason DELETE exists as a
+  // separate action from a blank PUT.
+  it("an empty-string DB row still writes a (header-only) note — it is not the same as no row at all", async () => {
     const app = await buildApp();
-    const projectId = await createProjectWithCommittedBriefing(app);
+    const projectId = await createProject(app);
 
     const putRes = await app.inject({
       method: "PUT",
@@ -188,6 +187,9 @@ describe("session-lifecycle.ts — per-project briefing precedence (DB row vs. c
     const sessionId = res.json().id as number;
     await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
 
+    expect(fs.existsSync(sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)))).toBe(
+      true,
+    );
     const written = fs.readFileSync(
       sessionBriefingPath(app.config.SESSIONS_DIR, String(sessionId)),
       "utf8",

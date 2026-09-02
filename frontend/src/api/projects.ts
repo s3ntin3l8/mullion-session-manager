@@ -136,7 +136,8 @@ export const projectsApi = {
     projectId: number,
     options: {
       slug: string;
-      mirrors?: Array<"GEMINI.md" | "AGENTS.override.md">;
+      mirrors?: Array<"GEMINI.md">;
+      includeContributingPointer?: boolean;
       symlinkAgentsSkills?: boolean;
       includeDockConfig?: boolean;
     },

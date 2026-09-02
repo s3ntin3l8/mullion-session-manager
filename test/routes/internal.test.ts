@@ -2854,6 +2854,41 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #942 — project-tooling.ts's save-time cap for NEW notes shrank to
+  // 512 bytes, but this schema's own maxLength deliberately stayed at the
+  // OLD 8192-byte bound (see internal-schemas.ts's own comment): a project
+  // that saved a briefing between 512 and 8192 bytes BEFORE that cap shrank
+  // still has that value sitting in the DB, unmodified (no data migration),
+  // and session-lifecycle.ts's createSessionRecord reads it straight
+  // through into this exact spawn-body field on a remote-host spawn. If
+  // this schema's maxLength were tightened to match the new save-time cap,
+  // that legacy row would 400 here on every remote spawn until someone
+  // happened to re-save it — a hard failure the local/primary spawn path
+  // never sees (it degrades gracefully via writeSessionBriefing's own
+  // clamp instead, which this route's schema gate runs before).
+  it("still accepts a legacy briefingOverride saved under the pre-#942 8 KiB cap, well over the new 512-byte save-time one", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "509",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        briefingOverride: "a".repeat(4000),
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    await app.close();
+  });
+
   it("omits any prompt argv when a spawn body carries no initialPrompt", async () => {
     const app = await buildApp();
     const before = fakePtyChildren.length;

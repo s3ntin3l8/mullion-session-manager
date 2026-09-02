@@ -146,18 +146,19 @@ export interface CreateSessionOptions {
    * that column's own doc comment for why it's persisted rather than
    * spawn-time-only. */
   env?: Record<string, string>;
-  /** Issue: per-project briefing storage (a follow-up PR, not this one) —
-   * resolved on the PRIMARY (where the DB lives) and threaded straight
-   * through to writeSessionBriefing's `override` param
-   * (project-briefing.ts), the same spawn-body channel `seedPrompt` above
-   * already uses. Exists because a multi-host **agent**-role process has no
-   * DB of its own (see src/plugins/hooks.ts's `app.db ? ... :
-   * DEFAULT_SETTINGS` comment for the same constraint on
-   * `injectAgentGuide`) — resolving a per-project briefing there directly
-   * would silently resolve to nothing on every remote host. The producer is
-   * session-lifecycle.ts's createSessionRecord (PR-4); a caller that omits
-   * this leaves writeSessionBriefing to fall back to
-   * `resolveProjectBriefing(cwd)` exactly as it always has. */
+  /** Issue: per-project briefing storage / #942 (pinned note) — resolved on
+   * the PRIMARY (where the DB lives) and threaded straight through to
+   * writeSessionBriefing's `note` param (project-briefing.ts), the same
+   * spawn-body channel `seedPrompt` above already uses. Exists because a
+   * multi-host **agent**-role process has no DB of its own (see
+   * src/plugins/hooks.ts's `app.db ? ... : DEFAULT_SETTINGS` comment for
+   * the same constraint on `injectAgentGuide`) — resolving a per-project
+   * note there directly would silently resolve to nothing on every remote
+   * host. The producer is session-lifecycle.ts's createSessionRecord; a
+   * caller that omits this leaves writeSessionBriefing with no note to
+   * write for this session — issue #942 redesigned this from a
+   * precedence-based override of a committed file region into a short,
+   * always-additive pinned note with no fallback of its own. */
   briefingOverride?: string;
   /** PR-5 — see HookAdapterContext.projectSkill's own doc comment
    * (hook-adapters/types.ts). Same producer/multi-host reasoning as
@@ -1018,16 +1019,15 @@ export class Session {
   // own doc comment. Same "spawn-time snapshot, consumed once in
   // bootstrapMaster()" posture as initialPrompt/seedPrompt above.
   private readonly resumeAgentSessionId: string | undefined;
-  // Issue: per-project briefing storage (deferred to a follow-up PR) needs
-  // a channel that also works on a multi-host agent-role process, which has
+  // Issue: per-project briefing storage / #942 (pinned note) needs a
+  // channel that also works on a multi-host agent-role process, which has
   // no DB of its own — resolved on the PRIMARY, threaded through the spawn
   // body the same way seedPrompt already is, all the way to
-  // writeSessionBriefing's `override` param (project-briefing.ts). Same
+  // writeSessionBriefing's `note` param (project-briefing.ts). Same
   // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
   // initialPrompt/seedPrompt/resumeAgentSessionId above. Producer:
-  // session-lifecycle.ts's createSessionRecord (PR-4); a caller that omits
-  // it leaves writeSessionBriefing to fall back to
-  // resolveProjectBriefing(cwd) exactly as it always has.
+  // session-lifecycle.ts's createSessionRecord; a caller that omits it
+  // leaves writeSessionBriefing with no note to write for this session.
   private readonly briefingOverride: string | undefined;
   // PR-5 — see HookAdapterContext.projectSkill/projectReviewerAgent's own
   // doc comments (hook-adapters/types.ts). Same producer/pass-through

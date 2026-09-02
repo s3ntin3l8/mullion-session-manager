@@ -390,4 +390,37 @@ describe("project-setup route", () => {
 
     await app.close();
   });
+
+  // Issue #942 — the route's own readExistingFiles must pick up an
+  // existing CONTRIBUTING.md so computeScaffold upserts into it rather
+  // than treating it as absent and overwriting it with a pointer-only
+  // file. A computeScaffold-only unit test can't catch a missing entry in
+  // the route's own scaffoldableRelPaths() read list — this has to go
+  // through the real preview route.
+  it("upserts the pointer into an already-committed CONTRIBUTING.md instead of overwriting it", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const customContributing =
+      "# Contributing\n\n## Code of Conduct\n\nBe excellent to each other.\n";
+    fs.writeFileSync(path.join(repoDir, "CONTRIBUTING.md"), customContributing);
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "hand-written CONTRIBUTING.md", "--no-verify"]);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo", includeContributingPointer: true },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().files).toContain("CONTRIBUTING.md");
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const onDisk = fs.readFileSync(path.join(worktreeDir, "CONTRIBUTING.md"), "utf8");
+    expect(onDisk).toContain("Code of Conduct");
+    expect(onDisk).toContain("Be excellent to each other.");
+    expect(onDisk).toContain("AGENTS.md");
+
+    await app.close();
+  });
 });

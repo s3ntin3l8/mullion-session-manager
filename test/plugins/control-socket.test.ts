@@ -2646,8 +2646,9 @@ describe("controlSocketPlugin (issue #185)", () => {
           });
           const projectId = project.json().id;
           const socket = await fullScopeSocket();
-          // Oversized briefing exceeds MAX_PROJECT_BRIEFING_BYTES (8 KiB),
-          // and an invalid skill frontmatter is rejected by the PUT route.
+          // Oversized briefing exceeds MAX_PROJECT_BRIEFING_FIELD_BYTES
+          // (512 bytes), and an invalid skill frontmatter is rejected by
+          // the PUT route.
           socket.write(
             `${JSON.stringify({
               id: 1,

@@ -109,7 +109,7 @@ describe("ProjectBriefingPanel", () => {
     );
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
-    const textarea = await screen.findByPlaceholderText(/No Mullion briefing set/);
+    const textarea = await screen.findByPlaceholderText(/No pinned note set/);
     expect(textarea).toHaveValue("");
     // No row exists yet, so there's nothing to delete.
     expect(screen.queryByText("Delete")).not.toBeInTheDocument();
@@ -142,7 +142,7 @@ describe("ProjectBriefingPanel", () => {
     const user = userEvent.setup();
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
-    const textarea = await screen.findByPlaceholderText(/No Mullion briefing set/);
+    const textarea = await screen.findByPlaceholderText(/No pinned note set/);
     await user.type(textarea, "new briefing text");
 
     const saveButton = screen.getByText("Save");
@@ -208,11 +208,11 @@ describe("ProjectBriefingPanel", () => {
     await screen.findByDisplayValue("to be deleted");
     // ConfirmButton requires arming before it fires — same "click again to
     // confirm" pattern as AgentRulesPanel's own delete button.
-    const deleteButton = screen.getByTitle(/Delete this project's Mullion briefing\?/);
+    const deleteButton = screen.getByTitle(/Delete this project's pinned note\?/);
     await user.click(deleteButton);
     await user.click(deleteButton);
 
-    expect(await screen.findByPlaceholderText(/No Mullion briefing set/)).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText(/No pinned note set/)).toBeInTheDocument();
     expect(screen.queryByText("Delete")).not.toBeInTheDocument();
   });
 
@@ -229,7 +229,7 @@ describe("ProjectBriefingPanel", () => {
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
     await screen.findByDisplayValue("content");
-    await user.click(screen.getByTitle(/Delete this project's Mullion briefing\?/));
+    await user.click(screen.getByTitle(/Delete this project's pinned note\?/));
     expect(delSpy).not.toHaveBeenCalled();
   });
 
@@ -264,12 +264,12 @@ describe("ProjectBriefingPanel", () => {
     const user = userEvent.setup();
     render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
-    const textarea = await screen.findByPlaceholderText(/No Mullion briefing set/);
+    const textarea = await screen.findByPlaceholderText(/No pinned note set/);
     await user.type(textarea, "short");
-    expect(screen.getByText(/5 \/ 8,192 bytes/)).toBeInTheDocument();
+    expect(screen.getByText(/5 \/ 512 bytes/)).toBeInTheDocument();
     expect(screen.getByText("Save")).not.toBeDisabled();
 
-    await user.paste("a".repeat(8193));
+    await user.paste("a".repeat(513));
     expect(await screen.findByText(/over the limit/)).toBeInTheDocument();
     expect(screen.getByText("Save")).toBeDisabled();
   });
@@ -334,7 +334,7 @@ describe("ProjectBriefingPanel", () => {
       const user = userEvent.setup();
       render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
-      await screen.findByPlaceholderText(/No Mullion briefing set/);
+      await screen.findByPlaceholderText(/No pinned note set/);
       await user.click(screen.getByText("Skill"));
       const textarea = await screen.findByPlaceholderText(/No project skill set yet/);
       await user.type(textarea, "---\nname: x\ndescription: d\n---\nbody");
@@ -392,7 +392,7 @@ describe("ProjectBriefingPanel", () => {
       const user = userEvent.setup();
       render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
 
-      await screen.findByPlaceholderText(/No Mullion briefing set/);
+      await screen.findByPlaceholderText(/No pinned note set/);
       await user.click(screen.getByText("Skill"));
       await screen.findByPlaceholderText(/No project skill set yet/);
 

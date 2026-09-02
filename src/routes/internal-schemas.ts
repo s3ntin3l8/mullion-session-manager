@@ -64,13 +64,12 @@ export interface SpawnSessionBody {
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts).
   env?: Record<string, string>;
-  // Issue: per-project briefing storage (a follow-up PR) — see
+  // Issue: per-project briefing storage / #942 (pinned note) — see
   // CreateSessionOptions.briefingOverride's own doc comment
   // (pty-manager.ts). Bounded (unlike initialPrompt/seedPrompt above,
   // which carry unbounded issue/task text): this is operator-authored
-  // configuration, not arbitrary user content, so 2x
-  // project-briefing.ts's own MAX_BRIEFING_BYTES (4096) is a real bound,
-  // not a token gesture — see the schema's own maxLength below.
+  // configuration — see the schema's own maxLength below for why it's
+  // deliberately looser than project-tooling.ts's current save-time cap.
   briefingOverride?: string;
   // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's own
   // doc comments (pty-manager.ts). Same "operator-authored, bounded"
@@ -116,13 +115,22 @@ export const spawnSessionSchema = {
         maxProperties: MAX_SESSION_ENV_ENTRIES,
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
-      // Issue: per-project briefing storage (a follow-up PR) — unlike
+      // Issue: per-project briefing storage / #942 (pinned note) — unlike
       // initialPrompt/seedPrompt above (arbitrary issue/task text with no
       // sane upper bound), this is operator-authored config resolved on
-      // the primary, so a real maxLength is appropriate — 2x
-      // project-briefing.ts's own MAX_BRIEFING_BYTES (4096), covering the
-      // clamped body plus buildSessionBriefingContent's header with room
-      // to spare, without being unbounded.
+      // the primary. Deliberately NOT tied to project-tooling.ts's current
+      // save-time cap (MAX_PROJECT_BRIEFING_FIELD_BYTES, 512) — #942
+      // shrunk that cap from the OLD 8192-byte one with no data migration
+      // ("single-user install, just change the behavior" — see the
+      // issue's own body), so a row saved before this change can still be
+      // up to 8192 bytes. This wire-level bound stays at that old, more
+      // permissive size so a stale row doesn't hard-fail spawning on a
+      // REMOTE host (this schema gates POST /internal/sessions, the only
+      // path that validates this value before writeSessionBriefing's own
+      // clamp ever runs) — the local/primary path already degrades
+      // gracefully via that clamp regardless of this bound. Every NEW save
+      // is already far under this via the write-side cap; this is purely
+      // legacy-data headroom, not the current authoring limit.
       briefingOverride: { type: "string", maxLength: 8192 },
       // PR-5 — unlike briefingOverride's maxLength above (derived from
       // project-briefing.ts's own post-clamp/header-prepend file-write cap,

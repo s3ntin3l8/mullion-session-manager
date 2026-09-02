@@ -78,7 +78,7 @@ protocol.
   cookie-profile import — see [`browser-automation.md`](browser-automation.md)),
   `project-urls` (per-project saved external-URL shortcuts), `project-tooling`
   (`GET`/`PUT`/`DELETE /api/projects/:id/tooling[/skill|/reviewer-agent]` —
-  a project's DB-authored briefing/skill/reviewer subagent, primary-only,
+  a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
   no host branching — see [`project-briefing.md`](project-briefing.md)),
   `project-setup` (`POST /api/projects/:id/setup/preview`/`apply` — scaffold
   a committed briefing region + starter skill/reviewer into a project's own

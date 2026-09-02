@@ -4,7 +4,10 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { MAX_PROJECT_BRIEFING_BYTES } from "../../src/services/project-tooling.js";
+import {
+  MAX_PROJECT_BRIEFING_FIELD_BYTES,
+  MAX_PROJECT_TOOLING_FIELD_BYTES,
+} from "../../src/services/project-tooling.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-tooling-test-${process.pid}.db`);
 
@@ -109,14 +112,14 @@ describe("project-tooling route", () => {
     await app.close();
   });
 
-  it("rejects a briefing over MAX_PROJECT_BRIEFING_BYTES with 400, not 500", async () => {
+  it("rejects a briefing over MAX_PROJECT_BRIEFING_FIELD_BYTES with 400, not 500", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);
 
     const res = await app.inject({
       method: "PUT",
       url: `/api/projects/${projectId}/tooling`,
-      payload: { briefing: "a".repeat(MAX_PROJECT_BRIEFING_BYTES + 1) },
+      payload: { briefing: "a".repeat(MAX_PROJECT_BRIEFING_FIELD_BYTES + 1) },
     });
     expect(res.statusCode).toBe(400);
 
@@ -205,13 +208,13 @@ describe("project-tooling route", () => {
       await app.close();
     });
 
-    it("rejects a skill over MAX_PROJECT_BRIEFING_BYTES with 400, not 500", async () => {
+    it("rejects a skill over MAX_PROJECT_TOOLING_FIELD_BYTES with 400, not 500", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);
 
       const oversized =
         "---\nname: too-big\ndescription: oversized\n---\n" +
-        "a".repeat(MAX_PROJECT_BRIEFING_BYTES);
+        "a".repeat(MAX_PROJECT_TOOLING_FIELD_BYTES);
       const res = await app.inject({
         method: "PUT",
         url: `/api/projects/${projectId}/tooling/skill`,

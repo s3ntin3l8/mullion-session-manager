@@ -12,58 +12,56 @@ This is the feature currently otherwise undocumented outside source comments
 — this page is the missing doc the `hook-adapters/mullion-bundle.ts` and
 `project-briefing.ts`/`project-tooling.ts` headers point at.
 
-## The committed briefing region
+## AGENTS.md leads
 
-A project can carry standing instructions for agents in a marker-delimited
-region of its own `AGENTS.md` or `CLAUDE.md` (or a dedicated,
-marker-free `.agents/briefing.md`):
+Issue #942 made `AGENTS.md` a project's single source of truth for standing
+operating instructions. Every CLI Mullion hosts (Claude Code, Codex,
+opencode, agy) reads it **natively** — Mullion never parses it, extracts a
+region from it, or re-injects a copy of its content into a session. There is
+no read-side "committed briefing" mechanism in `project-briefing.ts` at all
+anymore (it was removed by #942, along with the old `AGENTS.md` →
+`CLAUDE.md` → `.agents/briefing.md` fallback chain); a project that wants
+standing instructions for agents just writes them into `AGENTS.md` like it
+would for a human contributor.
 
-```markdown
-<!-- mullion:briefing:start -->
+`CLAUDE.md`/`GEMINI.md` are one-line **pointers** to `AGENTS.md`, not
+content mirrors — see "Scaffolding it into the repo instead" below for how
+the scaffold keeps it that way. `AGENTS.override.md` is the one file that
+can still silently shadow `AGENTS.md` (Codex reads it _instead of_
+`AGENTS.md` when it exists — `src/services/agent-rules.ts`'s precedence
+table); the scaffold no longer offers it as an option, though an existing,
+hand-authored one is left untouched. `scripts/check-briefing-sync.mjs`
+(wired into `make lint`/pre-commit for this repo) fails loud if either
+`GEMINI.md` or `AGENTS.override.md` ever re-acquires a content-bearing copy
+of the old `<!-- mullion:briefing:start/end -->` region.
 
-Run `npm test` before committing. Never touch `generated/`.
-<!-- mullion:briefing:end -->
-```
+## The pinned note
 
-`resolveProjectBriefing` (`src/services/project-briefing.ts`) tries
-`AGENTS.md`, then `CLAUDE.md`, then `.agents/briefing.md`, first match wins —
-`AGENTS.md`/`CLAUDE.md` both require the marker pair (an ordinary,
-unmarked instructions file is never dumped whole into a session's context);
-`.agents/briefing.md` needs no marker at all, since a dedicated file is
-already an explicit opt-in. The resolved body is clamped to 4 KiB
-(`MAX_BRIEFING_BYTES`) and written to a per-session copy
+A project can additionally set a short, **always-additive** note from the
+UI (see below) — never a competing alternate to `AGENTS.md`, never a file,
+never anything with precedence rules. When set, it's pushed on top of
+whatever `AGENTS.md` already told the agent, at the start of every session;
+when unset, nothing extra is pushed. The resolved note is clamped to 512
+bytes (`MAX_BRIEFING_BYTES`) and written to a per-session copy
 (`<sessionsDir>/<id>.briefing.md`) at spawn time, which every hook
 adapter's own injection mechanism reads from — a live model turn, not a
-file an agent has to go looking for (see
-[`agent-hooks.md`](agent-hooks.md) for the per-CLI injection channel and
-`agent-guide.md`'s own "Live end-to-end verification" section for a
-real-session confirmation across all four CLIs).
-
-`GEMINI.md` is deliberately **not** one of the read candidates above —
-agy is the one CLI here that also loads project files _natively_,
-independent of anything Mullion injects, and it reads `GEMINI.md` for
-that. Keeping `GEMINI.md`'s own `mullion:briefing` region byte-identical
-to `AGENTS.md`'s (`scripts/check-briefing-sync.mjs`, wired into `make
-lint`/pre-commit for this repo) means agy's native read and Mullion's own
-injection never show it two different sets of instructions, even if
-Mullion's injection were ever disabled. `AGENTS.override.md` (Codex's own
-override file, when a project uses one) gets the identical treatment for
-the same reason.
+file an agent has to go looking for (see [`agent-hooks.md`](agent-hooks.md)
+for the per-CLI injection channel).
 
 ## Authoring it from the UI instead
 
-A project's briefing doesn't have to be a committed file at all — the
-**Mullion Briefing** panel (Command Palette → "Mullion Briefing: \<project\>",
-or a project-scoped dockview panel) lets you author a briefing, a skill, and
-a reviewer subagent per project, stored as one row in the `project_tooling`
-table (`src/services/project-tooling.ts`), with **no repo write**:
+The **Mullion Briefing** panel (Command Palette → "Mullion Briefing:
+\<project\>", or a project-scoped dockview panel) lets you author a pinned
+note, a skill, and a reviewer subagent per project, stored as one row in the
+`project_tooling` table (`src/services/project-tooling.ts`), with **no repo
+write**:
 
-- **Briefing** — a plain-text operating-instructions block, capped at 8 KiB.
-  Precedence: once a row exists, it wins over the committed region above —
-  it's the more recently and deliberately authored artifact. Deleting the
-  row (not the same as saving an empty string — see
-  `deleteProjectBriefing`'s own doc comment) falls back to the committed
-  region again, if any.
+- **Pinned note** — a short, plain-text note, capped at 512 bytes
+  (`MAX_PROJECT_BRIEFING_FIELD_BYTES`) — deliberately small: this is a
+  live "pay attention to this" note, not a document. Deleting the row (not
+  the same as saving an empty string — see `deleteProjectBriefing`'s own
+  doc comment) simply stops the note from being pushed at all; there is no
+  file to "fall back" to.
 - **Skill** — a project-specific Claude Code/opencode skill (raw
   `SKILL.md` content: YAML frontmatter with `name`/`description`, then a
   Markdown body).
@@ -175,13 +173,21 @@ three artifacts into a real, reviewable pull request:
    already has one), a starter `.claude/skills/<slug>/SKILL.md`, a starter
    `.claude/agents/<slug>-reviewer.md`, and a `.agents/skills/<slug>` mirror
    for codex's/agy's own project-scope discovery — writes it into a scratch
-   worktree under `.mullion-worktrees/`, and shows the diff. **Never
-   clobbers content that's already there**: only the briefing region is
-   designed for repeated safe upserts (that's the whole point of the
-   marker delimiters); the skill, reviewer, and an optional starter
-   `.crs/dock.json` (see [`dock.md`](dock.md)) are each "create once,
-   never overwrite" — a re-scaffold over a repo that already committed or
-   hand-edited them leaves that content alone.
+   worktree under `.mullion-worktrees/`, and shows the diff. Two more
+   entries are opt-in: a one-line `GEMINI.md` **pointer** to `AGENTS.md`
+   (never a content copy — see "AGENTS.md leads" above), and a short
+   pointer paragraph upserted into `CONTRIBUTING.md` (created fresh if the
+   project doesn't have one yet) pointing at `AGENTS.md`'s Workflow
+   Conventions section, since that file's own process-rules section
+   otherwise drifts from `AGENTS.md` the same way `CLAUDE.md`/`GEMINI.md`
+   used to. **Never clobbers content that's already there**: only the
+   `AGENTS.md`/`GEMINI.md`/`CONTRIBUTING.md` marked regions are designed
+   for repeated safe upserts (that's the whole point of the marker
+   delimiters, and each pointer touches nothing outside its own marked
+   region); the skill, reviewer, and an optional starter `.crs/dock.json`
+   (see [`dock.md`](dock.md)) are each "create once, never overwrite" — a
+   re-scaffold over a repo that already committed or hand-edited them
+   leaves that content alone.
 2. **Apply** commits the previewed worktree and either opens a pull
    request (reusing Task Master's own promote path — push the branch,
    `createPullRequest`, with the same 422-then-recover-the-existing-PR

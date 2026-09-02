@@ -122,10 +122,10 @@ export interface LaunchPlanSession {
    * own doc comment (pty-manager.ts). */
   readonly resumeAgentSessionId: string | undefined;
   /** See CreateSessionOptions.briefingOverride's own doc comment
-   * (pty-manager.ts) and writeSessionBriefing's `override` param
+   * (pty-manager.ts) and writeSessionBriefing's `note` param
    * (project-briefing.ts) for the full multi-host reasoning. Passed
-   * straight through to writeSessionBriefing below — nothing here decides
-   * precedence, that's entirely writeSessionBriefing's job. */
+   * straight through to writeSessionBriefing below — `undefined` means "no
+   * pinned note for this project", nothing else to decide. */
   readonly briefingOverride: string | undefined;
   /** See HookAdapterContext.projectSkill's own doc comment
    * (hook-adapters/types.ts) — passed straight through to applyHookAdapters
@@ -273,33 +273,30 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // ordering changes nothing for Claude Code/Codex/agy.
   writeSessionAgentGuide(path.dirname(session.hookSocketPath), session.id);
 
-  // agent-briefing follow-up to #405 — same unconditional-write / must-
-  // precede-applyHookAdapters posture as writeSessionAgentGuide immediately
-  // above, and for the identical reason: the opencode adapter's
-  // prepareLaunch does its own existsSync check on this exact per-session
-  // path. Not gated on `sessions.injectProjectBriefing` here either — that
-  // setting only gates the injection (hooks.ts, opencode's `instructions`
-  // entry), never the file's own write. Unlike the guide, this write also
-  // UNLINKS a stale copy from a previous spawn when nothing resolves for
-  // this session's cwd (project-briefing.ts's own doc comment) — a project
-  // briefing can disappear between spawns in a way the shipped guide never
-  // does.
+  // agent-briefing follow-up to #405, redesigned by #942 — same
+  // unconditional-write / must-precede-applyHookAdapters posture as
+  // writeSessionAgentGuide immediately above, and for the identical reason:
+  // the opencode adapter's prepareLaunch does its own existsSync check on
+  // this exact per-session path. Not gated on `sessions.injectProjectBriefing`
+  // here either — that setting only gates the injection (hooks.ts,
+  // opencode's `instructions` entry), never the file's own write. Unlike
+  // the guide, this write also UNLINKS a stale copy from a previous spawn
+  // when the project has no pinned note set (project-briefing.ts's own doc
+  // comment) — a note can be deleted between spawns in a way the shipped
+  // guide never can.
   // Hermes review, PR #893 — this MUST be a nullish check, not a truthy
-  // one: an empty-string override (select-all-delete in the UI, then Save)
-  // is a real, reachable, and DELIBERATELY DIFFERENT state from no row at
-  // all — see project-tooling.ts's deleteProjectBriefing doc comment for
-  // why "" still overrides with a blank briefing while DELETE restores the
-  // committed region. A truthy check here would silently treat both the
-  // same, undoing that entire distinction. Caught by
-  // session-lifecycle-briefing.test.ts's own empty-string-override case.
+  // one: an empty-string note (select-all-delete in the UI, then Save) is a
+  // real, reachable, and DELIBERATELY DIFFERENT state from no row at all —
+  // see project-tooling.ts's deleteProjectBriefing doc comment for why ""
+  // still writes a (blank) note while DELETE stops injecting one at all. A
+  // truthy check here would silently treat both the same, undoing that
+  // entire distinction. Caught by session-lifecycle-briefing.test.ts's own
+  // empty-string case.
   writeSessionBriefing(
     path.dirname(session.hookSocketPath),
     session.id,
-    session.cwd,
     console,
-    session.briefingOverride !== undefined
-      ? { body: session.briefingOverride, sourceLabel: "Mullion's per-project settings" }
-      : undefined,
+    session.briefingOverride,
   );
 
   // Phase 2 (issue #174): if `session.command` matches a known agent with a

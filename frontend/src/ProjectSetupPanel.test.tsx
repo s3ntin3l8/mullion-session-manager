@@ -49,7 +49,7 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByLabelText("Mirror to GEMINI.md"));
+    await user.click(screen.getByLabelText("Add a GEMINI.md pointer"));
     await user.click(screen.getByText("Preview"));
 
     expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
@@ -61,6 +61,7 @@ describe("ProjectSetupPanel", () => {
     expect(sentBody).toEqual({
       slug: "demo",
       mirrors: ["GEMINI.md"],
+      includeContributingPointer: false,
       symlinkAgentsSkills: false,
       includeDockConfig: false,
     });

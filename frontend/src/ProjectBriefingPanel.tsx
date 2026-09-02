@@ -13,13 +13,20 @@ export interface ProjectBriefingPanelParams {
 // Hermes review, PR #893 — kept in sync BY HAND with
 // src/services/project-tooling.ts's MAX_PROJECT_TOOLING_FIELD_BYTES (which
 // is itself kept in sync by hand with internal-schemas.ts's
-// spawnSessionSchema briefingOverride/projectSkill/projectReviewerAgent
-// maxLength) — the frontend has no access to backend source, so this is a
-// third copy of the same number, same posture as that file's own header
-// comment. Only used here to show a live hint before Save — the backend's
-// own check is still the actual enforcement. Shared by all three fields
-// below (PR-5): they're all validated against the same byte cap.
+// spawnSessionSchema projectSkill/projectReviewerAgent maxLength) — the
+// frontend has no access to backend source, so this is a third copy of the
+// same number, same posture as that file's own header comment. Only used
+// here to show a live hint before Save — the backend's own check is still
+// the actual enforcement. Shared by skill/reviewerAgent (PR-5); the pinned
+// note has its own, much smaller cap — see MAX_BRIEFING_FIELD_BYTES below
+// (issue #942).
 const MAX_TOOLING_FIELD_BYTES = 8192;
+
+// Issue #942 — kept in sync BY HAND with project-tooling.ts's
+// MAX_PROJECT_BRIEFING_FIELD_BYTES. The pinned note is a short, live "pay
+// attention to this" note, not a document, so it gets its own much smaller
+// cap rather than sharing skill/reviewerAgent's 8192-byte one.
+const MAX_BRIEFING_FIELD_BYTES = 512;
 
 // PR-5 — a starting point for the reviewer-agent field, mirroring
 // .claude/agents/mullion-reviewer.md's own shape with this repo's specific
@@ -75,6 +82,7 @@ interface ToolingFieldConfig {
   notice: string;
   deleteConfirmTitle: string;
   template?: string;
+  maxBytes: number;
   write: (projectId: number, value: string) => Promise<{ [k: string]: string | null }>;
   remove: (projectId: number) => Promise<void>;
 }
@@ -82,14 +90,14 @@ interface ToolingFieldConfig {
 const FIELD_CONFIGS: ToolingFieldConfig[] = [
   {
     key: "briefing",
-    label: "Briefing",
-    placeholder: "No Mullion briefing set for this project yet — start typing to create one.",
+    label: "Pinned note",
+    placeholder: "No pinned note set for this project yet — start typing to create one.",
     notice:
-      "Carried into every session's context at startup, taking precedence over any " +
-      "<!-- mullion:briefing:start --> region already committed in this project's own " +
-      "AGENTS.md or CLAUDE.md. Delete this to fall back to that committed region, if one exists.",
-    deleteConfirmTitle:
-      "Delete this project's Mullion briefing? This restores any committed AGENTS.md/CLAUDE.md briefing region instead — it can't be undone.",
+      "A short, live note pushed at the start of every session, on top of whatever AGENTS.md " +
+      "already says — it's never a substitute for AGENTS.md, and never competes with it. Delete " +
+      "this to stop pushing a note at all.",
+    deleteConfirmTitle: "Delete this project's pinned note? This can't be undone.",
+    maxBytes: MAX_BRIEFING_FIELD_BYTES,
     write: (projectId, value) => api.writeProjectTooling(projectId, value),
     remove: (projectId) => api.deleteProjectTooling(projectId),
   },
@@ -105,6 +113,7 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
       "skill file instead — see “Scaffold Mullion integration” for those two.",
     deleteConfirmTitle: "Delete this project's skill? This can't be undone.",
     template: SKILL_TEMPLATE,
+    maxBytes: MAX_TOOLING_FIELD_BYTES,
     write: (projectId, value) => api.writeProjectSkill(projectId, value),
     remove: (projectId) => api.deleteProjectSkill(projectId),
   },
@@ -121,6 +130,7 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
       "apply everywhere). codex and agy have no subagent concept.",
     deleteConfirmTitle: "Delete this project's reviewer agent? This can't be undone.",
     template: REVIEWER_AGENT_TEMPLATE,
+    maxBytes: MAX_TOOLING_FIELD_BYTES,
     write: (projectId, value) => api.writeProjectReviewerAgent(projectId, value),
     remove: (projectId) => api.deleteProjectReviewerAgent(projectId),
   },
@@ -215,7 +225,7 @@ function ToolingFieldEditor({
   // just redundantly re-set state React already has.
 
   const draftByteLength = useMemo(() => new TextEncoder().encode(draft).length, [draft]);
-  const overCap = draftByteLength > MAX_TOOLING_FIELD_BYTES;
+  const overCap = draftByteLength > config.maxBytes;
 
   const handleDiscard = useCallback(() => {
     setDraft(savedValue ?? "");
@@ -313,7 +323,7 @@ function ToolingFieldEditor({
         spellCheck={false}
       />
       <div className={`agent-rules-panel-row-meta${overCap ? " error" : ""}`}>
-        {draftByteLength.toLocaleString()} / {MAX_TOOLING_FIELD_BYTES.toLocaleString()} bytes
+        {draftByteLength.toLocaleString()} / {config.maxBytes.toLocaleString()} bytes
         {overCap && " — over the limit, trim before saving"}
       </div>
     </div>

@@ -36,7 +36,7 @@ interface ApplyResult {
 export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams }) {
   const [slug, setSlug] = useState("");
   const [includeGemini, setIncludeGemini] = useState(false);
-  const [includeOverride, setIncludeOverride] = useState(false);
+  const [includeContributingPointer, setIncludeContributingPointer] = useState(false);
   const [symlinkAgentsSkills, setSymlinkAgentsSkills] = useState(false);
   const [includeDockConfig, setIncludeDockConfig] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
@@ -50,13 +50,11 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     setError(null);
     setApplyResult(null);
     try {
-      const mirrors: Array<"GEMINI.md" | "AGENTS.override.md"> = [
-        ...(includeGemini ? (["GEMINI.md"] as const) : []),
-        ...(includeOverride ? (["AGENTS.override.md"] as const) : []),
-      ];
+      const mirrors: Array<"GEMINI.md"> = includeGemini ? ["GEMINI.md"] : [];
       const result = await api.previewProjectSetup(params.projectId, {
         slug,
         mirrors,
+        includeContributingPointer,
         symlinkAgentsSkills,
         includeDockConfig,
       });
@@ -71,7 +69,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     params.projectId,
     slug,
     includeGemini,
-    includeOverride,
+    includeContributingPointer,
     symlinkAgentsSkills,
     includeDockConfig,
   ]);
@@ -198,9 +196,11 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       <div className="settings-row">
         <div className="settings-row-text">
           <label className="settings-row-label" htmlFor="setup-mirror-gemini">
-            Mirror to GEMINI.md
+            Add a GEMINI.md pointer
           </label>
-          <div className="settings-row-desc">Keeps a byte-identical briefing region for agy.</div>
+          <div className="settings-row-desc">
+            A one-line pointer to AGENTS.md, for agy — never a content copy.
+          </div>
         </div>
         <div className="settings-row-control">
           <input
@@ -213,19 +213,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       </div>
       <div className="settings-row">
         <div className="settings-row-text">
-          <label className="settings-row-label" htmlFor="setup-mirror-override">
-            Mirror to AGENTS.override.md
+          <label className="settings-row-label" htmlFor="setup-contributing-pointer">
+            Add a CONTRIBUTING.md pointer
           </label>
           <div className="settings-row-desc">
-            Only if this project already uses an AGENTS.override.md for Codex.
+            Upserts a short pointer to AGENTS.md's Workflow Conventions section — creates
+            CONTRIBUTING.md if this project doesn't have one yet, or upserts into it without
+            touching anything else already there.
           </div>
         </div>
         <div className="settings-row-control">
           <input
-            id="setup-mirror-override"
+            id="setup-contributing-pointer"
             type="checkbox"
-            checked={includeOverride}
-            onChange={(e) => setIncludeOverride(e.target.checked)}
+            checked={includeContributingPointer}
+            onChange={(e) => setIncludeContributingPointer(e.target.checked)}
           />
         </div>
       </div>

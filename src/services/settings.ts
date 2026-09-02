@@ -243,10 +243,12 @@ export interface AppSettings {
     // which points its `instructions` config at the per-session copy
     // (issue #437c) — the guide's full text, not a pointer sentence.
     injectAgentGuide: boolean;
-    // agent-briefing follow-up to #405 — gates the SessionStart injection of
-    // a PROJECT's own briefing (a marked region in its AGENTS.md/CLAUDE.md,
-    // written per-session by writeSessionBriefing — see
-    // project-briefing.ts), independently of injectAgentGuide above. Kept
+    // agent-briefing follow-up to #405, redesigned by #942 — gates the
+    // SessionStart injection of a PROJECT's own pinned note (a short,
+    // DB-authored, always-additive note — never a competing alternate to
+    // AGENTS.md, which every CLI already reads natively — written
+    // per-session by writeSessionBriefing, see project-briefing.ts),
+    // independently of injectAgentGuide above. Kept
     // as its own key rather than folded into injectAgentGuide: that key's
     // meaning is already shipped and test-asserted narrow ("gates the
     // pointer to Mullion's own per-session GUIDE copy" — see this field's

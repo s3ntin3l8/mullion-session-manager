@@ -47,10 +47,10 @@ covers, rather than assuming it reached your context automatically.
 - **Post-merge:** delete the local and remote branch, and
   `git worktree remove <path>`.
 - **Note for Codex:** an `AGENTS.override.md`, if one is ever added, takes
-  precedence over `AGENTS.md`. If you add one, its briefing region must match
-  this one — `npm run check:briefing-sync` (also a pre-commit hook)
-  hard-fails otherwise. Content outside the markers is free to diverge; an
-  out-of-sync region inside them silently shadows everything above for
-  Codex.
+  precedence over `AGENTS.md` _entirely_ — Codex reads it _instead of_ this
+  file. `npm run check:briefing-sync` (also a pre-commit hook) hard-fails if
+  one ever carries its own copy of this region (or if `GEMINI.md` does) —
+  AGENTS.md is the single source of truth now, so don't paste this region
+  into either file; point at this one instead.
 
 <!-- mullion:briefing:end -->
