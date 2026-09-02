@@ -134,6 +134,18 @@
   color: var(--c);
   background: color-mix(in srgb, var(--c) 15%, transparent);
 }
+.session-model-badge,
+.pane-tab-model-badge {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--tint);
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
 .pane-tab.attention-ring {
   /* #98 item 2 — background tint matching the sidebar's own
      .session-item.status-attention treatment, plus a static left-edge accent

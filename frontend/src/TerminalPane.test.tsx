@@ -501,6 +501,9 @@ function renderPane(extra: { active?: boolean } = {}) {
         dockerServices: true,
         autoAttachDockerLogs: false,
       },
+      opencode: {
+        defaultModel: null,
+      },
       taskMaster: {
         autoClaimPaused: false,
         enabled: "inherit",

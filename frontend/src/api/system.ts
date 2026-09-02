@@ -39,4 +39,6 @@ export const systemApi = {
     request<void>("/api/auth/login", { method: "POST", body: JSON.stringify({ token }) }),
 
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+
+  listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
 };
