@@ -134,6 +134,9 @@ export interface LaunchPlanSession {
   /** See HookAdapterContext.projectReviewerAgent's own doc comment
    * (hook-adapters/types.ts) — same pass-through as projectSkill above. */
   readonly projectReviewerAgent: string | undefined;
+  /** Issue #957 — see HookAdapterContext.model's own doc comment
+   * (hook-adapters/types.ts) — same pass-through as projectReviewerAgent. */
+  readonly model: string | undefined;
 }
 
 export interface LaunchPlan {
@@ -324,6 +327,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     seedPrompt: session.seedPrompt,
     projectSkill: session.projectSkill,
     projectReviewerAgent: session.projectReviewerAgent,
+    model: session.model,
   });
   Object.assign(sessionEnv, envAdditions);
 
