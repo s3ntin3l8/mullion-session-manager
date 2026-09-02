@@ -85,6 +85,7 @@ const createSessionSchema = {
         maxProperties: MAX_SESSION_ENV_ENTRIES,
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
+      model: { type: "string" },
     },
   },
 };

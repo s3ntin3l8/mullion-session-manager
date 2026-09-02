@@ -204,6 +204,10 @@ export interface SessionTarget {
   // comments (pty-manager.ts).
   projectSkill?: string;
   projectReviewerAgent?: string;
+  // Issue #957 — for spawn() only, same posture as projectReviewerAgent above.
+  // See CreateSessionOptions.model's own doc comment (pty-manager.ts) for the
+  // full multi-host reasoning.
+  model?: string;
   // Issue #884 — for spawn() only, same "meaningless for openAttach"
   // posture as seedPrompt/briefingOverride above. See
   // CreateSessionOptions.injectAgentGuide/injectProjectBriefing's own doc

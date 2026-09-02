@@ -123,6 +123,13 @@ export interface CreateSessionBody {
   // envAdditions), so none of those can be overridden by it — enforced by
   // reserved-key rejection at the dock-config write path, not here.
   env?: Record<string, string>;
+  // Issue #957 — the opencode model to set on the spawned session.
+  // Honored only when `command` resolves to an opencode adapter; ignored
+  // for every other command. For Task Master, set by task-claim.ts /
+  // task-reconciler.ts after running resolveOpenCodeModel; for the public
+  // UI, callers typically leave this unset so opencode's own fallback
+  // applies.
+  model?: string;
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -271,6 +278,11 @@ export type CreateSessionParams = CreateSessionBody & {
   // the producer below resolves them from project_tooling itself.
   projectSkill?: string;
   projectReviewerAgent?: string;
+  // Issue #957 — see CreateSessionBody.model above. NOT part of
+  // CreateSessionBody: only Task Master / internal callers ever set
+  // this (it must be resolved on the primary, see briefingOverride's
+  // own comment for the same multi-host reasoning).
+  model?: string;
 };
 
 export type CreateSessionResult =
@@ -337,6 +349,7 @@ export async function createSessionRecord(
     briefingOverride,
     projectSkill,
     projectReviewerAgent,
+    model,
   } = params;
   let cwd = params.cwd;
 
@@ -477,6 +490,7 @@ export async function createSessionRecord(
         ...(skipPermissions !== undefined ? { skipPermissions } : {}),
         ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
         ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
+        ...(model !== undefined ? { model } : {}),
       })
       .returning()
       .all();
@@ -566,6 +580,7 @@ export async function createSessionRecord(
       briefingOverride: resolvedBriefingOverride,
       projectSkill: resolvedProjectSkill,
       projectReviewerAgent: resolvedProjectReviewerAgent,
+      model,
       injectAgentGuide: resolvedInjectAgentGuide,
       injectProjectBriefing: resolvedInjectProjectBriefing,
       env,
