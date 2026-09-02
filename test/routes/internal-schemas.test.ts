@@ -77,7 +77,7 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
             maxProperties: 16,
             additionalProperties: { type: "string", maxLength: 256 },
           },
-          briefingOverride: { type: "string", maxLength: 512 },
+          briefingOverride: { type: "string", maxLength: 8192 },
           // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's
           // own doc comments (pty-manager.ts).
           projectSkill: { type: "string", maxLength: 8192 },

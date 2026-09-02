@@ -195,6 +195,27 @@ describe("computeScaffold", () => {
       const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
       expect(gemini.contents).not.toContain("stale pointer text");
     });
+
+    // Regression guard — without stripping the OLD mirror region first, a
+    // re-scaffold over a pre-#942 GEMINI.md would append the new pointer
+    // BELOW the stale full-mirror content instead of replacing it, and the
+    // freshly-scaffolded check-briefing-sync.mjs would then immediately
+    // fail against the very GEMINI.md this scaffold just wrote (that
+    // script fails the moment GEMINI.md carries ANY mullion:briefing
+    // region at all).
+    it("strips a pre-#942 byte-identical mirror region before writing the new pointer", () => {
+      const preExistingMirror = `# GEMINI.md\n\n${MARKER_START}\nold mirrored briefing content\n${MARKER_END}\n`;
+      const entries = computeScaffold(
+        { "GEMINI.md": preExistingMirror },
+        { slug: "demo", mirrors: ["GEMINI.md"] },
+      );
+      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
+      expect(gemini.contents).not.toContain("old mirrored briefing content");
+      expect(extractMarkedRegion(gemini.contents, MARKER_START, MARKER_END)).toBeNull();
+      expect(
+        extractMarkedRegion(gemini.contents, POINTER_MARKER_START, POINTER_MARKER_END),
+      ).toContain("AGENTS.md");
+    });
   });
 
   // Issue #942 — new, optional, opt-in-only scaffold target.

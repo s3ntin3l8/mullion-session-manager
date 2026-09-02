@@ -34,8 +34,11 @@ export const MAX_PROJECT_TOOLING_FIELD_BYTES = 8192;
 // applied when writing a session's per-session copy) exactly, so rejecting
 // an over-cap save here means that clamp should never actually have to
 // truncate anything in practice — reject at save time, don't silently
-// truncate later at spawn time. Kept in sync by hand with
-// internal-schemas.ts's spawnSessionSchema `briefingOverride` maxLength.
+// truncate later at spawn time. This is the cap for every NEW save only —
+// internal-schemas.ts's spawnSessionSchema `briefingOverride` maxLength is
+// deliberately NOT this same number; see that field's own comment for why
+// it stays at the old, more permissive 8192 to tolerate rows saved before
+// this cap shrank, with no data migration.
 export const MAX_PROJECT_BRIEFING_FIELD_BYTES = 512;
 
 export class ProjectBriefingTooLargeError extends Error {

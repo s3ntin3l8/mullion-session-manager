@@ -196,6 +196,25 @@ function contributingPointerBody(): string {
   return "See `AGENTS.md`'s Workflow Conventions section for our process rules.";
 }
 
+/** Removes a pre-#942 byte-identical mirror region (the `MARKER_START`/
+ * `MARKER_END` pair a scaffold used to write into `GEMINI.md`) before the
+ * new pointer region is upserted into what's left. Without this, a
+ * re-scaffold over a project that already adopted the old mirror option
+ * would APPEND the new pointer region below the stale full-mirror content
+ * instead of replacing it — and the freshly (re-)scaffolded
+ * `check-briefing-sync.mjs` would then immediately fail against the very
+ * `GEMINI.md` this scaffold just wrote, since that script fails the moment
+ * `GEMINI.md` carries ANY `mullion:briefing:start/end` region at all. A
+ * no-op when the old markers aren't present — the ordinary, post-#942
+ * case. */
+function stripLegacyBriefingMirror(text: string): string {
+  const startIdx = text.indexOf(MARKER_START);
+  if (startIdx === -1) return text;
+  const endIdx = text.indexOf(MARKER_END, startIdx + MARKER_START.length);
+  if (endIdx === -1) return text;
+  return text.slice(0, startIdx) + text.slice(endIdx + MARKER_END.length);
+}
+
 // Functionally equivalent to the script this repo (Mullion) ships at
 // scripts/check-briefing-sync.mjs — NOT byte-identical: that version's own
 // header comments cite Mullion's own issue history (#716, #942), which has
@@ -314,11 +333,12 @@ export function computeScaffold(
   // outside the marked region" posture as the CONTRIBUTING.md pointer
   // below) rather than overwriting the whole file.
   if (options.mirrors?.includes("GEMINI.md")) {
+    const existingGemini = stripLegacyBriefingMirror(existingFiles["GEMINI.md"] ?? "");
     entries.push({
       path: "GEMINI.md",
       kind: "file",
       contents: upsertMarkedRegion(
-        existingFiles["GEMINI.md"] ?? "",
+        existingGemini,
         POINTER_MARKER_START,
         POINTER_MARKER_END,
         agentsMdPointerBody(),
