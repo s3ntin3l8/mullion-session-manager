@@ -496,10 +496,11 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         // network call.
         if (reviewCommand === null) continue;
 
-        const reviewModel = resolveOpenCodeModel(app, {
-          taskModel: task.model ?? null,
-          issueBody: task.body,
-        }) ?? undefined;
+        const reviewModel =
+          resolveOpenCodeModel(app, {
+            taskModel: task.model ?? null,
+            issueBody: task.body,
+          }) ?? undefined;
 
         const ci = await resolveReviewCi(
           app,

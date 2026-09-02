@@ -724,7 +724,7 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         fallback: DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent,
       }),
     },
-  taskMaster: {
+    taskMaster: {
       ...settings.taskMaster,
       enabled:
         settings.taskMaster.enabled === "inherit" ||

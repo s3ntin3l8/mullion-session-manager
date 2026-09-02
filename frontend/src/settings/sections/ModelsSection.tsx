@@ -8,7 +8,10 @@ export function ModelsSection() {
   const [models, setModels] = useState<string[]>([]);
 
   useEffect(() => {
-    api.listOpenCodeModels().then(setModels).catch(() => {});
+    api
+      .listOpenCodeModels()
+      .then(setModels)
+      .catch(() => {});
   }, []);
 
   const disabled = settings.launchers?.defaultAgent !== "opencode";
@@ -16,10 +19,7 @@ export function ModelsSection() {
 
   return (
     <>
-      <Row
-        label="Default model"
-        desc="Select the default opencode model for new sessions."
-      >
+      <Row label="Default model" desc="Select the default opencode model for new sessions.">
         <select
           className="settings-select"
           value={defaultValue}

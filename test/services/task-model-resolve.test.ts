@@ -92,11 +92,11 @@ describe("resolveOpenCodeModel", () => {
 
   it("rejects a model string with embedded whitespace or extra slashes", () => {
     const app = mockApp();
-    expect(
-      resolveOpenCodeModel(app, { taskModel: "openrouter/foo bar", issueBody: null }),
-    ).toBe(OPENCODE_SETTINGS.opencode.defaultModel);
-    expect(
-      resolveOpenCodeModel(app, { taskModel: "openrouter/foo/bar", issueBody: null }),
-    ).toBe(OPENCODE_SETTINGS.opencode.defaultModel);
+    expect(resolveOpenCodeModel(app, { taskModel: "openrouter/foo bar", issueBody: null })).toBe(
+      OPENCODE_SETTINGS.opencode.defaultModel,
+    );
+    expect(resolveOpenCodeModel(app, { taskModel: "openrouter/foo/bar", issueBody: null })).toBe(
+      OPENCODE_SETTINGS.opencode.defaultModel,
+    );
   });
 });

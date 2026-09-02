@@ -21,7 +21,11 @@ describe("opencode adapter configContent.model", () => {
   });
 
   it("sets configContent.model when ctx.model is set", () => {
-    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, cwd: "/tmp", model: "opencode-go/foo" });
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      cwd: "/tmp",
+      model: "opencode-go/foo",
+    });
     const cc = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT!);
     expect(cc.model).toBe("opencode-go/foo");
   });

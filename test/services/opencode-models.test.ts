@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { listOpenCodeModels, resetOpenCodeModelsCache } from "../../src/services/opencode-models.js";
+import {
+  listOpenCodeModels,
+  resetOpenCodeModelsCache,
+} from "../../src/services/opencode-models.js";
 
 const REAL_OUTPUT = `opencode-go/deepseek-v4-pro
 opencode-go/minimax-m3

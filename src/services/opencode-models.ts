@@ -12,7 +12,9 @@ let cache: { fetchedAt: number; models: string[] } | null = null;
 
 export type ExecFn = (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
-export async function listOpenCodeModels(opts: { exec?: ExecFn; now?: () => number } = {}): Promise<string[]> {
+export async function listOpenCodeModels(
+  opts: { exec?: ExecFn; now?: () => number } = {},
+): Promise<string[]> {
   const exec = opts.exec ?? ((file, args) => execFileP(file, args));
   const now = opts.now ?? Date.now;
 

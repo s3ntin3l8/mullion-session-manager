@@ -363,10 +363,11 @@ export async function dispatchClaimedTask(
           )
         : undefined,
     });
-    const model = resolveOpenCodeModel(app, {
-      taskModel: task.model ?? null,
-      issueBody: task.body,
-    }) ?? undefined;
+    const model =
+      resolveOpenCodeModel(app, {
+        taskModel: task.model ?? null,
+        issueBody: task.body,
+      }) ?? undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
