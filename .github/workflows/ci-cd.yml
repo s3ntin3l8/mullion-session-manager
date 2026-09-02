@@ -119,8 +119,27 @@ jobs:
       # bumped. Same posture as the Playwright install above: a real
       # binary the test invokes via `opencode debug config`, not a
       # mock.
-      - name: Install opencode
-        run: npm install -g opencode-ai@1.18.26
+      #
+      # Hermes review, PR #966 — uses a dedicated workspace
+      # (test/e2e/opencode/) with its own package-lock.json rather
+      # than `npm install -g opencode-ai@1.18.26` so the integrity
+      # hash is locked in `package-lock.json` and enforced by `npm ci`
+      # (a registry republish of the 1.18.26 tag with different
+      # content would fail EINTEGRITY here, not silently install a
+      # tampered binary). When bumping the version, regenerate the
+      # lockfile with `cd test/e2e/opencode && rm -rf node_modules
+      # package-lock.json && npm install --package-lock-only` against
+      # the new version and commit.
+      - name: Install opencode (pinned, integrity-checked)
+        working-directory: test/e2e/opencode
+        run: npm ci
+      # Make the locally-installed `opencode` binary the one PATH
+      # resolves, so the test/e2e test's bare `execFileSync("opencode")`
+      # call hits the integrity-checked binary rather than whatever
+      # happens to be on the runner's PATH already.
+      - name: Prepend local opencode to PATH
+        working-directory: test/e2e/opencode
+        run: echo "$(pwd)/node_modules/.bin:$PATH" >> "$GITHUB_PATH"
       - name: Run e2e suite
         run: npm run test:e2e
 
