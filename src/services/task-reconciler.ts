@@ -24,7 +24,7 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
-import { resolveOpenCodeModel } from "./task-model-resolve.js";
+import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-resolve.js";
 import {
   syncTaskTransition,
   computeTaskDiffStat,
@@ -118,6 +118,7 @@ async function spawnReviewAgentNow(
   reviewCommand: string,
   ci: ReviewCiInfo | undefined,
   model: string | undefined,
+  smallModel: string | undefined,
 ): Promise<void> {
   if (!task.worktreePath) return;
   // Hoisted out of the `try` (Hermes review, PR #742) — a throw AFTER
@@ -178,6 +179,7 @@ async function spawnReviewAgentNow(
       name: `Task #${task.id} · review`,
       nameLocked: true,
       model,
+      smallModel,
     });
     if (!result.ok) {
       app.log.warn(
@@ -502,6 +504,11 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
             issueBody: task.body,
             role: "reviewer",
           }) ?? undefined;
+        const reviewSmallModel =
+          resolveOpenCodeSmallModel(app, {
+            taskSmallModel: task.smallModel ?? null,
+            issueBody: task.body,
+          }) ?? undefined;
 
         const ci = await resolveReviewCi(
           app,
@@ -548,6 +555,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           reviewCommand,
           ci,
           reviewModel,
+          reviewSmallModel,
         );
       }
     }),

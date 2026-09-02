@@ -270,6 +270,9 @@ export const sessions = sqliteTable(
     // in the session header. Source priority: tasks.model -> issue `Model:`
     // line -> settings.opencode.defaultModel -> null (opencode fallback).
     model: text("model"),
+    // Issue #958 — same shape as `model` above, for opencode's `small_model`
+    // config key (used for lightweight tasks like title generation).
+    smallModel: text("small_model"),
     // Optional override of the parent project's cwd — lets a launcher/action
     // (src/services/project-config.ts) or dock control target a subdirectory
     // (e.g. a monorepo package) without needing its own project row. Falls
@@ -620,6 +623,9 @@ export const tasks = sqliteTable(
     // `agentCommand` above. `null` means opencode's own fallback (priority
     // 3/4 — last-used or first model) ran.
     model: text("model"),
+    // Issue #958 — same shape as `model` above, for opencode's `small_model`
+    // config key. Recorded at claim time alongside `model`.
+    smallModel: text("small_model"),
     // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
     // (durable/shareable) list. Set once Task -> PR promotion succeeds.
     prUrl: text("pr_url"),

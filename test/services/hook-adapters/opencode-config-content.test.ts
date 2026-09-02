@@ -29,4 +29,20 @@ describe("opencode adapter configContent.model", () => {
     const cc = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT!);
     expect(cc.model).toBe("opencode-go/foo");
   });
+
+  it("sets configContent.small_model when ctx.smallModel is set", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      cwd: "/tmp",
+      smallModel: "opencode-go/small",
+    });
+    const cc = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT!);
+    expect(cc.small_model).toBe("opencode-go/small");
+  });
+
+  it("omits the small_model key when ctx.smallModel is unset", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, cwd: "/tmp" });
+    const cc = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT!);
+    expect(cc.small_model).toBeUndefined();
+  });
 });

@@ -130,6 +130,9 @@ export interface CreateSessionBody {
   // UI, callers typically leave this unset so opencode's own fallback
   // applies.
   model?: string;
+  // Issue #958 — opencode's `small_model` config key (lightweight tasks
+  // like title generation). Same threading posture as `model` above.
+  smallModel?: string;
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -283,6 +286,9 @@ export type CreateSessionParams = CreateSessionBody & {
   // this (it must be resolved on the primary, see briefingOverride's
   // own comment for the same multi-host reasoning).
   model?: string;
+  // Issue #958 — same posture as `model` above, for opencode's
+  // `small_model` config key.
+  smallModel?: string;
 };
 
 export type CreateSessionResult =
@@ -350,6 +356,7 @@ export async function createSessionRecord(
     projectSkill,
     projectReviewerAgent,
     model,
+    smallModel,
   } = params;
   let cwd = params.cwd;
 
@@ -491,6 +498,7 @@ export async function createSessionRecord(
         ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
         ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(smallModel !== undefined ? { smallModel } : {}),
       })
       .returning()
       .all();
@@ -581,6 +589,7 @@ export async function createSessionRecord(
       projectSkill: resolvedProjectSkill,
       projectReviewerAgent: resolvedProjectReviewerAgent,
       model,
+      smallModel,
       injectAgentGuide: resolvedInjectAgentGuide,
       injectProjectBriefing: resolvedInjectProjectBriefing,
       env,

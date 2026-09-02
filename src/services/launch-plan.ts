@@ -137,6 +137,9 @@ export interface LaunchPlanSession {
   /** Issue #957 — see HookAdapterContext.model's own doc comment
    * (hook-adapters/types.ts) — same pass-through as projectReviewerAgent. */
   readonly model: string | undefined;
+  /** Issue #958 — same pass-through posture as `model` above, for
+   * opencode's `small_model` config key. */
+  readonly smallModel: string | undefined;
 }
 
 export interface LaunchPlan {
@@ -328,6 +331,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     projectSkill: session.projectSkill,
     projectReviewerAgent: session.projectReviewerAgent,
     model: session.model,
+    smallModel: session.smallModel,
   });
   Object.assign(sessionEnv, envAdditions);
 

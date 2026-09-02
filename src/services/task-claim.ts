@@ -24,7 +24,7 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
-import { resolveOpenCodeModel } from "./task-model-resolve.js";
+import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 
@@ -369,6 +369,11 @@ export async function dispatchClaimedTask(
         issueBody: task.body,
         role: "implementer",
       }) ?? undefined;
+    const smallModel =
+      resolveOpenCodeSmallModel(app, {
+        taskSmallModel: task.smallModel ?? null,
+        issueBody: task.body,
+      }) ?? undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
@@ -387,6 +392,7 @@ export async function dispatchClaimedTask(
       name: `Task #${task.id} · worker`,
       nameLocked: true,
       model,
+      smallModel,
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -417,6 +423,7 @@ export async function dispatchClaimedTask(
         branchName,
         agentCommand: command,
         model,
+        smallModel,
         baseSha,
         seedDelivered,
       })

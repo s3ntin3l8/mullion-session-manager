@@ -366,6 +366,10 @@ export interface Session {
   // "anthropic/claude-sonnet-4-20250514"), resolved from the task issue body's
   // `Model:` directive, the global default, or null when unset/irrelevant.
   model?: string | null;
+  // Issue #958 — same shape as `model` above, for opencode's `small_model`
+  // config key. Resolved from the task issue body's `SmallModel:` directive,
+  // the global default, or null.
+  smallModel?: string | null;
   cwd: string | null;
   // Issue #822 — extra env vars this session was launched with (a dock
   // control's own `env`, or a direct API caller's), parsed back into an
@@ -1325,6 +1329,9 @@ export interface AppSettings {
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
+    // Issue #958 — opencode's `small_model` config key, used for
+    // lightweight tasks (title generation, summarization).
+    defaultSmallModel: string | null;
   };
   taskMaster: {
     autoClaimPaused: boolean;

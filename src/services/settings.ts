@@ -331,6 +331,11 @@ export interface AppSettings {
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
+    // Issue #958 — opencode's `small_model` config key, used for
+    // lightweight tasks (title generation, summarization) that don't
+    // need the full model. Single setting, not per-role — it's a
+    // property of the model itself, not the task.
+    defaultSmallModel: string | null;
   };
   taskMaster: {
     autoClaimPaused: boolean;
@@ -424,6 +429,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   opencode: {
     implementerModel: null,
     reviewerModel: null,
+    defaultSmallModel: null,
   },
   notifications: {
     channels: {

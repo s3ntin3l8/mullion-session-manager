@@ -504,6 +504,7 @@ function renderPane(extra: { active?: boolean } = {}) {
       opencode: {
         implementerModel: null,
         reviewerModel: null,
+        defaultSmallModel: null,
       },
       taskMaster: {
         autoClaimPaused: false,

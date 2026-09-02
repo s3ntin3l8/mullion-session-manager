@@ -180,6 +180,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   opencode: {
     implementerModel: null,
     reviewerModel: null,
+    defaultSmallModel: null,
   },
   taskMaster: {
     autoClaimPaused: false,

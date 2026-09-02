@@ -208,6 +208,9 @@ export interface SessionTarget {
   // See CreateSessionOptions.model's own doc comment (pty-manager.ts) for the
   // full multi-host reasoning.
   model?: string;
+  // Issue #958 — same posture as `model` above, for opencode's
+  // `small_model` config key.
+  smallModel?: string;
   // Issue #884 — for spawn() only, same "meaningless for openAttach"
   // posture as seedPrompt/briefingOverride above. See
   // CreateSessionOptions.injectAgentGuide/injectProjectBriefing's own doc

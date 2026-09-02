@@ -17,8 +17,12 @@ export function ModelsSection() {
   const disabled = settings.launchers?.defaultAgent !== "opencode";
   const implementerValue = settings.opencode?.implementerModel ?? "";
   const reviewerValue = settings.opencode?.reviewerModel ?? "";
+  const smallModelValue = settings.opencode?.defaultSmallModel ?? "";
 
-  const handleChange = (key: "implementerModel" | "reviewerModel", value: string) => {
+  const handleChange = (
+    key: "implementerModel" | "reviewerModel" | "defaultSmallModel",
+    value: string,
+  ) => {
     updateSettings({
       opencode: { [key]: value || null },
     });
@@ -56,6 +60,21 @@ export function ModelsSection() {
           ))}
         </select>
       </Row>
+      <Row label="Small model" desc="Used for lightweight tasks like title generation.">
+        <select
+          className="settings-select"
+          value={smallModelValue}
+          disabled={disabled}
+          onChange={(e) => handleChange("defaultSmallModel", e.target.value)}
+        >
+          <option value="">— None (CLI default) —</option>
+          {models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </Row>
       <p
         style={{
           fontSize: 12,
@@ -66,7 +85,7 @@ export function ModelsSection() {
       >
         {disabled
           ? "Only available when the default agent is opencode."
-          : "Each role can be overridden per task via Model: / Reviewer-Model: lines in the task issue body."}
+          : "Each can be overridden per task via Model: / Reviewer-Model: / SmallModel: lines in the task issue body."}
       </p>
     </>
   );

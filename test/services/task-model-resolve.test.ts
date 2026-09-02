@@ -7,7 +7,10 @@ vi.mock("../../src/services/settings.js", () => ({
   getStoredSettings: mockGetStoredSettings,
 }));
 
-import { resolveOpenCodeModel } from "../../src/services/task-model-resolve.js";
+import {
+  resolveOpenCodeModel,
+  resolveOpenCodeSmallModel,
+} from "../../src/services/task-model-resolve.js";
 
 function mockApp(): FastifyInstance {
   return {
@@ -17,7 +20,11 @@ function mockApp(): FastifyInstance {
 }
 
 const OPENCODE_SETTINGS = {
-  opencode: { implementerModel: "openrouter/minimax-m3", reviewerModel: "anthropic/claude-haiku" },
+  opencode: {
+    implementerModel: "openrouter/minimax-m3",
+    reviewerModel: "anthropic/claude-haiku",
+    defaultSmallModel: "opencode-go/cheap",
+  },
 };
 
 describe("resolveOpenCodeModel", () => {
@@ -166,5 +173,57 @@ describe("resolveOpenCodeModel", () => {
       });
       expect(result).toBe("anthropic/claude-opus");
     });
+  });
+});
+
+describe("resolveOpenCodeSmallModel", () => {
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue(OPENCODE_SETTINGS);
+  });
+
+  it("returns the task's small_model when set and well-formed", () => {
+    const result = resolveOpenCodeSmallModel(mockApp(), {
+      taskSmallModel: "opencode-go/cheap",
+      issueBody: "SmallModel: opencode-go/ignored",
+    });
+    expect(result).toBe("opencode-go/cheap");
+  });
+
+  it("falls through to the issue-body SmallModel: line when the task column is unset", () => {
+    const result = resolveOpenCodeSmallModel(mockApp(), {
+      taskSmallModel: null,
+      issueBody: "SmallModel: opencode-go/dirt-cheap",
+    });
+    expect(result).toBe("opencode-go/dirt-cheap");
+  });
+
+  it("falls through to the install-wide default when neither task nor issue sets a value", () => {
+    const result = resolveOpenCodeSmallModel(mockApp(), {
+      taskSmallModel: null,
+      issueBody: "No directive here.",
+    });
+    expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultSmallModel);
+  });
+
+  it("returns null when nothing configures a small_model", () => {
+    mockGetStoredSettings.mockReturnValue({
+      opencode: { ...OPENCODE_SETTINGS.opencode, defaultSmallModel: null },
+    });
+    const result = resolveOpenCodeSmallModel(mockApp(), {
+      taskSmallModel: null,
+      issueBody: null,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("logs a warning and falls through when the task column is malformed", () => {
+    const app = mockApp();
+    const result = resolveOpenCodeSmallModel(app, {
+      taskSmallModel: "no-slash",
+      issueBody: null,
+    });
+    expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultSmallModel);
+    expect(app.log.warn).toHaveBeenCalledOnce();
   });
 });

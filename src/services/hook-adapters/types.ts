@@ -133,6 +133,10 @@ export interface HookAdapterContext {
    * adapter is the only consumer; every other adapter ignores this
    * field, same posture as `seedPrompt`/`projectSkill`/etc. */
   model?: string;
+  /** Issue #958 — same threading posture as `model` above, but for
+   * opencode's `small_model` config key (used for lightweight tasks).
+   * Lands in OPENCODE_CONFIG_CONTENT.small_model. */
+  smallModel?: string;
 }
 
 export interface HookLaunchPlan {

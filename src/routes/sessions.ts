@@ -25,7 +25,7 @@ import {
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
-import { resolveOpenCodeModel } from "../services/task-model-resolve.js";
+import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "../services/task-model-resolve.js";
 import { adapterHasResumeSessionArgs } from "../services/hook-adapters/index.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
@@ -87,6 +87,7 @@ const createSessionSchema = {
         additionalProperties: { type: "string", maxLength: MAX_SESSION_ENV_VALUE_LENGTH },
       },
       model: { type: "string" },
+      smallModel: { type: "string" },
     },
   },
 };
@@ -391,14 +392,20 @@ export async function sessionsRoute(app: FastifyInstance) {
       // install-wide default so manual spawns also pick it up (same as
       // Task Master spawns do via task-claim/task-reconciler).
       const body =
-        request.body.model === undefined
+        request.body.model === undefined || request.body.smallModel === undefined
           ? {
               ...request.body,
               model:
+                request.body.model ??
                 resolveOpenCodeModel(app, {
                   issueBody: null,
                   role: "implementer",
-                }) ?? undefined,
+                }) ??
+                undefined,
+              smallModel:
+                request.body.smallModel ??
+                resolveOpenCodeSmallModel(app, { issueBody: null }) ??
+                undefined,
             }
           : request.body;
       const result = await createSessionRecord(app, body);
