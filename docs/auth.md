@@ -323,6 +323,24 @@ throttles itself.
   the rate-limit registration for the full reasoning and
   `test/plugins/security.test.ts` for the regression test pinning today's
   behavior.
+
+  The same global-bucketing extends to the **app-wide** `RATE_LIMIT_MAX`
+  (default **100/minute**, see `src/plugins/env.ts` and
+  `src/plugins/security.ts:86-119`) which gates every HTTP request that
+  doesn't have its own per-route limit: behind Traefik, every real client
+  on the deployment shares that one bucket. A reload fan-out (App.tsx's
+  mount effects, the live 4s session poll) plus concurrent activity from
+  every other browser and PWA tab in the deployment is what the ceiling
+  is actually protecting — not "this one user did too much." The
+  frontend's own 429-aware backoff (issue #959, see
+  `frontend/src/api/client.ts`'s `RateLimitedError` + per-endpoint
+  breaker and `frontend/src/store/slices/sessions.ts`'s
+  `sessionRefreshBlockedUntil`) is the part that turns a 429 from
+  "blank white page" into "Try again in N seconds" — without it, a
+  reload that lands on a still-blocked bucket can cascade into a
+  4s-cadence 429 storm that itself keeps the bucket blocked. Bumping
+  `RATE_LIMIT_MAX` alone is **not** the fix; the client-side backoff is.
+
 - **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
   `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/
   `Partitioned` when the request arrived over https, but falls back to

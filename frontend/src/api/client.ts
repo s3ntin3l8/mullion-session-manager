@@ -42,6 +42,100 @@ export class AuthExpiredError extends Error {
   }
 }
 
+// Thrown instead of a generic ApiError when the server returns HTTP 429
+// (issue #959). Distinct from ApiError deliberately: a 429 is not a
+// transport failure and not an auth-expiry — it's a "back off and retry"
+// signal. `retryAfterMs` is parsed from the response's `Retry-After` header
+// per RFC 7231 (seconds OR HTTP-date), with a 60s default when absent —
+// the same default as @fastify/rate-limit's typical 1-minute window, so
+// the frontend never retries sooner than the bucket can possibly refill.
+// `request()`'s per-endpoint breaker uses this field to short-circuit
+// later calls to the same key for `retryAfterMs` milliseconds; the live
+// poll (store/slices/sessions.ts) uses it to skip its own ticks without
+// flipping `backendReachable` (a 429 is not a "backend down" signal).
+// `statusCode` is carried alongside so callers that want to branch on the
+// raw HTTP status still can.
+export class RateLimitedError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly retryAfterMs: number,
+  ) {
+    super(`Rate limited (HTTP ${statusCode}); retry in ${retryAfterMs}ms`);
+    this.name = "RateLimitedError";
+  }
+}
+
+// Per-endpoint 429 breaker. When the server says "this exact key is rate
+// limited for N more ms," we honor N by short-circuiting any later call
+// to the same `${method}:${path}` instead of going back to the network
+// and getting another 429 — the cycle that produces the
+// reload-bombs-the-empty-bucket / blank-page user-visible symptom (issue
+// #959). Keyed on method+path (not just path) so a write and a read on
+// the same URL with different rate-limit buckets stay independent — and
+// so a future per-route bucket split on the server doesn't accidentally
+// cross-cancel. Cleared on any successful response, the same way the
+// auth-expiry reload guard is cleared (see the long comment on
+// clearAuthExpiryReloadGuard below for the symmetry). Lazy expiry: an
+// entry is removed the first time it's read after `until`, rather than
+// on a timer — adds zero timers and matches the "no background work"
+// style of the rest of this module.
+const RATE_LIMIT_BREAKER = new Map<string, number>();
+
+function breakerKey(method: string, path: string): string {
+  return `${method.toUpperCase()} ${path}`;
+}
+
+function getBreakerEntry(key: string): number {
+  const until = RATE_LIMIT_BREAKER.get(key);
+  if (until === undefined) return 0;
+  if (Date.now() >= until) {
+    RATE_LIMIT_BREAKER.delete(key);
+    return 0;
+  }
+  return until;
+}
+
+function setBreakerEntry(key: string, until: number): void {
+  RATE_LIMIT_BREAKER.set(key, until);
+}
+
+function clearBreakerEntry(key: string): void {
+  RATE_LIMIT_BREAKER.delete(key);
+}
+
+// Visible for tests: the breaker is module-level state, so the tests need
+// a way to reset it between cases without `vi.resetModules()` (which
+// would also wipe every other module-level in the test file).
+export function __resetRateLimitBreakerForTests(): void {
+  RATE_LIMIT_BREAKER.clear();
+}
+
+// Parses an RFC 7231 `Retry-After` value: either a non-negative integer
+// of seconds ("5") or an HTTP-date. Returns the millisecond delay. Falls
+// back to `defaultMs` for any unparseable value — a missing/malformed
+// header shouldn't ever be read as "retry immediately" (the cycle we're
+// trying to break), and the default is the typical rate-limit window.
+function parseRetryAfterMs(value: string | null, defaultMs: number): number {
+  if (value === null || value === "") return defaultMs;
+  // Seconds form: a non-negative integer. A bare number is the common
+  // shape @fastify/rate-limit and most reverse proxies emit.
+  if (/^\d+(\.\d+)?$/.test(value)) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return defaultMs;
+    return Math.round(seconds * 1000);
+  }
+  // HTTP-date form: anything that Date can parse. The spec allows several
+  // obsolete formats (RFC 1123, RFC 850, asctime) but in practice every
+  // implementation we care about emits the IMF-fixdate / RFC 1123 form.
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return defaultMs;
+  const delta = parsed - Date.now();
+  if (delta <= 0) return 0;
+  return delta;
+}
+
+const DEFAULT_RETRY_AFTER_MS = 60_000;
+
 // Reload-loop guard: sessionStorage (not a module-level variable — a
 // full-page reload resets JS state but not sessionStorage) records the last
 // auto-reload attempt so a second detection within the window falls through
@@ -118,6 +212,19 @@ function handleAuthExpiry(): never {
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Per-endpoint 429 breaker (issue #959). Checked before the fetch, so a
+  // call to a key that was just 429'd never touches the network — the
+  // cycle that produced the reload-blank-page symptom was each 4s tick
+  // hitting `listSessions` while the previous one was still in the
+  // 60-second bucket window. `breakerKey` is method+path so a write and a
+  // read on the same URL stay independent.
+  const method = init?.method ?? "GET";
+  const key = breakerKey(method, path);
+  const blockedUntil = getBreakerEntry(key);
+  if (blockedUntil !== 0) {
+    throw new RateLimitedError(429, blockedUntil - Date.now());
+  }
+
   const res = await fetch(path, {
     ...init,
     // Same-origin only (never sent cross-origin) — required for the
@@ -151,12 +258,24 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return handleAuthExpiry();
   }
 
+  if (res.status === 429) {
+    // Server says "this key is rate limited" — record the window and
+    // throw. The window is per-key (matches @fastify/rate-limit's per-
+    // route bucket model, and any per-IP keyGenerator the server may add
+    // later) and is cleared on the next successful response, mirroring
+    // clearAuthExpiryReloadGuard below.
+    const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"), DEFAULT_RETRY_AFTER_MS);
+    setBreakerEntry(key, Date.now() + retryAfterMs);
+    throw new RateLimitedError(429, retryAfterMs);
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new ApiError(body.message || `${path} failed with ${res.status}`, res.status, body.code);
   }
   if (res.status === 204) {
     clearAuthExpiryReloadGuard();
+    clearBreakerEntry(key);
     return undefined as T;
   }
 
@@ -178,5 +297,6 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   clearAuthExpiryReloadGuard();
+  clearBreakerEntry(key);
   return res.json() as Promise<T>;
 }

@@ -7,7 +7,13 @@
 // flipping the shared default.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { jsonResponse } from "../test/jsonResponse.js";
-import { request, ApiError, AuthExpiredError } from "./client.js";
+import {
+  request,
+  ApiError,
+  AuthExpiredError,
+  RateLimitedError,
+  __resetRateLimitBreakerForTests,
+} from "./client.js";
 
 // Regression coverage for the production incident: behind a gateway
 // forward-auth (Traefik + Authentik or similar), an expired session
@@ -200,5 +206,134 @@ describe("request() — genuine outage path is untouched", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { id: 1 })));
 
     await expect(request("/api/sessions")).resolves.toEqual({ id: 1 });
+  });
+});
+
+describe("request() — 429 rate-limit handling", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    __resetRateLimitBreakerForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function rateLimitedResponse(retryAfterSeconds: number | null): Response {
+    const headers = new Headers({ "content-type": "application/json" });
+    if (retryAfterSeconds !== null) headers.set("retry-after", String(retryAfterSeconds));
+    return new Response(JSON.stringify({ message: "Too Many Requests" }), {
+      status: 429,
+      headers,
+    });
+  }
+
+  it("throws RateLimitedError with retryAfterMs parsed from Retry-After (seconds)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rateLimitedResponse(5)));
+
+    const err = await request("/api/sessions").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RateLimitedError);
+    expect((err as RateLimitedError).retryAfterMs).toBe(5000);
+    expect((err as RateLimitedError).statusCode).toBe(429);
+  });
+
+  it("falls back to a 60s default when Retry-After is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rateLimitedResponse(null)));
+
+    const err = await request("/api/sessions").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RateLimitedError);
+    expect((err as RateLimitedError).retryAfterMs).toBe(60_000);
+  });
+
+  it("short-circuits the breaker: a second call to the same key within the window does not hit fetch", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(rateLimitedResponse(5));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(RateLimitedError);
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(RateLimitedError);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("different keys do not share the breaker", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(rateLimitedResponse(5));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(RateLimitedError);
+    await expect(request("/api/projects")).rejects.toBeInstanceOf(RateLimitedError);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("the breaker expires after the window elapses — fetch is called again", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitedResponse(5))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(5_001);
+
+    await expect(request("/api/sessions")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it("a successful response clears the breaker for that key", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitedResponse(60))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Expire the breaker window so the next call is allowed to go through.
+    vi.advanceTimersByTime(60_001);
+
+    // First call after expiry reaches the network. The successful
+    // response clears the breaker entry, so the breaker is now empty
+    // (lazy-expiry) and any subsequent call goes through too.
+    await expect(request("/api/sessions")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it("uses Retry-After: HTTP-date as a millisecond delay", async () => {
+    vi.useFakeTimers();
+    // Pick a date 7 seconds into the future relative to fake "now".
+    const future = new Date(Date.now() + 7_000);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ message: "x" }), {
+        status: 429,
+        headers: {
+          "content-type": "application/json",
+          "retry-after": future.toUTCString(),
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/sessions")).rejects.toBeInstanceOf(RateLimitedError);
+    const firstErr = (await request("/api/sessions").catch((e: unknown) => e)) as RateLimitedError;
+    // Second call within the HTTP-date-derived window should short-circuit.
+    expect(firstErr).toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(7_001);
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    await expect(request("/api/sessions")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
   });
 });
