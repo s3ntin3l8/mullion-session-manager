@@ -25,6 +25,7 @@ import {
   type CreateSessionBody,
 } from "../services/session-lifecycle.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
+import { resolveOpenCodeModel } from "../services/task-model-resolve.js";
 import { adapterHasResumeSessionArgs } from "../services/hook-adapters/index.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
@@ -386,7 +387,21 @@ export async function sessionsRoute(app: FastifyInstance) {
     "/api/sessions",
     { schema: createSessionSchema },
     async (request, reply) => {
-      const result = await createSessionRecord(app, request.body);
+      // Issue #957 — when the caller doesn't supply a model, resolve the
+      // install-wide default so manual spawns also pick it up (same as
+      // Task Master spawns do via task-claim/task-reconciler).
+      const body =
+        request.body.model === undefined
+          ? {
+              ...request.body,
+              model:
+                resolveOpenCodeModel(app, {
+                  issueBody: null,
+                  role: "implementer",
+                }) ?? undefined,
+            }
+          : request.body;
+      const result = await createSessionRecord(app, body);
       if (!result.ok) {
         if (result.reason === "unknown-project") return reply.badRequest("Unknown projectId");
         if (result.reason === "worktree-failed") {

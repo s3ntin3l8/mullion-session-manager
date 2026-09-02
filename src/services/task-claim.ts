@@ -367,6 +367,7 @@ export async function dispatchClaimedTask(
       resolveOpenCodeModel(app, {
         taskModel: task.model ?? null,
         issueBody: task.body,
+        role: "implementer",
       }) ?? undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,

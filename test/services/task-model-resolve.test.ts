@@ -16,7 +16,9 @@ function mockApp(): FastifyInstance {
   } as unknown as FastifyInstance;
 }
 
-const OPENCODE_SETTINGS = { opencode: { defaultModel: "openrouter/minimax-m3" } };
+const OPENCODE_SETTINGS = {
+  opencode: { implementerModel: "openrouter/minimax-m3", reviewerModel: "anthropic/claude-haiku" },
+};
 
 describe("resolveOpenCodeModel", () => {
   beforeEach(() => {
@@ -53,7 +55,7 @@ describe("resolveOpenCodeModel", () => {
       taskModel: null,
       issueBody: "Use the Model: anthropic/claude-sonnet-4-5 model for this task.",
     });
-    expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultModel);
+    expect(result).toBe(OPENCODE_SETTINGS.opencode.implementerModel);
   });
 
   it("falls through to the install-wide default when neither task nor issue sets a model", () => {
@@ -61,11 +63,13 @@ describe("resolveOpenCodeModel", () => {
       taskModel: null,
       issueBody: "No directive here.",
     });
-    expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultModel);
+    expect(result).toBe(OPENCODE_SETTINGS.opencode.implementerModel);
   });
 
   it("returns null when nothing configures a model", () => {
-    mockGetStoredSettings.mockReturnValue({ opencode: { defaultModel: null } });
+    mockGetStoredSettings.mockReturnValue({
+      opencode: { implementerModel: null, reviewerModel: null },
+    });
     const result = resolveOpenCodeModel(mockApp(), { taskModel: null, issueBody: null });
     expect(result).toBeNull();
   });
@@ -76,7 +80,7 @@ describe("resolveOpenCodeModel", () => {
       taskModel: "no-slash",
       issueBody: null,
     });
-    expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultModel);
+    expect(result).toBe(OPENCODE_SETTINGS.opencode.implementerModel);
     expect(app.log.warn).toHaveBeenCalledOnce();
   });
 
@@ -86,17 +90,81 @@ describe("resolveOpenCodeModel", () => {
       taskModel: null,
       issueBody: "Model: also-no-slash",
     });
-    expect(result).toBe(OPENCODE_SETTINGS.opencode.defaultModel);
+    expect(result).toBe(OPENCODE_SETTINGS.opencode.implementerModel);
     expect(app.log.warn).toHaveBeenCalledOnce();
   });
 
   it("rejects a model string with embedded whitespace or extra slashes", () => {
     const app = mockApp();
     expect(resolveOpenCodeModel(app, { taskModel: "openrouter/foo bar", issueBody: null })).toBe(
-      OPENCODE_SETTINGS.opencode.defaultModel,
+      OPENCODE_SETTINGS.opencode.implementerModel,
     );
     expect(resolveOpenCodeModel(app, { taskModel: "openrouter/foo/bar", issueBody: null })).toBe(
-      OPENCODE_SETTINGS.opencode.defaultModel,
+      OPENCODE_SETTINGS.opencode.implementerModel,
     );
+  });
+
+  describe("role-based resolution", () => {
+    it("uses implementerModel setting when role is implementer", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: null,
+        issueBody: null,
+        role: "implementer",
+      });
+      expect(result).toBe("openrouter/minimax-m3");
+    });
+
+    it("uses reviewerModel setting when role is reviewer", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: null,
+        issueBody: null,
+        role: "reviewer",
+      });
+      expect(result).toBe("anthropic/claude-haiku");
+    });
+
+    it("defaults to implementer when role is omitted", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: null,
+        issueBody: null,
+      });
+      expect(result).toBe("openrouter/minimax-m3");
+    });
+
+    it("prefers Reviewer-Model: over Model: when role is reviewer", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: null,
+        issueBody: "Model: opencode-go/generic\nReviewer-Model: opencode-go/review-specific",
+        role: "reviewer",
+      });
+      expect(result).toBe("opencode-go/review-specific");
+    });
+
+    it("falls back to Model: when Reviewer-Model: is absent and role is reviewer", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: null,
+        issueBody: "Model: opencode-go/fallback",
+        role: "reviewer",
+      });
+      expect(result).toBe("opencode-go/fallback");
+    });
+
+    it("ignores Reviewer-Model: when role is implementer", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: null,
+        issueBody: "Reviewer-Model: opencode-go/ignored",
+        role: "implementer",
+      });
+      expect(result).toBe(OPENCODE_SETTINGS.opencode.implementerModel);
+    });
+
+    it("taskModel overrides both roles regardless of directive", () => {
+      const result = resolveOpenCodeModel(mockApp(), {
+        taskModel: "anthropic/claude-opus",
+        issueBody: "Model: opencode-go/impl\nReviewer-Model: opencode-go/review",
+        role: "reviewer",
+      });
+      expect(result).toBe("anthropic/claude-opus");
+    });
   });
 });

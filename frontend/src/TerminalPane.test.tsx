@@ -502,7 +502,8 @@ function renderPane(extra: { active?: boolean } = {}) {
         autoAttachDockerLogs: false,
       },
       opencode: {
-        defaultModel: null,
+        implementerModel: null,
+        reviewerModel: null,
       },
       taskMaster: {
         autoClaimPaused: false,

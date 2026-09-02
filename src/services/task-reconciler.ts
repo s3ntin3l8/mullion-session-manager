@@ -500,6 +500,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           resolveOpenCodeModel(app, {
             taskModel: task.model ?? null,
             issueBody: task.body,
+            role: "reviewer",
           }) ?? undefined;
 
         const ci = await resolveReviewCi(

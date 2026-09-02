@@ -1318,11 +1318,13 @@ export interface AppSettings {
   // override, use the env default" (see taskConfig.ts's resolveTaskMaster,
   // the frontend mirror of the backend's own resolver). Surfaced in
   // Settings.tsx's Task Master section.
-  // Issue #957 — install-wide default opencode model, a `provider/model`
-  // string (e.g. "openrouter/minimax-m3", "anthropic/claude-sonnet-4-5").
-  // `null` means "no override; let opencode pick via its own priority chain".
+  // Issue #957 — install-wide default opencode model per role, each a
+  // `provider/model` string (e.g. "openrouter/minimax-m3",
+  // "anthropic/claude-sonnet-4-5"). `null` means "no override; let opencode
+  // pick via its own priority chain".
   opencode: {
-    defaultModel: string | null;
+    implementerModel: string | null;
+    reviewerModel: string | null;
   };
   taskMaster: {
     autoClaimPaused: boolean;

@@ -15,20 +15,38 @@ export function ModelsSection() {
   }, []);
 
   const disabled = settings.launchers?.defaultAgent !== "opencode";
-  const defaultValue = settings.opencode?.defaultModel ?? "";
+  const implementerValue = settings.opencode?.implementerModel ?? "";
+  const reviewerValue = settings.opencode?.reviewerModel ?? "";
+
+  const handleChange = (key: "implementerModel" | "reviewerModel", value: string) => {
+    updateSettings({
+      opencode: { [key]: value || null },
+    });
+  };
 
   return (
     <>
-      <Row label="Default model" desc="Select the default opencode model for new sessions.">
+      <Row label="Implementer model" desc="Default model for task worker sessions.">
         <select
           className="settings-select"
-          value={defaultValue}
+          value={implementerValue}
           disabled={disabled}
-          onChange={(e) => {
-            updateSettings({
-              opencode: { defaultModel: e.target.value || null },
-            });
-          }}
+          onChange={(e) => handleChange("implementerModel", e.target.value)}
+        >
+          <option value="">— None (CLI default) —</option>
+          {models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Reviewer model" desc="Default model for task review-agent sessions.">
+        <select
+          className="settings-select"
+          value={reviewerValue}
+          disabled={disabled}
+          onChange={(e) => handleChange("reviewerModel", e.target.value)}
         >
           <option value="">— None (CLI default) —</option>
           {models.map((model) => (
@@ -48,7 +66,7 @@ export function ModelsSection() {
       >
         {disabled
           ? "Only available when the default agent is opencode."
-          : "Choose the default model for new opencode sessions. Can be overridden per task via a Model: line in the task issue body."}
+          : "Each role can be overridden per task via Model: / Reviewer-Model: lines in the task issue body."}
       </p>
     </>
   );

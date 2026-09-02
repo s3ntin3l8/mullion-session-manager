@@ -178,7 +178,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoOpenChildPanels: false,
   },
   opencode: {
-    defaultModel: null,
+    implementerModel: null,
+    reviewerModel: null,
   },
   taskMaster: {
     autoClaimPaused: false,
