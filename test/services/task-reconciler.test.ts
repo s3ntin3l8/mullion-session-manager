@@ -5479,6 +5479,110 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // The PR review body ("reviewSummary") must not repeat a finding's
+    // path:line as prose when that SAME finding is also posted as GitHub's
+    // own anchored inline comment — autonomous-pr-review §5, and the whole
+    // point of the "review-body" render mode. `tasks.reviewFindings` (the
+    // task detail drawer's own record, asserted via `row.reviewFindings`
+    // below) intentionally keeps the bullet form — nothing there is
+    // anchored to anything.
+    it("renders the PR review body with a per-section anchor count, not repeated path:line prose", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "p-review-body-anchors", cwd: "/tmp" },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "a real changes-requested review with a blocker finding",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          prNumber: 9,
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      mockFinishedSessionIds(app, reviewSession.json().id);
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+      });
+      writeFindings(
+        app,
+        task.id,
+        0,
+        JSON.stringify({
+          verdict: "changes-requested",
+          summary: "One blocker.",
+          findings: [
+            {
+              path: "cmd/branchdam/main.go",
+              line: 42,
+              severity: "blocker",
+              body: "unchecked error return",
+            },
+          ],
+          verified: ["make lint && make typecheck"],
+        }),
+      );
+
+      await reconcileTasks(app);
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+        "tok",
+        "o",
+        "r",
+        9,
+        expect.objectContaining({
+          body: expect.stringContaining("### Critical\n- 1 finding(s) anchored inline below"),
+          comments: [
+            expect.objectContaining({
+              path: "cmd/branchdam/main.go",
+              line: 42,
+              body: expect.stringContaining("unchecked error return"),
+            }),
+          ],
+        }),
+      );
+      const lastCall = mockCreatePullRequestReview.mock.calls.at(-1) as [
+        string,
+        string,
+        string,
+        number,
+        { body: string },
+      ];
+      expect(lastCall[4].body).not.toContain("cmd/branchdam/main.go:42");
+
+      // tasks.reviewFindings (the drawer's own record) keeps the bullet
+      // form — it never anchors to anything, so there is nothing to avoid
+      // repeating.
+      const row = await getTask(app, task.id);
+      expect(row.reviewFindings).toContain("cmd/branchdam/main.go:42");
+
+      await app.close();
+    });
+
     // #756's whole point: a project with the default cap gets a SECOND
     // automatic round, where the pre-#756 behavior would have stalled in
     // "reviewing" after the first.

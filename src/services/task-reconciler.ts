@@ -3159,7 +3159,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           parsed
             ? {
                 body: commentBody + cappedNote,
-                reviewSummary: `${roundLabel}\n\n${parsed.summary}${cappedNote}`,
+                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
                 findings: parsed.findings,
                 verdict,
               }
@@ -3188,7 +3188,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           // Rendered, not the raw findings-file content — `shouldAutoReturn`
           // guarantees `parsed !== null` here, but `parsed` may be JSON; the
           // worker should read prose, not the wire format Mullion parses.
-          findings: renderReviewFindingsMarkdown(parsed!),
+          findings: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
           // #778 — resolved against the OWNING host's own sessionsDir; see
           // spawnReviewAgentNow's own comment for the full rationale.
           commitTitlePath: project.conventionalCommitTitles
