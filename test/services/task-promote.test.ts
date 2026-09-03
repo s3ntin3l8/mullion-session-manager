@@ -1248,6 +1248,47 @@ describe("openDraftPRForTask", () => {
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
   });
+
+  // #972 — a row can still carry prNumber set with prUrl null (a retry
+  // that predates retryTask clearing both together). Asserting the null
+  // prUrl non-null would hand `null` back to maybeOpenDraftPR, which writes
+  // the result straight into tasks.prUrl — re-affirming the bad pair
+  // forever instead of repairing it.
+  it("fetches the live PR URL to repair a row with prNumber set but prUrl null (#972)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockGetPullRequestByNumber.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+      draft: true,
+      title: "old title",
+    });
+
+    const task = baseTask({
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+      prNumber: 9,
+      prUrl: null,
+    });
+    const result = await openDraftPRForTask({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
+    expect(mockGetPullRequestByNumber).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      9,
+    );
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
 });
 
 describe("closeDraftPRForTask", () => {
