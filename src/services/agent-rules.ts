@@ -110,11 +110,12 @@ interface TargetDef {
    * AGENTS.md, and (Hermes review, PR #458) opencode's own AGENTS.md over
    * its CLAUDE.md fallback (opencode's docs: "if you have both AGENTS.md
    * and CLAUDE.md, only AGENTS.md is used"). Cross-agent sharing of the
-   * same underlying file (opencode and Codex both read a project's plain
-   * AGENTS.md) is not modeled as shadowing: opencode has no *override*
-   * concept of its own, so that shared file is simply "active" from
-   * opencode's perspective and independently "active"/"shadowed" from
-   * Codex's — two separate targets, occasionally the same absolutePath. */
+   * same underlying file (opencode, Codex, AND agy — issue #977 — all read
+   * a project's plain AGENTS.md) is not modeled as shadowing: opencode and
+   * agy have no *override* concept of their own, so that shared file is
+   * simply "active" from their perspective and independently
+   * "active"/"shadowed" from Codex's — separate targets, occasionally the
+   * same absolutePath. */
   shadowedBy?: string;
 }
 
@@ -368,14 +369,31 @@ export function resolveTarget(id: string): TargetDef | null {
         shadowedBy: "opencode:global",
       };
     case "agy:project":
+      // Issue #977 — agy reads project-scope AGENTS.md natively, the same
+      // as Codex and opencode (verified empirically against the real agy
+      // 1.1.24/1.1.25 binary: run with --new-project against a repo whose
+      // only rule file is AGENTS.md, agy cited it directly and had no
+      // knowledge of a GEMINI.md, which didn't exist in that repo). This
+      // target used to be modeled as GEMINI.md, which agy does not consult
+      // at project scope — see docs/project-briefing.md's "There is no
+      // GEMINI.md in this repo" section for the same finding. Cross-agent
+      // sharing of this same AGENTS.md file (also read by codex:project and
+      // opencode:project) is the norm this file's header comment already
+      // describes, not special-cased here.
       return {
         id: "agy:project",
         agent: "agy",
         agentLabel: AGENT_LABEL.agy,
         scope: "project",
-        fileName: "GEMINI.md",
+        fileName: "AGENTS.md",
       };
     case "agy:global":
+      // Issue #977 — unlike the project-scope target above, agy's global
+      // ~/.gemini/GEMINI.md really does load (re-verified live against the
+      // real developer's own ~/.gemini/GEMINI.md, which agy correctly cited
+      // as the source of a global-only rule): agy's project- and
+      // global-scope discovery are two independent mechanisms, not the same
+      // file at two roots, so only the project target above was wrong.
       return {
         id: "agy:global",
         agent: "agy",
@@ -610,11 +628,14 @@ export function deleteAgentRule(target: TargetDef, projectCwd: string): void {
 }
 
 // The distinct project-scope filenames across every target — deliberately
-// deduped (AGENTS.md is a separate target for both codex and opencode, but
-// the same underlying file), since this is a presence check, not a per-agent
-// listing. Global scope is intentionally excluded: a sidebar row is for one
-// specific project, and a global file's presence says nothing about that
-// project.
+// deduped (AGENTS.md is a separate target for codex, opencode, AND agy, but
+// the same underlying file — see resolveTarget's "agy:project" case), since
+// this is a presence check, not a per-agent listing. Global scope is
+// intentionally excluded: a sidebar row is for one specific project, and a
+// global file's presence says nothing about that project. GEMINI.md is
+// deliberately absent: no project-scope target uses it (issue #977 — agy's
+// project-scope file is AGENTS.md, not GEMINI.md; only agy:global still
+// resolves to GEMINI.md).
 //
 // Deliberately a hand-written literal array, not derived from
 // listTargetDefs()/resolveTarget() the way it originally was — CodeQL's
@@ -623,9 +644,12 @@ export function deleteAgentRule(target: TargetDef, projectCwd: string): void {
 // general function summary, even for these compile-time-only calls with
 // literal `ALL_TARGET_IDS` arguments, so anything built from it stays
 // "tainted" as far as the query is concerned. A flat literal array has no
-// such provenance to trace. This file's own tests assert the two stay in
-// sync (`SAFE_FILE_NAME_RE`'s literal set is the same one, checked there).
-const PROJECT_SCOPE_FILE_NAMES = ["CLAUDE.md", "AGENTS.md", "AGENTS.override.md", "GEMINI.md"];
+// such provenance to trace. This file's own tests assert this array matches
+// listTargetDefs()'s project-scope filenames exactly (checked there) —
+// it's deliberately NOT the same set as SAFE_FILE_NAME_RE (issue #977):
+// that regex also covers global-scope-only filenames (GEMINI.md, for
+// agy:global), which have no place in a project-scope presence check.
+const PROJECT_SCOPE_FILE_NAMES = ["CLAUDE.md", "AGENTS.md", "AGENTS.override.md"];
 
 /** Cheap, existsSync-only presence check for the sidebar's per-project rule
  * indicator (issue #431) — deliberately NOT listAgentRules(): that reads

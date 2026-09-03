@@ -80,7 +80,8 @@ export interface Project {
   // setting" (src/plugins/git-fetcher.ts). Mirrors the DB column 1:1.
   autoFetch: boolean | null;
   // Issue #431 — which project-scope agent-rules filenames exist for this
-  // project (CLAUDE.md, AGENTS.md, AGENTS.override.md, GEMINI.md), deduped
+  // project (CLAUDE.md, AGENTS.md, AGENTS.override.md — issue #977: agy's
+  // project-scope file is AGENTS.md too, not a separate GEMINI.md), deduped
   // across agents. Same "cheap enough to ride along on every GET
   // /api/projects" reasoning as currentBranch above — see
   // listExistingProjectRuleFileNames's own doc comment. Never includes

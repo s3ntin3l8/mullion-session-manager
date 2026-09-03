@@ -161,14 +161,18 @@ describe("agent-rules service", () => {
       const codexAgents = targets.find((t) => t.id === "codex:project")!;
       const codexOverride = targets.find((t) => t.id === "codex:project:override")!;
       const opencodeAgents = targets.find((t) => t.id === "opencode:project")!;
+      const agyAgents = targets.find((t) => t.id === "agy:project")!;
 
       expect(codexAgents.status).toBe("shadowed");
       expect(codexOverride.status).toBe("active");
-      // opencode has no override concept — the same underlying AGENTS.md
-      // file is "active" from opencode's perspective regardless of Codex's
-      // override existing, per agent-rules.ts's own doc comment on this.
+      // opencode and agy (issue #977) have no override concept — the same
+      // underlying AGENTS.md file is "active" from their own perspective
+      // regardless of Codex's override existing, per agent-rules.ts's own
+      // doc comment on this.
       expect(opencodeAgents.status).toBe("active");
       expect(opencodeAgents.absolutePath).toBe(codexAgents.absolutePath);
+      expect(agyAgents.status).toBe("active");
+      expect(agyAgents.absolutePath).toBe(codexAgents.absolutePath);
     });
 
     it("reports AGENTS.md as active when no override file exists", async () => {
@@ -276,7 +280,7 @@ describe("agent-rules service", () => {
 
   describe("getAgentRule", () => {
     it("returns a single target's info without needing the full list", async () => {
-      writeFileSync(path.join(projectCwd, "GEMINI.md"), "agy rules");
+      writeFileSync(path.join(projectCwd, "AGENTS.md"), "agy rules");
       const target = resolveTarget("agy:project")!;
       const result = await getAgentRule(target, projectCwd);
       expect(result.exists).toBe(true);
@@ -405,9 +409,20 @@ describe("agent-rules service", () => {
       writeFileSync(path.join(projectCwd, "CLAUDE.md"), "x");
       writeFileSync(path.join(projectCwd, "AGENTS.md"), "x");
       writeFileSync(path.join(projectCwd, "AGENTS.override.md"), "x");
-      writeFileSync(path.join(projectCwd, "GEMINI.md"), "x");
       const found = new Set(listExistingProjectRuleFileNames(projectCwd));
       expect(found).toEqual(derived);
+    });
+
+    // Issue #977 — GEMINI.md used to be agy's project-scope file; now only
+    // agy:global resolves to it. A regression that re-added "GEMINI.md" to
+    // PROJECT_SCOPE_FILE_NAMES wouldn't be caught by the test above alone
+    // (nothing writes a GEMINI.md there to trip it), so assert the negative
+    // directly: an actually-present project-scope GEMINI.md must still be
+    // excluded from this project-scope-only listing.
+    it("excludes a project-scope GEMINI.md — no project target resolves to it anymore", () => {
+      writeFileSync(path.join(projectCwd, "GEMINI.md"), "x");
+      const found = new Set(listExistingProjectRuleFileNames(projectCwd));
+      expect(found.has("GEMINI.md")).toBe(false);
     });
   });
 
