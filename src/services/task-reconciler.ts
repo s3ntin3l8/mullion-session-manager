@@ -2660,12 +2660,71 @@ export function resolveMaxAutoReturnRounds(project: {
  *
  * On a failed re-seed (`reseedTaskIfSessionExited` returning `false` —
  * terminate/spawn error, or ITS OWN lost race against a still-later
- * transition), the round increment is rolled back, CAS'd on the exact
- * value this call itself just wrote, so a genuinely later round can still
- * use it. Deliberately does NOT roll `status` back to "reviewing" on that
- * same failure — a pre-existing quirk of the review-feedback loop this
- * function was extracted from (Hermes review, PR #580), preserved exactly
- * rather than expanding this change's scope to also fix it.
+ * transition), BOTH the round increment and the "reviewing" -> "in_progress"
+ * status write are rolled back, CAS'd on the exact `autoReturnRounds` value
+ * this call itself just wrote, so a genuinely later attempt can still use
+ * the round. Issue #973 — this used to leave `status` at "in_progress" (a
+ * quirk carried over from the review-feedback loop this function was
+ * extracted from, Hermes review PR #580, deliberately preserved rather than
+ * fixed at the time) while `sessionId` still pointed at the OLD session
+ * `reseedTaskIfSessionExited` was trying to replace. task-state.ts treats
+ * "in_progress" as session-liveness-dependent ("agent's turn ended / session
+ * died") but "reviewing" as not, so an "in_progress" task left pointing at a
+ * dead-or-dying `sessionId` for any length of time is exposed to
+ * session-reconciler.ts's session-death hook flipping it to "failed" with a
+ * misleading "session exited" reason that has nothing to do with the real
+ * re-seed failure. Rolling `status` back too undoes every write THIS call
+ * itself made (status, the round, `lastAutoReturnReason`) — not
+ * `reviewFindings`/`lastReviewVerdict`/the posted PR comment from an
+ * earlier, already-committed step, which correctly survive — landing the
+ * task back in "reviewing", invisible to the liveness/budget checks that
+ * only run against "claimed"/"in_progress". For a level-triggered reason
+ * ("ci", "pr-comment" — re-evaluated against live external state every
+ * sweep) this also acts as a natural retry: the next tick calls this
+ * function again as long as the underlying condition persists, with no
+ * separate retry/backoff mechanism needed. "review" is edge-triggered on a
+ * findings file appearing (already unlinked and ingest-marked by the time
+ * this runs), so a failure there does NOT self-retry — it still needs a
+ * human to notice the stalled "reviewing" task — but at least no longer
+ * masquerades as an unrelated session death.
+ *
+ * This closes the INDEFINITE version of that exposure (a re-seed that fails
+ * outright and returns), but not the WINDOW between the forward CAS above
+ * and this rollback — which spans the entire re-seed attempt, `force:
+ * true`'s own terminate-then-spawn included. The incident this fixes (task
+ * 258971, PR #136, 2026-09-02) actually raced inside that window, not after
+ * it, and this change alone does not close it: `reseedTaskIfSessionExited`'s
+ * `terminate()` call hung for a full 90s systemd `TimeoutStopSec` (the prior
+ * session's process wasn't responding to SIGTERM) before being SIGKILLed,
+ * and a concurrent `reconcileExitedSessions` tick landed 27s into that hang
+ * — likely because `isMasterAlive`'s `stdout.trim() === "active"` check
+ * (session-process.ts) treats a scope mid-"deactivating" from OUR OWN
+ * in-flight `stopScope()` call identically to one that's genuinely gone,
+ * with nothing recording "a termination we ourselves started is still in
+ * flight for this id." That tick flipped the task to "failed" via
+ * session-death 63 seconds before this function's own rollback ran, AND (the
+ * established mechanism behind the incident's own ENOENT, verified against
+ * this host's disk state — see the fix commit's message) removed the task's
+ * worktree via `removeWorktreeIfClean`. The re-seed's OWN spawn — already in
+ * flight, re-seeding into that exact SAME worktree path per this function's
+ * own doc comment above — then ran with a `cwd` that no longer existed:
+ * `spawnChild(cmd, args, { cwd })` reports a nonexistent `cwd` as `spawn
+ * <cmd> ENOENT` on the COMMAND, not the directory (Node/libuv's well-known
+ * "cwd" spawn-error shape), which is exactly the "spawn systemd-run ENOENT"
+ * the original bug report opened on — a red herring for this incident;
+ * systemd-run itself was never missing. By the time this function's own
+ * rollback ran, `status: "in_progress"` in its CAS below correctly no-ops
+ * (status was already "failed"), rather than resurrecting a task
+ * session-death had already resolved. Closing the underlying race needs a
+ * bigger, separate change — session-death's own worktree removal must not
+ * race an in-flight re-seed for the same task — tracked in #988.
+ *
+ * Deliberately does NOT call `syncTaskTransition` for this rollback (unlike
+ * the real "in_progress -> reviewing" transition elsewhere in this file,
+ * which does): the forward "reviewing -> in_progress" write just above
+ * ALSO skips it, so GitHub's own labels/comments never left "reviewing" in
+ * the first place — syncing here would post a duplicate "Task ready for
+ * review" comment for a review that was already announced.
  */
 export async function autoReturnTask(
   app: FastifyInstance,
@@ -2707,6 +2766,11 @@ export async function autoReturnTask(
     const rolledBack = app.db
       .update(tasks)
       .set({
+        // Issue #973 — restores "reviewing", not just the round: see this
+        // function's own doc comment on why leaving "in_progress" behind
+        // with a stale `sessionId` let an unrelated session-death event
+        // clobber the task with the wrong failure reason.
+        status: "reviewing",
         autoReturnRounds: task.autoReturnRounds,
         // Fresh subagent review, PR #774 — a rolled-back attempt means no
         // auto-return round actually completed, so leaving this set to
@@ -2715,11 +2779,38 @@ export async function autoReturnTask(
         // recently drove an auto-return round" — this one didn't.
         lastAutoReturnReason: task.lastAutoReturnReason,
       })
-      .where(and(eq(tasks.id, task.id), eq(tasks.autoReturnRounds, task.autoReturnRounds + 1)))
+      // Adding `status = "in_progress"` here (issue #973) is a real
+      // semantic change, not just a tighter guard: status and the round now
+      // roll back TOGETHER or not at all. If a concurrent transition
+      // already moved the task off "in_progress" (approve/reject/give-up
+      // landing in the gap between the CAS above and here), this CAS loses
+      // and the round stays spent — weakening #580's original "a failed
+      // re-seed must never silently burn the round" promise for that one
+      // race. That's the right trade: the alternative would be writing
+      // `status: "reviewing"` back onto a task a concurrent call already
+      // moved to "failed"/"done"/elsewhere, resurrecting a resolved task
+      // out from under whoever resolved it — worse than losing one round.
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "in_progress"),
+          eq(tasks.autoReturnRounds, task.autoReturnRounds + 1),
+        ),
+      )
       .run();
+    if (rolledBack.changes > 0) {
+      recordTaskTransition(app, {
+        taskId: task.id,
+        projectId: project.id,
+        from: "in_progress",
+        to: "reviewing",
+        via: "reconcile",
+        context: { reason: opts.reason },
+      });
+    }
     app.log.warn(
       { taskId: task.id, reason: opts.reason, rolledBack: rolledBack.changes > 0 },
-      "task reconcile: auto-return re-seed failed — rolled back the spent auto-return round so a later attempt can still use it",
+      "task reconcile: auto-return re-seed failed — rolled back the spent auto-return round and status so a later attempt can still use it",
     );
   }
   return { ok: reseeded };

@@ -6254,17 +6254,25 @@ describe("reconcileTasks", () => {
     // see reseedTaskIfSessionExited's own doc comment) previously left the
     // task's one auto-return round permanently spent with nobody having
     // received the findings.
-    it("rolls back the spent auto-return round when the re-seed itself fails", async () => {
+    //
+    // Issue #973 — `status` now rolls back to "reviewing" alongside the
+    // round, not just the round: task 258971 (PR #136) shows why leaving it
+    // at "in_progress" (pointing at a `sessionId` this same call just failed
+    // to replace) is dangerous, not just cosmetically wrong — a later,
+    // unrelated session-death detection for that stale session flipped the
+    // task straight to "failed" with a misleading reason.
+    it("rolls back the spent auto-return round AND status when the re-seed itself fails", async () => {
       const app = await buildApp();
       const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(app, taskId, 0, "This should not cost the task its one round.");
       mockReseedTaskIfSessionExited.mockResolvedValueOnce(false);
       const warnSpy = vi.spyOn(app.log, "warn");
+      const infoSpy = vi.spyOn(app.log, "info");
 
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
-      expect(row.status).toBe("in_progress");
+      expect(row.status).toBe("reviewing");
       expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("should not cost the task its one round");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
@@ -6275,6 +6283,43 @@ describe("reconcileTasks", () => {
       expect(row.lastAutoReturnReason).toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId, rolledBack: true }),
+        expect.stringContaining("rolled back the spent auto-return round"),
+      );
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, from: "in_progress", to: "reviewing", via: "reconcile" }),
+        "task transition",
+      );
+
+      await app.close();
+    });
+
+    // Issue #973 — the CAS above (`status = "in_progress"`) is a real
+    // semantic change, not just a tighter guard: this is the scenario it
+    // exists for. task 258971's actual incident was a session-death
+    // detection racing this exact rollback and flipping status to "failed"
+    // out from under it. Simulates that race by mutating the row's status
+    // out from under the rollback, inside the re-seed mock — mirroring
+    // session-reconciler.ts's session-death handler landing between the
+    // forward CAS and this rollback. The rollback CAS must lose (status
+    // stays "failed", not resurrected to "reviewing") and must NOT spend
+    // the round back onto a task nobody is tracking as "reviewing" anymore.
+    it("does not resurrect a task a concurrent transition already moved off in_progress", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "Findings that already got recorded.");
+      mockReseedTaskIfSessionExited.mockImplementationOnce(async () => {
+        app.db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, taskId)).run();
+        return false;
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.autoReturnRounds).toBe(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, rolledBack: false }),
         expect.stringContaining("rolled back the spent auto-return round"),
       );
 
