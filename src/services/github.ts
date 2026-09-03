@@ -628,27 +628,42 @@ function pullRequestTriggerAllowsReadyForReview(yamlText: string): boolean {
     if (!triggerLine) continue;
     const baseIndent = triggerLine[1].length;
 
-    let block = "";
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j];
       if (line.trim() === "") continue;
       const indent = line.length - line.trimStart().length;
       if (indent <= baseIndent) break;
-      block += `${line}\n`;
-    }
 
-    if (/types:\s*\[[^\]]*\bready_for_review\b[^\]]*\]/.test(block)) return true;
-    // Hermes review, PR #989: the `types:` line itself can carry a trailing
-    // comment (`types: # opt in explicitly`) — `[ \t]*\n` alone doesn't
-    // allow for one, and a false NEGATIVE here resolves the gate to "no
-    // reviewer" and lets auto-approve proceed, reproducing the exact #83
-    // race this matcher exists to prevent. `(?:#.*)?` absorbs it.
-    if (
-      /types:[ \t]*(?:#.*)?\n(?:[ \t]*-[ \t]*\S+[ \t]*(?:#.*)?\n)*[ \t]*-[ \t]*ready_for_review\b/.test(
-        block,
-      )
-    ) {
-      return true;
+      // Inline array: `types: [opened, ready_for_review]`. A trailing
+      // comment after the closing bracket doesn't matter — this only
+      // reads up to `]`.
+      const inlineTypes = /^\s*types:\s*\[([^\]]*)\]/.exec(line);
+      if (inlineTypes) {
+        if (/\bready_for_review\b/.test(inlineTypes[1])) return true;
+        continue;
+      }
+
+      // Block-list form: a bare `types:` (optionally with its own trailing
+      // comment) followed by `- item` lines indented under it. CodeQL
+      // (js/redos), PR #989: an earlier version matched this with a
+      // single regex spanning multiple lines via nested quantifiers,
+      // which it correctly flagged as capable of exponential
+      // backtracking on adversarial workflow-file content — a real DoS
+      // surface, since these files are read from a repo Mullion doesn't
+      // control the trustworthiness of. Line-by-line scanning below has
+      // no multi-line backtracking to exploit.
+      const typesLine = /^(\s*)types:\s*(#.*)?$/.exec(line);
+      if (!typesLine) continue;
+      const typesIndent = typesLine[1].length;
+      for (let k = j + 1; k < lines.length; k++) {
+        const itemLine = lines[k];
+        if (itemLine.trim() === "") continue;
+        const itemIndent = itemLine.length - itemLine.trimStart().length;
+        if (itemIndent <= typesIndent) break;
+        const item = /^\s*-\s*(\S+)/.exec(itemLine);
+        if (!item) break;
+        if (/\bready_for_review\b/.test(item[1])) return true;
+      }
     }
   }
   return false;
