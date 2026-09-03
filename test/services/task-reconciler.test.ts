@@ -6254,7 +6254,14 @@ describe("reconcileTasks", () => {
     // see reseedTaskIfSessionExited's own doc comment) previously left the
     // task's one auto-return round permanently spent with nobody having
     // received the findings.
-    it("rolls back the spent auto-return round when the re-seed itself fails", async () => {
+    //
+    // Issue #973 — `status` now rolls back to "reviewing" alongside the
+    // round, not just the round: task 258971 (PR #136) shows why leaving it
+    // at "in_progress" (pointing at a `sessionId` this same call just failed
+    // to replace) is dangerous, not just cosmetically wrong — a later,
+    // unrelated session-death detection for that stale session flipped the
+    // task straight to "failed" with a misleading reason.
+    it("rolls back the spent auto-return round AND status when the re-seed itself fails", async () => {
       const app = await buildApp();
       const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(app, taskId, 0, "This should not cost the task its one round.");
@@ -6264,7 +6271,7 @@ describe("reconcileTasks", () => {
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
-      expect(row.status).toBe("in_progress");
+      expect(row.status).toBe("reviewing");
       expect(row.autoReturnRounds).toBe(0);
       expect(row.reviewFindings).toContain("should not cost the task its one round");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
