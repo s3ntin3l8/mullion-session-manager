@@ -35,7 +35,6 @@ interface ApplyResult {
 // without the user having seen the exact diff Preview produced first.
 export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams }) {
   const [slug, setSlug] = useState("");
-  const [includeGemini, setIncludeGemini] = useState(false);
   const [includeContributingPointer, setIncludeContributingPointer] = useState(false);
   const [symlinkAgentsSkills, setSymlinkAgentsSkills] = useState(false);
   const [includeDockConfig, setIncludeDockConfig] = useState(false);
@@ -50,10 +49,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     setError(null);
     setApplyResult(null);
     try {
-      const mirrors: Array<"GEMINI.md"> = includeGemini ? ["GEMINI.md"] : [];
       const result = await api.previewProjectSetup(params.projectId, {
         slug,
-        mirrors,
         includeContributingPointer,
         symlinkAgentsSkills,
         includeDockConfig,
@@ -65,14 +62,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     } finally {
       setPreviewing(false);
     }
-  }, [
-    params.projectId,
-    slug,
-    includeGemini,
-    includeContributingPointer,
-    symlinkAgentsSkills,
-    includeDockConfig,
-  ]);
+  }, [params.projectId, slug, includeContributingPointer, symlinkAgentsSkills, includeDockConfig]);
 
   const handleApply = useCallback(async () => {
     if (!preview) return;
@@ -191,24 +181,6 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             value={slug}
             onChange={(e) => setSlug(e.target.value)}
             placeholder="my-project"
-          />
-        </div>
-      </div>
-      <div className="settings-row">
-        <div className="settings-row-text">
-          <label className="settings-row-label" htmlFor="setup-mirror-gemini">
-            Add a GEMINI.md pointer
-          </label>
-          <div className="settings-row-desc">
-            A one-line pointer to AGENTS.md, for agy — never a content copy.
-          </div>
-        </div>
-        <div className="settings-row-control">
-          <input
-            id="setup-mirror-gemini"
-            type="checkbox"
-            checked={includeGemini}
-            onChange={(e) => setIncludeGemini(e.target.checked)}
           />
         </div>
       </div>

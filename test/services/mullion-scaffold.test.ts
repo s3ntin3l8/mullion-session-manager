@@ -1,8 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   computeScaffold,
   isValidScaffoldSlug,
@@ -147,80 +143,18 @@ describe("computeScaffold", () => {
     });
   });
 
-  it("no mirrors, no CONTRIBUTING.md pointer, no dock config, no symlink by default", () => {
+  it("no GEMINI.md, no AGENTS.override.md, no CONTRIBUTING.md pointer, no dock config, no symlink by default", () => {
     const entries = computeScaffold({}, { slug: "demo" });
     expect(entries.some((e) => e.path === "GEMINI.md")).toBe(false);
     expect(entries.some((e) => e.path === "AGENTS.override.md")).toBe(false);
     expect(entries.some((e) => e.path === "CONTRIBUTING.md")).toBe(false);
-    expect(entries.some((e) => e.path.endsWith("check-briefing-sync.mjs"))).toBe(false);
     expect(entries.some((e) => e.path === ".crs/dock.json")).toBe(false);
     const agentsSkills = entries.find((e) => e.path === ".agents/skills/demo/SKILL.md");
     expect(agentsSkills?.kind).toBe("file");
   });
 
-  // Issue #942 — GEMINI.md is no longer a content mirror; AGENTS.override.md
-  // is no longer offered as an option at all.
-  describe("GEMINI.md pointer (issue #942)", () => {
-    it("writes a one-line pointer to AGENTS.md, not a copy of the briefing region, plus the sync script", () => {
-      const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
-      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
-      expect(gemini).toBeDefined();
-      const pointerRegion = extractMarkedRegion(
-        gemini.contents,
-        POINTER_MARKER_START,
-        POINTER_MARKER_END,
-      );
-      expect(pointerRegion).toContain("AGENTS.md");
-      // Never a copy of AGENTS.md's own briefing region.
-      expect(extractMarkedRegion(gemini.contents, MARKER_START, MARKER_END)).toBeNull();
-      expect(entries.some((e) => e.path === "scripts/check-briefing-sync.mjs")).toBe(true);
-    });
-
-    it("upserts the pointer in place without disturbing existing GEMINI.md content", () => {
-      const existingGemini = "# GEMINI.md\n\nSome existing prose.\n";
-      const entries = computeScaffold(
-        { "GEMINI.md": existingGemini },
-        { slug: "demo", mirrors: ["GEMINI.md"] },
-      );
-      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
-      expect(gemini.contents).toContain("Some existing prose.");
-      expect(gemini.contents).toContain("AGENTS.md");
-    });
-
-    it("replaces a stale pointer region on a re-run rather than duplicating it", () => {
-      const existingGemini = `${POINTER_MARKER_START}\nstale pointer text\n${POINTER_MARKER_END}`;
-      const entries = computeScaffold(
-        { "GEMINI.md": existingGemini },
-        { slug: "demo", mirrors: ["GEMINI.md"] },
-      );
-      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
-      expect(gemini.contents).not.toContain("stale pointer text");
-    });
-
-    // Regression guard — without stripping the OLD mirror region first, a
-    // re-scaffold over a pre-#942 GEMINI.md would append the new pointer
-    // BELOW the stale full-mirror content instead of replacing it, and the
-    // freshly-scaffolded check-briefing-sync.mjs would then immediately
-    // fail against the very GEMINI.md this scaffold just wrote (that
-    // script fails the moment GEMINI.md carries ANY mullion:briefing
-    // region at all).
-    it("strips a pre-#942 byte-identical mirror region before writing the new pointer", () => {
-      const preExistingMirror = `# GEMINI.md\n\n${MARKER_START}\nold mirrored briefing content\n${MARKER_END}\n`;
-      const entries = computeScaffold(
-        { "GEMINI.md": preExistingMirror },
-        { slug: "demo", mirrors: ["GEMINI.md"] },
-      );
-      const gemini = entries.find((e) => e.path === "GEMINI.md") as { contents: string };
-      expect(gemini.contents).not.toContain("old mirrored briefing content");
-      expect(extractMarkedRegion(gemini.contents, MARKER_START, MARKER_END)).toBeNull();
-      expect(
-        extractMarkedRegion(gemini.contents, POINTER_MARKER_START, POINTER_MARKER_END),
-      ).toContain("AGENTS.md");
-    });
-  });
-
   // Issue #942 (this restructure) — CLAUDE.md is unconditional, like
-  // AGENTS.md, not opt-in like GEMINI.md/CONTRIBUTING.md's pointers:
+  // AGENTS.md, not opt-in like CONTRIBUTING.md's pointer:
   // without it, Claude Code (which does not read AGENTS.md natively) gets
   // nothing from this scaffold at all.
   describe("CLAUDE.md @AGENTS.md import (issue #942)", () => {
@@ -238,8 +172,9 @@ describe("computeScaffold", () => {
 
     // The regression guard for the highest-risk line in this change: every
     // existing pointer body in this module wraps filenames in backticks
-    // (agentsMdPointerBody's "Read `AGENTS.md`."). Following that
-    // convention here would put the import inside a Markdown code span,
+    // (contributingPointerBody's "See `AGENTS.md`'s Workflow Conventions
+    // ..."). Following that convention here would put the import inside a
+    // Markdown code span,
     // which Claude Code's importer SKIPS — a silent no-op that would still
     // pass every other assertion in this file and look correct in review.
     it("the import line is bare — no backticks, no fence, alone on its own line", () => {
@@ -342,168 +277,9 @@ describe("computeScaffold", () => {
   });
 
   it("is pure — the same inputs always produce byte-identical output", () => {
-    const options = { slug: "demo", mirrors: ["GEMINI.md"] as const };
+    const options = { slug: "demo", includeContributingPointer: true };
     const a = computeScaffold({ "AGENTS.md": "# hi" }, options);
     const b = computeScaffold({ "AGENTS.md": "# hi" }, options);
     expect(a).toEqual(b);
-  });
-
-  // The embedded CHECK_BRIEFING_SYNC_SCRIPT is a plain string this module
-  // never itself executes — a template-literal escaping mistake would
-  // parse fine as TS (it's just a string literal) but produce broken JS at
-  // runtime, silently, until someone actually ran the scaffolded script.
-  // Actually running it as a real subprocess is the only way to catch that.
-  describe("the embedded check-briefing-sync.mjs script actually runs", () => {
-    let tmpDir: string;
-
-    function writeScript(entries: ReturnType<typeof computeScaffold>) {
-      const script = entries.find((e) => e.path === "scripts/check-briefing-sync.mjs") as {
-        contents: string;
-      };
-      mkdirSync(path.join(tmpDir, "scripts"), { recursive: true });
-      writeFileSync(path.join(tmpDir, "scripts", "check-briefing-sync.mjs"), script.contents);
-    }
-
-    function runScript(): { status: number; stdout: string; stderr: string } {
-      try {
-        const stdout = execFileSync(
-          "node",
-          [path.join(tmpDir, "scripts", "check-briefing-sync.mjs")],
-          {
-            cwd: tmpDir,
-            encoding: "utf8",
-          },
-        );
-        return { status: 0, stdout, stderr: "" };
-      } catch (err) {
-        const e = err as { status: number; stdout: string; stderr: string };
-        return { status: e.status, stdout: e.stdout, stderr: e.stderr };
-      }
-    }
-
-    it("exits 0 when GEMINI.md and CLAUDE.md carry only their plain pointer/import (no content-bearing region)", () => {
-      tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-ok-"));
-      try {
-        const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
-        for (const entry of entries) {
-          if (
-            entry.path === "AGENTS.md" ||
-            entry.path === "GEMINI.md" ||
-            entry.path === "CLAUDE.md"
-          ) {
-            writeFileSync(path.join(tmpDir, entry.path), (entry as { contents: string }).contents);
-          }
-        }
-        writeScript(entries);
-        const result = runScript();
-        expect(result.status).toBe(0);
-        expect(result.stdout).toContain("OK");
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    it("exits 1 when GEMINI.md re-acquires a content-bearing mullion:briefing region", () => {
-      tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-mismatch-"));
-      try {
-        const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
-        for (const entry of entries) {
-          if (entry.path === "AGENTS.md") {
-            writeFileSync(path.join(tmpDir, entry.path), (entry as { contents: string }).contents);
-          }
-        }
-        writeFileSync(
-          path.join(tmpDir, "GEMINI.md"),
-          `${MARKER_START}\nsomething copied back in\n${MARKER_END}\n`,
-        );
-        writeScript(entries);
-        const result = runScript();
-        expect(result.status).toBe(1);
-        expect(result.stdout).toContain("single source of truth");
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    it("exits 1 when CLAUDE.md re-acquires a content-bearing mullion:briefing region", () => {
-      tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-claude-"));
-      try {
-        // mirrors: ["GEMINI.md"] just to get the guard script emitted (its
-        // emission is gated on that option — see computeScaffold); this
-        // case is about CLAUDE.md, not GEMINI.md.
-        const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
-        for (const entry of entries) {
-          if (entry.path === "AGENTS.md") {
-            writeFileSync(path.join(tmpDir, entry.path), (entry as { contents: string }).contents);
-          }
-        }
-        writeFileSync(
-          path.join(tmpDir, "CLAUDE.md"),
-          `${MARKER_START}\nsomething copied back in\n${MARKER_END}\n`,
-        );
-        writeScript(entries);
-        const result = runScript();
-        expect(result.status).toBe(1);
-        expect(result.stdout).toContain("CLAUDE.md");
-        expect(result.stdout).toContain("single source of truth");
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    it("exits 1 when AGENTS.override.md carries a content-bearing mullion:briefing region", () => {
-      tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-override-"));
-      try {
-        const entries = computeScaffold({}, { slug: "demo", mirrors: ["GEMINI.md"] });
-        for (const entry of entries) {
-          if (entry.path === "AGENTS.md" || entry.path === "GEMINI.md") {
-            writeFileSync(path.join(tmpDir, entry.path), (entry as { contents: string }).contents);
-          }
-        }
-        writeFileSync(
-          path.join(tmpDir, "AGENTS.override.md"),
-          `${MARKER_START}\nshadowing AGENTS.md\n${MARKER_END}\n`,
-        );
-        writeScript(entries);
-        const result = runScript();
-        expect(result.status).toBe(1);
-        expect(result.stdout).toContain("AGENTS.override.md");
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    // Proves stripLegacyBriefingMirror is load-bearing for CLAUDE.md, not
-    // just theoretically correct: a target repo whose CLAUDE.md carries a
-    // pre-#942 legacy mirror region gets it stripped by computeScaffold
-    // itself, so the SAME scaffold run's own freshly-emitted guard script
-    // passes against the CLAUDE.md that scaffold run just wrote — without
-    // the strip, this combination would fail the guard against its own
-    // output.
-    it("a pre-#942 legacy mirror region in CLAUDE.md is stripped before scaffolding, so the guard passes against the scaffold's own output", () => {
-      tmpDir = mkdtempSync(path.join(os.tmpdir(), "briefing-sync-strip-"));
-      try {
-        const legacyClaude = `# CLAUDE.md\n\n${MARKER_START}\nold mirrored briefing content\n${MARKER_END}\n`;
-        const entries = computeScaffold(
-          { "CLAUDE.md": legacyClaude },
-          { slug: "demo", mirrors: ["GEMINI.md"] },
-        );
-        for (const entry of entries) {
-          if (
-            entry.path === "AGENTS.md" ||
-            entry.path === "GEMINI.md" ||
-            entry.path === "CLAUDE.md"
-          ) {
-            writeFileSync(path.join(tmpDir, entry.path), (entry as { contents: string }).contents);
-          }
-        }
-        writeScript(entries);
-        const result = runScript();
-        expect(result.status).toBe(0);
-        expect(result.stdout).toContain("OK");
-      } finally {
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
   });
 });
