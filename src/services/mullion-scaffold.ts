@@ -203,9 +203,13 @@ function agentsMdPointerBody(): string {
 // backtick convention of agentsMdPointerBody above (`` `AGENTS.md` ``)
 // would silently turn this whole file into a no-op that still looks right
 // in review — see test/services/mullion-scaffold.test.ts's dedicated
-// regression assertion for this. The import sits alone on the first line,
-// at column 0; the prose below it is a graceful degradation for a human,
-// or an agent whose import syntax differs.
+// regression assertion for this. The import sits alone on its own line, at
+// column 0 of that line — not necessarily the file's first line: the
+// pointer markers (upsertMarkedRegion) or an existing CLAUDE.md's own
+// prose can sit above it, and that's fine, Claude Code scans the whole
+// file. What matters is that the import's OWN line has nothing else on
+// it. The prose below it is a graceful degradation for a human, or an
+// agent whose import syntax differs.
 function claudeMdImportBody(): string {
   return (
     "@AGENTS.md\n" +
