@@ -42,14 +42,19 @@ Mullion has a hook adapter for (Claude Code, Codex, opencode, agy) gets this
 pulled into context automatically at startup, one way or another (see
 [Auto-injection](#auto-injection) below).
 
-Claude Code sessions also get this as a discoverable skill named
-`mullion-host` — shipped as a session-scoped `--plugin-dir` bundle
-(`src/bundle/`, see `hook-adapters/mullion-bundle.ts`), not a file in any
-particular project's checkout, so it's available in every repo Mullion
-hosts a session in, not just this one. It's a thin pointer back to this same
-per-session copy, for an agent CLI that does its own skill discovery rather
-than (or in addition to) the SessionStart injection described below. Gated
-by the `sessions.injectMullionBundle` setting (default on).
+Claude Code sessions also get this content as a set of discoverable
+skills — `host`, `browser`, `troubleshooting`, `session-ops`, plus a fifth,
+`taskmaster-issues`, that isn't a copy of anything here — shipped as a
+session-scoped `--plugin-dir` bundle (`src/bundle/skills/`, see
+`hook-adapters/mullion-bundle.ts`), not a file in any particular project's
+checkout, so it's available in every repo Mullion hosts a session in, not
+just this one. Codex and agy get the same content installed into their own
+global skills directory instead, each named with a `mullion-` prefix (e.g.
+`mullion-host`) to avoid colliding with a user's own skill — see
+`installBundleSkills` in `hook-adapters/mullion-bundle.ts`. Each skill is
+self-contained, not a pointer back to this file, and self-identifies as
+inert outside a Mullion-hosted session. Gated by the
+`sessions.injectMullionBundle` setting (default on).
 
 If the PROJECT you're running against has its own skill and/or reviewer
 subagent authored (either from Mullion's UI or scaffolded into the repo

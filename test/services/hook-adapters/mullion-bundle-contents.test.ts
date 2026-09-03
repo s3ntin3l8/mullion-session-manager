@@ -42,4 +42,60 @@ describe("src/bundle — the shipped Mullion tooling bundle", () => {
       expect(parsed?.description.length).toBeGreaterThan(0);
     }
   });
+
+  // Issue #940 — the source dir must NOT carry the `mullion-` prefix
+  // itself (installBundleSkills, mullion-bundle.ts, prepends it on
+  // install; a prefixed source produced a double-`mullion-mullion-host`
+  // installed name). Named explicitly, not just "however many dirs exist
+  // today", so a regression that re-adds the prefix — or silently drops
+  // one of these five — fails loudly here instead of only showing up in a
+  // live codex/agy install.
+  it("ships exactly the five expected, unprefixed skill source directories", () => {
+    const skillsDir = path.join(bundleDir, "skills");
+    const skillNames = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    expect(skillNames).toEqual(
+      ["browser", "host", "session-ops", "taskmaster-issues", "troubleshooting"].sort(),
+    );
+  });
+
+  // Issue #940 — each env-var-coupled skill must self-identify as inert
+  // without Mullion's own env vars, so an agent reading it in a
+  // non-Mullion session recognizes "not applicable here" immediately
+  // rather than following instructions that reference unset variables.
+  // Approximated mechanically: the first mention of any of these vars
+  // must be preceded somewhere in the file by a guard-shaped phrase
+  // ("unset" or "Check for") — not a proof the check is correct, just
+  // that ONE wasn't simply forgotten.
+  const GUARDED_ENV_VARS = [
+    "MULLION_HOOK_SOCKET",
+    "MULLION_HOOK_TOKEN",
+    "MULLION_SOCKET_PATH",
+    "MULLION_SESSION_ID",
+  ];
+  const GUARD_PHRASE_RE = /unset|Check for/i;
+
+  it("never references a session env var without a preceding conditional check", () => {
+    const skillsDir = path.join(bundleDir, "skills");
+    const skillNames = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+
+    for (const skillName of skillNames) {
+      const raw = readFileSync(path.join(skillsDir, skillName, "SKILL.md"), "utf8");
+      const firstVarIndex = Math.min(
+        ...GUARDED_ENV_VARS.map((v) => raw.indexOf(v)).filter((i) => i >= 0),
+        Infinity,
+      );
+      if (!Number.isFinite(firstVarIndex)) continue; // this skill mentions no env var at all
+
+      const guardIndex = raw.slice(0, firstVarIndex).search(GUARD_PHRASE_RE);
+      expect(
+        guardIndex,
+        `${skillName}/SKILL.md references a session env var before any guard phrase ("unset"/"Check for")`,
+      ).toBeGreaterThanOrEqual(0);
+    }
+  });
 });

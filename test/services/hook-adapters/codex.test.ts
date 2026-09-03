@@ -416,27 +416,21 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     const plan = codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true });
     await plan.managedInstall?.();
 
-    const installedSkillPath = path.join(
-      resolveCodexAgentsSkillsDir(),
-      "mullion-mullion-host",
-      "SKILL.md",
-    );
+    const installedSkillPath = path.join(resolveCodexAgentsSkillsDir(), "mullion-host", "SKILL.md");
     expect(existsSync(installedSkillPath)).toBe(true);
-    expect(readFileSync(installedSkillPath, "utf8")).toContain("mullion-host");
+    expect(readFileSync(installedSkillPath, "utf8")).toContain("name: host");
   });
 
   it("does not install the bundle when injectMullionBundle is off", async () => {
     const plan = codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false });
     await plan.managedInstall?.();
 
-    expect(existsSync(path.join(resolveCodexAgentsSkillsDir(), "mullion-mullion-host"))).toBe(
-      false,
-    );
+    expect(existsSync(path.join(resolveCodexAgentsSkillsDir(), "mullion-host"))).toBe(false);
   });
 
   it("removes a previously-installed bundle skill once injectMullionBundle is turned off", async () => {
     await codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true }).managedInstall?.();
-    const skillDir = path.join(resolveCodexAgentsSkillsDir(), "mullion-mullion-host");
+    const skillDir = path.join(resolveCodexAgentsSkillsDir(), "mullion-host");
     expect(existsSync(skillDir)).toBe(true);
 
     await codexAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
