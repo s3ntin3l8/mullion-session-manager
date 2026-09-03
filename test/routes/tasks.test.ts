@@ -3511,6 +3511,59 @@ describe("tasks route", () => {
         getPrSpy.mockRestore();
         await app.close();
       });
+
+      // Review fix — the candidate filter must gate on mergedAt, not
+      // archivedAt. Unarchive (DELETE /api/tasks/:id/archive) deliberately
+      // clears only archivedAt, leaving mergedAt set; without this the
+      // route (meant to be re-run periodically) would re-confirm the same
+      // already-known merge and silently re-archive a task the user just
+      // asked to bring back.
+      it("does not re-archive a task the user manually unarchived", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/archive-merged-no-reunarchive");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "merged, then manually unarchived",
+            status: "done",
+            prNumber: 57,
+            mergedAt: new Date(),
+            archivedAt: new Date(),
+          })
+          .returning()
+          .all();
+
+        const unarchiveRes = await app.inject({
+          method: "DELETE",
+          url: `/api/tasks/${row.id}/archive`,
+        });
+        expect(unarchiveRes.statusCode).toBe(200);
+        expect(unarchiveRes.json().archivedAt).toBeNull();
+
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi.spyOn(githubWrite, "getPullRequestByNumber");
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ archived: [], failed: [], remaining: 0 });
+        // The task never matched the candidate query at all — no GitHub
+        // round-trip should have happened.
+        expect(getPrSpy).not.toHaveBeenCalled();
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const found = (listed.json() as { id: number; archivedAt: string | null }[]).find(
+          (t) => t.id === row.id,
+        );
+        expect(found?.archivedAt).toBeNull();
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
     });
   });
 });

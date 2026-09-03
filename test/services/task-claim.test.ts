@@ -1181,14 +1181,21 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
-  it("resumes on the preserved branch, keeping its prior commit, and clears failureReason/completedAt/prUrl/prNumber/sessionId", async () => {
+  it("resumes on the preserved branch, keeping its prior commit, and clears failureReason/completedAt/prUrl/prNumber/sessionId/archivedAt", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
     const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 70);
     app.db
       .update(tasks)
-      .set({ prUrl: "https://github.com/o/r/pull/1", prNumber: 1 })
+      .set({
+        prUrl: "https://github.com/o/r/pull/1",
+        prNumber: 1,
+        // Review fix (#1015) — a failed task can be archived (hidden from
+        // the board) without losing Retry; resuming it must un-hide it too,
+        // or it vanishes from the board the instant it starts running again.
+        archivedAt: new Date(),
+      })
       .where(eq(tasks.id, task.id))
       .run();
 
@@ -1214,6 +1221,7 @@ describe("retryTask (#483)", () => {
     expect(row.prUrl).toBeNull();
     expect(row.prNumber).toBeNull();
     expect(row.sessionId).not.toBeNull();
+    expect(row.archivedAt).toBeNull();
     expect(row.branchName).toBe(task.branchName);
     // #491 — retry resumes the preserved branch from its original base, so
     // baseSha must survive unchanged, not be re-resolved or cleared.

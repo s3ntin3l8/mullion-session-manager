@@ -1046,22 +1046,31 @@ export async function tasksRoute(app: FastifyInstance) {
   // arm that sweep). Modeled directly on /api/tasks/clear-done above: same
   // MAX_CLEAR_DONE_BATCH-shaped cap, same "check the install-wide rate
   // limit once per request, not once per task" reasoning.
+  //
+  // Review fix — candidates gate on `isNull(tasks.mergedAt)`, not just
+  // `isNull(tasks.archivedAt)`. Unarchive (DELETE .../archive) deliberately
+  // clears only archivedAt, leaving mergedAt set — the same
+  // isNull(mergedAt) guard the other two merge-observation paths
+  // (webhooks.ts, task-reconciler.ts's markTaskMerged) already use so a
+  // manual unarchive sticks. Without it, this route (meant to be re-run
+  // periodically) would re-confirm the same already-known merge and
+  // silently re-archive a task the user just asked to bring back.
   app.post<{ Body: { projectIds?: number[] } }>("/api/tasks/archive-merged", async (request) => {
     const { projectIds } = request.body ?? {};
 
-    const doneNotArchived = and(
+    const doneUnmergedWithPr = and(
       eq(tasks.status, "done"),
       isNotNull(tasks.prNumber),
-      isNull(tasks.archivedAt),
+      isNull(tasks.mergedAt),
     );
     const candidates =
       projectIds && projectIds.length > 0
         ? app.db
             .select()
             .from(tasks)
-            .where(and(doneNotArchived, inArray(tasks.projectId, projectIds)))
+            .where(and(doneUnmergedWithPr, inArray(tasks.projectId, projectIds)))
             .all()
-        : app.db.select().from(tasks).where(doneNotArchived).all();
+        : app.db.select().from(tasks).where(doneUnmergedWithPr).all();
 
     const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
     const remaining = candidates.length - attempted.length;
