@@ -4,6 +4,7 @@ import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
+import { resolveTaskIssueContextSafe } from "../services/task-issue-context.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
 import { deriveTaskBranchName } from "../services/git-worktree.js";
@@ -406,8 +407,16 @@ export async function tasksRoute(app: FastifyInstance) {
     // still active" guard passes, and that agent has no memory of the task
     // — the previous feedback-only prompt told it "this was rejected,
     // here's why" about work it had never seen and a spec it had never read.
+    // #939/#1016 — resolved once per spawn, fail-open — see
+    // task-issue-context.ts's own doc comment.
+    const issueContext = await resolveTaskIssueContextSafe(app, task, project);
     const prompt = buildRejectPrompt({
-      task,
+      task: {
+        ...task,
+        comments: issueContext?.comments,
+        parent: issueContext?.parent,
+        siblings: issueContext?.siblings,
+      },
       branchName: task.branchName ?? deriveTaskBranchName(task),
       worktreePath: task.worktreePath,
       budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,

@@ -175,6 +175,172 @@ describe("buildWorkerPrompt", () => {
   });
 });
 
+// #939/#1016 — a worker's prompt today is exactly `${title}\n\n${body}`;
+// these cover the optional comments/parent/siblings context
+// task-issue-context.ts resolves and threads through TaskPromptTask.
+describe("buildWorkerPrompt — issue context (#939/#1016)", () => {
+  it("does not render any extra section when comments/parent/siblings are absent (unchanged shape)", () => {
+    const out = buildWorkerPrompt({ ...BASE, mode: "claim" });
+    expect(out.endsWith("- [ ] Stop it exploding")).toBe(true);
+    expect(out).not.toContain("Comments on this issue");
+    expect(out).not.toContain("Parent tracking issue");
+    expect(out).not.toContain("Sibling sub-issues");
+  });
+
+  it("renders the task's own comments after the issue spec, newest-last", () => {
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        comments: [
+          { author: "alice", body: "first thought", createdAt: "2026-01-01T00:00:00Z" },
+          { author: "bob", body: "second thought", createdAt: "2026-01-02T00:00:00Z" },
+        ],
+      },
+    });
+    expect(out).toContain("## Comments on this issue");
+    expect(out).toContain("@alice: first thought");
+    expect(out).toContain("@bob: second thought");
+    expect(out.indexOf("@alice")).toBeLessThan(out.indexOf("@bob"));
+    expect(out.indexOf("Stop it exploding")).toBeLessThan(out.indexOf("@alice"));
+  });
+
+  it("renders 'someone' for a comment with no author", () => {
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        comments: [{ author: null, body: "anonymous note", createdAt: "2026-01-01T00:00:00Z" }],
+      },
+    });
+    expect(out).toContain("- someone: anonymous note");
+  });
+
+  it("caps rendered comments to the last 10 and notes how many were omitted", () => {
+    const comments = Array.from({ length: 13 }, (_, i) => ({
+      author: `user${i}`,
+      body: `comment ${i}`,
+      createdAt: `2026-01-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+    }));
+    const out = buildWorkerPrompt({ ...BASE, mode: "claim", task: { ...TASK, comments } });
+    expect(out).toContain("(3 earlier comments omitted for length)");
+    expect(out).not.toContain("user0:");
+    expect(out).not.toContain("user2:");
+    expect(out).toContain("user3:");
+    expect(out).toContain("user12:");
+  });
+
+  it("truncates an overlong comment body", () => {
+    const longBody = "x".repeat(2000);
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        comments: [{ author: "alice", body: longBody, createdAt: "2026-01-01T00:00:00Z" }],
+      },
+    });
+    expect(out).toContain("x".repeat(800) + "…");
+    expect(out).not.toContain("x".repeat(801));
+  });
+
+  it("renders the parent epic as context-only, with the 'not your task' framing", () => {
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        parent: {
+          number: 939,
+          repo: "s3ntin3l8/mullion-session-manager",
+          title: "feat: rework agent instruction architecture",
+          body: "streams S1-S6...",
+          comments: [],
+        },
+      },
+    });
+    expect(out).toContain("## Parent tracking issue #939 (s3ntin3l8/mullion-session-manager)");
+    expect(out).toContain("context only, not your task");
+    expect(out).toContain("Do not implement the epic's other streams");
+    expect(out).toContain("feat: rework agent instruction architecture");
+    expect(out).toContain("streams S1-S6...");
+  });
+
+  it("renders the parent's own comments, nested under the parent section", () => {
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        parent: {
+          number: 939,
+          repo: "owner/repo",
+          title: "Epic",
+          body: null,
+          comments: [
+            { author: "carol", body: "spike result: X", createdAt: "2026-01-01T00:00:00Z" },
+          ],
+        },
+      },
+    });
+    expect(out).toContain("Parent issue comments:");
+    expect(out).toContain("@carol: spike result: X");
+  });
+
+  it("does not render a parent section when parent is null (resolved: genuinely no parent)", () => {
+    const out = buildWorkerPrompt({ ...BASE, mode: "claim", task: { ...TASK, parent: null } });
+    expect(out).not.toContain("Parent tracking issue");
+  });
+
+  it("renders sibling sub-issues, somebody-else's-job framing included", () => {
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        siblings: [
+          { issueNumber: 940, title: "Decompose agent guide", status: "in_progress" },
+          { issueNumber: 941, title: "Host-local content sync", status: "ready" },
+        ],
+      },
+    });
+    expect(out).toContain("## Sibling sub-issues");
+    expect(out).toContain("somebody else's job, not yours");
+    expect(out).toContain("- #940 (in_progress): Decompose agent guide");
+    expect(out).toContain("- #941 (ready): Host-local content sync");
+  });
+
+  it("never folds injected context into the directive-parsed task.body", () => {
+    // #1016/task-agent-resolve.ts/task-model-resolve.ts all re-parse
+    // task.body for directives — a parent's body containing one must never
+    // reach that parsing. This is a structural guarantee (comments/parent/
+    // siblings are separate TaskPromptTask fields, never merged into body),
+    // asserted here so a future refactor that merges them trips a test.
+    const out = buildWorkerPrompt({
+      ...BASE,
+      mode: "claim",
+      task: {
+        ...TASK,
+        parent: {
+          number: 1,
+          repo: "owner/repo",
+          title: "Epic",
+          body: "Manual: true\nAgent: codex",
+          comments: [],
+        },
+      },
+    });
+    // The parent's directive-shaped lines still appear (as context text),
+    // but only inside the fenced parent section, not as this task's own
+    // body — i.e. TASK.body itself is untouched by this widened task object.
+    expect(TASK.body).not.toContain("Manual: true");
+    expect(out).toContain("Manual: true");
+    expect(out).toContain("## Parent tracking issue");
+  });
+});
+
 describe("buildRejectPrompt", () => {
   // The regression guard for the bug this module fixes: the previous
   // feedback-only prompt stranded a freshly-respawned agent with no spec.

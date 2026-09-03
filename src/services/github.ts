@@ -441,6 +441,106 @@ export async function listLabeledIssues(
     }));
 }
 
+// #939/#1016 — worker-prompt context (task-issue-context.ts). A worker's
+// initial prompt today is exactly `${title}\n\n${body}` (task-prompt.ts's
+// taskSpec) — these two reads are what let it also see the issue's own
+// comment thread and, for a child of a tracking epic, the parent's own
+// spec+comments. Deliberately separate, uncached one-off GET calls (not
+// folded into listLabeledIssues' list response, which carries neither) —
+// these only run once per worker SPAWN, not once per 60s poll sweep, so the
+// extra request volume is negligible next to the ingest sweep's own budget.
+
+export interface GitHubIssueComment {
+  author: string | null;
+  body: string;
+  createdAt: string;
+}
+
+/**
+ * Last `perPage` comments on an issue, newest-last (oldest-first within the
+ * returned window) — matches the order a human reading the thread top-to-
+ * bottom would see, and the order task-prompt.ts's own rendering expects.
+ * GitHub's list-comments endpoint has no "give me the last N" mode, so this
+ * asks for `direction=desc` (newest first) then reverses client-side, rather
+ * than requesting `direction=asc` and hoping `perPage` happens to cover the
+ * whole thread — a long thread (#939's own epic explicitly said "see each
+ * issue's comments for results") would otherwise silently return only the
+ * OLDEST N, which is usually the least relevant part for a worker context.
+ */
+export async function listIssueComments(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  perPage: number,
+): Promise<GitHubIssueComment[]> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments?per_page=${perPage}&sort=created&direction=desc`,
+    { headers },
+  );
+
+  if (!res.ok) {
+    throw new GitHubApiError(
+      `GitHub API error for ${owner}/${repo}#${issueNumber} comments (HTTP ${res.status})`,
+      res.status,
+    );
+  }
+
+  const items = (await res.json()) as {
+    user: { login: string } | null;
+    body?: string | null;
+    created_at: string;
+  }[];
+  return items
+    .map((item) => ({
+      author: item.user?.login ?? null,
+      body: item.body ?? "",
+      createdAt: item.created_at,
+    }))
+    .reverse();
+}
+
+export interface GitHubIssueSummary {
+  number: number;
+  title: string;
+  body: string | null;
+}
+
+/** A single issue's title+body — used to resolve a parent tracking issue's
+ * own spec, which (unlike a child's `parent_issue_url`/`sub_issues_summary`)
+ * doesn't ride any list response the child's own ingest already reads. */
+export async function getIssue(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<GitHubIssueSummary> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}`,
+    { headers },
+  );
+
+  if (!res.ok) {
+    throw new GitHubApiError(
+      `GitHub API error for ${owner}/${repo}#${issueNumber} (HTTP ${res.status})`,
+      res.status,
+    );
+  }
+
+  const item = (await res.json()) as { number: number; title: string; body?: string | null };
+  return { number: item.number, title: item.title, body: item.body ?? null };
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Per-PR CI status (issue #102) — server-side poller writes to this cache,
 // the /github/prs endpoint reads from it.

@@ -32,6 +32,7 @@ import {
   postReviewFindingsComment,
 } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
@@ -1247,8 +1248,16 @@ async function attemptAutoRebase(
       )
     : undefined;
   const seedCapable = commandSupportsSeed(task.agentCommand);
+  // #939/#1016 — resolved once per spawn, fail-open — see
+  // task-issue-context.ts's own doc comment.
+  const issueContext = await resolveTaskIssueContextSafe(app, task, project);
   const prompt = buildRebasePrompt({
-    task,
+    task: {
+      ...task,
+      comments: issueContext?.comments,
+      parent: issueContext?.parent,
+      siblings: issueContext?.siblings,
+    },
     branchName: worktree.branch,
     worktreePath: worktree.path,
     budgetMinutes: taskMasterConfig.budgetMinutes,
@@ -2082,8 +2091,16 @@ async function attemptReturnRedCiToWorker(
         task.id,
       )
     : undefined;
+  // #939/#1016 — resolved once per spawn, fail-open — see
+  // task-issue-context.ts's own doc comment.
+  const issueContext = await resolveTaskIssueContextSafe(app, task, project);
   const prompt = buildCiFailurePrompt({
-    task,
+    task: {
+      ...task,
+      comments: issueContext?.comments,
+      parent: issueContext?.parent,
+      siblings: issueContext?.siblings,
+    },
     branchName: task.branchName ?? deriveTaskBranchName(task),
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
@@ -2253,8 +2270,16 @@ async function attemptReturnPrCommentsToWorker(
         task.id,
       )
     : undefined;
+  // #939/#1016 — resolved once per spawn, fail-open — see
+  // task-issue-context.ts's own doc comment.
+  const issueContext = await resolveTaskIssueContextSafe(app, task, project);
   const prompt = buildPrReviewCommentsPrompt({
-    task,
+    task: {
+      ...task,
+      comments: issueContext?.comments,
+      parent: issueContext?.parent,
+      siblings: issueContext?.siblings,
+    },
     branchName: task.branchName ?? deriveTaskBranchName(task),
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
@@ -3260,8 +3285,16 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
 
         if (!shouldAutoReturn) continue;
 
+        // #939/#1016 — resolved once per spawn, fail-open — see
+        // task-issue-context.ts's own doc comment.
+        const issueContext = await resolveTaskIssueContextSafe(app, task, project);
         const prompt = buildReviewFeedbackPrompt({
-          task,
+          task: {
+            ...task,
+            comments: issueContext?.comments,
+            parent: issueContext?.parent,
+            siblings: issueContext?.siblings,
+          },
           branchName: task.branchName ?? deriveTaskBranchName(task),
           worktreePath: task.worktreePath!,
           budgetMinutes: resolvedTaskMaster.budgetMinutes,
