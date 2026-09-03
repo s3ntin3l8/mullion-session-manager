@@ -16,6 +16,7 @@ import {
 } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { Markdown } from "./ui/Markdown.js";
 
 const UNSET_AGENT = "";
 
@@ -466,7 +467,7 @@ export function TaskDetail({
             </div>
           )}
           {task.reviewFindings && (
-            <div className="task-detail-review-findings">{task.reviewFindings}</div>
+            <Markdown text={task.reviewFindings} className="task-detail-review-findings" />
           )}
           <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
         </div>
