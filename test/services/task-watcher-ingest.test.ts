@@ -418,6 +418,49 @@ describe("upsertIssueTask (#490a)", () => {
       );
     });
 
+    // Regression test — caught in review before merge: without the
+    // subIssueTotal-transition guard, this exact sequence silently flipped a
+    // human's manual "drag back to ready" straight back to backlog on the
+    // very next poll sweep, because GitHub's sub_issues_summary.total does
+    // NOT drop when children close (only when unlinked) — so re-demoting on
+    // every re-sighting of an already-known epic defeated the escape hatch
+    // docs/tasks.md promises.
+    it("does not re-demote a task a human dragged back to ready, once the epic count is already known", () => {
+      upsertIssueTask(app, projectId, {
+        number: 9631,
+        title: "Epic",
+        body: null,
+        htmlUrl: "https://x/9631",
+        subIssues: { total: 3, completed: 0 },
+      });
+      expect(rowFor(9631).status).toBe("backlog");
+
+      // A human overrides the guard, exactly as docs/tasks.md's own escape
+      // hatch describes.
+      app.db
+        .update(tasks)
+        .set({ status: "ready" })
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, 9631)))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      // Next poll sweep re-sights the same issue. All three children may
+      // even have closed by now — GitHub's total is unchanged either way.
+      upsertIssueTask(app, projectId, {
+        number: 9631,
+        title: "Epic",
+        body: null,
+        htmlUrl: "https://x/9631",
+        subIssues: { total: 3, completed: 3 },
+      });
+
+      const row = rowFor(9631);
+      expect(row.status).toBe("ready");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "transition" }),
+      );
+    });
+
     it("a webhook-sourced re-sighting (subIssues omitted) never demotes", () => {
       upsertIssueTask(app, projectId, {
         number: 964,

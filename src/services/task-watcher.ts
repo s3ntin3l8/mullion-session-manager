@@ -166,6 +166,10 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       failureReason: tasks.failureReason,
       branchName: tasks.branchName,
       worktreePath: tasks.worktreePath,
+      // #1016 (Hermes-equivalent review catch) — the re-sighting epic-demotion
+      // check below needs this to tell "newly detected" from "already known,"
+      // see that check's own doc comment for why.
+      subIssueTotal: tasks.subIssueTotal,
     })
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
@@ -277,9 +281,22 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
   // `claimed`/`in_progress`/`reviewing`/`done`/`failed` task is not this
   // guard's business, and a task a human has already started work on keeps
   // going regardless of what GitHub reports about its children afterward.
-  // The inverse (all children close, the epic becomes claimable again) is
-  // deliberately NOT automatic here — see #1021 for that design.
-  if (existingRow !== undefined && isEpicIssue(issue)) {
+  //
+  // Also gated on `(existingRow.subIssueTotal ?? 0) === 0` — i.e. only on
+  // the TRANSITION into "known to be an epic," not on every re-sighting of
+  // an already-known one. Without this, docs/tasks.md's own promised escape
+  // hatch ("a human drags it back to `ready`") would be a lie: GitHub's
+  // `sub_issues_summary.total` doesn't drop when children CLOSE, only when
+  // they're unlinked (see github.ts's listLabeledIssues mapping), so a
+  // human-dragged `ready` would get silently flipped straight back to
+  // `backlog` on the very next poll sweep — this exact bug shipped in this
+  // PR's first revision and was caught in review before merge. Once
+  // `subIssueTotal` is already non-null-and-nonzero in the DB, this block
+  // never fires again for that task, so a human override sticks permanently
+  // — matching #1021's own "not automatic" reverse-direction design, this is
+  // the forward-direction equivalent: detect once, then leave it to a human.
+  const isNewlyDetectedEpic = (existingRow?.subIssueTotal ?? 0) === 0 && isEpicIssue(issue);
+  if (existingRow !== undefined && isNewlyDetectedEpic) {
     const demoted = app.db
       .update(tasks)
       .set({ status: "backlog" satisfies TaskStatus })
