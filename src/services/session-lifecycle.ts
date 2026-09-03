@@ -734,7 +734,11 @@ export async function createSessionRecord(
     app.pty.discardPendingSeed(String(created.id));
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
-    return { ok: false, reason: "spawn-failed", detail: err instanceof Error ? err.message : undefined };
+    return {
+      ok: false,
+      reason: "spawn-failed",
+      detail: err instanceof Error ? err.message : undefined,
+    };
   }
 
   // Track preview worktrees for sync and cleanup

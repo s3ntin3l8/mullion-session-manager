@@ -150,7 +150,11 @@ export async function reseedTaskIfSessionExited(
   });
   if (!result.ok) {
     app.log.warn(
-      { taskId: task.id, reason: result.reason, detail: "detail" in result ? result.detail : undefined },
+      {
+        taskId: task.id,
+        reason: result.reason,
+        detail: "detail" in result ? result.detail : undefined,
+      },
       `${logContext}: re-seed spawn failed, worktree left as-is for a manual claim/retry`,
     );
     return false;

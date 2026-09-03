@@ -1098,7 +1098,11 @@ export async function tasksRoute(app: FastifyInstance) {
         // Awaited, unlike the sync above: this can change `sessionId` on
         // the task row, and the response below should reflect that rather
         // than the pre-reseed snapshot.
-        const reseeded = await reseedIfSessionExited(updated, project, request.body.feedback ?? null);
+        const reseeded = await reseedIfSessionExited(
+          updated,
+          project,
+          request.body.feedback ?? null,
+        );
         if (!reseeded) {
           // Issue #987 — the previous session had already exited AND the
           // re-seed attempt itself failed (spawn failure, or lost a race).
@@ -1113,7 +1117,11 @@ export async function tasksRoute(app: FastifyInstance) {
           const failedAt = new Date();
           const failed = app.db
             .update(tasks)
-            .set({ status: "failed", failureReason: "re-seed spawn failed after reject", completedAt: failedAt })
+            .set({
+              status: "failed",
+              failureReason: "re-seed spawn failed after reject",
+              completedAt: failedAt,
+            })
             .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress")))
             .returning()
             .all();
@@ -1127,7 +1135,12 @@ export async function tasksRoute(app: FastifyInstance) {
             });
             void syncTaskTransition(
               app,
-              { ...updated, status: "failed", failureReason: "re-seed spawn failed after reject", completedAt: failedAt },
+              {
+                ...updated,
+                status: "failed",
+                failureReason: "re-seed spawn failed after reject",
+                completedAt: failedAt,
+              },
               project,
               "failed",
             );
