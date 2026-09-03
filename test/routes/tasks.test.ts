@@ -1359,14 +1359,17 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("POST /api/tasks/:id/reject still records the new sessionId and 200s even when the re-seed spawn fails", async () => {
+    it("POST /api/tasks/:id/reject fails the task explicitly when the re-seed spawn fails (issue #987)", async () => {
       // The re-seed's prompt is now delivered as spawn-time initialPrompt
       // argv, not a separate post-spawn stashSeed call (see task-claim.ts's
       // own doc comment) — there's no longer a "spawn already succeeded,
       // then a follow-up delivery step failed" window to test for a local
       // host. What replaces it: createSessionRecord/spawn itself failing
-      // outright must still 200 with the OLD (unreseeded) sessionId
-      // untouched, not 500 the whole reject request.
+      // outright means the OLD session is confirmed dead and re-seeding it
+      // failed too — leaving the task at "in_progress" would strand it
+      // forever (issue #987), so this now fails the task explicitly instead,
+      // 200ing with the OLD (unreseeded) sessionId left in place as an
+      // honest record of which session actually ran.
       const app = await buildApp();
       const cwd = createGitRepo();
       const project = await app.inject({
@@ -1427,7 +1430,8 @@ describe("tasks route", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json().status).toBe("in_progress");
+      expect(res.json().status).toBe("failed");
+      expect(res.json().failureReason).toBe("re-seed spawn failed after reject");
       // Re-seed spawn failed — the OLD sessionId is left in place, not
       // silently nulled or 500ing the whole reject request.
       expect(res.json().sessionId).toBe(oldSessionId);

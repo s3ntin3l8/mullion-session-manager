@@ -95,7 +95,21 @@ export function isMasterAlive(id: string): Promise<boolean> {
     // ended, but doesn't guarantee every stdout 'data' chunk has been
     // delivered yet, which reconcileExitedSessions() polling many
     // sessions concurrently could hit in the same way.
-    child.on("close", () => resolve(stdout.trim() === "active"));
+    //
+    // "active" or "deactivating" both count as alive — issue #988: a scope
+    // Mullion itself asked systemd to stop (stopScope() below) sits in
+    // "deactivating" for up to systemd's own DefaultTimeoutStopSec (90s in
+    // the incident that motivated this) before settling, and is NOT "the
+    // program exited on its own," the only thing this function exists to
+    // catch. `is-active` exits non-zero for a deactivating unit while still
+    // printing "deactivating" on stdout — this reads only stdout already
+    // (the `close` handler ignores the exit code entirely), so widening the
+    // string check is sufficient on its own; do not add an exit-code guard
+    // alongside it, that would undo this fix.
+    child.on("close", () => {
+      const state = stdout.trim();
+      resolve(state === "active" || state === "deactivating");
+    });
   });
 }
 
@@ -157,7 +171,12 @@ export function isMasterAliveBatch(ids: string[]): Promise<Record<string, boolea
         "--user",
         "list-units",
         "--type=scope",
-        "--state=active",
+        // "active" or "deactivating" — issue #988, same fix as
+        // isMasterAlive() above: a scope Mullion itself asked systemd to
+        // stop sits in "deactivating" for up to systemd's own
+        // DefaultTimeoutStopSec before settling, and must not read as
+        // exited for that whole window.
+        "--state=active,deactivating",
         "--no-legend",
         "--plain",
         "crs-session-*.scope",

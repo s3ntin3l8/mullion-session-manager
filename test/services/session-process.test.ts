@@ -152,6 +152,15 @@ describe("isMasterAlive", () => {
     await expect(isMasterAlive("1")).resolves.toBe(false);
   });
 
+  // Issue #988 — a scope Mullion itself asked systemd to stop sits in
+  // "deactivating" for up to systemd's own DefaultTimeoutStopSec before
+  // settling; that is NOT "the program exited on its own," the only thing
+  // this function exists to catch, so it must not read as dead mid-stop.
+  it("resolves true when the scope is deactivating (Mullion's own stop is in flight)", async () => {
+    isActiveReplies["crs-session-1.scope"] = "deactivating";
+    await expect(isMasterAlive("1")).resolves.toBe(true);
+  });
+
   it("resolves false when the scope failed or never existed", async () => {
     isActiveReplies["crs-session-1.scope"] = "failed";
     await expect(isMasterAlive("1")).resolves.toBe(false);
@@ -198,7 +207,12 @@ describe("isMasterAliveBatch", () => {
         "--user",
         "list-units",
         "--type=scope",
-        "--state=active",
+        // Issue #988 — "deactivating" alongside "active": a scope Mullion
+        // itself asked systemd to stop must not read as exited for the
+        // whole window it takes to settle. This relies on systemctl's own
+        // `--state` filter, not any client-side parsing here — a matched
+        // unit's SUB field isn't inspected, only its presence in the list.
+        "--state=active,deactivating",
         "--no-legend",
         "--plain",
         "crs-session-*.scope",

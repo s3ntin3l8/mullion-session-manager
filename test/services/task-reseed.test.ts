@@ -183,6 +183,37 @@ describe("reseedTaskIfSessionExited", () => {
     expect(mockCloseSessionBrowserBindings.mock.calls[0][1]).toBe(sessionId);
   });
 
+  // Issue #988 — the session row must read "killed" for the ENTIRE
+  // terminate() await window, not just after it resolves. `terminate()`
+  // itself awaits `systemctl --user stop`, which can block for up to
+  // systemd's own DefaultTimeoutStopSec (90s in the incident that motivated
+  // this) — for that whole window the OLD shape here left the row reading
+  // "active", squarely inside reconcileExitedSessions's own candidate query.
+  // Asserting the ordering (not just the eventual end state, which the two
+  // tests above already cover) requires observing the row from INSIDE
+  // terminate()'s own mock, before it resolves.
+  it("with force: true — marks the session 'killed' BEFORE awaiting terminate, not after", async () => {
+    const { task, sessionId } = insertTaskWithSession("active");
+    mockSuccessfulSpawn();
+    let statusDuringTerminate: string | undefined;
+    mockTerminate.mockImplementation(async () => {
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      statusDuringTerminate = row.status;
+    });
+
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test review-feedback",
+      { force: true },
+    );
+
+    expect(result).toBe(true);
+    expect(statusDuringTerminate).toBe("killed");
+  });
+
   it("with force: true — does NOT spawn a second agent when terminate itself fails", async () => {
     mockTerminate.mockRejectedValue(new Error("host unreachable"));
     const { task, sessionId } = insertTaskWithSession("active");

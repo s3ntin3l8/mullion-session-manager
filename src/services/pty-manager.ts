@@ -2048,7 +2048,22 @@ export class Session {
         env: plan.env,
         stdio: "ignore",
       });
-      child.on("error", reject);
+      child.on("error", (err) => {
+        // Issue #988's investigation: Node's own spawn ENOENT blames
+        // whichever binary it was trying to exec ("spawn systemd-run
+        // ENOENT") even when the REAL cause is `cwd` itself having vanished
+        // (a worktree deleted out from under an in-flight re-seed) — the
+        // process manager can't tell those apart from the raw error alone,
+        // and the misleading message sent a prior incident's investigation
+        // looking at the wrong binary. Classify it here, where `this.cwd`
+        // is in scope, instead of leaving every caller to re-derive it.
+        const nodeErr = err as NodeJS.ErrnoException;
+        if (nodeErr.code === "ENOENT" && !existsSync(this.cwd)) {
+          reject(new Error(`master bootstrap failed: cwd does not exist: ${this.cwd}`));
+          return;
+        }
+        reject(err);
+      });
       child.on("exit", (code) => {
         if (code === 0) resolve();
         else reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));

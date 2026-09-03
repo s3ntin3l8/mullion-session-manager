@@ -294,6 +294,71 @@ describe("reconcileExitedSessions", () => {
       await app.close();
     });
 
+    // Issue #973's incident, #988's fix — a scope Mullion itself asked
+    // systemd to stop (e.g. task-reseed.ts's force re-seed, terminating a
+    // still-active session before spawning a fresh one) sits in
+    // "deactivating" for up to systemd's own DefaultTimeoutStopSec before
+    // settling. isMasterAliveBatch() now folds that into "alive" (see
+    // session-process.test.ts for the unit-level coverage of the actual
+    // systemctl `--state` widening); this pins the consequence one layer up
+    // — the reconciler must not race that window and flip the task to
+    // failed / delete the worktree out from under an in-flight re-seed.
+    it("does not fail a claimed task or touch its worktree while its scope is deactivating (issue #973/#988)", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      const { tasks } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(tasks)
+        .set({ worktreePath: "/tmp/.mullion-worktrees/mullion-task-988" })
+        .where(eq(tasks.id, taskId))
+        .run();
+      // Mimics what isMasterAliveBatch() itself now reports for a
+      // deactivating scope — "alive" — rather than re-deriving the
+      // systemctl state string here.
+      mockMasterAlive(app, true);
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn();
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks" });
+      const row = (res.json() as { id: number; status: string }[]).find((t) => t.id === taskId);
+      expect(row?.status).toBe("claimed");
+      expect(removeWorktreeIfCleanMock).not.toHaveBeenCalled();
+
+      resolveBackendSpy.mockRestore();
+      // Unlike every other test in this describe block, this one
+      // deliberately leaves the session "active" and the task "claimed" —
+      // that's the whole point. reconcileExitedSessions() scans the shared
+      // on-disk test DB for ALL "active" sessions, not just ones the current
+      // test created, so left as-is this row would still be a live
+      // candidate for a LATER test's own reconcile pass (with THAT test's
+      // own, different liveness mock) and get caught by it, corrupting that
+      // test's assertions. Every other test here naturally clears its own
+      // candidacy by failing/completing the row; this one has to do it
+      // explicitly.
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+      await app.close();
+    });
+
     it("syncs the failed transition to GitHub for a linked task, with the freshly-updated row and its project", async () => {
       const app = await buildApp();
       const sessionId = await createSession(app);

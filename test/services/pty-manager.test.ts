@@ -1784,7 +1784,9 @@ describe("PtyManager", () => {
           "--user",
           "list-units",
           "--type=scope",
-          "--state=active",
+          // Issue #988 — widened alongside "active"; see
+          // session-process.test.ts for the dedicated coverage of why.
+          "--state=active,deactivating",
           "--no-legend",
           "--plain",
           "crs-session-*.scope",
