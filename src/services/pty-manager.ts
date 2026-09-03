@@ -1,6 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -591,6 +591,21 @@ export const MIN_TERMINAL_ROWS = 10;
  * which attach path or caller supplied the number. */
 function clampTerminalSize(cols: number, rows: number): { cols: number; rows: number } {
   return { cols: Math.max(cols, MIN_TERMINAL_COLS), rows: Math.max(rows, MIN_TERMINAL_ROWS) };
+}
+
+/** Issue #988 / Hermes review, PR #1001 — bootstrapMaster()'s own ENOENT
+ * classification needs "is this cwd actually spawnable" rather than a bare
+ * existsSync: a path that exists but is a plain file (not a directory)
+ * spawns systemd-run with the identical ENOENT and would otherwise still
+ * surface the misleading raw error. statSync throwing (ENOENT, or anything
+ * else — a permissions error mid-stat is just as "not usable" here) and a
+ * successful stat that isn't a directory both collapse to `false`. */
+function isUsableCwd(cwd: string): boolean {
+  try {
+    return statSync(cwd).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 // Phase 5 (Track A) — cap on each session's subagent registry, same
@@ -2048,7 +2063,29 @@ export class Session {
         env: plan.env,
         stdio: "ignore",
       });
-      child.on("error", reject);
+      child.on("error", (err) => {
+        // Issue #988's investigation: Node's own spawn ENOENT blames
+        // whichever binary it was trying to exec ("spawn systemd-run
+        // ENOENT") even when the REAL cause is `cwd` itself having vanished
+        // (a worktree deleted out from under an in-flight re-seed) — the
+        // process manager can't tell those apart from the raw error alone,
+        // and the misleading message sent a prior incident's investigation
+        // looking at the wrong binary. Classify it here, where `this.cwd`
+        // is in scope, instead of leaving every caller to re-derive it.
+        //
+        // Hermes review, PR #1001 — a plain `existsSync` check alone would
+        // miss a `cwd` that exists but isn't a directory (e.g. a file left
+        // behind at that path): that also spawns with an identical ENOENT
+        // yet would still surface the misleading raw message. isUsableCwd()
+        // below covers both "doesn't exist" and "exists but isn't a
+        // directory" as the same "not usable" case.
+        const nodeErr = err as NodeJS.ErrnoException;
+        if (nodeErr.code === "ENOENT" && !isUsableCwd(this.cwd)) {
+          reject(new Error(`master bootstrap failed: cwd does not exist: ${this.cwd}`));
+          return;
+        }
+        reject(err);
+      });
       child.on("exit", (code) => {
         if (code === 0) resolve();
         else reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));

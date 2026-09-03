@@ -70,31 +70,54 @@ export async function reseedTaskIfSessionExited(
   const wasActive = session?.status === "active";
   if (wasActive) {
     if (!opts.force) return false;
+    // Issue #988's investigation: `terminate()` below awaits `stopScope()`
+    // (session-process.ts), which awaits `systemctl --user stop` — this can
+    // take up to systemd's own `DefaultTimeoutStopSec` (90s in the incident
+    // that motivated this) if the prior session's process doesn't respond
+    // to SIGTERM promptly. For that ENTIRE window, marking "killed" only on
+    // confirmed success (the previous shape here) left the row reading
+    // "active" — squarely in reconcileExitedSessions's own candidate query
+    // (session-reconciler.ts selects `status = "active"`), so a concurrent
+    // reconcile tick could independently decide this session had "exited on
+    // its own", flip the TASK to "failed" with a misleading reason, and
+    // delete the worktree this re-seed is about to spawn into (issue #973's
+    // incident). Flipping to "killed" BEFORE awaiting terminate — CAS'd on
+    // "active" so a losing race here costs nothing — takes this session out
+    // of that candidate query's reach for the whole window, not just after
+    // it. Restored back to "active" in the catch below if terminate throws,
+    // since termination is then NOT confirmed and the normal 30s reconciler
+    // must be free to notice this session for real (whether it actually
+    // died or is still running).
+    const claimedKilled = app.db
+      .update(sessions)
+      .set({ status: "killed" })
+      .where(and(eq(sessions.id, task.sessionId), eq(sessions.status, "active")))
+      .run();
+    if (claimedKilled.changes === 0) {
+      // Lost a race with something else that already moved this session
+      // off "active" (a concurrent kill, or it genuinely exited on its own
+      // between the read above and this write) — nothing left to
+      // terminate, and no live session left to spawn a second agent
+      // alongside.
+      app.log.warn(
+        { taskId: task.id, sessionId: task.sessionId },
+        `${logContext}: lost a race marking the still-active session killed before force re-seeding, leaving it as-is`,
+      );
+      return false;
+    }
     try {
       await resolveBackend(app, project.hostId).terminate(String(task.sessionId));
-      // Flip the superseded session's row to "killed" now that termination
-      // is CONFIRMED to have succeeded — deliberately not killSession()
-      // here, which marks a row "killed" even when its own terminate call
-      // fails (the right call for a human-initiated kill, where nothing
-      // downstream depends on confirmed death). This function's catch
-      // block below has a stronger requirement: it must NOT fall through
-      // to spawning a second agent into this worktree while the old one
-      // might still be alive, so the status write only happens on the
-      // success path. Without this, the superseded session stays
-      // "active" until the 30s reconciler notices and marks it "exited"
-      // — never "killed" — which is the one status the sidebar and the
-      // Unified Board's ad-hoc lane don't already filter out.
-      app.db
-        .update(sessions)
-        .set({ status: "killed" })
-        .where(eq(sessions.id, task.sessionId))
-        .run();
       closeSessionBrowserBindings(app, task.sessionId);
     } catch (err) {
       // Do NOT fall through to spawning anyway — a terminate failure means
       // the old session might still be alive and still writing to this
       // exact worktree; spawning a second agent into it concurrently would
       // be far worse than leaving the task as-is for a later pass to retry.
+      app.db
+        .update(sessions)
+        .set({ status: "active" })
+        .where(and(eq(sessions.id, task.sessionId), eq(sessions.status, "killed")))
+        .run();
       app.log.warn(
         { err, taskId: task.id, sessionId: task.sessionId },
         `${logContext}: failed to terminate the still-active session before force re-seeding, leaving it as-is`,
@@ -127,7 +150,11 @@ export async function reseedTaskIfSessionExited(
   });
   if (!result.ok) {
     app.log.warn(
-      { taskId: task.id, reason: result.reason },
+      {
+        taskId: task.id,
+        reason: result.reason,
+        detail: "detail" in result ? result.detail : undefined,
+      },
       `${logContext}: re-seed spawn failed, worktree left as-is for a manual claim/retry`,
     );
     return false;

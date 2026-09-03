@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
-import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
+import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
@@ -370,12 +370,28 @@ export async function tasksRoute(app: FastifyInstance) {
   // review-feedback auto-return via reseedTaskIfSessionExited
   // (task-reseed.ts), so the two paths can't drift into different re-seed
   // behaviors.
+  //
+  // Returns whether the task is left with a live agent attached: `true`
+  // covers both "re-seeded a fresh session" and "the old session is still
+  // active, left alone by design so a human watching that terminal can pick
+  // the feedback up" (task-reseed.ts's own default, non-`force` behavior).
+  // `false` means the previous session had already exited AND the re-seed
+  // attempt itself failed (spawn failure, or lost a race) — issue #987: that
+  // used to leave the task sitting at "in_progress" with a dead session and
+  // a stale `sessionId` forever, since nothing ever revisits it. The caller
+  // below fails the task explicitly instead.
   async function reseedIfSessionExited(
     task: typeof tasks.$inferSelect,
     project: typeof projects.$inferSelect,
     feedback: string | null,
-  ): Promise<void> {
-    if (!task.sessionId || !task.worktreePath || !task.agentCommand) return;
+  ): Promise<boolean> {
+    if (!task.sessionId || !task.worktreePath || !task.agentCommand) return true;
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+    if (session?.status === "active") {
+      // Session still alive — task-reseed.ts's own default behavior is to
+      // leave it untouched, not a failure.
+      return true;
+    }
     // Includes the task spec, not just the feedback: this only actually
     // reaches a fresh agent once reseedTaskIfSessionExited's own "session
     // still active" guard passes, and that agent has no memory of the task
@@ -401,7 +417,7 @@ export async function tasksRoute(app: FastifyInstance) {
           )
         : undefined,
     });
-    await reseedTaskIfSessionExited(app, task, project, prompt, "task reject");
+    return reseedTaskIfSessionExited(app, task, project, prompt, "task reject");
   }
 
   // Phase 6 (6.9/#233) — local-board creation, works with Task Master off.
@@ -1082,7 +1098,54 @@ export async function tasksRoute(app: FastifyInstance) {
         // Awaited, unlike the sync above: this can change `sessionId` on
         // the task row, and the response below should reflect that rather
         // than the pre-reseed snapshot.
-        await reseedIfSessionExited(updated, project, request.body.feedback ?? null);
+        const reseeded = await reseedIfSessionExited(
+          updated,
+          project,
+          request.body.feedback ?? null,
+        );
+        if (!reseeded) {
+          // Issue #987 — the previous session had already exited AND the
+          // re-seed attempt itself failed (spawn failure, or lost a race).
+          // Leaving the task at "in_progress" here strands it with a dead
+          // session and a stale `sessionId` permanently: nothing else ever
+          // revisits it. Fail it explicitly instead, same CAS-guarded shape
+          // task-reconciler.ts's failReviewingGate/budget-exceeded paths
+          // use. Deliberately NOT calling removeWorktreeIfClean, unlike
+          // those two — a human just wrote real reject feedback onto a
+          // branch that may carry committed work worth a retryTask picking
+          // back up, so the worktree is left in place for that.
+          const failedAt = new Date();
+          const failed = app.db
+            .update(tasks)
+            .set({
+              status: "failed",
+              failureReason: "re-seed spawn failed after reject",
+              completedAt: failedAt,
+            })
+            .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress")))
+            .returning()
+            .all();
+          if (failed.length > 0) {
+            recordTaskTransition(app, {
+              taskId,
+              projectId: project.id,
+              from: "in_progress",
+              to: "failed",
+              via: "reject",
+            });
+            void syncTaskTransition(
+              app,
+              {
+                ...updated,
+                status: "failed",
+                failureReason: "re-seed spawn failed after reject",
+                completedAt: failedAt,
+              },
+              project,
+              "failed",
+            );
+          }
+        }
       }
       const [final] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
       return final ?? updated;

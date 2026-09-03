@@ -324,7 +324,11 @@ export type CreateSessionResult =
   // own ClaimTaskOutcome.detail field, which routes/tasks.ts already reads
   // straight through — that route needs no change for this.
   | { ok: false; reason: "worktree-failed"; detail?: string }
-  | { ok: false; reason: "spawn-failed" }
+  // `detail` (issue #988) — the classified spawn error message (e.g. "cwd
+  // does not exist: ..." from pty-manager.ts's bootstrapMaster, rather than
+  // the misleading raw "spawn systemd-run ENOENT"), so callers that log a
+  // spawn failure (task-reseed.ts) can say what actually happened.
+  | { ok: false; reason: "spawn-failed"; detail?: string }
   // Phase 5 (Track B, issue #193 5.3b) — parentSessionId validation
   // failures, all clean 4xx per the roadmap's security guardrails for
   // sessions.spawn_child (never a 500).
@@ -730,7 +734,11 @@ export async function createSessionRecord(
     app.pty.discardPendingSeed(String(created.id));
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
-    return { ok: false, reason: "spawn-failed" };
+    return {
+      ok: false,
+      reason: "spawn-failed",
+      detail: err instanceof Error ? err.message : undefined,
+    };
   }
 
   // Track preview worktrees for sync and cleanup
