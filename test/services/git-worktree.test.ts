@@ -1714,6 +1714,48 @@ describe("resumeTaskWorktree (#483)", () => {
     const result = await resumeTaskWorktree(tmpDir, "someone-elses-feature-branch");
     expect(result).toBeNull();
   });
+
+  // Hermes review (PR #994): an in-flight task stranded in `failed` at
+  // deploy time carries the legacy `mullion/task-<id>` shape on its
+  // `branchName` column (no DB migration rewrites it). retryTask and
+  // attemptAutoRebase hand that stored value to resumeTaskWorktree —
+  // the namespace regex MUST accept both shapes or those retry paths
+  // silently no-op (`return null`) and the task is stuck until a human
+  // intervenes. Pins the fix in `TASK_BRANCH_NAME_RE`'s own
+  // `(-.+)?` optional-slug group.
+  it("accepts the legacy unslugged mullion/task-<id> form (an in-flight failed task stranded at deploy time)", async () => {
+    // Use a numeric task id since the regex's `-\d+` segment requires
+    // digits. The "legacy" form here is a real shape pre-PR #994 deploys
+    // wrote to the branchName column for every claimed task.
+    const legacyBranch = "mullion/task-99";
+    // Simulate the →failed lifecycle: create a worktree off the legacy
+    // branch name, do some work, then remove JUST the worktree (NOT the
+    // branch — removeWorktreeIfClean never deletes the branch, that's
+    // exactly the shape a stranded `failed` task presents to a retry).
+    const throwawayPath = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-legacy-"));
+    fs.rmdirSync(throwawayPath);
+    git(tmpDir, ["branch", legacyBranch, "main"]);
+    git(tmpDir, ["worktree", "add", throwawayPath, legacyBranch]);
+    fs.writeFileSync(path.join(throwawayPath, "work.txt"), "real committed work");
+    git(throwawayPath, ["add", "-A"]);
+    git(throwawayPath, ["commit", "-m", "agent did real work", "--no-verify"]);
+    git(tmpDir, ["worktree", "remove", throwawayPath]);
+
+    const result = await resumeTaskWorktree(tmpDir, legacyBranch);
+
+    expect(result).not.toBeNull();
+    expect(result!.branch).toBe(legacyBranch);
+    // The path derives from the branch name via sanitizeRefComponent
+    // (mullion/task-N → mullion-task-N), so the legacy form lands at
+    // a directory that's still inside TASK_WORKTREE_PREFIX.
+    expect(path.basename(result!.path)).toBe("mullion-task-99");
+    expect(result!.path).toBe(deriveWorktreePath(tmpDir, legacyBranch));
+    // The prior commit is there — this is a real branch checkout, not a
+    // fresh branch from baseRef.
+    expect(fs.readFileSync(path.join(result!.path, "work.txt"), "utf8")).toBe(
+      "real committed work",
+    );
+  });
 });
 
 describe("preview-worktree sync timer (B9 — .unref())", () => {

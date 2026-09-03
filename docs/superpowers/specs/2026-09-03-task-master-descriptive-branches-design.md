@@ -79,27 +79,48 @@ and strips leading/trailing `-`/`.`. A 200-char title → up to a
 200-char slug, combined with `mullion/task-<id>-` prefix → worst
 case ~230 chars, well under git's 4 KiB ref limit.
 
-### 4.2 Relaxed namespace regex
+### 4.2 Relaxed namespace regex (accepts legacy form too — Hermes review)
 
 `src/services/git-worktree.ts:541`:
 
 - From: `const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+$/;`
-- To: `const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+-.+$/;`
+- To: `const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+(-.+)?$/;`
+
+The final shape accepts BOTH the new slugged form
+(`mullion/task-<id>-<slug>`) AND the legacy unslugged form
+(`mullion/task-<id>`). Both shapes are inside the closed task-claim
+namespace (neither is user-chosen), so the defense-in-depth
+argument — that this regex is the only thing standing between
+`clearOrphanedTaskWorktree` and a user-chosen branch name it would
+happily delete — holds for both.
+
+Why both: rows claimed before this PR's deploy carry the legacy
+shape on their `branchName` column. There is no DB migration that
+rewrites it. `retryTask` and `attemptAutoRebase` hand that stored
+value to `resumeTaskWorktree`, which uses this regex as its
+namespace gate. Without `(-.+)?`, an in-flight task stranded in
+`failed` at deploy time would silently no-op on retry (the function
+returns `null`, the retry is recorded as `worktree-failed`, and the
+task is stuck until a human intervenes). Accepting the legacy form
+preserves the deploy model in the spec's non-goal: existing
+in-flight rows keep their old branch name AND remain retryable.
 
 Affects `clearOrphanedTaskWorktree` (line 885-892, the
 CodeQL-reviewed defense-in-depth gate that prevents this function
 from ever deleting a branch outside the task namespace) and
 `resumeTaskWorktree` (line 951, the retry path's check that the
 branch being checked out is a task branch and not a user-chosen
-ref). Both want the same shape: task-only, no user-chosen branches,
-no leading `-` (the existing `branchName.startsWith("-")` check at
-line 888 already covers the leading-dash case independently; the
-new regex just requires `\d+-` after the `task-` so a literal
-`mullion/task-foo` can't slip through).
+ref). Both want the same shape: task-only, no user-chosen
+branches, no leading `-` (the existing `branchName.startsWith("-")`
+check at line 888 already covers the leading-dash case
+independently; the regex just requires `\d+` and an optional
+`-.+` after the `task-` so a literal `mullion/task-foo` can't
+slip through).
 
 The corresponding comment at line 537-540 (which today names the
 literal `mullion/task-${task.id}`) gets updated to name the helper
-and describe the new shape.
+and describe the new shape, and to spell out the legacy-form
+acceptance as a deliberate invariant, not an oversight.
 
 ### 4.3 Call-site consolidation
 
@@ -204,7 +225,16 @@ Prose-only updates, no behavior change:
 - **Rollout model.** Existing in-flight tasks keep their old branch
   name. A user with `mullion/task-7` open in their workspace
   doesn't see the name change retroactively — they only see the
-  new shape on the next claim. Documented in the user-facing
+  new shape on the next claim. Crucially, an in-flight task
+  stranded in `failed` at deploy time must still be retryable:
+  `retryTask` and `attemptAutoRebase` hand the stored
+  `branchName` to `resumeTaskWorktree`, which uses the namespace
+  regex as its gate. The relaxed regex (`\d+(-.+)?`) accepts the
+  legacy unslugged form, so a stranded failed task with a
+  pre-PR `mullion/task-<id>` branch name resumes onto the
+  preserved branch instead of silently no-op'ing (`return null`
+  from the regex check) and getting recorded as
+  `worktree-failed`. Documented in the user-facing
   `docs/tasks.md` worktree section.
 - **Long directory names.** A 200-char title produces a ~225-char
   directory name (`mullion-task-<id>-<200 char slug>`). Linux

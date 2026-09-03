@@ -538,9 +538,16 @@ const TASK_WORKTREE_PREFIX = "mullion-task-";
 // — never a hand-typed or otherwise-sourced value. See
 // clearOrphanedTaskWorktree's own use of this below for why matching it is
 // load-bearing, not cosmetic. The `-\d+-` segment is the task id; the
-// trailing `.+` is the sanitized title slug (frozen at claim time — see
-// deriveTaskBranchName's own doc comment).
-const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+-.+$/;
+// trailing `(-.+)?` accepts BOTH the new slugged shape
+// (`mullion/task-<id>-<slug>`) AND the legacy unslugged form
+// (`mullion/task-<id>`) that rows created before this PR's deploy carry on
+// disk. Both shapes are still within the closed task-claim namespace
+// (neither is user-chosen), so the defense-in-depth argument holds for
+// both — and accepting the legacy form is what lets `retryTask` and
+// `attemptAutoRebase` resume in-flight failed tasks stranded at deploy
+// time (the stored `branchName` is whatever was written at claim, no DB
+// migration rewrites it).
+const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+(-.+)?$/;
 
 /**
  * The single source of truth for the branch name a Task Master task gets
