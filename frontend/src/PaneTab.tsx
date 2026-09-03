@@ -353,6 +353,14 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           {session.model.split("/").pop()}
         </span>
       )}
+      {!narrow && session?.smallModel && (
+        <span
+          className="pane-tab-model-badge is-small"
+          title={`Small model: ${session.smallModel}`}
+        >
+          {session.smallModel.split("/").pop()}
+        </span>
+      )}
       {unreadCount > 0 && unreadIconKind && (
         <span
           className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}

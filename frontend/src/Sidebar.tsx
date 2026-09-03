@@ -1575,6 +1575,7 @@ export function SessionRow({
           showAgentFallback={showAgentFallback}
           agentBinary={agentBinary}
           model={session.model}
+          smallModel={session.smallModel}
           dot={dot}
           statusLabel={statusLabel}
           gitStatus={gitStatus}

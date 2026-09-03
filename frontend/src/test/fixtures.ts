@@ -26,6 +26,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     nameLocked: false,
     command: "claude code",
     model: null,
+    smallModel: null,
     cwd: null,
     env: null,
     kind: "terminal",
