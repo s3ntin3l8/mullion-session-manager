@@ -589,11 +589,16 @@ export const tasks = sqliteTable(
     // and sessions.cwd alone doesn't survive the worker session's own
     // removal.
     worktreePath: text("worktree_path"),
-    // 6.2/6.7/6.8 — the branch git actually created for this task
-    // ("mullion/task-<id>", not derived from issueNumber — see the claim
-    // route's own comment for why a deterministic issue-number-based name
-    // broke retries). Recorded here so cleanup/push never have to
-    // re-derive it.
+    // 6.2/6.7/6.8 — the branch git actually created for this task, with
+    // shape `mullion/task-<id>-<slug>` (see git-worktree.ts's
+    // deriveTaskBranchName for the single source of truth and the
+    // namespace regex it matches). The id is in the name for uniqueness
+    // (issueNumber is nullable, so a name derived from it would collide
+    // every local task onto `mullion/task-null`); the title slug makes
+    // the branch self-describing in `git branch` and on the GitHub PR
+    // header, and is frozen at claim time — see deriveTaskBranchName's
+    // doc comment for why renaming on a title edit would break retry.
+    // Recorded here so cleanup/push never have to re-derive it.
     branchName: text("branch_name"),
     // #491 — the resolved commit SHA the worktree was actually branched
     // from, captured at claim time (local-hosted projects only — remote

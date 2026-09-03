@@ -280,7 +280,7 @@ function classifyCreateFailure(stderr: string): CreateWorktreeReason {
  * produce, WITHOUT touching the filesystem — the same `sanitizeRefComponent`
  * derivation `createWorktree` uses internally, exposed so a caller can
  * predict a worktree's path before it exists (task-claim.ts's orphan-clear
- * step: a crashed claim can leave `mullion/task-<id>`'s directory on disk
+ * step: a crashed claim can leave `mullion/task-<id>-<slug>`'s directory on disk
  * with nothing in the DB pointing at it, since `worktreePath` is only
  * stamped after full success — clearing it before retrying `git worktree
  * add` needs to know the path in advance, not after a collision). Pure and
@@ -534,11 +534,45 @@ export async function removeWorktree(worktreePath: string, parentCwd?: string): 
 
 const TASK_WORKTREE_PREFIX = "mullion-task-";
 
-// The exact, closed namespace task-claim.ts's `branchName = \`mullion/task-${task.id}\``
-// derivation produces — never a hand-typed or otherwise-sourced value. See
+// The exact, closed namespace task-claim.ts's `deriveTaskBranchName` produces
+// — never a hand-typed or otherwise-sourced value. See
 // clearOrphanedTaskWorktree's own use of this below for why matching it is
-// load-bearing, not cosmetic.
-const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+$/;
+// load-bearing, not cosmetic. The `-\d+-` segment is the task id; the
+// trailing `.+` is the sanitized title slug (frozen at claim time — see
+// deriveTaskBranchName's own doc comment).
+const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+-.+$/;
+
+/**
+ * The single source of truth for the branch name a Task Master task gets
+ * when claimed (task-claim.ts's `enqueueTask` and `dispatchClaimedTask` both
+ * call this — never construct the literal by hand). Stamps the slug once at
+ * claim time; title edits after claim do NOT rename the branch, since the
+ * branch survives the task's `claimed → in_progress → reviewing → done`
+ * lifecycle and renaming mid-flight would break the `git worktree add -b`
+ * collision-clear logic keyed to the stored `branchName`.
+ *
+ * Shape: `mullion/task-<id>-<slug>`, where `<slug>` is `task.title` run
+ * through `sanitizeRefComponent` (which truncates to 200 chars, replaces
+ * anything outside `[A-Za-z0-9_.-]` with `-`, and strips leading/trailing
+ * `-`/`.`). The id sits between the namespace and the slug specifically so
+ * two tasks titled the same thing under one project still get distinct
+ * branches and worktree directories — see `deriveWorktreePath`, which
+ * derives the directory from the same branch name, so the uniqueness
+ * carries over for free.
+ *
+ * Pure, synchronous, never throws. Takes only the fields it needs (not the
+ * full Drizzle row) so it's trivially testable and decoupled from the
+ * schema.
+ */
+export function deriveTaskBranchName(task: { id: number; title: string }): string {
+  // sanitizeRefComponent has its own `"session"` empty-after-sanitize
+  // fallback that's wrong for a task branch — we apply the same
+  // normalization but with a task-shaped fallback so an all-emoji or
+  // all-punctuation title still produces a readable branch.
+  const slug = sanitizeRefComponent(task.title);
+  const meaningfulSlug = slug === "session" ? "" : slug;
+  return `mullion/task-${task.id}-${meaningfulSlug.length > 0 ? meaningfulSlug : "untitled"}`;
+}
 
 export interface RemoveIfCleanResult {
   removed: boolean;
@@ -766,7 +800,7 @@ export interface ClearOrphanedTaskWorktreeResult {
  * Task-claim-specific orphan clearing (6.8/#283) — see task-claim.ts's own
  * doc comment for the gap this closes: a crashed/failed claim attempt can
  * leave BOTH a worktree directory and its branch ref behind at task-
- * claim.ts's deterministic `mullion/task-<id>` path/name, and a retry's
+ * claim.ts's deterministic `mullion/task-<id>-<slug>` path/name, and a retry's
  * `git worktree add -b` collides on whichever half still exists —
  * `removeWorktreeIfClean` alone only clears the directory half; the branch
  * survives it by design (see that function's own doc comment).
@@ -775,7 +809,7 @@ export interface ClearOrphanedTaskWorktreeResult {
  * deliberately preserves a worktree's branch for every OTHER caller (the
  * `→ done`/`→ failed` cleanup paths need that branch to survive; it's what
  * an open PR points at) — is safe specifically for THIS namespace:
- * `mullion/task-<id>` branches are only ever created by task-claim.ts
+ * `mullion/task-<id>-<slug>` branches are only ever created by task-claim.ts
  * itself, for exactly this task id, never user-chosen. A leftover one here
  * means either (a) it's brand new with zero commits — the realistic case,
  * since worktree creation and branch creation are one atomic `git worktree
@@ -802,7 +836,7 @@ export interface ClearOrphanedTaskWorktreeResult {
  * future retry path reaches a task in that state (`task-state.ts` already
  * models `failed → ready` as a legal transition, even though nothing in
  * this PR's shipped routes exercises it yet), a bare "clear whatever's
- * named `mullion/task-<id>`" here would silently destroy exactly the work
+ * named `mullion/task-<id>-<slug>`" here would silently destroy exactly the work
  * that preservation exists to protect. When directory content WAS present
  * (worktree creation and branch creation are one atomic `git worktree add
  * -b` call, so a leftover from "worktree created, then something after it
@@ -876,7 +910,7 @@ export async function clearOrphanedTaskWorktree(
   }
 
   // Defense in depth (independent review, PR #476): this function's entire
-  // safety argument for deleting a branch rests on `mullion/task-<id>`
+  // safety argument for deleting a branch rests on `mullion/task-<id>-<slug>`
   // being a namespace ONLY task-claim.ts ever writes into, never
   // user-chosen — enforced here directly rather than trusted from every
   // caller (the internal `/clear-orphan` route's schema only requires
@@ -923,7 +957,7 @@ export async function clearOrphanedTaskWorktree(
  * `dock-preview-*` directory name `listTaskWorktreeDirs`/`pruneWorktrees`
  * wouldn't recognize as a task worktree.
  *
- * A task that failed after committing work keeps its `mullion/task-<id>`
+ * A task that failed after committing work keeps its `mullion/task-<id>-<slug>`
  * branch on purpose — `removeWorktreeIfClean` (the `→ failed` cleanup path,
  * task-reconciler.ts/session-reconciler.ts) removes only the worktree
  * directory, never the branch (see that function's own doc comment). By
@@ -936,7 +970,7 @@ export async function clearOrphanedTaskWorktree(
  * forcing past it, since both are unexpected states a human should look at
  * rather than this function silently working around.
  *
- * Restricted to the same closed `mullion/task-<id>` namespace
+ * Restricted to the same closed `mullion/task-<id>-<slug>` namespace
  * `clearOrphanedTaskWorktree` enforces (`TASK_BRANCH_NAME_RE`) — this has
  * no other caller and no reason to check out an arbitrary branch name into
  * a task-shaped path. Returns `null` when `cwd` isn't a git repo, the
@@ -965,7 +999,7 @@ export async function resumeTaskWorktree(
  * Lists this host's on-disk task-worktree directories for `cwd` — absolute
  * paths under `<cwd>/.mullion-worktrees/` whose name starts with
  * `mullion-task-` (the directory naming `deriveWorktreePath` produces for
- * a `mullion/task-<id>` branch seed, since `sanitizeRefComponent` collapses
+ * a `mullion/task-<id>-<slug>` branch seed, since `sanitizeRefComponent` collapses
  * the `/` to `-`). Pure filesystem read — never throws, returns `[]` for a
  * missing/unreadable `.mullion-worktrees` directory. Does not distinguish
  * orphan from in-use; that requires cross-referencing task rows, which this

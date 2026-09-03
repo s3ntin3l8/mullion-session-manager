@@ -1292,7 +1292,7 @@ export async function internalRoutes(app: FastifyInstance) {
   );
 
   // #484 — the agent-side counterpart of resumeTaskWorktree: checks out an
-  // EXISTING `mullion/task-<id>` branch into a fresh worktree at its
+  // EXISTING `mullion/task-<id>-<slug>` branch into a fresh worktree at its
   // deterministic path, on THIS agent's own filesystem, for Retry (#483) on
   // a remote-hosted task. Returns `null` (200, not an error status) when
   // the resume fails for a git-level reason (branch missing, or checked out
@@ -1498,7 +1498,7 @@ export async function internalRoutes(app: FastifyInstance) {
 
   // Issue #283 — task-claim.ts's pre-claim orphan clearing on THIS agent's
   // own filesystem: clears both the worktree directory and the branch ref
-  // at task-claim.ts's deterministic mullion/task-<id> path/name. See
+  // at task-claim.ts's deterministic mullion/task-<id>-<slug> path/name. See
   // clearOrphanedTaskWorktree's own doc comment for why deleting the
   // branch here is safe, unlike /internal/git-worktree/remove above.
   app.post<{ Body: GitWorktreeClearOrphanBody }>(

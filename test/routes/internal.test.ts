@@ -1533,9 +1533,14 @@ describe("internal routes (agent role, issue #26)", () => {
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
-      const worktreePath = path.join(cwd, ".mullion-worktrees", "mullion-task-1");
-      run(["worktree", "add", "-b", "mullion/task-1", worktreePath, "main"]);
-      return { repoRoot, cwd, worktreePath, run };
+      // Branch uses the new descriptive shape (mullion/task-<id>-<slug>) —
+      // task-claim.ts's TASK_BRANCH_NAME_RE only accepts the slugged form
+      // now, so a leftover branch left in this shape is the only one
+      // clearOrphanedTaskWorktree / resumeTaskWorktree will recognize.
+      const branch = "mullion/task-1-test";
+      const worktreePath = path.join(cwd, ".mullion-worktrees", "mullion-task-1-test");
+      run(["worktree", "add", "-b", branch, worktreePath, "main"]);
+      return { repoRoot, cwd, worktreePath, run, branch };
     }
 
     it("removes a clean task worktree, but refuses (and leaves in place) a dirty one", async () => {
@@ -1631,7 +1636,7 @@ describe("internal routes (agent role, issue #26)", () => {
     });
 
     it("clear-orphan removes a clean worktree AND its branch ref, so a fresh worktree add -b at the same path/branch succeeds", async () => {
-      const { repoRoot, cwd, worktreePath, run } = await makeTaskWorktreeRepo();
+      const { repoRoot, cwd, worktreePath, run, branch } = await makeTaskWorktreeRepo();
       const previousRoots = process.env.PROJECTS_ROOTS;
       process.env.PROJECTS_ROOTS = repoRoot;
       const app = await buildApp();
@@ -1640,7 +1645,7 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: "/internal/git-worktree/clear-orphan",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { cwd, worktreePath, branchName: "mullion/task-1" },
+        payload: { cwd, worktreePath, branchName: branch },
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ cleared: true });
@@ -1648,9 +1653,7 @@ describe("internal routes (agent role, issue #26)", () => {
 
       // The branch is gone too — re-adding a worktree with the same -b
       // branch name at the same path no longer collides.
-      expect(() =>
-        run(["worktree", "add", "-b", "mullion/task-1", worktreePath, "main"]),
-      ).not.toThrow();
+      expect(() => run(["worktree", "add", "-b", branch, worktreePath, "main"])).not.toThrow();
       expect(fs.existsSync(worktreePath)).toBe(true);
 
       process.env.PROJECTS_ROOTS = previousRoots;
@@ -1659,7 +1662,7 @@ describe("internal routes (agent role, issue #26)", () => {
     });
 
     it("clear-orphan refuses (leaving worktree and branch in place) when the worktree is dirty, and rejects a cwd/worktreePath outside PROJECTS_ROOTS", async () => {
-      const { repoRoot, cwd, worktreePath } = await makeTaskWorktreeRepo();
+      const { repoRoot, cwd, worktreePath, branch } = await makeTaskWorktreeRepo();
       const previousRoots = process.env.PROJECTS_ROOTS;
       process.env.PROJECTS_ROOTS = repoRoot;
       const app = await buildApp();
@@ -1669,7 +1672,7 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: "/internal/git-worktree/clear-orphan",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { cwd, worktreePath, branchName: "mullion/task-1" },
+        payload: { cwd, worktreePath, branchName: branch },
       });
       expect(dirtyRes.statusCode).toBe(200);
       expect(dirtyRes.json()).toEqual({ cleared: false, reason: "dirty" });
@@ -1679,7 +1682,7 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: "/internal/git-worktree/clear-orphan",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { cwd, worktreePath: "/etc/not-a-project", branchName: "mullion/task-1" },
+        payload: { cwd, worktreePath: "/etc/not-a-project", branchName: branch },
       });
       expect(outsideRes.statusCode).toBe(400);
 
@@ -1703,9 +1706,12 @@ describe("internal routes (agent role, issue #26)", () => {
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
-      const worktreePath = path.join(cwd, ".mullion-worktrees", "mullion-task-1");
-      run(["worktree", "add", "-b", "mullion/task-1", worktreePath, "main"]);
-      return { repoRoot, cwd, worktreePath, run };
+      // Same descriptive shape as the other makeTaskWorktreeRepo — see
+      // that function's own comment for why.
+      const branch = "mullion/task-1-test";
+      const worktreePath = path.join(cwd, ".mullion-worktrees", "mullion-task-1-test");
+      run(["worktree", "add", "-b", branch, worktreePath, "main"]);
+      return { repoRoot, cwd, worktreePath, run, branch };
     }
 
     it("GET /internal/git-status?fresh=1 bypasses the cache — a change made just before the request is reflected immediately", async () => {
@@ -1833,7 +1839,7 @@ describe("internal routes (agent role, issue #26)", () => {
     });
 
     it("POST /internal/git-push pushes a branch to origin on this host's own filesystem", async () => {
-      const { repoRoot, worktreePath } = await makeTaskWorktreeRepo();
+      const { repoRoot, worktreePath, branch } = await makeTaskWorktreeRepo();
       const remote = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-push-remote-"));
       const { execFileSync } = await import("node:child_process");
       execFileSync("git", ["init", "--bare", "-b", "main"], {
@@ -1854,7 +1860,7 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: "/internal/git-push",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { cwd: worktreePath, branch: "mullion/task-1", token: "ghp_supersecrettoken" },
+        payload: { cwd: worktreePath, branch, token: "ghp_supersecrettoken" },
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true });
@@ -1863,7 +1869,7 @@ describe("internal routes (agent role, issue #26)", () => {
       // see git-push.ts's own header comment), so this confirms the route
       // really runs `git push`, not just plumbing through a mock.
       const branches = execFileSync("git", ["-C", remote, "branch"], { env: gitEnv() }).toString();
-      expect(branches).toContain("mullion/task-1");
+      expect(branches).toContain(branch);
 
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -1937,7 +1943,7 @@ describe("internal routes (agent role, issue #26)", () => {
     });
 
     it("GET /internal/git-worktree/task-dirs lists this host's own on-disk task-worktree directories", async () => {
-      const { repoRoot, cwd } = await makeTaskWorktreeRepo();
+      const { repoRoot, cwd, worktreePath } = await makeTaskWorktreeRepo();
       const previousRoots = process.env.PROJECTS_ROOTS;
       process.env.PROJECTS_ROOTS = repoRoot;
       const app = await buildApp();
@@ -1949,7 +1955,7 @@ describe("internal routes (agent role, issue #26)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
-        dirs: [path.join(cwd, ".mullion-worktrees", "mullion-task-1")],
+        dirs: [worktreePath],
       });
 
       process.env.PROJECTS_ROOTS = previousRoots;
@@ -1979,7 +1985,7 @@ describe("internal routes (agent role, issue #26)", () => {
     });
 
     it("POST /internal/git-worktree/resume checks out an EXISTING branch (not -b, not --detach) into a fresh worktree at the deterministic path", async () => {
-      const { repoRoot, cwd, worktreePath, run } = await makeTaskWorktreeRepo();
+      const { repoRoot, cwd, worktreePath, run, branch } = await makeTaskWorktreeRepo();
       // Remove the worktree directory but leave the branch — reproduces the
       // exact state `→ failed` cleanup leaves behind (removeWorktreeIfClean
       // never deletes the branch).
@@ -1994,10 +2000,10 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: "/internal/git-worktree/resume",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { cwd, branchName: "mullion/task-1" },
+        payload: { cwd, branchName: branch },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ path: worktreePath, branch: "mullion/task-1" });
+      expect(res.json()).toEqual({ path: worktreePath, branch });
       expect(fs.existsSync(worktreePath)).toBe(true);
 
       process.env.PROJECTS_ROOTS = previousRoots;
@@ -2049,7 +2055,7 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: "/internal/git-worktree/resume",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { cwd: outsideRoots, branchName: "mullion/task-1" },
+        payload: { cwd: outsideRoots, branchName: "mullion/task-1-test" },
       });
       expect(outside.statusCode).toBe(400);
 

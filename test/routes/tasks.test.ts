@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
+import { deriveTaskBranchName, deriveWorktreePath } from "../../src/services/git-worktree.js";
 import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
@@ -386,10 +387,13 @@ describe("tasks route", () => {
       expect(queued.sessionId).toBeNull();
       expect(queued.queuedAt).not.toBeNull();
       expect(queued.claimedAt).toBeNull();
-      // Branch/worktree dir is derived from task.id, not issueNumber
-      // (Hermes review, PR #471) — issueNumber is nullable now (6.9), so
-      // branching on it would collide every local task onto the same dir.
-      const predictedCwd = path.join(cwd, ".mullion-worktrees", `mullion-task-${task.id}`);
+      // Branch/worktree dir is derived from task.id (for uniqueness — see
+      // deriveTaskBranchName's own doc comment on why the id is in the
+      // name) plus a sanitized title slug, not issueNumber (Hermes review,
+      // PR #471) — issueNumber is nullable now (6.9), so branching on it
+      // would collide every local task onto the same dir.
+      const branchName = deriveTaskBranchName(task);
+      const predictedCwd = deriveWorktreePath(cwd, branchName);
       expect(queued.worktreePath).toBe(predictedCwd);
       // Predicted, not yet real — nothing on disk until dispatch runs.
       expect(fs.existsSync(predictedCwd)).toBe(false);
@@ -416,7 +420,7 @@ describe("tasks route", () => {
         status: "in_progress",
         sessionId: session.id,
         worktreePath: session.cwd,
-        branchName: `mullion/task-${task.id}`,
+        branchName,
       });
       expect((dispatched as { claimedAt: string | null }).claimedAt).not.toBeNull();
 
@@ -716,7 +720,7 @@ describe("tasks route", () => {
         .values({ projectId, issueNumber, title: "t", status: "ready" })
         .returning()
         .all();
-      const branchName = `mullion/task-${placeholder.id}`;
+      const branchName = deriveTaskBranchName(placeholder);
       const { createWorktree, removeWorktreeIfClean } =
         await import("../../src/services/git-worktree.js");
       const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });

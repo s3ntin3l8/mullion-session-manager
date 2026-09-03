@@ -10,6 +10,7 @@ import {
   commitWipChanges,
   createWorktree,
   deletePreviewWorktree,
+  deriveTaskBranchName,
   deriveWorktreePath,
   ensurePreviewSyncTick,
   findPreviewWorktreeSessionId,
@@ -819,6 +820,64 @@ describe("deriveWorktreePath", () => {
   });
 });
 
+describe("deriveTaskBranchName", () => {
+  it("appends a sanitized slug after the id for a clean title", () => {
+    expect(deriveTaskBranchName({ id: 42, title: "Add dark mode" })).toBe(
+      "mullion/task-42-Add-dark-mode",
+    );
+  });
+
+  it("falls back to 'untitled' when the title sanitizes to an empty string", () => {
+    expect(deriveTaskBranchName({ id: 7, title: "🚀🚀🚀" })).toBe("mullion/task-7-untitled");
+  });
+
+  it("falls back to 'untitled' when the title is all punctuation", () => {
+    expect(deriveTaskBranchName({ id: 7, title: "!!!???" })).toBe("mullion/task-7-untitled");
+  });
+
+  it("transliterates non-ASCII characters via sanitizeRefComponent's safe-set rule", () => {
+    // sanitizeRefComponent only allows [A-Za-z0-9_.-] — non-ASCII becomes
+    // '-' and is then collapsed/stripped.
+    expect(deriveTaskBranchName({ id: 3, title: "Über café" })).toBe("mullion/task-3-ber-caf");
+  });
+
+  it("strips leading and trailing punctuation from the slug", () => {
+    expect(deriveTaskBranchName({ id: 9, title: "!!! Add dark mode ???" })).toBe(
+      "mullion/task-9-Add-dark-mode",
+    );
+  });
+
+  it("truncates an oversize title to fit the 200-char slug budget", () => {
+    const longTitle = "a".repeat(500);
+    const result = deriveTaskBranchName({ id: 1, title: longTitle });
+    const slug = result.slice("mullion/task-1-".length);
+    expect(slug.length).toBeLessThanOrEqual(200);
+    expect(result.startsWith("mullion/task-1-")).toBe(true);
+  });
+
+  it("keeps the id intact even when the title itself contains a mullion/task-N string", () => {
+    expect(deriveTaskBranchName({ id: 7, title: "Document mullion/task-1" })).toBe(
+      "mullion/task-7-Document-mullion-task-1",
+    );
+  });
+
+  it("derives a worktree directory that still starts with the task-worktree prefix", () => {
+    const branch = deriveTaskBranchName({ id: 42, title: "Add dark mode" });
+    const dir = path.basename(deriveWorktreePath("/repo", branch));
+    expect(dir).toBe("mullion-task-42-Add-dark-mode");
+  });
+
+  it("round-trips a freshly-claimed task's branch through deriveWorktreePath without collision between two same-titled tasks", () => {
+    // Two tasks with the same title but different ids get different
+    // directories because the id is in the slug.
+    const a = deriveTaskBranchName({ id: 7, title: "Fix NPE" });
+    const b = deriveTaskBranchName({ id: 8, title: "Fix NPE" });
+    expect(a).not.toBe(b);
+    expect(path.basename(deriveWorktreePath("/repo", a))).toBe("mullion-task-7-Fix-NPE");
+    expect(path.basename(deriveWorktreePath("/repo", b))).toBe("mullion-task-8-Fix-NPE");
+  });
+});
+
 describe("removeWorktreeIfClean (issue #283)", () => {
   let tmpDir: string;
 
@@ -1510,27 +1569,28 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
     // directory, deliberately leaving the branch — and its commit — intact.
     const throwawayPath = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-throwaway-"));
     fs.rmdirSync(throwawayPath); // git worktree add refuses a pre-existing dir
-    git(tmpDir, ["branch", "mullion/task-5", "main"]);
-    git(tmpDir, ["worktree", "add", throwawayPath, "mullion/task-5"]);
+    const branch = "mullion/task-5-test";
+    git(tmpDir, ["branch", branch, "main"]);
+    git(tmpDir, ["worktree", "add", throwawayPath, branch]);
     fs.writeFileSync(path.join(throwawayPath, "work.txt"), "real committed work");
     git(throwawayPath, ["add", "-A"]);
     git(throwawayPath, ["commit", "-m", "agent did real work", "--no-verify"]);
     git(tmpDir, ["worktree", "remove", throwawayPath]);
 
-    const worktreePath = deriveWorktreePath(tmpDir, "mullion/task-5");
-    const result = await clearOrphanedTaskWorktree(tmpDir, worktreePath, "mullion/task-5");
+    const worktreePath = deriveWorktreePath(tmpDir, branch);
+    const result = await clearOrphanedTaskWorktree(tmpDir, worktreePath, branch);
 
     expect(result).toEqual({
       cleared: false,
       reason: "stale branch from a prior attempt exists — resolve manually",
     });
-    const branches = execFileSync("git", ["branch", "--list", "mullion/task-5"], {
+    const branches = execFileSync("git", ["branch", "--list", branch], {
       cwd: tmpDir,
       env: gitEnv(),
     }).toString();
-    expect(branches).toContain("mullion/task-5");
+    expect(branches).toContain(branch);
     // The commit itself is still reachable — nothing was lost.
-    const log = execFileSync("git", ["log", "mullion/task-5", "--oneline"], {
+    const log = execFileSync("git", ["log", branch, "--oneline"], {
       cwd: tmpDir,
       env: gitEnv(),
     }).toString();
@@ -1538,22 +1598,23 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
   });
 
   it("still deletes the branch when this call itself found and removed real directory content — provably zero commits beyond baseRef", async () => {
+    const branch = "mullion/task-6-test";
     const created = await createWorktree({
       cwd: tmpDir,
       baseRef: "main",
-      seed: "mullion/task-6",
-      branchName: "mullion/task-6",
+      seed: branch,
+      branchName: branch,
     });
     expect(created).not.toBeNull();
 
-    const result = await clearOrphanedTaskWorktree(tmpDir, created!.path, "mullion/task-6");
+    const result = await clearOrphanedTaskWorktree(tmpDir, created!.path, branch);
 
     expect(result).toEqual({ cleared: true });
-    const branches = execFileSync("git", ["branch", "--list", "mullion/task-6"], {
+    const branches = execFileSync("git", ["branch", "--list", branch], {
       cwd: tmpDir,
       env: gitEnv(),
     }).toString();
-    expect(branches).not.toContain("mullion/task-6");
+    expect(branches).not.toContain(branch);
   });
 
   it("never deletes a branch outside the mullion/task-<id> namespace, even when directory content was cleared (independent review, PR #476 — defense in depth)", async () => {
@@ -1601,18 +1662,19 @@ describe("resumeTaskWorktree (#483)", () => {
     // intact.
     const throwawayPath = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-throwaway-"));
     fs.rmdirSync(throwawayPath);
-    git(tmpDir, ["branch", "mullion/task-7", "main"]);
-    git(tmpDir, ["worktree", "add", throwawayPath, "mullion/task-7"]);
+    const branch = "mullion/task-7-test";
+    git(tmpDir, ["branch", branch, "main"]);
+    git(tmpDir, ["worktree", "add", throwawayPath, branch]);
     fs.writeFileSync(path.join(throwawayPath, "work.txt"), "real committed work");
     git(throwawayPath, ["add", "-A"]);
     git(throwawayPath, ["commit", "-m", "agent did real work", "--no-verify"]);
     git(tmpDir, ["worktree", "remove", throwawayPath]);
 
-    const result = await resumeTaskWorktree(tmpDir, "mullion/task-7");
+    const result = await resumeTaskWorktree(tmpDir, branch);
 
     expect(result).not.toBeNull();
-    expect(result!.branch).toBe("mullion/task-7");
-    expect(result!.path).toBe(deriveWorktreePath(tmpDir, "mullion/task-7"));
+    expect(result!.branch).toBe(branch);
+    expect(result!.path).toBe(deriveWorktreePath(tmpDir, branch));
     // The prior commit is there — this is a real branch checkout, not a
     // fresh branch from baseRef.
     expect(fs.readFileSync(path.join(result!.path, "work.txt"), "utf8")).toBe(
@@ -1623,30 +1685,31 @@ describe("resumeTaskWorktree (#483)", () => {
       cwd: result!.path,
       env: gitEnv(),
     }).toString();
-    expect(headRef).toContain("mullion/task-7");
+    expect(headRef).toContain(branch);
   });
 
   it("returns null when the branch doesn't exist", async () => {
-    const result = await resumeTaskWorktree(tmpDir, "mullion/task-999");
+    const result = await resumeTaskWorktree(tmpDir, "mullion/task-999-test");
     expect(result).toBeNull();
   });
 
   it("returns null when the branch is already checked out elsewhere (git worktree add refuses without --force)", async () => {
+    const branch = "mullion/task-8-test";
     const created = await createWorktree({
       cwd: tmpDir,
       baseRef: "main",
-      seed: "mullion/task-8",
-      branchName: "mullion/task-8",
+      seed: branch,
+      branchName: branch,
     });
     expect(created).not.toBeNull();
     // Deliberately NOT removed — the branch is still checked out at
     // created!.path, so a second checkout must be refused.
 
-    const result = await resumeTaskWorktree(tmpDir, "mullion/task-8");
+    const result = await resumeTaskWorktree(tmpDir, branch);
     expect(result).toBeNull();
   });
 
-  it("refuses a branch name outside the mullion/task-<id> namespace, even if it exists", async () => {
+  it("refuses a branch name outside the mullion/task-<id>-<slug> namespace, even if it exists", async () => {
     git(tmpDir, ["branch", "someone-elses-feature-branch", "main"]);
     const result = await resumeTaskWorktree(tmpDir, "someone-elses-feature-branch");
     expect(result).toBeNull();
