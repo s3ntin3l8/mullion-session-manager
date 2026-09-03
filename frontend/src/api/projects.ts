@@ -136,7 +136,6 @@ export const projectsApi = {
     projectId: number,
     options: {
       slug: string;
-      mirrors?: Array<"GEMINI.md">;
       includeContributingPointer?: boolean;
       symlinkAgentsSkills?: boolean;
       includeDockConfig?: boolean;
