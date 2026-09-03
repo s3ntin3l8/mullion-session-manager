@@ -362,14 +362,26 @@ export function PaneActionsMenu({
               </button>
             )}
             {session?.model && (
-              <div className="pane-tab-overflow-item" style={{ opacity: 0.6, cursor: "default" }}>
+              <div
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                aria-disabled="true"
+                aria-label={`Model: ${session.model}`}
+                style={{ opacity: 0.6, cursor: "default" }}
+              >
                 <BotIcon size={14} style={{ color: "var(--muted)" }} />
                 <span style={{ flex: 1 }}>Model</span>
                 <span className="pane-tab-overflow-hint">{session.model}</span>
               </div>
             )}
             {session?.smallModel && (
-              <div className="pane-tab-overflow-item" style={{ opacity: 0.45, cursor: "default" }}>
+              <div
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                aria-disabled="true"
+                aria-label={`Small model: ${session.smallModel}`}
+                style={{ opacity: 0.45, cursor: "default" }}
+              >
                 <BotIcon size={14} style={{ color: "var(--muted)" }} />
                 <span style={{ flex: 1 }}>Small model</span>
                 <span className="pane-tab-overflow-hint">{session.smallModel}</span>
