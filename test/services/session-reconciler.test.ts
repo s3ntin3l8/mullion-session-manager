@@ -359,6 +359,86 @@ describe("reconcileExitedSessions", () => {
       await app.close();
     });
 
+    // Issue #988's residual gap, on top of #973/#1001 above — even with the
+    // deactivating-as-alive widening, this sweep's own SELECT (top of
+    // reconcileExitedSessions) can cache an "active" snapshot a moment
+    // before some other writer (task-reseed.ts's force re-seed CAS'ing the
+    // same session to "killed" before it awaits its own terminate()) wins
+    // the race. If that other writer's target process responds to SIGTERM
+    // fast enough, THIS pass's own isMasterAlive check can legitimately
+    // report "not alive" against the now-stale snapshot. Simulated here by
+    // having the liveness mock itself flip the row to "killed" as a side
+    // effect before resolving `false` — reproducing "another writer already
+    // moved this row off 'active' while the liveness check was in flight."
+    // The reconciler must lose its own CAS on that write and back off
+    // entirely, not clobber "killed" back to "exited" and race ahead to
+    // fail the task / delete the worktree out from under the in-flight
+    // re-seed (task 258971's incident, PR #136).
+    it("backs off the task-failure/worktree-removal block when another writer wins the race to flip the session first (issue #988)", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "in_progress");
+      const { tasks, sessions } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(tasks)
+        .set({ worktreePath: "/tmp/.mullion-worktrees/mullion-task-988-residual" })
+        .where(eq(tasks.id, taskId))
+        .run();
+
+      vi.spyOn(app.pty, "isMasterAliveBatch").mockImplementation(async (ids: string[]) => {
+        // Mimics task-reseed.ts's own kill-CAS landing while this exact
+        // liveness check is in flight — after this pass's SELECT already
+        // read the row as "active", before this pass's own flip-to-exited
+        // write runs.
+        app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, sessionId)).run();
+        const result: Record<string, boolean> = Object.create(null);
+        for (const id of ids) result[id] = false;
+        return result;
+      });
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      // mockResolvedValue, not a bare vi.fn() — matches removeWorktreeIfClean's
+      // real Promise<RemoveIfCleanResult> return shape (see the "cleans up
+      // the worktree..." test above), so a regression that lets this get
+      // called fails on the intended `not.toHaveBeenCalled()` assertion
+      // below rather than an unrelated TypeError from session-reconciler.ts
+      // awaiting `undefined`.
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileExitedSessions(app);
+
+      const [sessionRow] = app.db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .all();
+      expect(sessionRow?.status).toBe("killed");
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks" });
+      const row = (res.json() as { id: number; status: string }[]).find((t) => t.id === taskId);
+      expect(row?.status).toBe("in_progress");
+      expect(removeWorktreeIfCleanMock).not.toHaveBeenCalled();
+      expect(mockSyncTaskTransition).not.toHaveBeenCalled();
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
     it("syncs the failed transition to GitHub for a linked task, with the freshly-updated row and its project", async () => {
       const app = await buildApp();
       const sessionId = await createSession(app);

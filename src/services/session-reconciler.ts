@@ -125,26 +125,68 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // exactly like A9's other call site (session-lifecycle.ts's
         // killSession).
         //
-        // Flipping unconditionally is safe because the thing PR #341's
-        // ordering protected — worktree-removal retry — no longer depends
-        // on it: cleanupPreviewWorktree() (git-worktree.ts) already marks a
-        // failed removal `pendingRemoval` and the module's own 5s sync tick
+        // Flipping unconditionally (rather than gating this write itself on
+        // "active") is safe because the thing PR #341's ordering
+        // protected — worktree-removal retry — no longer depends on it:
+        // cleanupPreviewWorktree() (git-worktree.ts) already marks a failed
+        // removal `pendingRemoval` and the module's own 5s sync tick
         // retries it forever, independent of this row's `status`. That's
         // the exact mechanism killSession (session-lifecycle.ts) already
         // relies on for the identical case, so this reconciler is now
         // consistent with it rather than carrying its own bespoke
         // stay-active-and-retry path.
-        app.db
+        //
+        // CAS'd on `status = "active"` (issue #988's residual gap, on top
+        // of #1001's fix) — this SELECT's own snapshot of "active" rows can
+        // go stale during the `isMasterAlive`/`isMasterAliveBatch` call
+        // above: task-reseed.ts's force re-seed (`reseedTaskIfSessionExited`)
+        // flips a still-active session to "killed" BEFORE it awaits its own
+        // `terminate()`, precisely so a slow-to-stop scope stays out of this
+        // sweep's reach for the whole stop window (#1001). But if that
+        // terminate's target process responds to SIGTERM fast enough,
+        // `isMasterAlive` can legitimately observe "not alive" for a row
+        // this pass already fetched a moment earlier — i.e. the exact
+        // moment BEFORE the kill-CAS landed. Writing here unconditionally
+        // would silently overwrite that "killed" back to "exited" and, far
+        // worse, fall through into the task-failure/worktree-removal block
+        // below for a task whose re-seed is still actively spawning into
+        // that exact worktree — task 258971's incident, PR #136. `changes
+        // === 0` means some other writer already won that race for this
+        // session; that writer owns resolving whatever it's claimed to
+        // (task-reseed's own success/rollback path, or a plain kill), so
+        // this pass backs off from the task-level teardown entirely rather
+        // than racing it. This creates no NEW stuck-task exposure: any
+        // writer that moves a session off "active" already drops it out of
+        // this sweep's own re-queried WHERE clause on every later tick
+        // regardless (e.g. a human directly killing a task's worker session
+        // via DELETE /api/sessions/:id today never gets caught here either)
+        // — losing this CAS just makes the in-flight tick consistent with
+        // how every subsequent tick would already treat the row.
+        const flipped = app.db
           .update(sessions)
           .set({ status: "exited" })
-          .where(eq(sessions.id, row.session.id))
+          .where(and(eq(sessions.id, row.session.id), eq(sessions.status, "active")))
           .run();
 
+        // Unconditional regardless of the CAS above — both are keyed to
+        // this session id alone (a preview-worktree binding, a browser
+        // binding), idempotent no-ops if already cleared, and correct to
+        // run either way since `isMasterAlive` already confirmed the real
+        // OS-level process is gone: whether THIS pass or some other writer
+        // owns the DB row's terminal transition doesn't change that.
         const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
         // #182 — same teardown as the user-initiated DELETE path
         // (session-lifecycle.ts's killSession), for the auto-detected
         // program-exited-on-its-own case.
         closeSessionBrowserBindings(app, row.session.id);
+
+        if (flipped.changes === 0) {
+          app.log.info(
+            { sessionId: row.session.id, hostId },
+            "session reconcile: lost the race to flip this session to exited — another writer already claimed its terminal transition (e.g. an in-flight re-seed), skipping this task's own teardown",
+          );
+          continue;
+        }
 
         // Phase 6 Task Master (6.2/#215, issue #282) — a task claimed by
         // this session dies with it if the session exits before the task

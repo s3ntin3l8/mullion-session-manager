@@ -2585,35 +2585,55 @@ export function resolveMaxAutoReturnRounds(project: {
  * masquerades as an unrelated session death.
  *
  * This closes the INDEFINITE version of that exposure (a re-seed that fails
- * outright and returns), but not the WINDOW between the forward CAS above
- * and this rollback — which spans the entire re-seed attempt, `force:
- * true`'s own terminate-then-spawn included. The incident this fixes (task
- * 258971, PR #136, 2026-09-02) actually raced inside that window, not after
- * it, and this change alone does not close it: `reseedTaskIfSessionExited`'s
- * `terminate()` call hung for a full 90s systemd `TimeoutStopSec` (the prior
- * session's process wasn't responding to SIGTERM) before being SIGKILLed,
- * and a concurrent `reconcileExitedSessions` tick landed 27s into that hang
- * — likely because `isMasterAlive`'s `stdout.trim() === "active"` check
- * (session-process.ts) treats a scope mid-"deactivating" from OUR OWN
- * in-flight `stopScope()` call identically to one that's genuinely gone,
- * with nothing recording "a termination we ourselves started is still in
- * flight for this id." That tick flipped the task to "failed" via
- * session-death 63 seconds before this function's own rollback ran, AND (the
- * established mechanism behind the incident's own ENOENT, verified against
- * this host's disk state — see the fix commit's message) removed the task's
- * worktree via `removeWorktreeIfClean`. The re-seed's OWN spawn — already in
- * flight, re-seeding into that exact SAME worktree path per this function's
- * own doc comment above — then ran with a `cwd` that no longer existed:
- * `spawnChild(cmd, args, { cwd })` reports a nonexistent `cwd` as `spawn
- * <cmd> ENOENT` on the COMMAND, not the directory (Node/libuv's well-known
- * "cwd" spawn-error shape), which is exactly the "spawn systemd-run ENOENT"
- * the original bug report opened on — a red herring for this incident;
- * systemd-run itself was never missing. By the time this function's own
- * rollback ran, `status: "in_progress"` in its CAS below correctly no-ops
- * (status was already "failed"), rather than resurrecting a task
- * session-death had already resolved. Closing the underlying race needs a
- * bigger, separate change — session-death's own worktree removal must not
- * race an in-flight re-seed for the same task — tracked in #988.
+ * outright and returns), but on its own did not close the WINDOW between
+ * the forward CAS above and this rollback — which spans the entire re-seed
+ * attempt, `force: true`'s own terminate-then-spawn included. The incident
+ * this fixes (task 258971, PR #136, 2026-09-02) actually raced inside that
+ * window, not after it: `reseedTaskIfSessionExited`'s `terminate()` call
+ * hung for a full 90s systemd `TimeoutStopSec` (the prior session's process
+ * wasn't responding to SIGTERM) before being SIGKILLed, and a concurrent
+ * `reconcileExitedSessions` tick landed 27s into that hang and treated the
+ * scope's `deactivating` state identically to "genuinely gone." That tick
+ * flipped the task to "failed" via session-death 63 seconds before this
+ * function's own rollback ran, AND removed the task's worktree via
+ * `removeWorktreeIfClean`. The re-seed's OWN spawn — already in flight,
+ * re-seeding into that exact SAME worktree path per this function's own doc
+ * comment above — then ran with a `cwd` that no longer existed, surfacing as
+ * the misleading "spawn systemd-run ENOENT" the original bug report opened
+ * on (Node/libuv blames the command, not a missing `cwd`); systemd-run
+ * itself was never missing.
+ *
+ * Two changes since have closed the mechanism that produced the incident.
+ * #1001 (issues #987/#988's first pass): `reseedTaskIfSessionExited`'s force
+ * path now flips the still-active session to "killed" — CAS'd — BEFORE
+ * awaiting `terminate()`, not after, so it drops out of
+ * `reconcileExitedSessions`'s own `status = "active"` candidate query for
+ * the entire stop window rather than just after it; and
+ * `isMasterAlive`/`isMasterAliveBatch` (session-process.ts) now treat
+ * `deactivating` as alive, a second layer for any termination that doesn't
+ * go through that kill-CAS. #988's follow-up closes the specific
+ * SELECT-vs-kill-CAS staleness those two left open: `reconcileExitedSessions`'s
+ * own SELECT can still cache an "active" snapshot of this exact session a
+ * moment before the kill-CAS above lands, and if the terminating process
+ * responds to SIGTERM fast enough, its later `isMasterAlive` check
+ * legitimately observes "not alive" against that stale snapshot.
+ * `session-reconciler.ts` now CASes its own flip-to-"exited" write on
+ * `status = "active"` too, and skips the task-failure/worktree-removal block
+ * entirely when that CAS loses — the "in flight" recording this comment used
+ * to say was missing, implemented as the session row's own status rather
+ * than a new column. This does NOT claim every theoretical interleaving is
+ * closed — e.g. a `terminate()` call that itself throws (a remote host RPC
+ * failure, not a slow-but-successful stop) reverts the kill-CAS back to
+ * "active" so the standard reconciler can determine the truth on its own;
+ * if that reconciler's own `isMasterAlive` then genuinely reports "not
+ * alive" for the same session, failing the task via session-death is the
+ * correct outcome (the process really is gone), not a race this fix needs
+ * to prevent — re-seeding already gave up by that point.
+ *
+ * By the time this function's own rollback runs today, `status:
+ * "in_progress"` in its CAS below still correctly no-ops if the task
+ * somehow already left `in_progress` some other way — belt-and-suspenders,
+ * not the load-bearing fix anymore.
  *
  * Deliberately does NOT call `syncTaskTransition` for this rollback (unlike
  * the real "in_progress -> reviewing" transition elsewhere in this file,
