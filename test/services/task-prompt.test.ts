@@ -77,6 +77,22 @@ describe("buildTaskMasterPreamble", () => {
     expect(out).not.toContain("mullion-reviewer");
   });
 
+  // Pins the bullet's position so a future reword can't silently reorder the
+  // contract's emphasis: verify → self-review → commit, so the worker always
+  // reviews with the FULL verification-gate diff in view, before it's split
+  // across commits.
+  it("places the self-review bullet after the verification gate and before committing", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    const verifyIdx = out.indexOf("Run the repo's own verification gate before you commit");
+    const selfReviewIdx = out.indexOf("Look over your own diff with fresh eyes before committing");
+    const commitIdx = out.indexOf(`Commit your work on ${BASE.branchName}`);
+    expect(verifyIdx).toBeGreaterThan(-1);
+    expect(selfReviewIdx).toBeGreaterThan(-1);
+    expect(commitIdx).toBeGreaterThan(-1);
+    expect(selfReviewIdx).toBeGreaterThan(verifyIdx);
+    expect(commitIdx).toBeGreaterThan(selfReviewIdx);
+  });
+
   it("warns that an outstanding background job suppresses the completion signal", () => {
     expect(buildTaskMasterPreamble(BASE)).toContain(
       "Finish or cancel any background job before you end your turn",
