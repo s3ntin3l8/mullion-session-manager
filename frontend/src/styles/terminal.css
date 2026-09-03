@@ -134,26 +134,6 @@
   color: var(--c);
   background: color-mix(in srgb, var(--c) 15%, transparent);
 }
-.session-model-badge,
-.pane-tab-model-badge {
-  font-size: 10px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--tint);
-  color: var(--dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 80px;
-}
-/* Issue #958 — the small-model badge reuses the model badge's rule
-   wholesale via this modifier (same shape, same truncation budget) rather
-   than a duplicate ruleset; opacity is what marks it as secondary to the
-   main model badge when both render side by side. */
-.session-model-badge.is-small,
-.pane-tab-model-badge.is-small {
-  opacity: 0.65;
-}
 .pane-tab.attention-ring {
   /* #98 item 2 — background tint matching the sidebar's own
      .session-item.status-attention treatment, plus a static left-edge accent
