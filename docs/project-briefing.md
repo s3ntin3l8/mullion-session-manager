@@ -151,7 +151,7 @@ an ephemeral-overlay mechanism:
 
 - **Claude Code**: `hook-adapters/mullion-bundle.ts`'s
   `composeClaudeSessionBundle` materializes a per-session plugin directory —
-  the shipped `mullion-host` skill (see `agent-guide.md`) plus, when set,
+  the shipped bundle skills (see `agent-guide.md`) plus, when set,
   the project's own skill under `skills/<frontmatter-name>/SKILL.md` and
   reviewer under `agents/<frontmatter-name>.md` — and points `--plugin-dir`
   at it instead of the static shipped bundle. If this install hasn't shipped
@@ -252,8 +252,8 @@ both):
   doesn't affect the file's own existence, just whether an agent's own
   SessionStart channel is told to look at it.
 - **Inject Mullion tooling bundle** — gates the whole `--plugin-dir`/
-  `skills.paths` delivery mechanism for both the shipped `mullion-host`
-  skill and any project skill/reviewer subagent. Unlike the briefing
+  `skills.paths` delivery mechanism for both the shipped bundle skills
+  and any project skill/reviewer subagent. Unlike the briefing
   toggle, there's no separate per-skill toggle to reconcile this with — a
   plugin-sourced Claude Code skill is invisible to Mullion's own Skills
   Manager, so this one setting really does govern the whole thing.

@@ -12,9 +12,10 @@ import { fileURLToPath } from "node:url";
 import { parseSkillFrontmatter } from "../skills.js";
 import { isDangerousSkillName } from "./skill-name.js";
 
-// Issue: Mullion's own agent-facing tooling (today just the `mullion-host`
-// skill — a repo-agnostic pointer to the per-session agent guide copy, see
-// src/bundle/skills/host/SKILL.md) currently only reaches an agent
+// Issue: Mullion's own agent-facing tooling (originally just the
+// `mullion-host` skill, a repo-agnostic pointer to the per-session agent
+// guide copy — since decomposed into five self-contained skills, issue
+// #940, see src/bundle/skills/) currently only reaches an agent
 // when the session's cwd happens to be THIS repo's own checkout
 // (.claude/skills/mullion-agent-guide/). This module ships it into every
 // Claude Code session, in every project, via `--plugin-dir` — "Load a

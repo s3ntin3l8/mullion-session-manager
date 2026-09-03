@@ -393,8 +393,8 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // (ctx.projectSkill/ctx.projectReviewerAgent), `--plugin-dir` points at a
   // per-session COMPOSED copy of the bundle instead of the static shipped
   // one (mullion-bundle.ts's composeClaudeSessionBundle) — one plugin dir
-  // carrying both the universal `mullion-host` skill and this project's own
-  // content, rather than a second `--plugin-dir` flag (spike S7 confirmed
+  // carrying both the universal shipped bundle skills and this project's
+  // own content, rather than a second `--plugin-dir` flag (spike S7 confirmed
   // the CLI would accept one, but the plan deliberately keeps argv from
   // growing a flag per content source). Falls back to the plain shipped
   // bundle when neither field is set — the ordinary case for every project
