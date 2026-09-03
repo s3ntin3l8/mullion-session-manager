@@ -64,4 +64,24 @@ describe("ui/Markdown", () => {
     // No heading/list elements manufactured out of the fence markers.
     expect(container.querySelector("h2, h3, ul")).toBeNull();
   });
+
+  // Hermes review, PR #1000 — a heading/bullet-shaped line INSIDE the fence
+  // (not just the fence markers themselves) must also not be reinterpreted.
+  it("does not turn a heading/bullet-shaped line inside a fence into a real heading or list", () => {
+    const { container } = render(<Markdown text={"```\n## config\n- run --flag\n```"} />);
+    expect(container.querySelector("h2, h3, ul")).toBeNull();
+    expect(container.textContent).toContain("## config");
+    expect(container.textContent).toContain("- run --flag");
+  });
+
+  // Hermes review, PR #1000 (Suggestion) — CommonMark closes/reopens a list
+  // across a blank line; the pre-fix renderer merged both runs into one
+  // <ul> since the parser gave it no way to tell them apart.
+  it("renders two bullet runs separated by a blank line as two separate lists", () => {
+    const { container } = render(<Markdown text={"- one\n\n- two"} />);
+    const lists = container.querySelectorAll("ul");
+    expect(lists).toHaveLength(2);
+    expect(lists[0]?.querySelectorAll("li")).toHaveLength(1);
+    expect(lists[1]?.querySelectorAll("li")).toHaveLength(1);
+  });
 });

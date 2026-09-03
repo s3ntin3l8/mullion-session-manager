@@ -55,6 +55,10 @@ export function Markdown({ text, className }: { text: string; className?: string
             <h3 key={key}>{renderSpans(group.spans, key)}</h3>
           );
         }
+        // "break" renders nothing — it only exists to stop the grouping
+        // loop above from re-joining two bullet runs the source separated
+        // with a blank line into one <ul>. See markdown.ts's own comment.
+        if (group.type === "break") return null;
         return (
           <p key={key}>
             {group.lines.map((line, li) => (

@@ -91,12 +91,14 @@ describe("parseSimpleMarkdown", () => {
       "paragraph", // **Verdict:** ...
       "heading", // ### Critical
       "bullet",
+      "break", // blank line closing the Critical list before ### Warnings
       "heading", // ### Warnings
       "bullet", // - None
+      "break", // blank line closing the Warnings list before ## Round 2
       "heading", // ## Round 2
       "paragraph", // **Verdict:** clean
     ]);
-    expect(blocks[6]).toEqual({
+    expect(blocks[8]).toEqual({
       type: "heading",
       level: 2,
       spans: [{ type: "text", text: "Round 2" }],
@@ -108,7 +110,7 @@ describe("parseSimpleMarkdown", () => {
     const blocks = parseSimpleMarkdown(src);
     // Every source line survives somewhere, verbatim, none silently dropped.
     const allText = blocks
-      .flatMap((b) => (b.type === "paragraph" ? b.lines.flat() : b.spans))
+      .flatMap((b) => (b.type === "paragraph" ? b.lines.flat() : b.type === "break" ? [] : b.spans))
       .map((s) => s.text)
       .join("\n");
     for (const line of src.split("\n")) {
@@ -117,6 +119,48 @@ describe("parseSimpleMarkdown", () => {
     // The fence markers are not recognized as anything special -- literal text.
     expect(blocks.some((b) => b.type === "paragraph" && JSON.stringify(b).includes("```ts"))).toBe(
       true,
+    );
+    // No structural block was manufactured out of any fence-internal line.
+    expect(blocks.some((b) => b.type === "heading" || b.type === "bullet")).toBe(false);
+  });
+
+  // Hermes review, PR #1000 — the fence-fallthrough guarantee above only
+  // held for content that ALSO didn't look like markdown structure. Real
+  // unstructured escape-hatch content (see this module's own header) can
+  // legitimately reproduce a repro command like `## config` or a CLI flag
+  // list like `- run --flag`, which the parser used to reinterpret as an
+  // actual heading/bullet rather than leaving as code.
+  it("does not reinterpret heading/bullet-shaped lines inside a fenced code block", () => {
+    const src = ["```", "## config", "- run --flag", "```"].join("\n");
+    const blocks = parseSimpleMarkdown(src);
+    expect(blocks.every((b) => b.type === "paragraph")).toBe(true);
+    const allText = blocks
+      .flatMap((b) => (b.type === "paragraph" ? b.lines.flat() : []))
+      .map((s) => s.text)
+      .join("\n");
+    expect(allText).toContain("## config");
+    expect(allText).toContain("- run --flag");
+  });
+
+  it("preserves a blank line inside a fence verbatim, without splitting into two paragraph blocks", () => {
+    const src = ["```", "line one", "", "line two", "```"].join("\n");
+    const blocks = parseSimpleMarkdown(src);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("paragraph");
+  });
+
+  // Hermes review, PR #1000 (Suggestion) — CommonMark closes and reopens a
+  // list across a blank line; the pre-fix renderer merged both runs into
+  // one <ul> because the parser dropped the blank line with no trace.
+  it("marks a blank line between two bullet runs with a break block, not silently dropping it", () => {
+    const src = ["- one", "", "- two"].join("\n");
+    const blocks = parseSimpleMarkdown(src);
+    expect(blocks.map((b) => b.type)).toEqual(["bullet", "break", "bullet"]);
+  });
+
+  it("does not insert a break block for a blank line that isn't between two bullet runs", () => {
+    expect(parseSimpleMarkdown(["para one", "", "para two"].join("\n")).map((b) => b.type)).toEqual(
+      ["paragraph", "paragraph"],
     );
   });
 
