@@ -427,7 +427,28 @@ export async function openDraftPRForTask(
       }
     }
     clearGithubSyncError(app, task.id);
-    return { ok: true, prUrl: task.prUrl!, prNumber: task.prNumber };
+    // #972 — task.prUrl can still be null here on a row that predates
+    // retryTask clearing prUrl/prNumber together (a retry that cleared only
+    // prUrl left this exact inconsistent pair). Asserting it non-null would
+    // hand `null` to a caller (maybeOpenDraftPR) that writes it straight
+    // back into tasks.prUrl, re-affirming the bad state forever. Fetch the
+    // live URL instead of trusting the DB row when it's missing.
+    if (task.prUrl !== null) {
+      return { ok: true, prUrl: task.prUrl, prNumber: task.prNumber };
+    }
+    try {
+      const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+      return { ok: true, prUrl: pr.htmlUrl, prNumber: task.prNumber };
+    } catch (err) {
+      const detail =
+        err instanceof GitHubWriteScopeError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      recordGithubSyncError(app, task.id, detail);
+      return { ok: false, reason: "pr-create-failed", detail };
+    }
   }
 
   // Base resolved BEFORE pushing (Hermes review, PR #475's original

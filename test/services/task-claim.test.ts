@@ -1167,14 +1167,14 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
-  it("resumes on the preserved branch, keeping its prior commit, and clears failureReason/completedAt/prUrl/sessionId", async () => {
+  it("resumes on the preserved branch, keeping its prior commit, and clears failureReason/completedAt/prUrl/prNumber/sessionId", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
     const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 70);
     app.db
       .update(tasks)
-      .set({ prUrl: "https://github.com/o/r/pull/1" })
+      .set({ prUrl: "https://github.com/o/r/pull/1", prNumber: 1 })
       .where(eq(tasks.id, task.id))
       .run();
 
@@ -1194,7 +1194,11 @@ describe("retryTask (#483)", () => {
     expect(row.status).toBe("in_progress");
     expect(row.failureReason).toBeNull();
     expect(row.completedAt).toBeNull();
+    // #972 — prUrl and prNumber must clear together, never leaving an
+    // inconsistent pair (a prNumber with no matching prUrl hid the PR link
+    // in the frontend, gated on prUrl truthiness).
     expect(row.prUrl).toBeNull();
+    expect(row.prNumber).toBeNull();
     expect(row.sessionId).not.toBeNull();
     expect(row.branchName).toBe(task.branchName);
     // #491 — retry resumes the preserved branch from its original base, so

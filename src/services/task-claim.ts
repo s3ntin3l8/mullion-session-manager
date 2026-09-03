@@ -575,11 +575,15 @@ export async function retryTask(
         // doesn't carry its old failure text / stale PR link / dead
         // session id forward. worktreePath/branchName are left as-is —
         // they're the deterministic, still-correct values this retry is
-        // about to resume onto.
+        // about to resume onto. prUrl and prNumber are cleared together —
+        // never one alone — so the row can't end up with a prNumber but no
+        // prUrl (or vice versa), which is exactly the inconsistent pair
+        // that made the PR link vanish from the UI (#972).
         failureReason: null,
         completedAt: null,
         sessionId: null,
         prUrl: null,
+        prNumber: null,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "failed")))
       .run();
