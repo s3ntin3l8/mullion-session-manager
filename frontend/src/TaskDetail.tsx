@@ -523,6 +523,11 @@ function DeleteTaskAction({
   worktreePath: string | null;
 }) {
   const deleteTask = useDashboardStore((s) => s.deleteTask);
+  // #1014 (Abandon), review fix — the label name is configurable
+  // (MULLION_TASK_LABEL, env.ts), not always literally "mullion-task". This
+  // is the same value TaskMasterSection.tsx's own Settings display reads.
+  const taskMasterEnv = useDashboardStore((s) => s.taskMasterEnv);
+  const taskLabel = taskMasterEnv?.issueLabel ?? "mullion-task";
   const [confirming, setConfirming] = useState(false);
   // #1014 (Abandon) — set once a plain delete 409s, per api/client.ts's own
   // guidance to branch on statusCode rather than the message text. Once
@@ -532,6 +537,17 @@ function DeleteTaskAction({
   const [needsForce, setNeedsForce] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Review fix — Cancel must also drop needsForce, or reopening this panel
+  // skips straight to the Abandon/force prompt even if whatever triggered
+  // the earlier 409 (a still-tracked issue, a since-resolved race) no
+  // longer holds. A fresh open should always try the plain delete again
+  // first.
+  function cancel() {
+    setConfirming(false);
+    setNeedsForce(false);
+    setError(null);
+  }
 
   if (!confirming) {
     return (
@@ -560,7 +576,7 @@ function DeleteTaskAction({
     ? [
         "This task can't be deleted normally.",
         isGithubLinked
-          ? "Abandoning it removes the mullion-task label from the linked issue,"
+          ? `Abandoning it removes the ${taskLabel} label from the linked issue,`
           : "Abandoning it",
         worktreePath ? `deletes its worktree (${worktreePath}),` : null,
         branchName ? `deletes its branch (${branchName}),` : null,
@@ -599,7 +615,7 @@ function DeleteTaskAction({
       >
         {needsForce ? "Abandon task" : "Confirm delete"}
       </button>
-      <button className="notif-gate-btn" disabled={submitting} onClick={() => setConfirming(false)}>
+      <button className="notif-gate-btn" disabled={submitting} onClick={cancel}>
         Cancel
       </button>
       {error && <span className="task-detail-error">{error}</span>}

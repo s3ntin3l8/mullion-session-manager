@@ -2739,6 +2739,53 @@ describe("tasks route", () => {
         removeLabelSpy.mockRestore();
         await app.close();
       });
+
+      // Review fix — if the row's status changes between checkTaskDeletable's
+      // read and the CAS delete (a concurrent Retry, the reconciler, a second
+      // concurrent force-delete), the unlabel above already succeeded but the
+      // delete then fails: the label is gone, but the row survives. The
+      // response must say so rather than the generic "refresh and try again",
+      // which reads as "nothing happened yet." Simulated by having the
+      // removeLabel mock itself mutate the row's status mid-request — the
+      // only await point between the read and the CAS write.
+      it("says the label was already removed when a concurrent status change beats the delete", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-1014-race");
+        const branchName = "mullion/task-9005";
+        const worktreePath = createTaskWorktree(cwd, branchName);
+        const app = await buildApp();
+        await connectPat(app, "ghp_abandon_race");
+        const githubWrite = await import("../../src/services/github-write.js");
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            issueNumber: 904,
+            title: "abandon me, but I race",
+            htmlUrl: "https://github.com/acme/widgets-1014-race/issues/904",
+            status: "failed",
+            failureReason: "session exited unexpectedly",
+            worktreePath,
+            branchName,
+          })
+          .returning()
+          .all();
+
+        const removeLabelSpy = vi.spyOn(githubWrite, "removeLabel").mockImplementation(async () => {
+          app.db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, row.id)).run();
+        });
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}?force=true` });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ message: expect.stringContaining("already removed") });
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect((listed.json() as { id: number }[]).some((t) => t.id === row.id)).toBe(true);
+
+        removeLabelSpy.mockRestore();
+        await app.close();
+      });
     });
 
     // #746 — `done` widens the same DELETE handler #729 already exercises

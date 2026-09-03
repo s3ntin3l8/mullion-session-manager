@@ -5,13 +5,17 @@ import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
 import type * as ApiModule from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api/index.js";
+import type { GitHubPRsStatus, NotificationEvent, ServerInfo, Session, Task } from "./api/index.js";
 
 let tasks: Task[];
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
 let taskMasterEnabled: boolean;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
+// #1014 (Abandon), review fix — null in most tests, so DeleteTaskAction
+// falls back to the literal "mullion-task" (matching every existing test's
+// assertions); set per-test to exercise a custom MULLION_TASK_LABEL.
+let taskMasterEnv: ServerInfo["taskMasterEnv"] | null = null;
 
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
@@ -29,6 +33,7 @@ function storeState() {
     sessions,
     events,
     taskMasterEnabled,
+    taskMasterEnv,
     claimTask,
     approveTask,
     mergeTask,
@@ -181,6 +186,7 @@ beforeEach(() => {
   sessions = [];
   events = {};
   taskMasterEnabled = true;
+  taskMasterEnv = null;
   prsByProject = {};
   claimTask.mockClear();
   approveTask.mockClear();
@@ -1313,6 +1319,60 @@ describe("TaskDetail delete action", () => {
     await user.click(abandonButton);
 
     expect(deleteTask).toHaveBeenLastCalledWith(1, { force: true });
+  });
+
+  // Review fix — MULLION_TASK_LABEL is configurable (env.ts), so the force
+  // re-prompt must name whatever label is actually configured, not always
+  // literally "mullion-task".
+  it("names the project's actual configured label, not a hardcoded one", async () => {
+    taskMasterEnv = {
+      enabled: true,
+      maxConcurrent: 1,
+      budgetMinutes: 30,
+      progressCommentMinutes: 10,
+      skipPermissions: false,
+      issueLabel: "custom-work-label",
+      pollIntervalSeconds: 60,
+    };
+    deleteTask.mockRejectedValueOnce(
+      new ApiError("Cannot delete: this task has a preserved branch — use Retry to resume it", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await screen.findByRole("button", { name: "Abandon task" });
+    expect(screen.getByText(/removes the custom-work-label label/)).toBeInTheDocument();
+    expect(screen.queryByText(/removes the mullion-task label/)).toBeNull();
+  });
+
+  // Review fix — Cancel must drop needsForce too, or reopening the panel
+  // skips straight to the Abandon prompt (and force-deletes) even if
+  // whatever triggered the earlier 409 no longer applies.
+  it("resets the force prompt back to a plain delete after Cancel", async () => {
+    deleteTask.mockRejectedValueOnce(
+      new ApiError("Cannot delete: this task has a preserved branch — use Retry to resume it", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await screen.findByRole("button", { name: "Abandon task" });
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Delete task" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    expect(screen.getByRole("button", { name: "Confirm delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abandon task" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(deleteTask).toHaveBeenLastCalledWith(1);
   });
 
   // #746 — done tasks (local and GitHub-linked) get the same Delete

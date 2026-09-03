@@ -744,6 +744,15 @@ export async function tasksRoute(app: FastifyInstance) {
       // auto-claim would then dispatch a fresh worker to the very task the
       // user just asked to get rid of.
       let project: typeof projects.$inferSelect | null = null;
+      // Review fix (#1014) — tracked so the CAS-delete-failed branch below
+      // can tell the caller the label is ALREADY gone, rather than implying
+      // (as the generic "refresh and try again" message would) that nothing
+      // happened yet. The unlabel itself is not undone on that path: retrying
+      // the request is enough (issueNumber's already unlabeled, so the
+      // second attempt's checkTaskDeletable + this whole `if` block is a
+      // no-op) and re-adding a label a human or the watcher may have since
+      // touched again would be its own race.
+      let labelRemoved = false;
       if (force && existing.issueNumber !== null) {
         project = getProjectOr404(existing.projectId);
         if (!project) return reply.notFound();
@@ -763,6 +772,7 @@ export async function tasksRoute(app: FastifyInstance) {
             existing.issueNumber,
             app.config.MULLION_TASK_LABEL,
           );
+          labelRemoved = true;
         } catch (err) {
           app.log.warn(
             { err, taskId, issueNumber: existing.issueNumber },
@@ -777,6 +787,21 @@ export async function tasksRoute(app: FastifyInstance) {
         .where(and(eq(tasks.id, taskId), eq(tasks.status, existing.status)))
         .run();
       if (deleted.changes === 0) {
+        // Review fix (#1014) — a concurrent status change (a Retry, the
+        // reconciler, a second concurrent force-delete) between this
+        // handler's own read and this CAS write can land here AFTER the
+        // label above was already removed. The row survives, but it's no
+        // longer labeled — say so, rather than the generic message that
+        // reads as "nothing happened."
+        if (labelRemoved) {
+          app.log.warn(
+            { taskId, issueNumber: existing.issueNumber },
+            "abandon: label removed but the row changed before it could be deleted — retry will finish the delete",
+          );
+          return reply.conflict(
+            "Task changed since this check — the GitHub label was already removed; refresh and try again",
+          );
+        }
         return reply.conflict("Task changed since this check — refresh and try again");
       }
 
