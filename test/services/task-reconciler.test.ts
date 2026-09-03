@@ -132,8 +132,6 @@ const {
   mockGetDefaultBranch,
   mockInvalidateReleaseCache,
   mockDetectReleaseWorkflow,
-  mockRepoHasExternalReviewWorkflow,
-  mockMarkPullRequestReadyForReview,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
@@ -178,19 +176,6 @@ const {
   mockGetDefaultBranch: vi.fn(),
   mockInvalidateReleaseCache: vi.fn(),
   mockDetectReleaseWorkflow: vi.fn(),
-  // Sequential review phase — no pass-through default: the real
-  // implementation hits GitHub's contents API over the network, which
-  // this test file has no business doing. Defaults to `false` every
-  // beforeEach ("no external reviewer configured") so every pre-existing
-  // test — none of which know about this — sees exactly the old
-  // single-stage behavior; only the dedicated tests below override it.
-  mockRepoHasExternalReviewWorkflow: vi.fn(),
-  // Sequential review phase — no pass-through default: the real
-  // implementation is a live GraphQL mutation. Every pre-existing test's
-  // mockPr() defaults `draft: false`, so this was never reached before;
-  // defaults to a no-op resolved value every beforeEach so the dedicated
-  // tests below (which DO set `draft: true`) never hit the network.
-  mockMarkPullRequestReadyForReview: vi.fn(),
   // #758 — no pass-through default (unlike commitWipChanges's `{ committed:
   // false }` no-op default): resumeTaskWorktree/removeWorktree would shell
   // out to real git against this file's fake "/tmp" project cwds, which
@@ -265,7 +250,6 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     deleteRemoteBranch: mockDeleteRemoteBranch,
     createPullRequestReview: mockCreatePullRequestReview,
     getPullRequestReviewDecision: mockGetPullRequestReviewDecision,
-    markPullRequestReadyForReview: mockMarkPullRequestReadyForReview,
     fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
     resolveReviewThread: mockResolveReviewThread,
     findReleasePullRequest: mockFindReleasePullRequest,
@@ -281,7 +265,6 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
     fetchRequiredStatusContexts: mockFetchRequiredStatusContexts,
     fetchCheckRunsForHead: mockFetchCheckRunsForHead,
     getDefaultBranch: mockGetDefaultBranch,
-    repoHasExternalReviewWorkflow: mockRepoHasExternalReviewWorkflow,
   };
 });
 
@@ -510,12 +493,6 @@ describe("reconcileTasks", () => {
     // review requirement configured, no reviewer App configured.
     mockGetPullRequestReviewDecision.mockReset().mockResolvedValue(null);
     mockResolveReviewerToken.mockReset().mockResolvedValue(null);
-    // Sequential review phase — reset (not just clear) so a leaked
-    // .mockResolvedValueOnce can't bleed forward, then re-establish "no
-    // external reviewer configured" as the default every pre-existing test
-    // relies on; only the dedicated tests below override this.
-    mockRepoHasExternalReviewWorkflow.mockReset().mockResolvedValue(false);
-    mockMarkPullRequestReadyForReview.mockReset().mockResolvedValue(undefined);
     // D0 fix — default reproduces the pre-fix single-identity filter (just
     // the caller's own viewerLogin) so every pre-existing PR-comment test
     // keeps its original behavior; only the dedicated D0 test overrides
@@ -3341,8 +3318,6 @@ describe("reconcileTasks", () => {
         autoReturnRounds: number;
         sessionId: number | null;
         lastPrReviewCommentAt: Date | null;
-        externalReviewRequestedAt: Date | null;
-        externalReviewNote: string | null;
       }> = {},
     ) {
       const { autoApprove = true, ...taskOverrides } = overrides;
@@ -3375,17 +3350,6 @@ describe("reconcileTasks", () => {
           reviewSessionId,
           reviewFindingsIngestedSessionId: reviewSessionId,
           lastReviewVerdict: "clean",
-          // Sequential review phase — every pre-existing test in this
-          // describe block models a task whose internal review already
-          // converged some (unspecified) time ago, so default to "already
-          // past stage 1" rather than null: none of these tests know about
-          // processExternalReviewRequests, and a null default would make
-          // EVERY one of them also trigger it on the very first
-          // reconcileTasks() tick, inflating call counts on shared mocks
-          // (mockGetPullRequestByNumber in particular) that several tests
-          // assert exact counts on. Only the dedicated tests below
-          // override this to null to exercise that trigger directly.
-          externalReviewRequestedAt: new Date(0),
           ...taskOverrides,
         })
         .returning()
@@ -3629,204 +3593,6 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
 
       await app.close();
-    });
-
-    // Sequential review phase (branchdam-mobile #83's investigation) —
-    // processExternalReviewRequests (the undraft-relocation trigger) and
-    // attemptAutoApprove's own external-review gate. createAutoApproveCandidate
-    // defaults externalReviewRequestedAt to a past timestamp (see its own
-    // doc comment) specifically so every OTHER test in this describe block
-    // is unaffected; these tests override it back to null to exercise the
-    // trigger directly.
-    describe("sequential review phase (PR #83's investigation)", () => {
-      it("marks the PR ready for external review once the internal verdict is clean, before approving", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app, {
-          externalReviewRequestedAt: null,
-        });
-        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ draft: true }));
-        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
-        mockRepoHasExternalReviewWorkflow.mockResolvedValue(false);
-        mockPromoteTaskToPR.mockResolvedValueOnce({
-          ok: true,
-          prUrl: "https://github.com/o/r/pull/9",
-          prNumber: 9,
-        });
-
-        await reconcileTasks(app);
-
-        expect(mockMarkPullRequestReadyForReview).toHaveBeenCalledWith("tok", "PR_node9");
-        const row = await getTask(app, taskId);
-        // No external reviewer configured (mocked `false` above) — resolves
-        // "satisfied" immediately, no detection window to wait out.
-        expect(row.status).toBe("done");
-        expect(row.externalReviewRequestedAt).not.toBeNull();
-
-        await app.close();
-      });
-
-      it("does not mark the PR ready when the internal verdict is still changes-requested (not converged)", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app, {
-          externalReviewRequestedAt: null,
-          lastReviewVerdict: "changes-requested",
-        });
-        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ draft: true }));
-        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
-
-        await reconcileTasks(app);
-
-        expect(mockMarkPullRequestReadyForReview).not.toHaveBeenCalled();
-        const row = await getTask(app, taskId);
-        expect(row.externalReviewRequestedAt).toBeNull();
-        expect(row.status).toBe("reviewing");
-
-        await app.close();
-      });
-
-      it("marks the PR ready once the auto-return round cap is spent, even though the verdict never went clean", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app, {
-          externalReviewRequestedAt: null,
-          lastReviewVerdict: "changes-requested",
-          autoReturnRounds: 2,
-        });
-        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ draft: true }));
-
-        await reconcileTasks(app);
-
-        expect(mockMarkPullRequestReadyForReview).toHaveBeenCalledWith("tok", "PR_node9");
-        const row = await getTask(app, taskId);
-        expect(row.externalReviewRequestedAt).not.toBeNull();
-
-        await app.close();
-      });
-
-      it("waits (does not approve) once an external reviewer workflow exists but hasn't posted a decision yet", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app);
-        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
-        mockRepoHasExternalReviewWorkflow.mockResolvedValue(true);
-        mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
-
-        await reconcileTasks(app);
-
-        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
-        const row = await getTask(app, taskId);
-        expect(row.status).toBe("reviewing");
-
-        await app.close();
-      });
-
-      it("approves once a known-configured external reviewer's decision is APPROVED", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app);
-        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
-        mockRepoHasExternalReviewWorkflow.mockResolvedValue(true);
-        mockGetPullRequestReviewDecision.mockResolvedValue("APPROVED");
-        mockPromoteTaskToPR.mockResolvedValueOnce({
-          ok: true,
-          prUrl: "https://github.com/o/r/pull/9",
-          prNumber: 9,
-        });
-
-        await reconcileTasks(app);
-
-        const row = await getTask(app, taskId);
-        expect(row.status).toBe("done");
-
-        await app.close();
-      });
-
-      it("does NOT approve, and does not treat it as an error, once the external reviewer requests changes", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app);
-        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
-        mockRepoHasExternalReviewWorkflow.mockResolvedValue(true);
-        mockGetPullRequestReviewDecision.mockResolvedValue("CHANGES_REQUESTED");
-
-        await reconcileTasks(app);
-
-        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
-        const row = await getTask(app, taskId);
-        expect(row.status).toBe("reviewing");
-        expect(row.externalReviewNote).toMatch(/needs a human/);
-
-        await app.close();
-      });
-
-      // mullion-reviewer finding: requestExternalReviewForTask's GitHub
-      // write (marking the PR ready) already lands BEFORE this sweep's own
-      // CAS write on externalReviewRequestedAt — same shape as
-      // "refuses to spawn when a concurrent reject flips the task away
-      // from reviewing mid-CI-lookup" below, just for this sweep instead.
-      it("does not stamp externalReviewRequestedAt when a concurrent reject flips the task away from reviewing mid-request", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app, {
-          externalReviewRequestedAt: null,
-        });
-        mockGetPullRequestByNumber.mockImplementationOnce(async () => {
-          // Simulates a human's Reject landing on this exact task WHILE
-          // requestExternalReviewForTask's own PR lookup is in flight.
-          app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, taskId)).run();
-          return mockPr({ draft: true });
-        });
-
-        await reconcileTasks(app);
-
-        const row = await getTask(app, taskId);
-        expect(row.status).toBe("in_progress"); // the concurrent reject wins
-        expect(row.externalReviewRequestedAt).toBeNull();
-
-        await app.close();
-      });
-
-      // mullion-reviewer finding: externalReviewRequestedAt/externalReviewNote
-      // must not survive a reject-and-re-review cycle — otherwise a SECOND
-      // "reviewing" episode never re-enters processExternalReviewRequests's
-      // own candidate query (it requires externalReviewRequestedAt IS
-      // NULL), and a stale note from episode 1 keeps rendering while an
-      // entirely different diff is under review in episode 2.
-      it("resets externalReviewRequestedAt/externalReviewNote when a task re-enters reviewing after a reject", async () => {
-        const app = await buildApp();
-        const { taskId } = await createAutoApproveCandidate(app, {
-          externalReviewRequestedAt: new Date(),
-          externalReviewNote: "External reviewer requested changes on this pull request.",
-        });
-        app.db
-          .update(tasks)
-          .set({ status: "in_progress", reviewSessionId: null })
-          .where(eq(tasks.id, taskId))
-          .run();
-        const workerSession = await app.inject({
-          method: "POST",
-          url: "/api/sessions",
-          payload: { projectId: (await getTask(app, taskId)).projectId, command: "bash" },
-        });
-        app.db
-          .update(tasks)
-          .set({ sessionId: workerSession.json().id, worktreePath: "/tmp" })
-          .where(eq(tasks.id, taskId))
-          .run();
-        vi.spyOn(app.pty, "get").mockImplementation(
-          () =>
-            ({
-              toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
-            }) as never,
-        );
-
-        await reconcileTasks(app);
-
-        const row = await getTask(app, taskId);
-        expect(row.status).toBe("reviewing");
-        expect(row.externalReviewRequestedAt).toBeNull();
-        expect(row.externalReviewNote).toBeNull();
-
-        await app.close();
-      });
     });
 
     // #755 — a red REQUIRED check returns the task to its worker for one
