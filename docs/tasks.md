@@ -771,12 +771,23 @@ reviewing` transition itself — `task-reconciler.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
   block approve's own clean-tree check), as JSON:
   `{verdict: "clean" | "changes-requested", summary, findings: [{path, line,
-side, severity, body}]}` — written to a temp file and moved into place as
-  the last step, not written directly, so a reconcile tick can never
-  observe a torn/partial write. `parseReviewFindings` tolerantly falls back
-  to `changes-requested` (the whole file as `summary`, no anchored findings)
-  for anything that isn't valid JSON in that shape — an agent that ignores
-  the contract must never silently read as a clean review.
+side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
+  verdict sentence; `verified`/`notes`/`looksGood` are optional string
+  arrays for what was checked, cross-cutting observations that don't anchor
+  to a line, and what's solid about the change, respectively. Written to a
+  temp file and moved into place as the last step, not written directly, so
+  a reconcile tick can never observe a torn/partial write.
+  `parseReviewFindings` tolerantly falls back to `changes-requested` (the
+  whole file as `summary`, no anchored findings, no `verified`/`notes`/
+  `looksGood`) for anything that isn't valid JSON in that shape — an agent
+  that ignores the contract must never silently read as a clean review.
+  `renderReviewFindingsMarkdown` renders the parsed verdict into the
+  Hermes-style sectioned body actually posted: `**Verdict:**` line, then
+  `### Critical` (severity `blocker`/`major`), `### Warnings`
+  (`minor`/unset), `### Suggestions` (`nit`) — each with `- None` when
+  empty — followed by `### Verified`/`### Notes`/`### Looks Good` when
+  non-empty. A freeform (non-JSON) review renders verbatim instead, since
+  its `summary` holds the whole file, not one sentence.
 
   A missing file is treated as **inconclusive**, not "no findings" and not
   "clean" — but not on the very first tick that observes it missing.
@@ -1183,14 +1194,23 @@ committed, same posture as the review-agent spawn next to it). This exists
 so CI (`ci-cd.yml`/`codeql.yml` both trigger on plain `pull_request:`,
 drafts included) and a human — or the optional review agent, see Agent
 selection above — have a real diff and real check results to look at before
-a human commits to approving it. `hermes.yml`'s own
-`pull_request.draft == false` gate means Hermes never reviews the draft,
-only once approve flips it ready-for-review — the two reviewers sequence by
-construction, no coordination needed. A dirty tree, an unreachable host, an
-old agent build, or an undeterminable default branch just means no draft
-opens yet; none of those block the `→ reviewing` transition itself, and
-approve's own checks below still apply regardless of whether a draft
-exists.
+a human commits to approving it. A dirty tree, an unreachable host, an old
+agent build, or an undeterminable default branch just means no draft opens
+yet; none of those block the `→ reviewing` transition itself, and approve's
+own checks below still apply regardless of whether a draft exists.
+
+**The PR is undrafted once Task Master's own review converges, not at
+approve** (`processExternalReviewRequests`, `src/services/
+task-reconciler.ts` — branchdam-mobile task 348423 / PR #83's
+investigation; `autoApprove` projects only for now, see "Sequential review
+phase" below). This used to happen at approve itself, which — combined with
+`hermes.yml`'s `pull_request.draft == false` gate — meant an external
+reviewer's first look at the diff arrived on (or after) the exact instant a
+task flipped to "done", with nowhere for its findings to land (`done` has
+no outgoing edge). "The two reviewers sequence by construction" was never
+true; it was two reviewers racing the same instant, with the external one
+guaranteed to lose. See "Sequential review phase" below for the full
+mechanism.
 
 **A stranded `reviewing` task with no PR is retried, not left for dead**
 (`retryStrandedDraftPRs`, `src/services/task-reconciler.ts`, its own sweep
@@ -1523,6 +1543,12 @@ once **all** of the following hold:
    configured therefore never auto-approves — the right default for a gate
    whose whole job is to be a gate, not a formality that eventually
    rubber-stamps itself.
+5. If this repo has a configured external reviewer, its verdict is
+   `APPROVED` (or no such reviewer exists at all) — see "Sequential review
+   phase" below. `CHANGES_REQUESTED` blocks approval outright (parks in
+   `reviewing` with `tasks.externalReviewNote` set); anything else
+   (`REVIEW_REQUIRED`, no decision yet) means "not yet," same posture as
+   step 4's own no-deadline wait.
 
 Anything else — no review agent configured on the project (so no verdict is
 ever ingested), `changes-requested`, `inconclusive`, CI red or still
@@ -1675,6 +1701,84 @@ comment names it, deduped per round (`prCommentCapCommentedRounds`,
 `task-reconciler.ts`) — same posture as `#755`'s own cap-reached comment,
 kept in a separate map since the two triggers can each hit the cap for a
 task independently and post different text.
+
+### Sequential review phase
+
+branchdam-mobile task 348423 / PR #83's investigation: `approveTask` used to
+undraft the PR immediately before the `→ done` CAS write, and `hermes.yml`'s
+auto-review gates on `pull_request.draft == false` — so an external
+reviewer's very first look at a diff could only ever arrive on (or after)
+the transition that ends the task, with nowhere for its findings to land
+(`done` has no outgoing edge — see `task-state.ts`). The fix restructures
+`reviewing` into two (unnamed — no new `tasks.status` value, no
+`task-state.ts` edit) stages, distinguished by a nullable
+`tasks.externalReviewRequestedAt` timestamp:
+
+- **Stage 1** — the draft PR, Task Master's own review agent, and its
+  auto-return rounds, unchanged from everything described above.
+- **Stage 2** — once stage 1 converges (a `clean` verdict, or the
+  auto-return round cap spent — the same "give up, needs a human" case
+  `#756`'s `cappedNote` already surfaces), the PR is marked ready for
+  review and `externalReviewRequestedAt` is stamped
+  (`processExternalReviewRequests`, `task-reconciler.ts`). An external
+  reviewer (Hermes or any equivalent `claude.yml`/Codex workflow) now sees
+  a diff Task Master already considers final.
+
+**Currently scoped to `autoApprove` projects only.** `processExternalReview
+Requests`'s candidate query requires `projects.autoApprove = true` — the
+same filter `processAutoApprovals` uses — because that sweep is the only
+piece wired up so far to actually GATE on the external verdict
+(`resolveExternalReviewGate`, inside `attemptAutoApprove`). A human clicking
+Approve on a non-autoApprove project still undrafts the PR itself
+(`promoteTaskToPR`'s own `markPullRequestReadyForReview` call — kept as a
+deliberate override/safety-net path, not removed), same as before this
+shipped; see issue #982 for sequencing that project population in too, once
+external findings are actually ingested for them (issue #982 also covers
+that — hoisting `attemptReturnPrCommentsToWorker` out of its own
+`autoApprove`-only gate). A task with no review agent configured at all
+(`reviewSessionId === null`) is also out of scope for now — see issue #981.
+
+**Whether an external reviewer exists at all is a static fact, read
+directly, never guessed at by waiting.** `repoHasExternalReviewWorkflow`
+(`github.ts`) reads the target repo's own `.github/workflows/*.{yml,yaml}`
+content and checks for a `pull_request` trigger that explicitly lists
+`ready_for_review` in its `types:` — GitHub's own default `pull_request`
+types (`opened`/`synchronize`/`reopened`) never include it, so a workflow
+must opt in explicitly, exactly like `hermes-review.yml` does. This was a
+deliberate pivot away from an earlier design (polling for a workflow RUN to
+appear within some time window before concluding "no reviewer configured"):
+that would have imposed a real wait — sized in minutes, to tolerate a slow
+or cold self-hosted runner — on **every** task in **every** autoApprove
+project, including ones that will never have an external reviewer at all.
+Reading the workflow config directly answers "does a reviewer exist" in one
+cached (1 hour, workflow files change about never — same TTL and
+only-cache-a-success posture as `fetchRequiredStatusContexts` above) read,
+with no detection window at all:
+
+- **No qualifying workflow** → `resolveExternalReviewGate` returns
+  `"satisfied"` immediately — auto-approve proceeds exactly as it did
+  before this shipped.
+- **A qualifying workflow exists** → its actual verdict is polled with NO
+  timeout (`getPullRequestReviewDecision`), since its eventual arrival is
+  already known, not merely hoped for. Run completion is not review
+  completion — PR #83's own Hermes run concluded 55 seconds before its
+  review was actually submitted (`hermes.yml`'s self-hosted runner only
+  relays the prompt; the agent posts the review asynchronously) — so no
+  run-level signal is ever consulted, only the PR's aggregate review
+  decision: `APPROVED` satisfies the gate, `CHANGES_REQUESTED` blocks it
+  (parks in `reviewing`, `tasks.externalReviewNote` set to a human-readable
+  reason — same separate-column posture as `mergeError`/`releaseError`),
+  and anything else (`REVIEW_REQUIRED`, no review yet) waits.
+
+No new auto-return round is spent on a `CHANGES_REQUESTED` external verdict
+yet — this first slice only PARKS the task for a human once that happens.
+Actually driving a fix round (a separate `tasks.externalReviewRounds`
+counter, never shared with `autoReturnRounds` — sharing would let stage 1
+exhaust the budget before the gating reviewer is ever consulted, the
+258971 failure mode but worse since the external review is the one that
+gates) and re-summoning the reviewer after one (`hermes-review.yml`'s
+on-demand `@mention` mode — draft/undraft does NOT re-trigger it, verified
+against that workflow's own "already reviewed" guard) are issue #982.
 
 ## Worktree lifecycle
 

@@ -302,6 +302,23 @@ export interface ParsedReviewFindings {
   verdict: ReviewVerdict;
   summary: string;
   findings: ReviewFinding[];
+  /** What the reviewer says it actually ran/checked (commands, files read) —
+   * rendered as its own "Verified" section. Empty when the reviewer omitted
+   * it or (see `structured` below) never wrote JSON at all. */
+  verified: string[];
+  /** Cross-cutting observations that don't anchor to one file:line — kept
+   * distinct from `findings` so they never get force-fit into a fake
+   * path/line pair just to have somewhere to go. */
+  notes: string[];
+  /** What's solid about the change — Hermes-parity "Looks Good" content. */
+  looksGood: string[];
+  /** `true` only when `raw` parsed as the JSON contract `buildReviewPrompt`
+   * asks for; `false` on the freeform-fallback branch, where `summary` holds
+   * the ENTIRE raw file content rather than one verdict sentence.
+   * `renderReviewFindingsMarkdown` uses this to decide whether `summary` is
+   * safe to wrap in a "**Verdict:**" line and section headings, or must be
+   * returned verbatim — see that function's own doc comment. */
+  structured: boolean;
 }
 
 /**
@@ -337,6 +354,15 @@ function normalizeReviewFinding(f: unknown): ReviewFinding | null {
   };
 }
 
+/** Normalizes an optional raw string-array field (`verified`/`notes`/
+ * `looksGood`) the same tolerant way `findings` is: not an array → `[]`;
+ * non-string or empty-string entries dropped rather than rejecting the
+ * whole file over one bad entry. */
+function normalizeStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((s): s is string => typeof s === "string" && s.length > 0);
+}
+
 /**
  * Parses a review agent's findings-file content into a verdict — the
  * load-bearing half of the review contract (`task-reconciler.ts`'s
@@ -364,21 +390,34 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
         (obj as Record<string, unknown>).verdict === "changes-requested") &&
       typeof (obj as Record<string, unknown>).summary === "string"
     ) {
-      const rawFindings = (obj as Record<string, unknown>).findings;
+      const rec = obj as Record<string, unknown>;
+      const rawFindings = rec.findings;
       const findings: ReviewFinding[] = Array.isArray(rawFindings)
         ? rawFindings.map(normalizeReviewFinding).filter((f): f is ReviewFinding => f !== null)
         : [];
       return {
-        verdict: (obj as Record<string, unknown>).verdict as ReviewVerdict,
-        summary: (obj as Record<string, unknown>).summary as string,
+        verdict: rec.verdict as ReviewVerdict,
+        summary: rec.summary as string,
         findings,
+        verified: normalizeStringArray(rec.verified),
+        notes: normalizeStringArray(rec.notes),
+        looksGood: normalizeStringArray(rec.looksGood),
+        structured: true,
       };
     }
   } catch {
     // Falls through to the freeform-text branch below — malformed JSON is
     // just another shape of "the agent didn't follow the contract".
   }
-  return { verdict: "changes-requested", summary: trimmed, findings: [] };
+  return {
+    verdict: "changes-requested",
+    summary: trimmed,
+    findings: [],
+    verified: [],
+    notes: [],
+    looksGood: [],
+    structured: false,
+  };
 }
 
 /** `"[severity] "`, or `""` when the reviewer gave none — the one piece of
@@ -390,18 +429,138 @@ export function severityPrefix(severity: ReviewFinding["severity"]): string {
   return severity ? `[${severity}] ` : "";
 }
 
-/** Renders a parsed verdict back into the plain-text form the review
- * comment and the review-feedback re-seed prompt both already expect —
- * summary prose, then each anchored finding as a `path:line` bullet,
- * severity-prefixed when the reviewer gave one. `task-github-sync.ts`'s own
- * PR-review posting (structured, not this text) consumes
- * `ParsedReviewFindings.findings` directly instead. */
-export function renderReviewFindingsMarkdown(parsed: ParsedReviewFindings): string {
-  if (parsed.findings.length === 0) return parsed.summary;
-  const bullets = parsed.findings.map(
-    (f) => `- ${severityPrefix(f.severity)}**${f.path}:${f.line}** — ${f.body}`,
-  );
-  return [parsed.summary, "", ...bullets].join("\n");
+/** Which rendered-markdown section a finding's severity belongs under —
+ * mapped mechanically, never left to the LLM to decide. `null` (a reviewer
+ * that gave no severity at all) goes to Warnings, not Suggestions: a
+ * severity-less finding from a reviewer that asked for changes isn't
+ * necessarily a nit. */
+function findingSection(
+  severity: ReviewFinding["severity"],
+): "critical" | "warnings" | "suggestions" {
+  if (severity === "blocker" || severity === "major") return "critical";
+  if (severity === "nit") return "suggestions";
+  return "warnings";
+}
+
+/** `mode` controls how findings render within a section:
+ * - `"bullets"` — today's `- [sev] **path:line** — body` form.
+ * - `"count"` — a single `- N finding(s) anchored inline below` line, for
+ *   the PR review body where the findings themselves are posted as
+ *   GitHub's own anchored inline comments (`task-github-sync.ts`) and must
+ *   not ALSO appear as prose in the summary — `autonomous-pr-review` §5. */
+function renderFindingsSection(
+  heading: string,
+  items: ReviewFinding[],
+  mode: "bullets" | "count",
+): string[] {
+  if (items.length === 0) return [`### ${heading}`, "- None", ""];
+  const lines =
+    mode === "count"
+      ? [`- ${items.length} finding(s) anchored inline below`]
+      : items.map((f) => `- ${severityPrefix(f.severity)}**${f.path}:${f.line}** — ${f.body}`);
+  return [`### ${heading}`, ...lines, ""];
+}
+
+function renderTextSection(heading: string, items: string[], omitIfEmpty: boolean): string[] {
+  if (items.length === 0) return omitIfEmpty ? [] : [`### ${heading}`, "- None", ""];
+  return [`### ${heading}`, ...items.map((s) => `- ${s}`), ""];
+}
+
+/** Every real one-sentence `summary` in this file's own test fixtures is
+ * under 100 characters; this leaves generous headroom above that before
+ * treating a `summary` as the old contract's whole-paragraph shape instead
+ * — see `renderReviewFindingsMarkdown`'s own doc comment (Hermes review,
+ * PR #992). */
+const MAX_STRUCTURED_SUMMARY_LENGTH = 300;
+
+/**
+ * Renders a parsed verdict into the markdown body its four consumers post
+ * or feed a worker: the PR-review body/comment body (`task-reconciler.ts`),
+ * the 422/issue-comment fallback (`task-github-sync.ts`), the persisted
+ * `tasks.reviewFindings` column, and the review-feedback re-seed prompt
+ * (`buildReviewFeedbackPrompt`). One renderer, three `mode`s, so the four
+ * call sites can never drift into different section styling for the same
+ * fields (the same reasoning `severityPrefix`'s own doc comment gives for
+ * why THAT one piece of styling is centralized).
+ *
+ * `mode`:
+ * - `"comment"` (default) — issue comment, no-anchor PR body, the 422
+ *   fallback, and `tasks.reviewFindings`. Findings render as bullets.
+ * - `"review-body"` — the PR review body only. Each section with findings
+ *   gets its own "N finding(s) anchored inline below" line instead of
+ *   `path:line` bullets, since `task-github-sync.ts` posts the findings
+ *   themselves as GitHub's own anchored inline comments alongside this body.
+ * - `"worker-prompt"` — the review-feedback auto-return re-seed. Only
+ *   findings + notes render — no "Looks Good", no "Verified", no `- None`
+ *   filler. That prompt's only job is telling the worker what to fix;
+ *   praise and empty headings compete with the instruction, not support it.
+ *
+ * `parsed.structured === false` means the reviewer never wrote the JSON
+ * contract `buildReviewPrompt` asks for, so `summary` holds the ENTIRE raw
+ * file content, not one verdict sentence (see `parseReviewFindings`'s own
+ * doc comment). Wrapping that in a "**Verdict:**" line and section headings
+ * would render a multi-kilobyte bold line above four empty sections —
+ * instead, return it verbatim in every mode, exactly as before this change.
+ * The same escape hatch also fires for a STRUCTURED review whose `summary`
+ * is suspiciously long (see `MAX_STRUCTURED_SUMMARY_LENGTH` below): valid
+ * JSON in the old contract shape (the whole review dumped into `summary`)
+ * still parses as `structured: true`, so length is the only signal left to
+ * catch it.
+ */
+export function renderReviewFindingsMarkdown(
+  parsed: ParsedReviewFindings,
+  mode: "comment" | "review-body" | "worker-prompt" = "comment",
+): string {
+  if (!parsed.structured) return parsed.summary;
+
+  const critical = parsed.findings.filter((f) => findingSection(f.severity) === "critical");
+  const warnings = parsed.findings.filter((f) => findingSection(f.severity) === "warnings");
+  const suggestions = parsed.findings.filter((f) => findingSection(f.severity) === "suggestions");
+
+  if (mode === "worker-prompt") {
+    const lines: string[] = [parsed.summary, ""];
+    for (const f of parsed.findings) {
+      lines.push(`- ${severityPrefix(f.severity)}**${f.path}:${f.line}** — ${f.body}`);
+    }
+    for (const n of parsed.notes) lines.push(`- ${n}`);
+    return lines.join("\n").trimEnd();
+  }
+
+  // Hermes review, PR #992 — `structured` only means `raw` parsed as the
+  // JSON shape; it says nothing about whether the reviewer actually kept
+  // `summary` to the one-sentence verdict `buildReviewPrompt` now asks for
+  // (the OLD contract asked for the whole review in this one field, and
+  // that shape still parses cleanly). Past this length, `summary` no longer
+  // looks like "one sentence" — render it verbatim rather than wrap a
+  // paragraph in "**Verdict:**" above four empty "- None" sections.
+  if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH) return parsed.summary;
+
+  const findingsMode = mode === "review-body" ? "count" : "bullets";
+  // A `changes-requested` verdict whose findings are ALL nits/warnings (no
+  // blocker/major) would otherwise post a REQUEST_CHANGES review above an
+  // empty "### Critical\n- None" — `autonomous-pr-review` §5 calls exactly
+  // this state ("a REQUEST_CHANGES next to an empty Critical section")
+  // a sign one of the two is wrong. It isn't wrong here — `wantsAutoReturn`
+  // (task-reconciler.ts) still correctly spends the task's one auto-return
+  // round on it — so the fix is saying so in the verdict line, not
+  // suppressing the section.
+  const nonBlockingNote =
+    parsed.verdict === "changes-requested" && critical.length === 0
+      ? " (non-blocking findings only)"
+      : "";
+  const verdictLabel = parsed.verdict === "clean" ? "clean" : "changes requested";
+  // Hermes review, PR #992 — an empty `summary` (the reviewer left it
+  // blank) must not leave a dangling " — " with nothing after it.
+  const summarySuffix = parsed.summary ? ` — ${parsed.summary}` : "";
+
+  const lines: string[] = [`**Verdict:** ${verdictLabel}${nonBlockingNote}${summarySuffix}`, ""];
+  lines.push(...renderFindingsSection("Critical", critical, findingsMode));
+  lines.push(...renderFindingsSection("Warnings", warnings, findingsMode));
+  lines.push(...renderFindingsSection("Suggestions", suggestions, findingsMode));
+  lines.push(...renderTextSection("Verified", parsed.verified, /* omitIfEmpty */ true));
+  lines.push(...renderTextSection("Notes", parsed.notes, /* omitIfEmpty */ true));
+  lines.push(...renderTextSection("Looks Good", parsed.looksGood, /* omitIfEmpty */ false));
+  return lines.join("\n").trimEnd();
 }
 
 /**
@@ -523,23 +682,29 @@ export function buildReviewPrompt(opts: {
     "",
     "{",
     '  "verdict": "clean" | "changes-requested",',
-    '  "summary": "what you reviewed, what you checked and how (the actual',
-    '    commands you ran), and why it is clean or not",',
+    '  "summary": "one sentence: your overall verdict, nothing more",',
     '  "findings": [',
     '    { "path": "relative/file/path", "line": 42, "side": "RIGHT",',
     '      "severity": "blocker" | "major" | "minor" | "nit",',
     '      "body": "the defect and the concrete fix" }',
-    "  ]",
+    "  ],",
+    '  "verified": ["what you actually ran/checked, e.g. the exact commands"],',
+    '  "notes": ["cross-cutting observations that do not anchor to one line"],',
+    '  "looksGood": ["what is solid about this change"]',
     "}",
+    "",
+    "`verified`/`notes`/`looksGood` are all optional arrays of strings — omit",
+    "any that don't apply, but keep `summary` to one sentence: the detail",
+    "belongs in `verified`, not folded into `summary`.",
     "",
     'Write "clean" only when you found nothing at all. A missing or unparseable',
     'file is treated as an inconclusive review, never as "clean" — writing the',
     "file is what lets a genuinely clean review be told apart from one that",
     "crashed or was killed before reporting anything.",
     "",
-    'Every entry in "findings" must be a real file:line in this diff — see this',
-    "repo's own autonomous-pr-review skill for why: a finding is an inline",
-    'anchored comment, never prose citing "file:42" inside the summary.',
+    'Every entry in "findings" must be a real file:line in this diff: a finding',
+    'is an inline anchored comment, never prose citing "file:42" inside the',
+    '"summary" or "notes" fields.',
     "",
     "Write findings as clear, actionable instructions, not just observations: a",
     '"changes-requested" verdict may be sent back to the worker automatically,',

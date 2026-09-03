@@ -170,6 +170,14 @@ const TASK_ROW_COLUMNS = {
   // Every read of `task.lastReviewVerdict` was `undefined` at runtime while
   // typechecking as `string | null`.
   lastReviewVerdict: tasks.lastReviewVerdict,
+  // Sequential review phase (branchdam-mobile #83's investigation) — null
+  // means the task is still in the internal-review stage (its PR, if any,
+  // is still a draft); non-null means Task Master's own review converged
+  // and an external reviewer has been asked to look. externalReviewNote is
+  // the human-readable status of that stage, same posture as mergeError/
+  // releaseError above.
+  externalReviewRequestedAt: tasks.externalReviewRequestedAt,
+  externalReviewNote: tasks.externalReviewNote,
   // Not surfaced directly — consumed by withAutoReturnCapped below to derive
   // `autoReturnCapped`, then stripped, same treatment as blockedBy/
   // withBlockedState just below. Raw per-project config has no reason to

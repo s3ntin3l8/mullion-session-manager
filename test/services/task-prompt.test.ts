@@ -234,8 +234,23 @@ describe("buildReviewPrompt", () => {
       worktreePath: BASE.worktreePath,
       findingsPath: FINDINGS_PATH,
     });
-    expect(out).toContain("autonomous-pr-review skill");
+    expect(out).toContain("a real file:line in this diff");
     expect(out).toContain("inline");
+    // No longer a dangling pointer to a skill this repo doesn't ship — see
+    // task-prompt.ts's buildReviewPrompt doc comment.
+    expect(out).not.toContain("autonomous-pr-review");
+  });
+
+  it("asks for a one-sentence summary and the optional verified/notes/looksGood arrays", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain('"summary": "one sentence');
+    expect(out).toContain('"verified"');
+    expect(out).toContain('"notes"');
+    expect(out).toContain('"looksGood"');
   });
 
   it("warns a changes-requested verdict may be sent back to the worker automatically", () => {
@@ -388,6 +403,41 @@ describe("parseReviewFindings", () => {
     const parsed = parseReviewFindings(JSON.stringify({ verdict: "looks fine", summary: "s" }));
     expect(parsed.verdict).toBe("changes-requested");
   });
+
+  it("marks a well-formed JSON review as structured, and freeform text as not", () => {
+    expect(parseReviewFindings(CLEAN_JSON).structured).toBe(true);
+    expect(parseReviewFindings("Fix the null check on line 42.").structured).toBe(false);
+    expect(parseReviewFindings('{"verdict": "clean", "summary": ').structured).toBe(false);
+  });
+
+  it("defaults verified/notes/looksGood to empty arrays when omitted", () => {
+    const parsed = parseReviewFindings(CLEAN_JSON);
+    expect(parsed.verified).toEqual([]);
+    expect(parsed.notes).toEqual([]);
+    expect(parsed.looksGood).toEqual([]);
+  });
+
+  it("parses verified/notes/looksGood, dropping non-string entries rather than throwing", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "clean",
+        summary: "s",
+        verified: ["make lint && make typecheck", "", 42, "vitest run test/x.test.ts"],
+        notes: ["worth a follow-up issue"],
+        looksGood: ["clean removal of the deprecated option"],
+      }),
+    );
+    expect(parsed.verified).toEqual(["make lint && make typecheck", "vitest run test/x.test.ts"]);
+    expect(parsed.notes).toEqual(["worth a follow-up issue"]);
+    expect(parsed.looksGood).toEqual(["clean removal of the deprecated option"]);
+  });
+
+  it("defaults verified/notes/looksGood to [] when present but not an array", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({ verdict: "clean", summary: "s", verified: "make lint" }),
+    );
+    expect(parsed.verified).toEqual([]);
+  });
 });
 
 // Hermes review, PR #736 — shared between this file's own bullet renderer
@@ -403,20 +453,107 @@ describe("severityPrefix", () => {
   });
 });
 
+const FULL_SHAPE_JSON = JSON.stringify({
+  verdict: "changes-requested",
+  summary: "One blocker and a nit.",
+  findings: [
+    {
+      path: "cmd/branchdam/main_test.go",
+      line: 669,
+      side: "RIGHT",
+      severity: "blocker",
+      body: "`defer occupied.Close()` ignores its error return.",
+    },
+    {
+      path: "cmd/branchdam/main.go",
+      line: 12,
+      side: "RIGHT",
+      severity: "nit",
+      body: "Prefer `const` over `let` here.",
+    },
+  ],
+  verified: ["make lint && make typecheck", "npx vitest run test/x.test.ts"],
+  notes: ["Worth filing a follow-up issue for the flaky test."],
+  looksGood: ["Root-cause-clean removal of the deprecated option."],
+});
+
 describe("renderReviewFindingsMarkdown", () => {
-  it("renders just the summary when there are no anchored findings", () => {
+  it("returns the summary verbatim for a freeform (non-JSON) review, no headings", () => {
+    const parsed = parseReviewFindings("Fix the null check on line 42.");
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toBe("Fix the null check on line 42.");
+    expect(out).not.toContain("**Verdict:**");
+    expect(out).not.toContain("###");
+  });
+
+  it("returns the summary verbatim for malformed JSON too", () => {
+    const parsed = parseReviewFindings('{"verdict": "clean", "summary": ');
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).not.toContain("**Verdict:**");
+    expect(out).not.toContain("###");
+  });
+
+  // Hermes review, PR #992 — valid JSON in the OLD contract shape (the
+  // whole review dumped into `summary`) still parses as `structured: true`;
+  // length is the only signal left to catch it and avoid wrapping a
+  // paragraph in "**Verdict:**" above four empty "- None" sections.
+  it("returns a suspiciously long structured summary verbatim too, even though it parsed as JSON", () => {
+    const longSummary =
+      "Reviewed the full diff across every changed file. ".repeat(8) + "No issues found.";
+    expect(longSummary.length).toBeGreaterThan(300);
+    const parsed = parseReviewFindings(JSON.stringify({ verdict: "clean", summary: longSummary }));
+    expect(parsed.structured).toBe(true);
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toBe(longSummary);
+    expect(out).not.toContain("**Verdict:**");
+    expect(out).not.toContain("###");
+  });
+
+  it("does not leave a dangling em-dash when the reviewer left summary empty", () => {
+    const parsed = parseReviewFindings(JSON.stringify({ verdict: "clean", summary: "" }));
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toContain("**Verdict:** clean\n");
+    expect(out).not.toContain("— \n");
+    expect(out).not.toMatch(/— *$/m);
+  });
+
+  it("renders a legacy-shape (verdict/summary/findings only) JSON review with sections and no Verified", () => {
     const out = renderReviewFindingsMarkdown(parseReviewFindings(CLEAN_JSON));
-    expect(out).toBe("Reviewed the diff and ran `go test ./...`; no issues found.");
+    expect(out).toContain("**Verdict:** clean — Reviewed the diff and ran `go test ./...`");
+    expect(out).toContain("### Critical\n- None");
+    expect(out).toContain("### Warnings\n- None");
+    expect(out).toContain("### Suggestions\n- None");
+    expect(out).toContain("### Looks Good\n- None");
+    expect(out).not.toContain("### Verified");
   });
 
-  it("renders the summary followed by a path:line bullet per finding, prefixed with its severity", () => {
-    const out = renderReviewFindingsMarkdown(parseReviewFindings(CHANGES_REQUESTED_JSON));
-    expect(out).toContain("One errcheck failure golangci-lint would catch.");
-    expect(out).toContain("[major] **cmd/branchdam/main_test.go:669**");
-    expect(out).toContain("wrap it or assign to `_` explicitly");
+  it("renders a full-shape review in Hermes section order, grouped by severity", () => {
+    const out = renderReviewFindingsMarkdown(parseReviewFindings(FULL_SHAPE_JSON));
+    const order = [
+      "**Verdict:**",
+      "### Critical",
+      "### Warnings",
+      "### Suggestions",
+      "### Verified",
+      "### Looks Good",
+    ];
+    let cursor = -1;
+    for (const marker of order) {
+      const idx = out.indexOf(marker);
+      expect(idx).toBeGreaterThan(cursor);
+      cursor = idx;
+    }
+    expect(out).toContain("### Critical\n- [blocker] **cmd/branchdam/main_test.go:669**");
+    expect(out).toContain("### Warnings\n- None");
+    expect(out).toContain("### Suggestions\n- [nit] **cmd/branchdam/main.go:12**");
+    expect(out).toContain(
+      "### Verified\n- make lint && make typecheck\n- npx vitest run test/x.test.ts",
+    );
+    expect(out).toContain("### Notes\n- Worth filing a follow-up issue for the flaky test.");
+    expect(out).toContain("### Looks Good\n- Root-cause-clean removal of the deprecated option.");
   });
 
-  it("omits the severity prefix entirely for a finding with no recognized severity", () => {
+  it("puts a severity-less finding under Warnings, not Suggestions", () => {
     const parsed = parseReviewFindings(
       JSON.stringify({
         verdict: "changes-requested",
@@ -425,9 +562,61 @@ describe("renderReviewFindingsMarkdown", () => {
       }),
     );
     const out = renderReviewFindingsMarkdown(parsed);
-    expect(out).toContain("- **a.go:1** — b");
-    expect(out).not.toContain("[null]");
-    expect(out).not.toContain("undefined");
+    expect(out).toContain("### Warnings\n- **a.go:1** — b");
+    expect(out).toContain("### Suggestions\n- None");
+  });
+
+  it("notes non-blocking-only when changes-requested has no Critical findings", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "changes-requested",
+        summary: "s",
+        findings: [{ path: "a.go", line: 1, body: "b", severity: "nit" }],
+      }),
+    );
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toContain("**Verdict:** changes requested (non-blocking findings only) — s");
+    expect(out).toContain("### Critical\n- None");
+  });
+
+  it("does not add the non-blocking note when Critical has a real finding", () => {
+    const out = renderReviewFindingsMarkdown(parseReviewFindings(CHANGES_REQUESTED_JSON));
+    expect(out).toContain("**Verdict:** changes requested — One errcheck failure");
+    expect(out).not.toContain("non-blocking findings only");
+  });
+
+  describe('mode: "review-body"', () => {
+    it("emits a per-section anchored-count line instead of path:line prose", () => {
+      const out = renderReviewFindingsMarkdown(parseReviewFindings(FULL_SHAPE_JSON), "review-body");
+      expect(out).toContain("### Critical\n- 1 finding(s) anchored inline below");
+      expect(out).toContain("### Suggestions\n- 1 finding(s) anchored inline below");
+      expect(out).not.toContain("cmd/branchdam/main_test.go:669");
+      expect(out).not.toContain("ignores its error return");
+    });
+  });
+
+  describe('mode: "worker-prompt"', () => {
+    it("renders findings and notes, but no Looks Good, Verified, or empty sections", () => {
+      const out = renderReviewFindingsMarkdown(
+        parseReviewFindings(FULL_SHAPE_JSON),
+        "worker-prompt",
+      );
+      expect(out).toContain("[blocker] **cmd/branchdam/main_test.go:669**");
+      expect(out).toContain("[nit] **cmd/branchdam/main.go:12**");
+      expect(out).toContain("Worth filing a follow-up issue for the flaky test.");
+      expect(out).not.toContain("Looks Good");
+      expect(out).not.toContain("Verified");
+      expect(out).not.toContain("- None");
+      expect(out).not.toContain("###");
+      expect(out).not.toContain("**Verdict:**");
+    });
+
+    it("falls back to the summary verbatim for a freeform review", () => {
+      const parsed = parseReviewFindings("Fix the null check on line 42.");
+      expect(renderReviewFindingsMarkdown(parsed, "worker-prompt")).toBe(
+        "Fix the null check on line 42.",
+      );
+    });
   });
 });
 
