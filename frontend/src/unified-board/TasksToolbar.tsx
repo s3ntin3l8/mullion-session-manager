@@ -16,6 +16,8 @@ export function TasksToolbar({
   onCreated,
   hideDone,
   onToggleHideDone,
+  showArchived,
+  onToggleShowArchived,
   activeProjectIds,
   clearDoneTasks,
 }: {
@@ -29,6 +31,11 @@ export function TasksToolbar({
   // ("Clear done").
   hideDone: boolean;
   onToggleHideDone: () => void;
+  // #1015 (archive) — same placement reasoning as hideDone above. Unlike
+  // hideDone, this one DOES route through visibleTasks (see UnifiedBoard.tsx's
+  // own comment), so toggling it also changes the column counts.
+  showArchived: boolean;
+  onToggleShowArchived: () => void;
   // Empty array means "no project filter active" — mirrors
   // UnifiedBoard.tsx's own activeProjectIds semantics (visibleTasks treats
   // [] as "show every project" too), passed through as `undefined` to the
@@ -127,6 +134,14 @@ export function TasksToolbar({
         onClick={onToggleHideDone}
       >
         Hide done
+      </button>
+      <button
+        type="button"
+        className={`sidebar-filter-chip tasks-panel-show-archived-toggle${showArchived ? " active" : ""}`}
+        aria-pressed={showArchived}
+        onClick={onToggleShowArchived}
+      >
+        Show archived
       </button>
       {!clearConfirming ? (
         <button

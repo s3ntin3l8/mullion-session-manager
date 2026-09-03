@@ -154,6 +154,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     startedAt: null,
     reviewingAt: null,
     completedAt: null,
+    mergedAt: null,
+    archivedAt: null,
     ...overrides,
   };
 }

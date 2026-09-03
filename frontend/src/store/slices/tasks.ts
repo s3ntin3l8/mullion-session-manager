@@ -136,6 +136,18 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       void get().refreshTasks();
     },
 
+    archiveTask: async (id) => {
+      const task = await api.archiveTask(id);
+      void get().refreshTasks();
+      return task;
+    },
+
+    unarchiveTask: async (id) => {
+      const task = await api.unarchiveTask(id);
+      void get().refreshTasks();
+      return task;
+    },
+
     clearDoneTasks: async (opts) => {
       const result = await api.clearDoneTasks(opts);
       void get().refreshTasks();

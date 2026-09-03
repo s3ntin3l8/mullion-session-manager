@@ -884,6 +884,24 @@ export const tasks = sqliteTable(
     startedAt: integer("started_at", { mode: "timestamp" }),
     reviewingAt: integer("reviewing_at", { mode: "timestamp" }),
     completedAt: integer("completed_at", { mode: "timestamp" }),
+    // #1015 (archive) — a FACT, not user-visible state: this task's own PR
+    // actually merged. Recorded at every place Mullion already observes a
+    // PR's merge state (no new poller) — the `pull_request closed` webhook,
+    // and attemptMerge's "already-done"/"clean" branches (task-reconciler.ts)
+    // — so it's set whether the merge happened through Mullion or by hand on
+    // github.com. Deliberately separate from archivedAt below: a merged task
+    // can be un-archived (the user wants it back on the board) without this
+    // column lying about whether its PR actually merged.
+    mergedAt: integer("merged_at", { mode: "timestamp" }),
+    // #1015 (archive) — orthogonal to `status`, not a new status value: a
+    // `done`/`failed` task the user (or auto-archive, once mergedAt is set on
+    // a done task) has asked to stop showing on the board by default.
+    // Keeping this separate from status preserves the done-vs-failed
+    // distinction and the prNumber -> task linkage PR-comment re-ingest
+    // depends on, and means every existing `status === "done"` branch in the
+    // services needs no auditing. Unarchive clears only this column, never
+    // mergedAt.
+    archivedAt: integer("archived_at", { mode: "timestamp" }),
   },
   // De-dup mechanism for the watcher's poll sweep: insert-or-ignore/update
   // per (project, issue) rather than a "last-seen cursor" — see #214's

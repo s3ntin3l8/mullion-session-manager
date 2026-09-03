@@ -699,6 +699,67 @@ describe("UnifiedBoard hide-done toggle (#746)", () => {
   });
 });
 
+// #1015 (archive) — unlike hide-done above, this toggle DOES route through
+// visibleTasks (see UnifiedBoard.tsx's own comment on why that's safe here:
+// archiving is restricted to done/failed, so an archived task can never sit
+// in a drag-editable column), so toggling it must also change the column
+// COUNT, not just collapse the cards.
+describe("UnifiedBoard show-archived toggle (#1015)", () => {
+  it("hides archived tasks and their count by default, and persists the toggle", async () => {
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", title: "in flight" }),
+      makeTask({
+        id: 2,
+        projectId: 1,
+        status: "done",
+        title: "shipped and archived",
+        archivedAt: "2026-01-01T00:00:00.000Z",
+      }),
+      makeTask({ id: 3, projectId: 1, status: "done", title: "shipped, not archived" }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.queryByText("shipped and archived")).toBeNull();
+    expect(screen.getByText("shipped, not archived")).toBeInTheDocument();
+    const doneColumn = screen
+      .getByText("Done", { selector: ".kanban-column-title" })
+      .closest(".kanban-column");
+    expect(doneColumn?.querySelector(".kanban-column-count")?.textContent).toBe("1");
+
+    await user.click(screen.getByRole("button", { name: /Show archived/ }));
+
+    expect(screen.getByText("shipped and archived")).toBeInTheDocument();
+    expect(doneColumn?.querySelector(".kanban-column-count")?.textContent).toBe("2");
+    expect(screen.getByRole("button", { name: /Show archived/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(localStorage.getItem("crs.taskShowArchived")).toBe("1");
+  });
+
+  it("toggles back off, hiding archived tasks again", async () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 1,
+        status: "failed",
+        title: "abandoned and archived",
+        archivedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Show archived/ }));
+    expect(screen.getByText("abandoned and archived")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Show archived/ }));
+    expect(screen.queryByText("abandoned and archived")).toBeNull();
+    expect(localStorage.getItem("crs.taskShowArchived")).toBe("0");
+  });
+});
+
 // #701 — mirrors "UnifiedBoard blocked-only filter" above: composes with
 // the project/blocked filters via the same absoluteDropIndex path, so a
 // drag with the phase filter active must produce the same updateTask

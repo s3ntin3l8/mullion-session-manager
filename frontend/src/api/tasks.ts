@@ -61,6 +61,12 @@ export const tasksApi = {
   deleteTask: (id: number, opts?: { force?: boolean }) =>
     request<void>(`/api/tasks/${id}${opts?.force ? "?force=true" : ""}`, { method: "DELETE" }),
 
+  // #1015 (archive) — orthogonal to status (see db/schema.ts's own doc
+  // comment); restricted server-side to done/failed tasks.
+  archiveTask: (id: number) => request<Task>(`/api/tasks/${id}/archive`, { method: "POST" }),
+  // Clears only archivedAt — mergedAt (a fact about the PR) is untouched.
+  unarchiveTask: (id: number) => request<Task>(`/api/tasks/${id}/archive`, { method: "DELETE" }),
+
   // #746 — bulk companion to deleteTask, scoped to `done` tasks only. A
   // single call; capped server-side (20/call) — `result.remaining > 0`
   // means the caller (TasksToolbar's own "Clear done" handler) needs to

@@ -1077,6 +1077,23 @@ function recordMergeError(app: FastifyInstance, taskId: number, message: string)
   app.db.update(tasks).set({ mergeError: message }).where(eq(tasks.id, taskId)).run();
 }
 
+// #1015 (archive) — called only where the caller has already confirmed
+// `pr.merged` is true (never on a PR closed WITHOUT merging — see this
+// function's two call sites' own comments on why that distinction matters).
+// Every task reaching attemptMerge came from processMergeRequests' own
+// `status = "done"` sweep candidate query, so archivedAt is set
+// unconditionally here — unlike the `pull_request` webhook handler
+// (routes/webhooks.ts), which can observe a merge before the task has left
+// "reviewing" and must check status itself. `isNull(tasks.mergedAt)` makes
+// this idempotent against attemptMerge's own retry/backoff behavior.
+function markTaskMerged(app: FastifyInstance, taskId: number): void {
+  app.db
+    .update(tasks)
+    .set({ mergedAt: new Date(), archivedAt: new Date() })
+    .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
+    .run();
+}
+
 // #758 — bounds how many times attemptAutoRebase spawns a worker for the
 // SAME task across its whole lifecycle. A separate counter/cap from
 // autoReturnRounds/maxAutoReturnRounds on purpose: this task is `done` and
@@ -1356,6 +1373,11 @@ async function attemptMerge(
       case "already-done": {
         // Merged or closed out of band (a human merged it directly on
         // GitHub, or closed it) — idempotent no-op, not an error.
+        // #1015 (archive) — same `pr.merged` check the autorelease-arm
+        // comment below already relies on: "already-done" collapses merged
+        // and closed-without-merging into one verdict, and only the former
+        // should archive.
+        if (pr.merged) markTaskMerged(app, task.id);
         clearMergeState(app, task, project);
         return;
       }
@@ -1364,6 +1386,9 @@ async function attemptMerge(
           sha: pr.headSha,
           commitTitle: pr.title,
         });
+        // #1015 (archive) — the merge call above just succeeded, so this is
+        // unconditionally a real merge (unlike "already-done").
+        markTaskMerged(app, task.id);
         // Best-effort: a failure here must not undo the merge that just
         // succeeded, nor re-arm the sweep to retry a merge that's already
         // done. delete_branch_on_merge is false on this repo, so without
