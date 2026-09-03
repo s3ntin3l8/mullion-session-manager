@@ -368,6 +368,13 @@ export function PaneActionsMenu({
                 <span className="pane-tab-overflow-hint">{session.model}</span>
               </div>
             )}
+            {session?.smallModel && (
+              <div className="pane-tab-overflow-item" style={{ opacity: 0.45, cursor: "default" }}>
+                <BotIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Small model</span>
+                <span className="pane-tab-overflow-hint">{session.smallModel}</span>
+              </div>
+            )}
             {/* Issue: narrow headers overflow — PaneHeaderActions.tsx's
                 header-level split buttons hide once their group gets too
                 narrow; this is the fallback entry point for a TERMINAL
