@@ -2668,10 +2668,12 @@ async function unlinkFindingsFileIfPresent(
  * Mullion resolves — but ONLY once its own NEXT independent review round
  * confirms the diff is no longer a "changes-requested" one, i.e. exactly
  * the same corroboration a human reviewer clicking Resolve would be acting
- * on. This function runs from processReviewingTasks at the moment a
- * "clean" verdict is durably ingested — never fires off an
- * "inconclusive"/crashed-reviewer verdict, which is not corroborating
- * evidence of anything.
+ * on. This function has two call sites, both gated on a "clean" verdict:
+ * `processReviewingTasks`, at the moment that verdict is durably ingested,
+ * and `attemptMerge`'s D1 self-heal, which re-checks the same
+ * `lastReviewVerdict` column on already-`done` rows (see the comment at
+ * that call site) — never fires off an "inconclusive"/crashed-reviewer
+ * verdict, which is not corroborating evidence of anything.
  *
  * Bounded to `mullionLogins` (`resolveMullionReviewLogins`, same set D0's
  * fix uses) — a human's own review thread is NEVER a candidate here,
