@@ -7,7 +7,18 @@ const MODEL_LINE_RE = /^\s*Model:\s*(\S+)\s*$/im;
 const REVIEWER_MODEL_LINE_RE = /^\s*Reviewer-Model:\s*(\S+)\s*$/im;
 const SMALL_MODEL_LINE_RE = /^\s*SmallModel:\s*(\S+)\s*$/im;
 
-const MODEL_FORMAT_RE = /^[^\s/]+\/[^\s/]+$/;
+// Requires at least one "/" with non-whitespace content on both sides of
+// the FIRST and LAST segment — not exactly one slash. `GET /api/opencode/models`
+// (issue #957's catalog endpoint) returns real ids like
+// "openrouter/anthropic/claude-sonnet-4-5" (a routing prefix in front of the
+// underlying provider/model pair) — roughly 60% of the live catalog on this
+// install has two slashes, not one. Before the settings-tier deepMerge fix
+// (same PR), no install-wide default could ever persist, so this regex was
+// dead code for that call site; fixing persistence is what made the
+// too-strict pattern actually reachable, so it's fixed here too rather than
+// shipping a Models dropdown whose majority of entries silently fail
+// validation at spawn time and fall back to "no override".
+const MODEL_FORMAT_RE = /^\S+\/\S+$/;
 
 export function validateModel(value: string): boolean {
   return MODEL_FORMAT_RE.test(value);

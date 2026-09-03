@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { settings } from "../db/schema.js";
 import {
+  DEFAULT_SETTINGS,
   deepMerge,
   getStoredSettings,
   sanitizeSettings,
@@ -50,8 +51,15 @@ export async function settingsRoute(app: FastifyInstance) {
       // Merge the partial patch onto the *current* stored settings (already
       // fully-defaulted by getStoredSettings) — deepMerge is the same helper
       // mergeSettings uses to layer a stored blob over DEFAULT_SETTINGS.
+      // The explicit third argument matters here specifically: `previous`
+      // has already drifted from DEFAULT_SETTINGS (that's the whole point of
+      // reading it), so deepMerge can't infer a field's nullability from
+      // `previous` alone once it's been set once — DEFAULT_SETTINGS is the
+      // one reference that never drifts. See deepMerge's own doc comment.
       const previous = getStoredSettings(app.db);
-      const next: AppSettings = sanitizeSettings(deepMerge(previous, request.body));
+      const next: AppSettings = sanitizeSettings(
+        deepMerge(previous, request.body, DEFAULT_SETTINGS),
+      );
       const data = JSON.stringify(next);
 
       // Upsert the singleton row — SQLite's ON CONFLICT DO UPDATE, matching

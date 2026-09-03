@@ -171,7 +171,13 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     updateSettings: (patch) => {
-      const next = deepMerge(get().settings, patch);
+      // DEFAULT_SETTINGS passed explicitly (not the default `defaults = base`
+      // param) — `get().settings` has already drifted from the defaults by
+      // the time a second updateSettings() call lands, so deepMerge can't
+      // infer a field's nullability from it alone. See deepMerge's own doc
+      // comment (settingsMerge.ts) for the null <-> value transition bug
+      // this fixes.
+      const next = deepMerge(get().settings, patch, DEFAULT_SETTINGS);
       applySettings(next);
 
       pendingPatch = pendingPatch ? mergePartialPatch(pendingPatch, patch) : patch;
