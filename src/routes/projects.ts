@@ -19,7 +19,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
-import { resolveRepoRefResult, resolveRepoRef } from "../services/host-git.js";
+import { resolveRepoRefResult } from "../services/host-git.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
@@ -1987,19 +1987,32 @@ export async function projectsRoute(app: FastifyInstance) {
           })();
 
           // PR half — a warm-cache read (github-pr-poller.ts's background
-          // poller), same as the per-project /github/prs route; resolving
-          // the repo ref is the only part that can fail (a remote host RPC
-          // for a non-local project), and resolveRepoRef already collapses
-          // that to null rather than throwing (host-git.ts's own doc
-          // comment on why), so no try/catch is needed here — unlike the
-          // branches half above.
+          // poller), same as the per-project /github/prs route. Uses
+          // `resolveRepoRefResult` directly (Hermes review), NOT the
+          // null-collapsing `resolveRepoRef` — that collapse conflates
+          // "durably no GitHub remote" with "host momentarily unreachable"
+          // into the same `null`, which this route can't afford: setting
+          // `prsResult[project.id] = null` for a transient outage clears
+          // the frontend's last-known-good PR list for that project
+          // (store/slices/git.ts maps a present `null` to `undefined`,
+          // same as every other "nothing here" case), contradicting the
+          // omit-on-transient-failure contract the branches half above
+          // already follows. `resolveRepoRefResult` never throws either
+          // (viaRemote's own doc comment), so this still needs no
+          // try/catch — just a three-way branch instead of a collapsed one.
           const prsPromise = (async () => {
-            const repoRef = await resolveRepoRef(app, project);
-            if (!repoRef) {
+            const result = await resolveRepoRefResult(app, project);
+            if (!result.ok) {
+              // Transient (remote host unreachable) — omit, preserving
+              // last-known-good, exactly like the branches half's catch.
+              return;
+            }
+            if (!result.value) {
+              // Durable — no GitHub remote configured for this project.
               prsResult[project.id] = null;
               return;
             }
-            const status = getPRsStatus(repoRef.owner, repoRef.repo);
+            const status = getPRsStatus(result.value.owner, result.value.repo);
             prsResult[project.id] = status && status.prs.length > 0 ? status : null;
           })();
 

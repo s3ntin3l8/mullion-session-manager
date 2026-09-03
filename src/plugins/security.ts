@@ -81,8 +81,13 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
   // frontend/index.html and frontend/public/*). `/` itself is included
   // since staticPlugin serves index.html there once the frontend is built
   // (rootRoute's placeholder only covers the unbuilt-frontend case).
+  // `assets/` and `screenshots/` (Hermes review) are anchored to exactly
+  // one filename segment (`[^/]+$`), same as every other alternative here
+  // — both are flat directories in the actual Vite build output, so this
+  // costs nothing and closes the only two open-ended wildcards in an
+  // otherwise fully-anchored pattern.
   const STATIC_SHELL_PATTERN =
-    /^\/(assets\/|screenshots\/|favicon\.(ico|svg)$|apple-touch-icon\.png$|apple-splash-[^/]+\.png$|icon-[^/]+\.png$|logo\.svg$|safari-pinned-tab\.svg$|site\.webmanifest$|sw\.js$|push-sw\.js$|workbox-[^/]+\.js$|theme-hint\.js$)/;
+    /^\/(assets\/[^/]+$|screenshots\/[^/]+$|favicon\.(ico|svg)$|apple-touch-icon\.png$|apple-splash-[^/]+\.png$|icon-[^/]+\.png$|logo\.svg$|safari-pinned-tab\.svg$|site\.webmanifest$|sw\.js$|push-sw\.js$|workbox-[^/]+\.js$|theme-hint\.js$)/;
 
   // Basic abuse protection. Tune via RATE_LIMIT_MAX / RATE_LIMIT_WINDOW.
   //
