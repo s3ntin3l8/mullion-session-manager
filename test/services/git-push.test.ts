@@ -164,6 +164,8 @@ describe("git-push", () => {
 
       const otherClone = fs.mkdtempSync(path.join(os.tmpdir(), "git-push-test-other-"));
       git(otherClone, ["clone", bareRemote, "."]);
+      git(otherClone, ["config", "user.email", "test@example.com"]);
+      git(otherClone, ["config", "user.name", "Test"]);
       git(otherClone, ["checkout", "mullion/task-7"]);
       fs.writeFileSync(path.join(otherClone, "concurrent.txt"), "concurrent");
       git(otherClone, ["add", "-A"]);
@@ -204,6 +206,8 @@ describe("git-push", () => {
 
       const otherClone = fs.mkdtempSync(path.join(os.tmpdir(), "git-push-test-other2-"));
       git(otherClone, ["clone", bareRemote, "."]);
+      git(otherClone, ["config", "user.email", "test@example.com"]);
+      git(otherClone, ["config", "user.name", "Test"]);
       git(otherClone, ["checkout", "hand-made-branch"]);
       fs.writeFileSync(path.join(otherClone, "concurrent.txt"), "concurrent");
       git(otherClone, ["add", "-A"]);
