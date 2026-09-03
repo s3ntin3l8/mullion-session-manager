@@ -101,14 +101,27 @@ describe("resolveOpenCodeModel", () => {
     expect(app.log.warn).toHaveBeenCalledOnce();
   });
 
-  it("rejects a model string with embedded whitespace or extra slashes", () => {
+  it("rejects a model string with embedded whitespace", () => {
     const app = mockApp();
     expect(resolveOpenCodeModel(app, { taskModel: "openrouter/foo bar", issueBody: null })).toBe(
       OPENCODE_SETTINGS.opencode.implementerModel,
     );
+  });
+
+  // Regression: MODEL_FORMAT_RE used to require EXACTLY one slash, rejecting
+  // this shape and falling through to the install-wide default. Real
+  // GET /api/opencode/models catalog entries (openrouter's own routing
+  // prefix in front of the underlying provider/model pair) commonly have two
+  // — e.g. "openrouter/anthropic/claude-sonnet-4-5" — so the old regex
+  // rejected the majority of one real provider's catalog. Caught live
+  // (curl against a running install's real catalog) once the settings-tier
+  // deepMerge fix made this call site reachable for the first time.
+  it("accepts a model string with more than one slash (e.g. a routing-prefixed openrouter id)", () => {
+    const app = mockApp();
     expect(resolveOpenCodeModel(app, { taskModel: "openrouter/foo/bar", issueBody: null })).toBe(
-      OPENCODE_SETTINGS.opencode.implementerModel,
+      "openrouter/foo/bar",
     );
+    expect(app.log.warn).not.toHaveBeenCalled();
   });
 
   describe("role-based resolution", () => {
