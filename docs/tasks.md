@@ -1709,7 +1709,10 @@ above.
 
 **Task Master's own PRs are deliberately excluded from such workflows'
 automatic triggers.** `hermes.yml`'s `auto-review` job gates on
-`!startsWith(github.event.pull_request.head.ref, 'mullion/task-')` —
+`!startsWith(github.event.pull_request.head.ref, 'mullion/task-')` (lands
+with the PR that added this section — until it merges, this repo's own
+`auto-review` job does not yet have the exclusion, and the race described
+below is genuinely still open here) —
 `mullion/task-` is a closed namespace exclusive to Task Master
 (`deriveTaskBranchName`, `git-worktree.ts`; the worker preamble forbids
 pushing anything else there), so this is a complete exclusion, not a
