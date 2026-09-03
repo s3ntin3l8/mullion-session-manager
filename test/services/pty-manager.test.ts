@@ -295,6 +295,118 @@ describe("PtyManager", () => {
     }
   });
 
+  // Issue #988's investigation: Node's own spawn ENOENT blames whichever
+  // binary it tried to exec ("spawn systemd-run ENOENT") even when the REAL
+  // cause is `cwd` itself having vanished (a worktree deleted out from
+  // under an in-flight re-seed) — a misleading message that sent that
+  // incident's own investigation looking at the wrong binary.
+  // bootstrapMaster() now classifies this against `existsSync(this.cwd)`.
+  describe("bootstrapMaster ENOENT classification (issue #988)", () => {
+    it("reclassifies a systemd-run ENOENT as a vanished cwd when the cwd doesn't exist", async () => {
+      const missingCwd = path.join(sessionsDir, "does-not-exist");
+      vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
+        const ee = new EventEmitter();
+        expect(file).toBe("systemd-run");
+        setImmediate(() =>
+          ee.emit(
+            "error",
+            Object.assign(new Error("spawn systemd-run ENOENT"), { code: "ENOENT" }),
+          ),
+        );
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: missingCwd,
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      await expect(session.spawnOutcome()).rejects.toThrow(`cwd does not exist: ${missingCwd}`);
+    });
+
+    it("leaves a systemd-run ENOENT unclassified when the cwd genuinely exists", async () => {
+      vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
+        const ee = new EventEmitter();
+        expect(file).toBe("systemd-run");
+        setImmediate(() =>
+          ee.emit(
+            "error",
+            Object.assign(new Error("spawn systemd-run ENOENT"), { code: "ENOENT" }),
+          ),
+        );
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      await expect(session.spawnOutcome()).rejects.toThrow("spawn systemd-run ENOENT");
+    });
+
+    it("leaves a non-ENOENT systemd-run spawn error unclassified even when the cwd is missing", async () => {
+      const missingCwd = path.join(sessionsDir, "still-does-not-exist");
+      vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
+        const ee = new EventEmitter();
+        expect(file).toBe("systemd-run");
+        setImmediate(() =>
+          ee.emit(
+            "error",
+            Object.assign(new Error("spawn systemd-run EACCES"), { code: "EACCES" }),
+          ),
+        );
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: missingCwd,
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      await expect(session.spawnOutcome()).rejects.toThrow("spawn systemd-run EACCES");
+    });
+
+    // Hermes review, PR #1001 — a plain existsSync check alone would miss
+    // this case: a `cwd` that exists but is a regular file (not a
+    // directory) spawns with the identical ENOENT and would otherwise still
+    // surface the misleading raw error.
+    it("reclassifies a systemd-run ENOENT as unusable when the cwd exists but isn't a directory", async () => {
+      const fileCwd = path.join(sessionsDir, "a-plain-file");
+      fs.writeFileSync(fileCwd, "");
+      vi.mocked(spawnChildProcess).mockImplementationOnce((file: string) => {
+        const ee = new EventEmitter();
+        expect(file).toBe("systemd-run");
+        setImmediate(() =>
+          ee.emit(
+            "error",
+            Object.assign(new Error("spawn systemd-run ENOENT"), { code: "ENOENT" }),
+          ),
+        );
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: fileCwd,
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      await expect(session.spawnOutcome()).rejects.toThrow(`cwd does not exist: ${fileCwd}`);
+    });
+  });
+
   it("reuses the same session object and does not respawn while alive", async () => {
     const first = manager.getOrCreate({
       id: "1",

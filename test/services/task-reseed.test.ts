@@ -214,6 +214,41 @@ describe("reseedTaskIfSessionExited", () => {
     expect(statusDuringTerminate).toBe("killed");
   });
 
+  // Issue #988 — the CAS marking the session "killed" before terminate can
+  // itself lose a race (a concurrent kill, or the session genuinely exited
+  // on its own between the read above and this write). Nothing left to
+  // terminate and no live session left to spawn a second agent alongside,
+  // so this must bail out cleanly rather than proceed.
+  it("with force: true — bails out cleanly when the pre-terminate CAS loses a race", async () => {
+    const { task, sessionId } = insertTaskWithSession("active");
+    const updateSpy = vi.spyOn(app.db, "update").mockReturnValueOnce({
+      set: () => ({
+        where: () => ({
+          run: () => ({ changes: 0, lastInsertRowid: 0 }),
+        }),
+      }),
+    } as never);
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    const result = await reseedTaskIfSessionExited(
+      app,
+      task,
+      project,
+      "prompt text",
+      "test review-feedback",
+      { force: true },
+    );
+
+    expect(result).toBe(false);
+    expect(mockTerminate).not.toHaveBeenCalled();
+    expect(mockCreateSessionRecord).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, sessionId }),
+      expect.stringContaining("lost a race marking"),
+    );
+    updateSpy.mockRestore();
+  });
+
   it("with force: true — does NOT spawn a second agent when terminate itself fails", async () => {
     mockTerminate.mockRejectedValue(new Error("host unreachable"));
     const { task, sessionId } = insertTaskWithSession("active");
