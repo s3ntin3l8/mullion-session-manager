@@ -638,7 +638,16 @@ function pullRequestTriggerAllowsReadyForReview(yamlText: string): boolean {
     }
 
     if (/types:\s*\[[^\]]*\bready_for_review\b[^\]]*\]/.test(block)) return true;
-    if (/types:[ \t]*\n(?:[ \t]*-[ \t]*\S+[ \t]*\n)*[ \t]*-[ \t]*ready_for_review\b/.test(block)) {
+    // Hermes review, PR #989: the `types:` line itself can carry a trailing
+    // comment (`types: # opt in explicitly`) — `[ \t]*\n` alone doesn't
+    // allow for one, and a false NEGATIVE here resolves the gate to "no
+    // reviewer" and lets auto-approve proceed, reproducing the exact #83
+    // race this matcher exists to prevent. `(?:#.*)?` absorbs it.
+    if (
+      /types:[ \t]*(?:#.*)?\n(?:[ \t]*-[ \t]*\S+[ \t]*(?:#.*)?\n)*[ \t]*-[ \t]*ready_for_review\b/.test(
+        block,
+      )
+    ) {
       return true;
     }
   }
@@ -706,6 +715,18 @@ export async function repoHasExternalReviewWorkflow(
       }
     }
 
+    // Hermes review, PR #989 — bounded the same way `cache`/`prsCache`
+    // above are (`cacheSet`'s own oldest-evicted pattern): one entry per
+    // distinct repo, so this only matters for an install with a very large
+    // and churning repo set, but there's no reason for it to be the one
+    // unbounded map in this file when the pattern already exists.
+    if (
+      !externalReviewWorkflowCache.has(key) &&
+      externalReviewWorkflowCache.size >= MAX_CACHE_ENTRIES
+    ) {
+      const oldestKey = externalReviewWorkflowCache.keys().next().value;
+      if (oldestKey !== undefined) externalReviewWorkflowCache.delete(oldestKey);
+    }
     externalReviewWorkflowCache.set(key, {
       value: found,
       expiresAt: Date.now() + EXTERNAL_REVIEW_WORKFLOW_CACHE_TTL_MS,

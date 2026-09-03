@@ -477,6 +477,45 @@ describe("repoHasExternalReviewWorkflow", () => {
     expect(result).toBe(true);
   });
 
+  it("returns true for the block-list YAML form of types:", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/hermes-review.yml")) {
+        return Promise.resolve(
+          rawResponse(
+            "on:\n  pull_request:\n    types:\n      - opened\n      - ready_for_review\n",
+          ),
+        );
+      }
+      return Promise.resolve(
+        listResponse([{ path: ".github/workflows/hermes-review.yml", type: "file" }]),
+      );
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "block-list-types-repo");
+    expect(result).toBe(true);
+  });
+
+  // Hermes review, PR #989: a bare `[ \t]*\n` anchor on the `types:` line
+  // used to reject this form outright — a false negative that would have
+  // let auto-approve proceed as if no reviewer were configured.
+  it("returns true for the block-list form even with a trailing comment on the types: line", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/hermes-review.yml")) {
+        return Promise.resolve(
+          rawResponse(
+            "on:\n  pull_request:\n    types: # opt in explicitly\n      - opened\n      - ready_for_review\n",
+          ),
+        );
+      }
+      return Promise.resolve(
+        listResponse([{ path: ".github/workflows/hermes-review.yml", type: "file" }]),
+      );
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "trailing-comment-types-repo");
+    expect(result).toBe(true);
+  });
+
   it("returns false when every workflow file exists but none mention ready_for_review", async () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.includes("/contents/.github/workflows/ci-cd.yml")) {
