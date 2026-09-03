@@ -83,6 +83,30 @@
   font-size: 10.5px;
   color: var(--dim);
 }
+/* Issue #1009 — collapsed by default (a native <details> needs no extra
+   state to manage that), constrained so a long stack-shaped message
+   doesn't blow out a small pane's layout. */
+.crashed-pane-detail {
+  max-width: 100%;
+  font-size: 10px;
+  color: var(--dim);
+}
+.crashed-pane-detail summary {
+  cursor: pointer;
+  color: var(--r);
+}
+.crashed-pane-detail-message {
+  margin: 6px 0 0;
+  max-width: 320px;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+  font-family: "Geist Mono", monospace;
+  font-size: 10px;
+  color: var(--dim);
+}
 .crashed-pane-reload {
   border: 1px solid color-mix(in srgb, var(--r) 35%, transparent);
   background: transparent;

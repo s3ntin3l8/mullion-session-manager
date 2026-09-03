@@ -148,6 +148,67 @@ describe("ErrorBoundary / RateLimitedError branch (issue #959)", () => {
     expect(screen.queryByText(/too many requests/i)).not.toBeInTheDocument();
   });
 
+  // Issue #1009 — the only diagnostic that used to exist for a crash was
+  // console.error, which is useless once the console is gone. This is the
+  // actual fix for issue #1: the caught error's message must be visible in
+  // the rendered UI, not just logged.
+  it("renders the caught error's message in a collapsible detail (issue #1009)", () => {
+    const Thrower = (): never => {
+      throw new Error("useWorkspacePersistence: layout blob missing sessionIds");
+    };
+
+    render(
+      <ErrorBoundary onReset={() => {}}>
+        <Thrower />
+      </ErrorBoundary>,
+    );
+
+    expect(
+      screen.getByText("useWorkspacePersistence: layout blob missing sessionIds"),
+    ).toBeInTheDocument();
+  });
+
+  it("crashedTitle/crashedSubtitle/reloadLabel override the pane-scoped defaults (issue #1009)", () => {
+    const Thrower = (): never => {
+      throw new Error("app-level crash");
+    };
+
+    render(
+      <ErrorBoundary
+        onReset={() => {}}
+        crashedTitle="Mullion crashed"
+        crashedSubtitle="reload to recover"
+        reloadLabel="Reload"
+      >
+        <Thrower />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText("Mullion crashed")).toBeInTheDocument();
+    expect(screen.getByText("reload to recover")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    // The pane-scoped defaults must NOT also be present — this is a
+    // replacement, not an addition.
+    expect(screen.queryByText("This pane crashed")).not.toBeInTheDocument();
+    expect(screen.queryByText("other panes are unaffected")).not.toBeInTheDocument();
+  });
+
+  it("without overrides, every pane-scoped call site keeps its exact prior copy (no unintended default change)", () => {
+    const Thrower = (): never => {
+      throw new Error("pane crash");
+    };
+
+    render(
+      <ErrorBoundary onReset={() => {}}>
+        <Thrower />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText("This pane crashed")).toBeInTheDocument();
+    expect(screen.getByText("other panes are unaffected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload pane" })).toBeInTheDocument();
+  });
+
   it("an error transitioning from RateLimitedError to null clears the timer (no leak)", () => {
     vi.useFakeTimers();
     let shouldThrow = true;

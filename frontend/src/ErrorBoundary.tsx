@@ -11,6 +11,15 @@ interface Props {
   // that threw, so clearing local state alone isn't enough; the parent must
   // hand this boundary a genuinely new child.
   onReset: () => void;
+  // Issue #1009 — crash-copy overrides. Every existing pane-scoped call
+  // site (panels/registry.tsx's 7 wrappers) relies on the defaults below
+  // and doesn't need to change. main.tsx's root boundary is the one
+  // exception: a crash there means the WHOLE app is down, not one pane
+  // among several — "other panes are unaffected" is actively wrong there,
+  // and "Reload pane" doesn't make sense for a full-page reload either.
+  crashedTitle?: string;
+  crashedSubtitle?: string;
+  reloadLabel?: string;
 }
 
 interface State {
@@ -129,13 +138,31 @@ export class ErrorBoundary extends Component<Props, State> {
       return this.renderRateLimited(this.state.error);
     }
     if (this.state.error) {
+      const error = this.state.error;
       return (
         <div className="crashed-pane">
           <WarningTriangleIcon size={19} style={{ color: "var(--r)" }} />
-          <div className="crashed-pane-title">This pane crashed</div>
-          <div className="crashed-pane-subtitle">other panes are unaffected</div>
+          <div className="crashed-pane-title">{this.props.crashedTitle ?? "This pane crashed"}</div>
+          <div className="crashed-pane-subtitle">
+            {this.props.crashedSubtitle ?? "other panes are unaffected"}
+          </div>
+          {
+            // Issue #1009 — the only diagnostic that used to exist for a
+            // crash was console.error("[error-boundary]", ...), which is
+            // useless the moment nobody had DevTools open when it happened
+            // (a phone, a screenshot sent after the fact). A native
+            // <details> disclosure needs no extra state — collapsed by
+            // default so it doesn't clutter the common case, but the exact
+            // error.message is always one click away.
+            error.message && (
+              <details className="crashed-pane-detail">
+                <summary>Show error</summary>
+                <pre className="crashed-pane-detail-message">{error.message}</pre>
+              </details>
+            )
+          }
           <button className="crashed-pane-reload" onClick={this.handleReload}>
-            Reload pane
+            {this.props.reloadLabel ?? "Reload pane"}
           </button>
         </div>
       );
