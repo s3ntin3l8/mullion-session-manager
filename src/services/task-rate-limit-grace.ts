@@ -7,9 +7,10 @@
  * Conditions, all required: `errorState === "api_error"`, `graceMinutes > 0`,
  * `hasCommitsPastBase === false` (if the task made progress, don't delay —
  * let the normal path succeed), `errorAt !== null`, `errorDetail` exactly
- * `"rate_limit"` (the short classification label `stop_failure` sets via
- * `errorType`; `null` means no classification, free-text detail carries no
- * signal — fail fast rather than grace an unknown error that could be a
+ * `"rate_limit"` (the short classification label `stop_failure` sets via the
+ * wire-level `errorType` field, populated onto `SessionInfo.errorDetail` in
+ * `hook-handlers.ts`; `null` means no classification, free-text detail carries
+ * no signal — fail fast rather than grace an unknown error that could be a
  * permanent failure like auth), and the window itself
  * (`Date.now() - errorAt < graceMinutes * 60_000`).
  */
