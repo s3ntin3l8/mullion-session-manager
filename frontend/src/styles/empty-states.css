@@ -528,6 +528,17 @@
 .task-card-review-round-capped {
   color: var(--r);
 }
+/* Sequential review phase (branchdam-mobile #83's investigation) — same
+   muted tone as .task-card-review-round above: waiting on an external
+   review is ordinary progress, not something needing attention (that's
+   what externalReviewNote's own CHANGES_REQUESTED wording is for). */
+.task-card-external-review {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* UnifiedBoard.tsx's TaskSessionSlot — a task card's nested worker/review
    session, compact (not SessionRow, see the component's own doc comment). */
