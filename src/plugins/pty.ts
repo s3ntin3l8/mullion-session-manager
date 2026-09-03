@@ -7,6 +7,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
+import { isAuthEnabled } from "../services/auth.js";
 import { PtyManager } from "../services/pty-manager.js";
 import {
   resolveSshAuthSock,
@@ -274,6 +275,13 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   const manager = new PtyManager({
     sessionsDir,
     sshAuthSock: resolvedSshAuthSock.path,
+    // Issue #949 — read once here, at boot, same posture as sshAuthSock
+    // immediately above: PtyManager freezes this into every Session it
+    // spawns for the life of this process, so there's no later point where
+    // re-reading it would matter (isAuthEnabled(app.config) only changes
+    // across a restart, since MULLION_AUTH_TOKEN/OIDC config are env-var-
+    // derived, not DB-backed settings).
+    authEnabled: isAuthEnabled(app.config),
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),

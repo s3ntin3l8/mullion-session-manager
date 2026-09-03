@@ -1,11 +1,17 @@
-// Shared by agent-guide.ts (Mullion's own doc excerpt) and
-// project-briefing.ts (a project's own operating instructions), so both
-// "carry a delimited slice of a doc into a session's context" features use
-// exactly one marker syntax and one truncation behavior — not two
-// independently-drifting implementations of the same idea. The two callers
-// use DIFFERENT marker strings (`mullion:tier1:*` vs `mullion:briefing:*`,
-// each caller's own constant) precisely so they can't cross-match each
-// other's regions; only the extraction/clamping logic is shared here.
+// `clampToBytes` is shared by project-briefing.ts (a project's own pinned
+// operating note) and mullion-scaffold.ts's `upsertMarkedRegion` (writing a
+// delimited region into a scaffolded file), so "carry/author a delimited
+// slice of a doc" features use exactly one truncation behavior — not two
+// independently-drifting implementations of the same idea. `extractMarkedRegion`
+// itself has no production caller of its own as of issue #949 (which
+// removed agent-guide.ts's `readAgentGuideExcerpt`, the last one) — kept
+// here as `upsertMarkedRegion`'s natural read-side counterpart and exercised
+// directly by this file's own test suite plus mullion-scaffold.test.ts's
+// round-trip assertions against `upsertMarkedRegion`'s output. Any future
+// caller reading a marked region should use its own marker-string constant,
+// same posture the removed caller and project-briefing.ts's
+// `mullion:briefing:*` constants both had — so two features' regions can
+// never cross-match each other.
 
 /**
  * Returns the text strictly between the first `startMarker` and the first

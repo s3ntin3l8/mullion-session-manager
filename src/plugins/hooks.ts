@@ -17,7 +17,7 @@ import {
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 import {
   agentGuideSourceExists,
-  readAgentGuideExcerpt,
+  buildAgentGuideBlock,
   sessionAgentGuidePath,
 } from "../services/agent-guide.js";
 import { readSessionBriefing } from "../services/project-briefing.js";
@@ -135,14 +135,16 @@ interface PendingPromote {
 // handling doing something unpredictable.
 export const PROMOTE_TIMEOUT_MS = 290_000;
 
-// Issue #405 — the short SessionStart pointer to a session's own copy of
-// the shipped agent guide doc (docs/agent-guide.md), composed alongside
-// (never in place of) the existing promote-flow seed — see the
-// "session_start" branch below. Deliberately a few lines, not the guide
-// itself: the guide is already on disk (Session.bootstrapMaster() ->
-// writeSessionAgentGuide(), unconditional — see agent-guide.ts), so this
-// only needs to make an agent aware it exists and summarize the one thing
-// most likely to trip it up (the scope model) before it reads the rest.
+// Issue #405, redesigned by #949 — the short SessionStart push composed
+// alongside (never in place of) the existing promote-flow seed — see the
+// "session_start" branch below. `buildAgentGuideBlock` (and the
+// `buildAgentGuidePointer` sentence it wraps) now live in agent-guide.ts,
+// not here — opencode.ts's prepareLaunch needs the identical builder for
+// its own tier-0 push (issue #949), and a service-layer function is the
+// right shared home for both consumers, not a re-import from this fastify
+// plugin. See that module's own doc comments for what the block contains
+// and why a push still exists at all now that #940 gave every CLI a real
+// `host` skill to pull instead.
 //
 // This reaches Claude Code, Codex, and agy sessions this way (issue #437,
 // landing per-agent): forwarder-core.mjs's formatSessionStartOutput
@@ -154,47 +156,12 @@ export const PROMOTE_TIMEOUT_MS = 290_000;
 // forwarder-core.mjs directly, not assumed).
 //
 // opencode is NOT left without a mechanism, though — it gets a materially
-// different one (issue #437c, hook-adapters/opencode.ts's prepareLaunch):
-// the guide's full text loaded via its own `instructions` config, not this
-// short pointer sentence. Confirmed live (not just by reading the adapter)
-// that the injected content actually reaches the model's context — an
-// `opencode run` probe against a real per-session config answered a
-// question only the guide's body could answer. What that mechanism does
-// NOT do is say "this is the Mullion agent guide, on disk at <path>" the
-// way this pointer does; a production incident had an opencode session
-// with the guide's content in context still fail to connect it to
-// `agent-guide.md` by name when asked. Fixed at the source instead of
-// here: agent-guide.ts's buildSessionAgentGuideContent now prepends a
-// short self-identifying header to the per-session copy every agent reads
-// (or, for opencode, has injected) — so this pointer and that header now
-// say the same thing via two different channels.
-export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean): string {
-  return [
-    `Mullion agent guide available at ${guidePath}.`,
-    authEnabled
-      ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected."
-      : "This host has in-app auth disabled, so every control-socket connection (including yours) resolves to full scope — session list/create/kill, dock control, and previews are all reachable, not just session-scoped ops.",
-  ].join("\n");
-}
-
-// Issue (agent-briefing follow-up to #405) — a live session empirically
-// never opened the path buildAgentGuidePointer names (an agent told "the
-// guide is available at <path>" has no reason to go read it mid-task). This
-// wraps that same pointer with a short CONTENT excerpt ahead of it — the
-// four env vars and a one-paragraph scope summary, read straight out of
-// docs/agent-guide.md's own `mullion:tier1` marked region
-// (readAgentGuideExcerpt) — so the load-bearing facts reach context
-// directly instead of behind a path the agent has to choose to follow.
-// `excerpt` is null on any install whose docs/agent-guide.md predates the
-// markers; the pointer alone (today's behavior) is what that install falls
-// back to.
-export function buildAgentGuideBlock(
-  excerpt: string | null,
-  guidePath: string,
-  authEnabled: boolean,
-): string {
-  return [excerpt, buildAgentGuidePointer(guidePath, authEnabled)].filter(Boolean).join("\n\n");
-}
+// different one (issue #437c, revised by #949's own tier-0 file,
+// hook-adapters/opencode.ts's prepareLaunch): the identical tier-0 block
+// this file builds, written to its own small per-session file and loaded
+// via opencode's `instructions` config, not this live hook reply. See that
+// adapter's own doc comment for why a dedicated small file, not the full
+// per-session guide copy `instructions` used to point at.
 
 /** Writes a decision back to a still-open promote connection and clears its
  * bookkeeping — shared by the server-side timeout below and
@@ -500,7 +467,7 @@ function handleConnection(
           // presence doesn't).
           const guideBlock =
             effectiveInjectAgentGuide && agentGuideSourceExists()
-              ? buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, isAuthEnabled(app.config))
+              ? buildAgentGuideBlock(guidePath, isAuthEnabled(app.config))
               : null;
           // Independent of injectAgentGuide — a different owner (the
           // PROJECT's own pinned note, not Mullion's doc) and a different
@@ -513,15 +480,15 @@ function handleConnection(
           // conventions (#937), pinned note]` — seed first (it's "what to
           // do right now" for a promote-flow launch), tier-0 next (Mullion
           // mechanics orientation), workflow-conventions next (stable "how
-          // we work" policy), the pinned note last. `guideBlock` above is
-          // exactly the slot #949's tier-0 push will replace; #937's
-          // workflow-conventions slot doesn't exist yet, so today's actual
-          // composition is `[seed, guideBlock, pinned note]` — the note is
-          // last either way, not because it's the operative instruction set
-          // (it never competes with AGENTS.md, which every CLI already
-          // reads natively) but because it's meant to be the MOST
-          // EMPHASIZED, timely note, and recency in a small context block
-          // favors that.
+          // we work" policy), the pinned note last. `guideBlock` above IS
+          // that tier-0 push (#949 landed, `buildAgentGuideBlock` in
+          // agent-guide.ts); #937's workflow-conventions slot doesn't exist
+          // yet, so today's actual composition is `[seed, guideBlock,
+          // pinned note]` — the note is last either way, not because it's
+          // the operative instruction set (it never competes with
+          // AGENTS.md, which every CLI already reads natively) but because
+          // it's meant to be the MOST EMPHASIZED, timely note, and recency
+          // in a small context block favors that.
           const briefing = effectiveInjectProjectBriefing
             ? readSessionBriefing(sessionsDir, sessionId)
             : null;

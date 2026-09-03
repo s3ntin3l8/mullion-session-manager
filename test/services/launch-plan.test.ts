@@ -74,6 +74,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     controlSocketPath: "/tmp/sessions/mullion.sock",
     sessionsDir: "/tmp/sessions",
     sshAuthSock: "",
+    authEnabled: false,
     env: {},
     injectAgentGuide: true,
     injectProjectBriefing: true,
@@ -405,6 +406,7 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         injectAgentGuide: false,
         injectProjectBriefing: false,
         injectMullionBundle: false,
+        authEnabled: true,
         skipPermissions: true,
       }),
     );
@@ -421,6 +423,7 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
         injectAgentGuide: false,
         injectProjectBriefing: false,
         injectMullionBundle: false,
+        authEnabled: true,
         cwd: "/tmp/project",
         skipPermissions: true,
       }),
@@ -440,6 +443,19 @@ describe("buildLaunchPlan — hook adapter wiring", () => {
     expect(mockApplyHookAdapters).toHaveBeenCalledWith(
       "claude",
       expect.objectContaining({ injectMullionBundle: true }),
+    );
+  });
+
+  // Issue #949 — the opencode adapter's own tier-0 push needs this boot-time
+  // constant (isAuthEnabled(app.config), threaded from pty.ts through
+  // PtyManager/Session — see HookAdapterContext.authEnabled's own doc
+  // comment for why it's the one boolean here NOT DB-backed/live-checkable).
+  it("threads authEnabled through to the HookAdapterContext", () => {
+    buildLaunchPlan(baseSession({ command: "opencode", authEnabled: true }));
+
+    expect(mockApplyHookAdapters).toHaveBeenCalledWith(
+      "opencode",
+      expect.objectContaining({ authEnabled: true }),
     );
   });
 

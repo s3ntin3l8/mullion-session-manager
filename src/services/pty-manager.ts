@@ -1003,6 +1003,15 @@ export class Session {
   // field it hands to buildLaunchPlan(), which reads it back out and injects
   // it into the session's own SSH_AUTH_SOCK.
   private readonly sshAuthSock: string;
+  // Issue #949 — mirrors app.config's resolved isAuthEnabled(), passed down
+  // from PtyManager (same boot-time-constant posture as sshAuthSock
+  // immediately above, not a live per-request read). bootstrapMaster()
+  // below puts this into the LaunchPlanSession.authEnabled field it hands
+  // to buildLaunchPlan(), which threads it into the opencode adapter's ctx
+  // for its own tier-0 push — see HookAdapterContext.authEnabled's own doc
+  // comment (hook-adapters/types.ts) for why only that one adapter reads
+  // it.
+  private readonly authEnabled: boolean;
   // Issue #437c, revised by issue #884 — the resolved value of
   // sessions.injectAgentGuide AT THIS SESSION'S CREATION
   // (PtyManager.getOrCreate() passes `opts.injectAgentGuide` when the
@@ -1436,6 +1445,7 @@ export class Session {
     controlSocketPath: string;
     sessionsDir: string;
     sshAuthSock?: string;
+    authEnabled?: boolean;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
     injectMullionBundle?: boolean;
@@ -1467,6 +1477,7 @@ export class Session {
     this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
     this.sshAuthSock = opts.sshAuthSock ?? "";
+    this.authEnabled = opts.authEnabled ?? false;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
     this.injectMullionBundle = opts.injectMullionBundle ?? true;
@@ -2027,6 +2038,7 @@ export class Session {
       controlSocketPath: this.controlSocketPath,
       sessionsDir: this.sessionsDir,
       sshAuthSock: this.sshAuthSock,
+      authEnabled: this.authEnabled,
       injectAgentGuide: this.injectAgentGuide,
       injectProjectBriefing: this.injectProjectBriefing,
       injectMullionBundle: this.injectMullionBundle,
@@ -3749,6 +3761,14 @@ export class PtyManager {
   // in opts, defaulting "", so existing `new PtyManager({ sessionsDir })`
   // call sites (tests, mainly) keep compiling unchanged.
   private readonly sshAuthSock: string;
+  // Issue #949 — same boot-time-constant posture as sshAuthSock immediately
+  // above (mirrors app.config's resolved isAuthEnabled(), read once at
+  // process start): threaded into every Session this manager creates so
+  // its bootstrapMaster() can pass it through to buildLaunchPlan for the
+  // opencode adapter's own tier-0 push. Optional in opts, defaulting
+  // false, so existing `new PtyManager({ sessionsDir })` call sites
+  // (tests, mainly) keep compiling unchanged.
+  private readonly authEnabled: boolean;
   // Issue #437c — a live accessor, not a cached boolean: unlike
   // sshAuthSock above (a boot-time app.config constant),
   // sessions.injectAgentGuide is DB-backed and can be toggled at runtime via
@@ -3776,6 +3796,7 @@ export class PtyManager {
   constructor(opts: {
     sessionsDir: string;
     sshAuthSock?: string;
+    authEnabled?: boolean;
     controlSocketPath?: string;
     getInjectAgentGuide?: () => boolean;
     getInjectProjectBriefing?: () => boolean;
@@ -3812,6 +3833,7 @@ export class PtyManager {
     // per-session-different) directory instead of the single stable path
     // this feature depends on.
     this.sshAuthSock = opts.sshAuthSock ? path.resolve(opts.sshAuthSock) : "";
+    this.authEnabled = opts.authEnabled ?? false;
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
     this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
     this.getInjectMullionBundle = opts.getInjectMullionBundle ?? (() => true);
@@ -3860,6 +3882,7 @@ export class PtyManager {
         controlSocketPath: this.controlSocketPath,
         sessionsDir: this.sessionsDir,
         sshAuthSock: this.sshAuthSock,
+        authEnabled: this.authEnabled,
         // Called now, at this session's own creation — see getInjectAgentGuide's
         // own doc comment for why this must be a fresh call, not a value
         // cached at PtyManager-construction/boot time. Issue #884 — an

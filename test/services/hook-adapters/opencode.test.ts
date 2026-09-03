@@ -7,7 +7,7 @@ import {
   buildOpenCodeMcpConfig,
 } from "../../../src/services/hook-adapters/opencode.js";
 import { resolveMcpServerPath } from "../../../src/services/hook-adapters/shared.js";
-import { sessionAgentGuidePath } from "../../../src/services/agent-guide.js";
+import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../../src/services/agent-guide.js";
 import { sessionBriefingPath } from "../../../src/services/project-briefing.js";
 import { resolveMullionBundleDir } from "../../../src/services/hook-adapters/mullion-bundle.js";
 
@@ -138,15 +138,15 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
   });
 });
 
-describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)", () => {
-  // Deliberately a real temp dir with a real file at the per-session guide
-  // path, not the fake "/tmp/mullion-sessions" path the other describe
-  // block in this file uses: prepareLaunch checks existsSync on the actual
-  // per-session copy (not agentGuideSourceExists(), the shipped source doc
-  // — see prepareLaunch's own doc comment for why), so a fixture that
-  // never writes a real file there would make every "setting is on" test
-  // below false-negative into the "omitted" branch instead of genuinely
-  // exercising the gate.
+describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949, formerly #437c)", () => {
+  // A real temp dir, same posture the pre-#949 version of this describe
+  // block used — not because prepareLaunch still checks existsSync on the
+  // full per-session guide copy (it no longer does: this adapter now
+  // writes its OWN small tier-0 file via settingsFiles, so the
+  // `instructions` entry can never dangle regardless of whether that other
+  // copy exists — see prepareLaunch's own doc comment), but because
+  // buildAgentGuideBlock's pointer sentence still names that copy's path,
+  // and assertions below reconstruct the expected tier-0 content from it.
   let sessionsDir: string;
   let baseCtx: {
     sessionId: string;
@@ -178,26 +178,51 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
-  it("points OPENCODE_CONFIG_CONTENT's instructions at this session's own guide file when the setting is on and the copy exists", () => {
-    writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
+  function tier0Path(): string {
+    return path.join(sessionsDir, "42.opencode-tier0.md");
+  }
+
+  it("writes a small tier-0 file and points OPENCODE_CONFIG_CONTENT's instructions at it when the setting is on", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: true });
     expect(plan.envAdditions?.OPENCODE_CONFIG_CONTENT).toBeDefined();
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
-      instructions: [sessionAgentGuidePath(sessionsDir, "42")],
+      instructions: [tier0Path()],
       mcp: expectedMcp(baseCtx),
     });
+    const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
+    expect(tier0File).toBeDefined();
+    expect(tier0File!.contents).toBe(
+      buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "42"), false),
+    );
+  });
+
+  it("reflects ctx.authEnabled in the tier-0 file's scope sentence, the same live host state hooks.ts's own SessionStart reply carries", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      injectAgentGuide: true,
+      authEnabled: true,
+    });
+    const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
+    expect(tier0File!.contents).toBe(
+      buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "42"), true),
+    );
+    expect(tier0File!.contents).toContain("MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN");
+  });
+
+  it("treats ctx.authEnabled as false when omitted (optional field — every other adapter's tests don't set it)", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: true });
+    const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
+    expect(tier0File!.contents).toContain("in-app auth disabled");
   });
 
   it("still sets OPENCODE_CONFIG_DIR alongside OPENCODE_CONFIG_CONTENT", () => {
-    writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: true });
     expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe(
       path.join(sessionsDir, "42.opencode-config"),
     );
   });
 
-  it("omits the guide pointer from instructions when the setting is off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (OPENCODE_CONFIG_CONTENT itself stays present for the unconditional mcp entry, issue #881)", () => {
-    writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
+  it("omits the tier-0 push from instructions and settingsFiles when the setting is off — mirrors hooks.ts gating the push for every other agent (OPENCODE_CONFIG_CONTENT itself stays present for the unconditional mcp entry, issue #881)", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: false });
     expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe(
       path.join(sessionsDir, "42.opencode-config"),
@@ -205,21 +230,24 @@ describe("openCodeAdapter.prepareLaunch — agent-guide injection (issue #437c)"
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       mcp: expectedMcp(baseCtx),
     });
+    expect(plan.settingsFiles?.some((f) => f.path === tier0Path())).toBe(false);
   });
 
-  // Issue #437c, Hermes review on PR #457 — the dangling-path corner case:
-  // the setting is on and the SOURCE doc exists (agentGuideSourceExists()
-  // would report true), but writeSessionAgentGuide's own copy write never
-  // happened (or failed) for this session, so the per-session copy this
-  // adapter would reference genuinely isn't there.
-  it("omits the guide pointer from instructions when the setting is on but the per-session guide copy doesn't exist (e.g. writeSessionAgentGuide's write failed)", () => {
+  // Issue #949 — this is what used to be the dangling-path corner case
+  // (Hermes review, PR #457, on the pre-#949 version of this adapter): the
+  // setting is on, but writeSessionAgentGuide's own copy of the FULL guide
+  // never happened (or failed) for this session. Previously that omitted
+  // the guide pointer entirely, since `instructions` pointed straight at
+  // that copy. Now it doesn't: this adapter writes its own tier-0 file
+  // regardless, so `instructions` never dangles on that other write's
+  // success — only the tier-0 block's OWN pointer sentence (inside the
+  // file, not the `instructions` entry itself) can still go stale, the
+  // same accepted risk the other three agents' pointer already has.
+  it("still pushes the tier-0 file even when the full per-session guide copy was never written", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: true });
-    expect(plan.envAdditions?.OPENCODE_CONFIG_DIR).toBe(
-      path.join(sessionsDir, "42.opencode-config"),
-    );
-    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
-      mcp: expectedMcp(baseCtx),
-    });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT).instructions).toEqual([
+      tier0Path(),
+    ]);
   });
 });
 
@@ -257,10 +285,9 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills.paths 
     });
   });
 
-  it("composes with instructions from the agent-guide gate into one OPENCODE_CONFIG_CONTENT payload", () => {
+  it("composes with instructions from the agent-guide tier-0 gate into one OPENCODE_CONFIG_CONTENT payload", () => {
     const sessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-bundle-"));
     try {
-      writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
       const scopedCtx = {
         ...ctx,
         sessionsDir,
@@ -271,7 +298,7 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills.paths 
       };
       const plan = openCodeAdapter.prepareLaunch(scopedCtx);
       expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [sessionAgentGuidePath(sessionsDir, "42")],
+        instructions: [path.join(sessionsDir, "42.opencode-tier0.md")],
         skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
         mcp: expectedMcp(scopedCtx),
       });
@@ -426,8 +453,7 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     });
   });
 
-  it("exact instructions order is [guide, briefing, seed] when all three are present", () => {
-    writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
+  it("exact instructions order is [guide tier-0, briefing, seed] when all three are present", () => {
     writeFileSync(sessionBriefingPath(sessionsDir, "42"), "briefing content");
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
@@ -437,7 +463,7 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     });
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       instructions: [
-        sessionAgentGuidePath(sessionsDir, "42"),
+        path.join(sessionsDir, "42.opencode-tier0.md"),
         sessionBriefingPath(sessionsDir, "42"),
         path.join(sessionsDir, "42.opencode-seed.md"),
       ],
@@ -501,15 +527,14 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     );
   });
 
-  it("concatenates the seed path with the agent-guide path when both are gated on", () => {
-    writeFileSync(sessionAgentGuidePath(sessionsDir, "42"), "guide content");
+  it("concatenates the seed path with the agent-guide tier-0 path when both are gated on", () => {
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       injectAgentGuide: true,
       seedPrompt: "resume the refactor",
     });
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
-      instructions: [sessionAgentGuidePath(sessionsDir, "42"), seedPath()],
+      instructions: [path.join(sessionsDir, "42.opencode-tier0.md"), seedPath()],
       mcp: expectedMcp(baseCtx),
     });
   });
@@ -598,13 +623,10 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
   });
 
   it("composes the permission block alongside other OPENCODE_CONFIG_CONTENT keys (agent-guide / skills / instructions / mcp) — none of the other gates interact with the deny list", () => {
-    // Need a real temp dir for the agent-guide file (prepareLaunch checks
-    // existsSync on the per-session copy, not agentGuideSourceExists() —
-    // see its own doc comment), unlike the bare-ctx tests above which
-    // don't exercise the agent-guide path at all.
+    // A real temp dir for the tier-0 file this adapter writes, same
+    // posture as the agent-guide tier-0 describe block above.
     const realSessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-taskid-"));
     try {
-      writeFileSync(sessionAgentGuidePath(realSessionsDir, "42"), "guide content");
       const plan = openCodeAdapter.prepareLaunch({
         ...baseCtx,
         sessionsDir: realSessionsDir,
@@ -614,7 +636,7 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
         taskId: 348423,
       });
       expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [sessionAgentGuidePath(realSessionsDir, "42")],
+        instructions: [path.join(realSessionsDir, "42.opencode-tier0.md")],
         mcp: expectedMcp({
           hookSocketPath: path.join(realSessionsDir, "hooks.sock"),
           hookToken: baseCtx.hookToken,

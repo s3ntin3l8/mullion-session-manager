@@ -84,6 +84,16 @@ export interface HookAdapterContext {
    * the posture a pre-trusted folder matches — a manual launch with this
    * off (the default) still sees agy's folder-trust prompt, unchanged. */
   skipPermissions?: boolean;
+  /** Issue #949 — mirrors `isAuthEnabled(app.config)`, a boot-time constant
+   * (same category as pty-manager.ts's own `sshAuthSock` field — read once
+   * at process start, never re-derived per session) needed by opencode's
+   * adapter to build its own tier-0 push (buildAgentGuideBlock,
+   * agent-guide.ts) the same way hooks.ts's SessionStart reply already
+   * does for Claude Code/Codex/agy. Optional for the same reason as `cwd`/
+   * `skipPermissions` above: opencode's adapter is the only consumer, so
+   * this isn't required on every ctx literal the other three adapters' own
+   * tests already construct. */
+  authEnabled?: boolean;
   /** Issue #678 — the promote flow's seed prompt (POST
    * /api/sessions/:id/promote's `seedPrompt` body field), threaded all the
    * way from session-lifecycle.ts's createSessionRecord through spawn() so

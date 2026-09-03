@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { clampToBytes, extractMarkedRegion } from "./marked-region.js";
 
 // Issue #405 — the agent-facing skill/guide doc (docs/agent-guide.md) is
 // written once, checked into the repo, and copied verbatim into a per-session
@@ -59,43 +58,18 @@ export function agentGuideSourceExists(): boolean {
   return resolveAgentGuideSourcePath() !== null;
 }
 
-const GUIDE_TIER1_START = "<!-- mullion:tier1:start -->";
-const GUIDE_TIER1_END = "<!-- mullion:tier1:end -->";
-
-/** Cap on the excerpt itself, before buildAgentGuideBlock appends the
- * pointer sentence on top — half of MAX_BRIEFING_BYTES
- * (project-briefing.ts): Mullion's own doc is a supporting fact here, the
- * project's briefing (when present) is the operative one. */
-export const MAX_GUIDE_EXCERPT_BYTES = 2048;
-
-/**
- * The delimited tier-1 excerpt of the shipped docs/agent-guide.md — the
- * four env vars and a one-paragraph scope-model summary — clamped to
- * MAX_GUIDE_EXCERPT_BYTES. `null` when the source doc is missing (see
- * resolveAgentGuideSourcePath) or carries no marked region at all: an
- * install whose docs/agent-guide.md predates the markers degrades to
- * nothing here rather than injecting a stale/malformed excerpt — hooks.ts
- * falls back to the plain pointer sentence in that case, i.e. today's
- * pre-excerpt behavior, not silence.
- *
- * Deliberately NOT memoized: SessionStart fires once per session, a
- * ~10 KiB sync read is noise, and caching would make an in-place edit to
- * docs/agent-guide.md (e.g. under `make dev`) go stale without a restart —
- * quietly breaking the single-source property this excerpt exists to keep.
- */
-export function readAgentGuideExcerpt(): string | null {
-  const sourcePath = resolveAgentGuideSourcePath();
-  if (!sourcePath) return null;
-  let shipped: string;
-  try {
-    shipped = readFileSync(sourcePath, "utf8");
-  } catch {
-    return null;
-  }
-  const region = extractMarkedRegion(shipped, GUIDE_TIER1_START, GUIDE_TIER1_END);
-  if (region === null || region.length === 0) return null;
-  return clampToBytes(region, MAX_GUIDE_EXCERPT_BYTES, sourcePath);
-}
+// Issue #949 — the SessionStart push (buildAgentGuideBlock below) used to
+// carry a static excerpt read out of docs/agent-guide.md's own
+// `mullion:tier1` marked region (readAgentGuideExcerpt, removed here). That
+// mechanism is dead now that #940 gives every CLI a real, discoverable
+// `host` skill to load instead: a skill is a better home for STATIC prose
+// than a string re-read out of a doc file on every SessionStart. What a
+// skill file can never carry, though — the reason a push still exists at
+// all instead of pull alone — is host-dependent LIVE state (this host's
+// resolved auth-enabled/disabled scope model) and the plain fact that a
+// session is Mullion-hosted in the first place; see buildAgentGuideBlock's
+// own doc comment for how those two land in the ~4-line block that replaced
+// the excerpt.
 
 /**
  * Pure path builder (no I/O) for a session's own copy of the guide, shared
@@ -174,16 +148,57 @@ export function writeSessionAgentGuide(
 
 /**
  * Prepends a short, self-identifying header to the shipped guide before it's
- * written to a session's own copy. Claude Code/Codex/agy get an explicit
- * SessionStart pointer sentence naming this file's path (hooks.ts); opencode
- * instead gets the guide's full body loaded as an unlabeled `instructions`
- * blob (hook-adapters/opencode.ts) — nothing in that blob previously said
- * "this is the Mullion agent guide" or named its own on-disk path, so an
- * opencode session asked to "read agent-guide.md" had the content but
- * nothing connecting it to that name (a real production incident, not a
- * hypothetical). Exported (not inlined) so the test suite can assert the
- * header shape independently of file I/O.
+ * written to a session's own copy. All four CLIs get an explicit pointer
+ * naming this file's path — Claude Code/Codex/agy via hooks.ts's SessionStart
+ * reply (buildAgentGuidePointer below), opencode via its own tier-0 push
+ * (hook-adapters/opencode.ts, issue #949) — but nothing an agent reads
+ * BEFORE following that pointer says "this is the Mullion agent guide" or
+ * names its own on-disk path, so a session asked to "read agent-guide.md"
+ * could have the content in front of it with nothing connecting it to that
+ * name (a real production incident, not a hypothetical). Exported (not
+ * inlined) so the test suite can assert the header shape independently of
+ * file I/O.
  */
 export function buildSessionAgentGuideContent(shippedContent: string, destPath: string): string {
   return `> This is the Mullion agent guide — this session's own copy, on disk at \`${destPath}\`.\n\n${shippedContent}`;
+}
+
+// Issue #405, redesigned by #949 — the short SessionStart push every CLI
+// gets alongside (never in place of) the pull-based bundle skills from
+// #940. Deliberately a few lines, not the guide itself: the guide is
+// already on disk (writeSessionAgentGuide above, unconditional), and #940
+// already gave every CLI a real, discoverable `host` skill covering the
+// same ground the old tier-1 excerpt used to inline here — see this file's
+// own comment above readAgentGuideExcerpt's removal for why that excerpt
+// is gone rather than kept alongside the skill.
+//
+// What a skill can't carry, and the reason a push still exists at all: (1)
+// a live session empirically never opens a file it's merely told exists —
+// see the original tier-1 excerpt's own history, same problem, just for a
+// PULLED skill instead of a linked doc; (2) `authEnabled` is host-dependent
+// LIVE state (this host's actual auth configuration), which a skill
+// installed once, globally, structurally cannot encode.
+export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean): string {
+  return [
+    `Mullion agent guide available at ${guidePath}.`,
+    authEnabled
+      ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected."
+      : "This host has in-app auth disabled, so every control-socket connection (including yours) resolves to full scope — session list/create/kill, dock control, and previews are all reachable, not just session-scoped ops.",
+  ].join("\n");
+}
+
+/**
+ * The tier-0 SessionStart block (issue #949): session identity, the
+ * host-dependent scope sentence (buildAgentGuidePointer above, unchanged),
+ * and a pointer to the `host` skill (#940) for everything else — the full
+ * env-var table, the full scope table, CLI vs. MCP. Composed fresh on every
+ * call (never stashed/consumed), so it's safe to call once per SessionStart
+ * reply (hooks.ts) or once per spawn (opencode.ts's prepareLaunch).
+ */
+export function buildAgentGuideBlock(guidePath: string, authEnabled: boolean): string {
+  return [
+    "You're in a Mullion-hosted session — one of the AI CLIs Mullion dashboards (Claude Code, Codex, opencode, agy), running inside a host PTY.",
+    buildAgentGuidePointer(guidePath, authEnabled),
+    "For the rest — the full env-var/scope table and CLI vs. MCP — load the Mullion host skill.",
+  ].join("\n\n");
 }

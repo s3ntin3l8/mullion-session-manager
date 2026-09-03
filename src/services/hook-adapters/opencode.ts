@@ -1,7 +1,11 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveOpenCodePluginPath, resolveMcpServerPath, shellQuote } from "./shared.js";
-import { sessionAgentGuidePath } from "../agent-guide.js";
+import {
+  agentGuideSourceExists,
+  buildAgentGuideBlock,
+  sessionAgentGuidePath,
+} from "../agent-guide.js";
 import { sessionBriefingPath } from "../project-briefing.js";
 import {
   resolveMullionBundleDir,
@@ -34,13 +38,12 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // clean up afterward (the scratch directory lives under the sessions dir,
 // same lifecycle as everything else there).
 //
-// Issue #437c — the agent-guide SessionStart nudge (#405/#437a/#437b) also
-// rides an env var, `OPENCODE_CONFIG_CONTENT` (same additive-merge posture,
+// Issue #437c, redesigned by #949 — the agent-guide tier-0 push also rides
+// an env var, `OPENCODE_CONFIG_CONTENT` (same additive-merge posture,
 // verified against the installed CLI this PR via `opencode debug config`),
-// pointing OpenCode's `instructions` config at the session's own on-disk
-// guide file — see prepareLaunch's own doc comment for the full reasoning
-// and how this differs in kind (whole-file injection, no per-event seed)
-// from the other three agents' short SessionStart pointer sentence.
+// pointing OpenCode's `instructions` config at a small dedicated tier-0
+// file this adapter writes itself — see prepareLaunch's own doc comment for
+// the full reasoning and why it's no longer the whole guide doc's content.
 //
 // Only non-blocking events are forwarded by the plugin — see
 // opencode-plugin.js's own header comment for why its real gating hook,
@@ -161,21 +164,29 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // one array; see each source's own comment for why.
   const instructions: string[] = [];
 
-  // Issue #437c — the agent-guide SessionStart nudge (#405/#437a/#437b), for
+  // Issue #437c, redesigned by #949 — the agent-guide tier-0 push, for
   // OpenCode. Unlike every other agent, OpenCode has no live hook round trip
   // to reply to (see this file's header) — hooks.ts's session_start branch
   // (a per-hook-fire dynamic composition of an optional promote-flow seed +
-  // a short guide pointer) simply doesn't apply here. The nearest equivalent
+  // the tier-0 block) simply doesn't apply here. The nearest equivalent
   // OpenCode's config system offers is `instructions`, a list of file paths
-  // whose CONTENTS get loaded into context at startup — so this points it at
-  // the session's own on-disk guide file directly (writeSessionAgentGuide,
-  // called unconditionally right after this in bootstrapMaster, so the file
-  // exists by the time OpenCode's process actually starts). That is a
-  // materially different mechanism from the other three agents' short
-  // pointer sentence: OpenCode gets the guide's FULL content injected as
-  // context, not a pointer telling it where to go read it — and there is no
-  // way to compose in a promote-flow seed here, since `instructions` is
-  // static config resolved once at startup, not a live per-event reply.
+  // whose CONTENTS get loaded into context at startup.
+  //
+  // Through issue #949, this pointed `instructions` at the FULL per-session
+  // guide file (writeSessionAgentGuide's own copy of docs/agent-guide.md) —
+  // materially different in kind from the other three agents' short pointer
+  // sentence, injecting the whole doc as context rather than telling the
+  // agent where to go read it. #940 made that gap moot: OpenCode now also
+  // gets the SAME `host`/`browser`/`troubleshooting`/`session-ops` skills
+  // pulled via `skills.paths` below (mirroring the plugin-dir bundle Claude
+  // Code gets), so injecting the full doc a second time here would just be
+  // duplicate content. What #940's pull-based skills can't carry — the
+  // reason a push channel still exists here at all, same as hooks.ts's own
+  // tier-0 reasoning — is host-dependent LIVE state (`ctx.authEnabled`) and
+  // the plain fact the guide file and skills exist to go read. So this now
+  // builds the SAME small tier-0 block hooks.ts pushes to the other three
+  // agents (buildAgentGuideBlock, agent-guide.ts) and writes it to its own
+  // small file rather than pointing at the full guide copy.
   //
   // `OPENCODE_CONFIG_CONTENT` is a runtime override near the top of
   // OpenCode's own documented config-precedence chain, and — verified
@@ -192,30 +203,47 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // Gated on ctx.injectAgentGuide (see that field's own doc comment for why
   // this is necessarily a spawn-time snapshot of the setting, not a live
   // read) — mirrors hooks.ts's own setting gate for every other agent's
-  // pointer, even though the underlying guide FILE is still always written
-  // regardless (agent-guide.ts's own invariant: gate the pointer, never
-  // the on-disk write).
+  // push. Also gated on agentGuideSourceExists(), same as hooks.ts's own
+  // gate — a checkout/install that hasn't shipped docs/agent-guide.md must
+  // never send an agent to a guide-file pointer that isn't there.
   //
-  // Checks existsSync on the actual PER-SESSION COPY here, not
-  // agentGuideSourceExists() (the shipped source doc) the way every other
-  // consumer of this setting does — deliberately stricter than that
-  // precedent, because the failure mode is worse for opencode specifically.
-  // For Claude Code/Codex/agy, a dangling pointer (source existed when
-  // checked, but writeSessionAgentGuide's own copy write then failed —
-  // logged-and-swallowed, e.g. full disk or EACCES on sessionsDir) is just
-  // a sentence an LLM reads and ignores. For opencode, `instructions`
-  // becomes a config reference its own CLI resolves at startup — checking
-  // the copy that will ACTUALLY be referenced, not merely the source it
-  // was copied from, is what this call site can control. Safe to check
-  // here regardless of call order elsewhere: bootstrapMaster() (pty-
-  // manager.ts) writes the guide file before calling applyHookAdapters
-  // specifically so this check sees the real, current state, not a stale
-  // one from a previous session reusing this path.
-  if (ctx.injectAgentGuide) {
+  // Written via `settingsFiles` (like the seed file below), so — unlike the
+  // pre-#949 existsSync check this replaces — the `instructions` entry can
+  // never dangle: this adapter writes the tier-0 file itself, in the same
+  // pass, rather than depending on a copy some OTHER write (writeSessionAgentGuide)
+  // produced. The tier-0 block's own pointer sentence still names that
+  // other copy's path, and CAN dangle if that separate write fails — same
+  // accepted risk the other three agents' pointer sentence already has (see
+  // agent-guide.ts's own doc comment), no longer a stricter bar for
+  // opencode specifically.
+  //
+  // Confirmed live (not just by reading this adapter), same bar issue
+  // #715's own verification set: with `OPENCODE_CONFIG_DIR`/
+  // `OPENCODE_CONFIG_CONTENT` set exactly the way this function sets them
+  // (an `instructions` entry pointing at a real tier-0 file, no plugin, no
+  // tool calls available), `opencode run` against a real installed 1.18.27
+  // binary answered a two-part probe — "what does your scope sentence say,
+  // and what skill does it tell you to load" — correctly from injected
+  // context alone, in its own words identifying the same host-scope claim
+  // and the same "go load the host skill" pointer this block's content
+  // carries. That proves the CONTENT reaches the model's context, the
+  // actual gap this redesign closes (see this file's own header) — it does
+  // NOT prove the model, given real tool access, would successfully
+  // resolve a skill invocation from that pointer (this probe had no
+  // `skills.paths` configured and made no tool calls at all, so the
+  // model's answer was free-text paraphrase, not a verified skill lookup;
+  // the pointer sentence itself never spells out a literal skill-name
+  // string on purpose — see buildAgentGuideBlock's own doc comment for why
+  // — so there's no exact string for a probe like this to match against
+  // anyway).
+  if (ctx.injectAgentGuide && agentGuideSourceExists()) {
     const guidePath = sessionAgentGuidePath(ctx.sessionsDir, ctx.sessionId);
-    if (existsSync(guidePath)) {
-      instructions.push(guidePath);
-    }
+    const tier0Path = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-tier0.md`);
+    settingsFiles.push({
+      path: tier0Path,
+      contents: buildAgentGuideBlock(guidePath, ctx.authEnabled ?? false),
+    });
+    instructions.push(tier0Path);
   }
 
   // Same existsSync-on-the-per-session-copy posture as the guide block

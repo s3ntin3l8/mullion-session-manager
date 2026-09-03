@@ -97,6 +97,11 @@ export interface LaunchPlanSession {
    * this below and session-env.ts's "Deliberately NOT stripped" comment for
    * why SSH_AUTH_SOCK itself isn't in SERVER_ENV_KEYS. */
   readonly sshAuthSock: string;
+  /** Issue #949 — see HookAdapterContext.authEnabled's own doc comment
+   * (hook-adapters/types.ts) — threaded through unchanged to that ctx field
+   * below, the same pass-through posture as injectAgentGuide/
+   * injectMullionBundle. */
+  readonly authEnabled: boolean;
   /** Issue #822 — extra env vars for this launch, applied FIRST (before
    * the shell-integration setup and every MULLION_ var / SSH_AUTH_SOCK
    * write below), so nothing here can ever override a Mullion-owned var.
@@ -330,6 +335,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     injectAgentGuide: session.injectAgentGuide,
     injectProjectBriefing: session.injectProjectBriefing,
     injectMullionBundle: session.injectMullionBundle,
+    authEnabled: session.authEnabled,
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,
     seedPrompt: session.seedPrompt,
