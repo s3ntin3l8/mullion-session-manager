@@ -17,7 +17,7 @@ import { HostRequestError } from "./remote-host-client.js";
 import { resolveHostBaseRef } from "./host-git.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { deriveWorktreePath } from "./git-worktree.js";
+import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
 import {
   resolveAgentCommand,
@@ -120,10 +120,13 @@ export async function enqueueTask(
     };
   }
 
-  // Derived from task.id, not task.issueNumber: issueNumber is nullable
-  // (6.9) and every local task shares the same NULL — branching on it
-  // would collide every local task onto `mullion/task-null`.
-  const branchName = `mullion/task-${task.id}`;
+  // Derive the branch name through deriveTaskBranchName (git-worktree.ts)
+  // so the shape is owned in one place. The id is in the name for
+  // uniqueness (issueNumber is nullable — every local task shares NULL),
+  // and the title-slug makes the branch self-describing in `git branch`
+  // and on the GitHub PR header. Frozen at claim time — title edits after
+  // claim do NOT rename the branch.
+  const branchName = deriveTaskBranchName(task);
   const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
 
   const reserved = app.db.transaction((tx) => {
@@ -229,7 +232,7 @@ export async function dispatchClaimedTask(
   });
   const seedCapable = commandSupportsSeed(command);
 
-  const branchName = task.branchName ?? `mullion/task-${task.id}`;
+  const branchName = task.branchName ?? deriveTaskBranchName(task);
   const predictedWorktreePath = task.worktreePath ?? deriveWorktreePath(project.cwd, branchName);
 
   const taskMasterConfig = resolveTaskMasterConfig(app);
@@ -493,7 +496,7 @@ export type RetryTaskOutcome =
 
 /**
  * #483 — retries a `failed` task by resuming on its preserved
- * `mullion/task-<id>` branch (git-worktree.ts's `resumeTaskWorktree`)
+ * `mullion/task-<id>-<slug>` branch (git-worktree.ts's `resumeTaskWorktree`)
  * rather than starting over from `baseRef`. Every task that ever reaches
  * "failed" got there from "claimed"/"in_progress" (session-reconciler.ts's
  * session-died hook, or task-reconciler.ts's budget force-fail) — both

@@ -172,7 +172,7 @@ remaining }`) is modeled on `git-worktree.ts`'s own
   GitHub issue lost its tracking label" after recovery. Retry (`failed →
 claimed`, below) does not help here in practice even though the table
   allows `failed → backlog`/`ready`: Retry requires a preserved
-  `mullion/task-<id>` branch, which a task that failed while still
+  `mullion/task-<id>-<slug>` branch, which a task that failed while still
   `backlog`/`ready` never had.
 
 - **Local task**: created directly on the board (`POST /api/tasks`), no
@@ -304,7 +304,7 @@ full design.
   that session is still alive.
 - **`failed → in_progress`** (`#483`) — **Retry**, on a `failed` task,
   resumes work rather than restarting it: it checks out the task's
-  preserved `mullion/task-<id>` branch (see Worktree lifecycle below for
+  preserved `mullion/task-<id>-<slug>` branch (see Worktree lifecycle below for
   why that branch survives a failure) into a fresh worktree and spawns a
   new session there, so committed-but-unfinished work isn't lost. Retry
   stays a single-phase, atomic operation (unlike Claim, it does **not**
@@ -1385,7 +1385,7 @@ instead of just backing off:
 
 - Recreates the worktree with `resumeTaskWorktree` (the same primitive Retry
   uses) — the worktree itself is long gone by this point (`approveTask` cleans
-  it up at approve time), but the branch (`mullion/task-<id>`) isn't touched
+  it up at approve time), but the branch (`mullion/task-<id>-<slug>`) isn't touched
   until a successful merge deletes it. A stale worktree from a prior attempt
   at the same deterministic path is force-removed first — `resumeTaskWorktree`
   refuses outright if the target path already exists.
@@ -1782,11 +1782,18 @@ against that workflow's own "already reviewed" guard) are issue #982.
 
 ## Worktree lifecycle
 
-A task's worktree lives at `.mullion-worktrees/mullion-task-<id>`, on
-branch `mullion/task-<id>` — its path is predicted and stamped onto the
-task row at claim/enqueue time (not eagerly at task creation), but not
-actually created on disk until dispatch (task-claim queueing,
-rate-limit-storm fix — see `enqueueTask`/`dispatchClaimedTask`). It's
+A task's worktree lives at `.mullion-worktrees/mullion-task-<id>-<slug>`,
+on branch `mullion/task-<id>-<slug>` — the path and branch are both
+derived from the task's id and a sanitized title slug via
+`git-worktree.ts`'s `deriveTaskBranchName`, the single source of truth
+for the shape. The id sits in the name so two tasks titled the same
+under one project still get distinct branches and directories; the
+slug makes them self-describing in `git branch` and on the GitHub PR
+header. Both are stamped onto the task row at claim/enqueue time (not
+eagerly at task creation), but not actually created on disk until
+dispatch (task-claim queueing, rate-limit-storm fix — see
+`enqueueTask`/`dispatchClaimedTask`). The slug is frozen at claim
+time: title edits after claim do NOT rename the branch. It's
 removed only once its task reaches `done` or `failed` — never on session
 death alone — and only when `getGitStatus` reports the tree clean; a
 refusal leaves the path on the task row rather than destroying anything
@@ -1847,7 +1854,7 @@ fresh worktree at the same deterministic path — a real branch checkout
 Refuses (returns `null`, surfaced as a `worktree-failed` 502) only when the
 branch no longer exists or is already checked out elsewhere — both
 unexpected states a human should look at, not silently worked around.
-Restricted to the same closed `mullion/task-<id>` namespace
+Restricted to the same closed `mullion/task-<id>-<slug>` namespace
 `clearOrphanedTaskWorktree` enforces. Proxies to a remote host via
 `SessionBackend.resumeTaskWorktree` → `/internal/git-worktree/resume`
 (`#484`), the same way create/remove/prune already did.

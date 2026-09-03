@@ -6,6 +6,7 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
+import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
@@ -383,7 +384,7 @@ export async function tasksRoute(app: FastifyInstance) {
     // here's why" about work it had never seen and a spec it had never read.
     const prompt = buildRejectPrompt({
       task,
-      branchName: task.branchName ?? `mullion/task-${task.id}`,
+      branchName: task.branchName ?? deriveTaskBranchName(task),
       worktreePath: task.worktreePath,
       budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
       // A reject is always a human's action, so someone is watching.

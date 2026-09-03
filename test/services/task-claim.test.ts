@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
+import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
 import { eq } from "drizzle-orm";
 
 // Same fakes as test/routes/tasks.test.ts — claimTask spawns a real
@@ -109,6 +110,16 @@ describe("claimTask", () => {
       .returning()
       .all();
     return row;
+  }
+
+  // Derives the on-disk worktree directory a real claim for `task` would
+  // produce on `cwd`, mirroring task-claim.ts's own
+  // `deriveWorktreePath(project.cwd, branchName)` path. Test fixtures that
+  // need to set up a leftover or assert a path use this rather than the
+  // literal `mullion-task-<id>` shape, which task-claim.ts no longer
+  // produces.
+  function deriveWorktreePathForTask(cwd: string, task: { id: number; title: string }): string {
+    return path.join(cwd, ".mullion-worktrees", deriveTaskBranchName(task).replace(/\//g, "-"));
   }
 
   // Task-claim queueing (rate-limit-storm fix) — the old single-phase
@@ -264,7 +275,7 @@ describe("claimTask", () => {
       id: task.id,
       issueNumber: 62,
       status: "in_progress",
-      branchName: `mullion/task-${task.id}`,
+      branchName: deriveTaskBranchName(task),
     });
     // sessionId/worktreePath came from the just-created session record, not
     // the pre-dispatch task snapshot (which had neither set) — verifies
@@ -406,7 +417,7 @@ describe("claimTask", () => {
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
-        path: `${cwd}/.mullion-worktrees/mullion-task-${task.id}`,
+        path: deriveWorktreePathForTask(cwd, task),
         branch: "x",
       }),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
@@ -579,13 +590,17 @@ describe("claimTask", () => {
       // Simulate a prior claim attempt that created the worktree but crashed
       // before stamping tasks.worktreePath — the exact gap this step exists
       // to close. The directory sits at the same deterministic path a fresh
-      // claim for this task id will try to create.
+      // claim for this task id will try to create. Both the seed (which
+      // derives the directory) and the branchName use the new helper's
+      // shape, since task-claim.ts now looks for the leftover at the path
+      // deriveWorktreePath(cwd, deriveTaskBranchName(task)) produces.
+      const branch = deriveTaskBranchName(task);
       const { createWorktree } = await import("../../src/services/git-worktree.js");
       const leftover = await createWorktree({
         cwd,
         baseRef: "main",
-        seed: `mullion/task-${task.id}`,
-        branchName: `mullion/task-${task.id}`,
+        seed: branch,
+        branchName: branch,
       });
       expect(leftover).not.toBeNull();
 
@@ -603,13 +618,14 @@ describe("claimTask", () => {
       const cwd = createGitRepo();
       const projectId = await createProject(app, cwd);
       const task = insertReadyTask(app, projectId, 65);
+      const branch = deriveTaskBranchName(task);
 
       const { createWorktree } = await import("../../src/services/git-worktree.js");
       const leftover = await createWorktree({
         cwd,
         baseRef: "main",
-        seed: `mullion/task-${task.id}`,
-        branchName: `mullion/task-${task.id}`,
+        seed: branch,
+        branchName: branch,
       });
       expect(leftover).not.toBeNull();
       fs.writeFileSync(path.join(leftover!.path, "dirty.txt"), "uncommitted from a stuck attempt");
@@ -667,10 +683,8 @@ describe("claimTask", () => {
 
       expect(outcome.ok).toBe(true);
       expect(sawDuringSpawn?.status).toBe("in_progress");
-      expect(sawDuringSpawn?.worktreePath).toBe(
-        `${cwd}/.mullion-worktrees/mullion-task-${task.id}`,
-      );
-      expect(sawDuringSpawn?.branchName).toBe(`mullion/task-${task.id}`);
+      expect(sawDuringSpawn?.worktreePath).toBe(deriveWorktreePathForTask(cwd, task));
+      expect(sawDuringSpawn?.branchName).toBe(deriveTaskBranchName(task));
 
       spy.mockRestore();
       fs.rmSync(cwd, { recursive: true, force: true });
@@ -695,8 +709,8 @@ describe("claimTask", () => {
       expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
       const row = getTask(app, task.id);
       expect(row.status).toBe("claimed");
-      expect(row.worktreePath).toBe(`${notARepo}/.mullion-worktrees/mullion-task-${task.id}`);
-      expect(row.branchName).toBe(`mullion/task-${task.id}`);
+      expect(row.worktreePath).toBe(deriveWorktreePathForTask(notARepo, task));
+      expect(row.branchName).toBe(deriveTaskBranchName(task));
 
       fs.rmSync(notARepo, { recursive: true, force: true });
       await app.close();
@@ -801,7 +815,7 @@ describe("claimTask", () => {
     const row = getTask(app, task.id);
     // The pinned SHA, not the "HEAD" literal a pre-#484 remote claim used.
     expect(row.baseSha).toBe("deadbeefcafe");
-    const branchName = `mullion/task-${task.id}`;
+    const branchName = deriveTaskBranchName(task);
     expect(fakeBackend.createWorktree).toHaveBeenCalledWith(
       "/remote/project",
       "deadbeefcafe",
@@ -859,7 +873,7 @@ describe("claimTask", () => {
     expect(outcome.ok).toBe(true);
     const row = getTask(app, task.id);
     expect(row.baseSha).toBeNull();
-    const branchName = `mullion/task-${task.id}`;
+    const branchName = deriveTaskBranchName(task);
     expect(fakeBackend.createWorktree).toHaveBeenCalledWith(
       "/remote/project",
       "HEAD",
@@ -984,7 +998,7 @@ describe("retryTask (#483)", () => {
       .values({ projectId, issueNumber, title: "t", status: "ready" })
       .returning()
       .all();
-    const branchName = `mullion/task-${placeholder.id}`;
+    const branchName = deriveTaskBranchName(placeholder);
 
     const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
     if (!created) throw new Error("test setup: failed to create worktree");

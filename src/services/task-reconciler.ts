@@ -50,7 +50,7 @@ import { openDraftPRForTask, requestExternalReviewForTask } from "./task-promote
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
-import { commitWipChanges, deriveWorktreePath } from "./git-worktree.js";
+import { commitWipChanges, deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import {
   resolveGitHubToken,
@@ -1196,7 +1196,7 @@ async function attemptAutoRebase(
   // reservation transaction refuses a null branchName before a task can
   // even reach "done"), but fall back the same way task-claim.ts's resume
   // path does rather than crash on an unexpected null.
-  const branchName = task.branchName ?? `mullion/task-${task.id}`;
+  const branchName = task.branchName ?? deriveTaskBranchName(task);
   if (!task.agentCommand || !commandSupportsSeed(task.agentCommand)) {
     recordMergeError(
       app,
@@ -2069,7 +2069,7 @@ async function attemptReturnRedCiToWorker(
     : undefined;
   const prompt = buildCiFailurePrompt({
     task,
-    branchName: task.branchName ?? `mullion/task-${task.id}`,
+    branchName: task.branchName ?? deriveTaskBranchName(task),
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     auto: true,
@@ -2228,7 +2228,7 @@ async function attemptReturnPrCommentsToWorker(
     : undefined;
   const prompt = buildPrReviewCommentsPrompt({
     task,
-    branchName: task.branchName ?? `mullion/task-${task.id}`,
+    branchName: task.branchName ?? deriveTaskBranchName(task),
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     auto: true,
@@ -3180,7 +3180,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
 
         const prompt = buildReviewFeedbackPrompt({
           task,
-          branchName: task.branchName ?? `mullion/task-${task.id}`,
+          branchName: task.branchName ?? deriveTaskBranchName(task),
           worktreePath: task.worktreePath!,
           budgetMinutes: resolvedTaskMaster.budgetMinutes,
           // Nobody is watching an automated review-feedback round.

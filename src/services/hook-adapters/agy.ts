@@ -201,7 +201,7 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
 // SEPARATE gate from the tool-permission prompts that flag covers (per
 // `agy --help`: "Auto-approve all tool permission requests" — nothing
 // about folder trust). Every Task Master claim/retry creates a brand-new
-// `.mullion-worktrees/mullion-task-<id>` directory, so an unattended agy
+// `.mullion-worktrees/mullion-task-<id>-<slug>` directory, so an unattended agy
 // spawn would otherwise stall at this prompt forever with nobody to
 // answer it. Confirmed live: pre-populating this file's
 // `trustedWorkspaces` array with the session's cwd before launch makes

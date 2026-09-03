@@ -928,7 +928,7 @@ export class RemoteHostClient {
     return result.dirs;
   }
 
-  /** Checks out an existing `mullion/task-<id>` branch into a fresh
+  /** Checks out an existing `mullion/task-<id>-<slug>` branch into a fresh
    * worktree on this agent's own filesystem (#484) — for Retry (#483) on a
    * remote-hosted task. Mirrors /internal/git-worktree/resume's
    * `WorktreeResult | null` shape; `null` (not thrown) means the resume
