@@ -94,14 +94,14 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
 
   it("installs every shipped skill under destRoot/mullion-<name>/", () => {
     installBundleSkills(destRoot);
-    const skillPath = path.join(destRoot, "mullion-mullion-host", "SKILL.md");
+    const skillPath = path.join(destRoot, "mullion-host", "SKILL.md");
     expect(existsSync(skillPath)).toBe(true);
-    expect(readFileSync(skillPath, "utf8")).toContain("mullion-host");
+    expect(readFileSync(skillPath, "utf8")).toContain("name: host");
   });
 
   it("is idempotent — a second install call doesn't touch files whose content already matches", async () => {
     installBundleSkills(destRoot);
-    const skillPath = path.join(destRoot, "mullion-mullion-host", "SKILL.md");
+    const skillPath = path.join(destRoot, "mullion-host", "SKILL.md");
     const mtimeBefore = statSync(skillPath).mtimeMs;
 
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -113,22 +113,22 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
 
   it("overwrites a file whose on-disk content has drifted from the shipped skill", () => {
     installBundleSkills(destRoot);
-    const skillPath = path.join(destRoot, "mullion-mullion-host", "SKILL.md");
+    const skillPath = path.join(destRoot, "mullion-host", "SKILL.md");
     writeFileSync(skillPath, "stale, hand-edited content");
 
     installBundleSkills(destRoot);
 
     expect(readFileSync(skillPath, "utf8")).not.toBe("stale, hand-edited content");
-    expect(readFileSync(skillPath, "utf8")).toContain("mullion-host");
+    expect(readFileSync(skillPath, "utf8")).toContain("name: host");
   });
 
   it("uninstall removes every mullion-<name>/ directory it would have installed", () => {
     installBundleSkills(destRoot);
-    expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(true);
+    expect(existsSync(path.join(destRoot, "mullion-host"))).toBe(true);
 
     uninstallBundleSkills(destRoot);
 
-    expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(false);
+    expect(existsSync(path.join(destRoot, "mullion-host"))).toBe(false);
   });
 
   // Hermes review, PR #891 — the prefix alone is a naming convention, not
@@ -147,18 +147,18 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
     expect(existsSync(path.join(lookalikeDir, "SKILL.md"))).toBe(true);
     // The real install is still removed correctly — this isn't uninstall
     // going inert, just correctly discriminating.
-    expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(false);
+    expect(existsSync(path.join(destRoot, "mullion-host"))).toBe(false);
   });
 
   // Hermes review, PR #891 round 2 — install was asymmetric with uninstall:
   // uninstall correctly refuses an unmarked mullion-prefixed dir, but
   // install would happily sync files into one (and then claim it by
   // writing the marker), silently absorbing a colliding user-owned
-  // directory. Names the double-prefixed collision explicitly
-  // (`mullion-mullion-host`, this bundle's actual install target) rather
-  // than a name that would never collide in practice.
+  // directory. Names the collision explicitly (`mullion-host`, this
+  // bundle's actual install target) rather than a name that would never
+  // collide in practice.
   it("install never overwrites or claims a pre-existing directory at its own target path that has no ownership marker", () => {
-    const collisionDir = path.join(destRoot, "mullion-mullion-host");
+    const collisionDir = path.join(destRoot, "mullion-host");
     mkdirSync(collisionDir, { recursive: true });
     writeFileSync(path.join(collisionDir, "SKILL.md"), "not mine to overwrite");
 
@@ -170,7 +170,7 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
 
   it("installs a marker file inside each installed skill directory", () => {
     installBundleSkills(destRoot);
-    expect(existsSync(path.join(destRoot, "mullion-mullion-host", ".mullion-managed"))).toBe(true);
+    expect(existsSync(path.join(destRoot, "mullion-host", ".mullion-managed"))).toBe(true);
   });
 
   it("uninstall never touches a directory without the mullion- prefix", () => {
@@ -189,12 +189,39 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
     expect(() => uninstallBundleSkills(destRoot)).not.toThrow();
   });
 
+  // Issue #940 — a shipped skill's source directory getting renamed (e.g.
+  // the `mullion-host/` → `host/` fix, done to stop this same prefixing
+  // from double-stacking) must not leave the OLD installed name behind
+  // forever: syncSkillDir only ever adds/overwrites, never deletes, so
+  // without an explicit prune the orphan would sit there indefinitely.
+  it("install prunes a previously-installed skill directory whose name is no longer shipped", () => {
+    const orphanDir = path.join(destRoot, "mullion-mullion-host");
+    mkdirSync(orphanDir, { recursive: true });
+    writeFileSync(path.join(orphanDir, "SKILL.md"), "stale pre-rename content");
+    writeFileSync(path.join(orphanDir, ".mullion-managed"), "managed");
+
+    installBundleSkills(destRoot);
+
+    expect(existsSync(orphanDir)).toBe(false);
+    expect(existsSync(path.join(destRoot, "mullion-host", "SKILL.md"))).toBe(true);
+  });
+
+  it("install never prunes a same-prefixed directory with no ownership marker, even if unrecognized", () => {
+    const lookalikeDir = path.join(destRoot, "mullion-something-unrelated");
+    mkdirSync(lookalikeDir, { recursive: true });
+    writeFileSync(path.join(lookalikeDir, "SKILL.md"), "not mine to touch");
+
+    installBundleSkills(destRoot);
+
+    expect(existsSync(path.join(lookalikeDir, "SKILL.md"))).toBe(true);
+  });
+
   it("install is a no-op when MULLION_HOME points at a location shipping no bundle", () => {
     const originalMullionHome = process.env.MULLION_HOME;
     process.env.MULLION_HOME = "/nonexistent/mullion/home";
     try {
       expect(() => installBundleSkills(destRoot)).not.toThrow();
-      expect(existsSync(path.join(destRoot, "mullion-mullion-host"))).toBe(false);
+      expect(existsSync(path.join(destRoot, "mullion-host"))).toBe(false);
     } finally {
       if (originalMullionHome === undefined) delete process.env.MULLION_HOME;
       else process.env.MULLION_HOME = originalMullionHome;
@@ -239,9 +266,7 @@ describe("composeClaudeSessionBundle", () => {
     expect(files).not.toBeNull();
     const relPaths = files!.map((f) => f.path);
     expect(relPaths.some((p) => p.endsWith(path.join(".claude-plugin", "plugin.json")))).toBe(true);
-    expect(relPaths.some((p) => p.endsWith(path.join("skills", "mullion-host", "SKILL.md")))).toBe(
-      true,
-    );
+    expect(relPaths.some((p) => p.endsWith(path.join("skills", "host", "SKILL.md")))).toBe(true);
   });
 
   it("adds the project skill under skills/<frontmatter-name>/SKILL.md", () => {

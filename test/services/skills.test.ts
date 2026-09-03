@@ -468,7 +468,7 @@ describe("skills service", () => {
   // Mullion's tooling work in every repo" plan, which deleted that
   // repo-local skill+symlink in favor of a session-scoped `--plugin-dir`
   // bundle shipped from `src/bundle/` (see mullion-bundle.ts and
-  // src/bundle/skills/mullion-host/, covered by its own test under
+  // src/bundle/skills/host/, covered by its own test under
   // test/services/hook-adapters/). `mullion-review-invariants` is
   // repo-specific by design (it will never move into that bundle) and has
   // the identical two-location shape, so it's the natural replacement

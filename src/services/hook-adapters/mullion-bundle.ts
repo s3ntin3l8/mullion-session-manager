@@ -12,9 +12,10 @@ import { fileURLToPath } from "node:url";
 import { parseSkillFrontmatter } from "../skills.js";
 import { isDangerousSkillName } from "./skill-name.js";
 
-// Issue: Mullion's own agent-facing tooling (today just the `mullion-host`
-// skill — a repo-agnostic pointer to the per-session agent guide copy, see
-// src/bundle/skills/mullion-host/SKILL.md) currently only reaches an agent
+// Issue: Mullion's own agent-facing tooling (originally just the
+// `mullion-host` skill, a repo-agnostic pointer to the per-session agent
+// guide copy — since decomposed into five self-contained skills, issue
+// #940, see src/bundle/skills/) currently only reaches an agent
 // when the session's cwd happens to be THIS repo's own checkout
 // (.claude/skills/mullion-agent-guide/). This module ships it into every
 // Claude Code session, in every project, via `--plugin-dir` — "Load a
@@ -131,7 +132,19 @@ function isCurrentMullionManagedDir(dir: string): boolean {
  * at all, only from a workspace-relative `.agents/skills` or this global
  * root; see the plan doc's S6 spike). A no-op (not an error) when this
  * install hasn't shipped a bundle (resolveMullionBundleDir() returns null)
- * or ships one with no skills/ directory at all. */
+ * or ships one with no skills/ directory at all.
+ *
+ * Also prunes any marker-carrying `mullion-<name>/` directory under
+ * `destRoot` whose `<name>` is no longer among the shipped bundle's own
+ * skill names — issue #940: renaming a shipped skill's source directory
+ * (e.g. `mullion-host/` → `host/`, fixing a double-prefix bug where the
+ * OLD source name plus this function's own prefixing produced an installed
+ * `mullion-mullion-host/`) would otherwise leave the stale, now-orphaned
+ * directory installed forever alongside the correctly-named replacement —
+ * syncSkillDir only ever adds/overwrites files, never removes a directory
+ * that disappeared from the source. Same ownership-marker safety as
+ * uninstallBundleSkills: only ever removes a directory Mullion itself
+ * installed, never a same-prefixed user-owned lookalike. */
 export function installBundleSkills(destRoot: string): void {
   const bundleDir = resolveMullionBundleDir();
   if (!bundleDir) return;
@@ -162,6 +175,29 @@ export function installBundleSkills(destRoot: string): void {
     // marker a user deleted by hand while leaving the skill files in place.
     if (!isCurrentMullionManagedDir(destDir)) {
       writeFileSync(path.join(destDir, INSTALLED_MARKER_NAME), INSTALLED_MARKER_CONTENT);
+    }
+  }
+
+  // Hermes review, PR #1011 — if `skillsDir` ever resolves to a directory
+  // with zero skill subdirectories (a malformed release tarball, not a
+  // case this codebase ships today), `skillNames` is empty here, so this
+  // prune removes every marker-carrying `mullion-*` dir under `destRoot` —
+  // identical to what an empty-bundle `uninstallBundleSkills` call would
+  // do. Deliberate, not a bug: an install that ships no skills at all has
+  // nothing legitimate left to keep installed.
+  const currentDestNames = new Set(skillNames.map((name) => `${INSTALLED_SKILL_PREFIX}${name}`));
+  let existingEntries: Dirent[];
+  try {
+    existingEntries = readdirSync(destRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of existingEntries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(INSTALLED_SKILL_PREFIX)) continue;
+    if (currentDestNames.has(entry.name)) continue;
+    const dir = path.join(destRoot, entry.name);
+    if (isCurrentMullionManagedDir(dir)) {
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 }

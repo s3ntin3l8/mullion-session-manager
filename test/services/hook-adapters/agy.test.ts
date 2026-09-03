@@ -550,25 +550,21 @@ describe("agyAdapter.prepareLaunch — Mullion tooling bundle install (issue: ma
     const plan = agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true });
     await plan.managedInstall?.();
 
-    const installedSkillPath = path.join(
-      resolveAgyGlobalSkillsDir(),
-      "mullion-mullion-host",
-      "SKILL.md",
-    );
+    const installedSkillPath = path.join(resolveAgyGlobalSkillsDir(), "mullion-host", "SKILL.md");
     expect(existsSync(installedSkillPath)).toBe(true);
-    expect(readFileSync(installedSkillPath, "utf8")).toContain("mullion-host");
+    expect(readFileSync(installedSkillPath, "utf8")).toContain("name: host");
   });
 
   it("does not install the bundle when injectMullionBundle is off", async () => {
     const plan = agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false });
     await plan.managedInstall?.();
 
-    expect(existsSync(path.join(resolveAgyGlobalSkillsDir(), "mullion-mullion-host"))).toBe(false);
+    expect(existsSync(path.join(resolveAgyGlobalSkillsDir(), "mullion-host"))).toBe(false);
   });
 
   it("removes a previously-installed bundle skill once injectMullionBundle is turned off", async () => {
     await agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: true }).managedInstall?.();
-    const skillDir = path.join(resolveAgyGlobalSkillsDir(), "mullion-mullion-host");
+    const skillDir = path.join(resolveAgyGlobalSkillsDir(), "mullion-host");
     expect(existsSync(skillDir)).toBe(true);
 
     await agyAdapter.prepareLaunch({ ...ctx(), injectMullionBundle: false }).managedInstall?.();
