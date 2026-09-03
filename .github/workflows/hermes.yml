@@ -17,6 +17,14 @@ name: Hermes (review)
 # responding to feedback produced 5 separate Hermes review submissions.
 # `ready_for_review` is safe to keep alongside `opened` -- it fires at most
 # once per PR (the draft->ready transition), not on every push.
+#
+# `auto-review` deliberately excludes `mullion/task-*` branches (see the
+# job's own `if:` below) -- that's Task Master's own closed branch namespace
+# (deriveTaskBranchName, git-worktree.ts), and Task Master's own review
+# agent is the terminal review for its tasks; see docs/tasks.md's "External
+# review workflows" section for the full story. `on-demand-review` is NOT
+# excluded -- a human can still explicitly ask for a second opinion on a
+# Task Master PR via `@s3ntin3l8-hermes Review`.
 on:
   pull_request:
     types: [opened, ready_for_review]
@@ -37,7 +45,8 @@ jobs:
       github.actor != 's3ntin3l8-hermes[bot]' &&
       github.actor != 'dependabot[bot]' &&
       github.actor != 'github-actions[bot]' &&
-      github.event.pull_request.draft == false
+      github.event.pull_request.draft == false &&
+      !startsWith(github.event.pull_request.head.ref, 'mullion/task-')
     permissions:
       contents: write
       pull-requests: write
