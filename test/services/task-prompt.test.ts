@@ -65,6 +65,34 @@ describe("buildTaskMasterPreamble", () => {
     expect(out).toContain("do not claim CI is green");
   });
 
+  // The reviewer that follows this worker cannot edit anything and draws on
+  // a small, never-reset round budget — a defect the worker catches itself
+  // is free; the same one caught downstream is not. This instruction must
+  // stay CLI-neutral: it runs against arbitrary target repos and CLIs, so it
+  // must not name a specific command or subagent that may not exist there.
+  it("tells the worker to review its own diff, without naming a CLI-specific tool", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    expect(out).toContain("Look over your own diff with fresh eyes before committing");
+    expect(out).not.toContain("/code-review");
+    expect(out).not.toContain("mullion-reviewer");
+  });
+
+  // Pins the bullet's position so a future reword can't silently reorder the
+  // contract's emphasis: verify → self-review → commit, so the worker always
+  // reviews with the FULL verification-gate diff in view, before it's split
+  // across commits.
+  it("places the self-review bullet after the verification gate and before committing", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    const verifyIdx = out.indexOf("Run the repo's own verification gate before you commit");
+    const selfReviewIdx = out.indexOf("Look over your own diff with fresh eyes before committing");
+    const commitIdx = out.indexOf(`Commit your work on ${BASE.branchName}`);
+    expect(verifyIdx).toBeGreaterThan(-1);
+    expect(selfReviewIdx).toBeGreaterThan(-1);
+    expect(commitIdx).toBeGreaterThan(-1);
+    expect(selfReviewIdx).toBeGreaterThan(verifyIdx);
+    expect(commitIdx).toBeGreaterThan(selfReviewIdx);
+  });
+
   it("warns that an outstanding background job suppresses the completion signal", () => {
     expect(buildTaskMasterPreamble(BASE)).toContain(
       "Finish or cancel any background job before you end your turn",

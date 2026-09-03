@@ -95,13 +95,22 @@ export interface WorkerPreambleOptions {
  * worktree — deliberately NOT a restatement of CLAUDE.md, which the agent
  * already reads (the worktree is a checkout of the same repo).
  *
- * The verification-gate bullet below doesn't break that rule even though it
- * points at CLAUDE.md/AGENTS.md/README: it names no commands, so it stays
- * correct across the arbitrary target repos Task Master runs against (a Go
- * repo's gate looks nothing like this one's `make lint`). It establishes an
- * obligation this repo's own docs can't — Mullion opens the pull request
- * only AFTER the worker's turn ends, so nothing already in a target repo's
- * docs tells the agent it will never see CI's result.
+ * The verification-gate and self-review bullets below don't break that rule
+ * even though they overlap with what a target repo's own docs might already
+ * ask for: both name no commands or tools, so they stay correct across the
+ * arbitrary target repos and CLIs Task Master runs against (a Go repo's
+ * gate looks nothing like this one's `make lint`; a CLI without a
+ * `/code-review` slash command still has "look at your own diff again").
+ * Each establishes an obligation a target repo's own docs can't:
+ * verification, because Mullion opens the pull request only AFTER the
+ * worker's turn ends, so nothing already in a target repo's docs tells the
+ * agent it will never see CI's result; self-review, because the worker
+ * cannot see from inside the worktree that its diff goes to a separately
+ * spawned reviewer that cannot edit files and draws on a small, never-reset
+ * round budget shared with CI and PR-comment auto-returns (see
+ * `buildReviewPrompt` and `docs/tasks.md`'s "The round budget") — so a
+ * defect the worker catches itself is free, and the same defect caught
+ * downstream is not.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   const { task, branchName, worktreePath, budgetMinutes, auto, commitTitlePath } = opts;
@@ -121,6 +130,10 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  not just the test suite. Mullion opens the pull request AFTER your turn ends,",
     "  so you never see CI's result: do not claim CI is green. Report only what you",
     "  actually ran, and say so plainly if you skipped something.",
+    "- Look over your own diff with fresh eyes before committing. A separate",
+    "  reviewer sees this diff afterwards but cannot edit anything in it — so a",
+    "  defect you catch now is free, and the same defect caught downstream costs",
+    "  this task one of a small, non-renewing number of automatic fix-up rounds.",
     `- Commit your work on ${branchName}. Uncommitted changes never reach the pull`,
     '  request, and the review summary reports them as "nothing changed".',
     "- Leave the worktree clean. Untracked files count as dirty and block approval",
