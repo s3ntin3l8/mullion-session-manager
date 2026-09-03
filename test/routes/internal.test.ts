@@ -1024,7 +1024,7 @@ describe("internal routes (agent role, issue #26)", () => {
       it("returns only existing project-scope filenames, never content", async () => {
         const app = await buildApp();
         const cwd = fs.mkdtempSync(path.join(projectsRoot, "exists-test-"));
-        fs.writeFileSync(path.join(cwd, "GEMINI.md"), "should not appear in the response");
+        fs.writeFileSync(path.join(cwd, "AGENTS.md"), "should not appear in the response");
 
         const res = await app.inject({
           method: "GET",
@@ -1032,7 +1032,7 @@ describe("internal routes (agent role, issue #26)", () => {
           headers: { authorization: `Bearer ${TOKEN}` },
         });
         expect(res.statusCode).toBe(200);
-        expect(res.json()).toEqual(["GEMINI.md"]);
+        expect(res.json()).toEqual(["AGENTS.md"]);
         expect(res.payload).not.toContain("should not appear");
 
         fs.rmSync(cwd, { recursive: true, force: true });

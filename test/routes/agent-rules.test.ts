@@ -202,14 +202,14 @@ describe("agent-rules routes", () => {
 
   describe("DELETE /api/projects/:id/agent-rules/:target", () => {
     it("deletes an existing file and returns 204", async () => {
-      fs.writeFileSync(path.join(projectCwd, "GEMINI.md"), "to be deleted");
+      fs.writeFileSync(path.join(projectCwd, "AGENTS.md"), "to be deleted");
       const { app, projectId } = await createProject();
       const res = await app.inject({
         method: "DELETE",
         url: `/api/projects/${projectId}/agent-rules/agy:project`,
       });
       expect(res.statusCode).toBe(204);
-      expect(fs.existsSync(path.join(projectCwd, "GEMINI.md"))).toBe(false);
+      expect(fs.existsSync(path.join(projectCwd, "AGENTS.md"))).toBe(false);
       await app.close();
     });
 
