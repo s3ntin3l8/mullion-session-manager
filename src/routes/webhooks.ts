@@ -233,9 +233,11 @@ export async function webhookRoutes(app: FastifyInstance) {
             // meaningful on a "closed" delivery — GitHub always sends it,
             // `false` for a close-without-merge.
             if (
+              // CodeQL flagged `pr !== null` here as comparing inconvertible
+              // types — `if (!pr) break` above already excludes null (and
+              // undefined), so it was dead code, not a real guard.
               prAction === "closed" &&
               typeof pr === "object" &&
-              pr !== null &&
               "merged" in pr &&
               pr.merged === true &&
               "number" in pr &&

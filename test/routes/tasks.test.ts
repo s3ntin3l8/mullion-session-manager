@@ -3564,6 +3564,20 @@ describe("tasks route", () => {
         getPrSpy.mockRestore();
         await app.close();
       });
+
+      // Review fix — was registered with no body schema at all, unlike its
+      // sibling /api/tasks/clear-done; a malformed body fell through to
+      // drizzle's inArray and would 500 instead of 400.
+      it("400s a malformed body instead of 500ing", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: "not-an-array" },
+        });
+        expect(res.statusCode).toBe(400);
+        await app.close();
+      });
     });
   });
 });

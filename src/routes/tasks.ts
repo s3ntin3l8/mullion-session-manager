@@ -76,6 +76,20 @@ const clearDoneTasksSchema = {
   },
 };
 
+// #1015 (archive), review fix — mirrors clearDoneTasksSchema above, which
+// this route was otherwise modeled on directly; a malformed body (e.g.
+// projectIds sent as a string) would previously fall through to drizzle's
+// inArray and 500 instead of 400.
+const archiveMergedTasksSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      projectIds: { type: "array", items: { type: "integer", minimum: 1 } },
+    },
+  },
+};
+
 const createTaskSchema = {
   body: {
     type: "object",
@@ -1055,75 +1069,96 @@ export async function tasksRoute(app: FastifyInstance) {
   // manual unarchive sticks. Without it, this route (meant to be re-run
   // periodically) would re-confirm the same already-known merge and
   // silently re-archive a task the user just asked to bring back.
-  app.post<{ Body: { projectIds?: number[] } }>("/api/tasks/archive-merged", async (request) => {
-    const { projectIds } = request.body ?? {};
+  app.post<{ Body: { projectIds?: number[] } }>(
+    "/api/tasks/archive-merged",
+    { schema: archiveMergedTasksSchema },
+    async (request) => {
+      const { projectIds } = request.body ?? {};
 
-    const doneUnmergedWithPr = and(
-      eq(tasks.status, "done"),
-      isNotNull(tasks.prNumber),
-      isNull(tasks.mergedAt),
-    );
-    const candidates =
-      projectIds && projectIds.length > 0
-        ? app.db
-            .select()
-            .from(tasks)
-            .where(and(doneUnmergedWithPr, inArray(tasks.projectId, projectIds)))
-            .all()
-        : app.db.select().from(tasks).where(doneUnmergedWithPr).all();
+      const doneUnmergedWithPr = and(
+        eq(tasks.status, "done"),
+        isNotNull(tasks.prNumber),
+        isNull(tasks.mergedAt),
+      );
+      const candidates =
+        projectIds && projectIds.length > 0
+          ? app.db
+              .select()
+              .from(tasks)
+              .where(and(doneUnmergedWithPr, inArray(tasks.projectId, projectIds)))
+              .all()
+          : app.db.select().from(tasks).where(doneUnmergedWithPr).all();
 
-    const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
-    const remaining = candidates.length - attempted.length;
+      const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
+      const remaining = candidates.length - attempted.length;
 
-    const rateLimited = isGitHubRateLimited();
-    const archived: number[] = [];
-    const failed: { id: number; error: string }[] = [];
+      const rateLimited = isGitHubRateLimited();
+      const archived: number[] = [];
+      const failed: { id: number; error: string }[] = [];
 
-    for (const task of attempted) {
-      if (rateLimited) {
-        failed.push({ id: task.id, error: "GitHub rate limit is in effect — try again shortly" });
-        continue;
-      }
-      const project = getProjectOr404(task.projectId);
-      if (!project) {
-        failed.push({ id: task.id, error: "Project not found" });
-        continue;
-      }
-      const repoRef = await resolveRepoRef(app, project);
-      if (!repoRef) {
-        failed.push({ id: task.id, error: "Could not resolve the project's GitHub repo" });
-        continue;
-      }
-      const token = await resolveGitHubToken(app, repoRef, "read");
-      if (!token) {
-        failed.push({ id: task.id, error: "No GitHub token available" });
-        continue;
-      }
-      try {
-        const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!);
-        if (!pr.merged) {
-          failed.push({ id: task.id, error: "PR is not merged" });
+      for (const task of attempted) {
+        if (rateLimited) {
+          failed.push({ id: task.id, error: "GitHub rate limit is in effect — try again shortly" });
           continue;
         }
-      } catch (err) {
-        app.log.warn(
-          { err, taskId: task.id, prNumber: task.prNumber },
-          "archive-merged: failed to confirm PR merge state",
-        );
-        failed.push({ id: task.id, error: "Could not confirm PR merge state" });
-        continue;
+        const project = getProjectOr404(task.projectId);
+        if (!project) {
+          failed.push({ id: task.id, error: "Project not found" });
+          continue;
+        }
+        const repoRef = await resolveRepoRef(app, project);
+        if (!repoRef) {
+          failed.push({ id: task.id, error: "Could not resolve the project's GitHub repo" });
+          continue;
+        }
+        const token = await resolveGitHubToken(app, repoRef, "read");
+        if (!token) {
+          failed.push({ id: task.id, error: "No GitHub token available" });
+          continue;
+        }
+        let mergedAt: string | null;
+        try {
+          const pr = await getPullRequestByNumber(
+            token,
+            repoRef.owner,
+            repoRef.repo,
+            task.prNumber!,
+          );
+          if (!pr.merged) {
+            failed.push({ id: task.id, error: "PR is not merged" });
+            continue;
+          }
+          mergedAt = pr.mergedAt;
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, prNumber: task.prNumber },
+            "archive-merged: failed to confirm PR merge state",
+          );
+          failed.push({ id: task.id, error: "Could not confirm PR merge state" });
+          continue;
+        }
+        const now = new Date();
+        app.db
+          .update(tasks)
+          // Review fix — prefers GitHub's own merged_at (the PR's actual
+          // merge time) over "whenever this endpoint happened to run," which
+          // matters for the backfill case: a task merged days before this
+          // route is ever called would otherwise get a misleading mergedAt.
+          // Falls back to `now` only when GitHub genuinely doesn't have one
+          // (shouldn't happen once pr.merged is confirmed true, but the type
+          // is nullable) or a prior run already set one.
+          .set({
+            mergedAt: task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now),
+            archivedAt: now,
+          })
+          .where(eq(tasks.id, task.id))
+          .run();
+        archived.push(task.id);
       }
-      const now = new Date();
-      app.db
-        .update(tasks)
-        .set({ mergedAt: task.mergedAt ?? now, archivedAt: now })
-        .where(eq(tasks.id, task.id))
-        .run();
-      archived.push(task.id);
-    }
 
-    return { archived, failed, remaining };
-  });
+      return { archived, failed, remaining };
+    },
+  );
 
   // Phase 6 (6.2/#215) — thin wrapper over task-claim.ts's shared
   // orchestration (also used by task-watcher.ts's auto-claim sweep), which
