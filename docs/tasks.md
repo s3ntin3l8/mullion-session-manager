@@ -771,12 +771,23 @@ reviewing` transition itself — `task-reconciler.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
   block approve's own clean-tree check), as JSON:
   `{verdict: "clean" | "changes-requested", summary, findings: [{path, line,
-side, severity, body}]}` — written to a temp file and moved into place as
-  the last step, not written directly, so a reconcile tick can never
-  observe a torn/partial write. `parseReviewFindings` tolerantly falls back
-  to `changes-requested` (the whole file as `summary`, no anchored findings)
-  for anything that isn't valid JSON in that shape — an agent that ignores
-  the contract must never silently read as a clean review.
+side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
+  verdict sentence; `verified`/`notes`/`looksGood` are optional string
+  arrays for what was checked, cross-cutting observations that don't anchor
+  to a line, and what's solid about the change, respectively. Written to a
+  temp file and moved into place as the last step, not written directly, so
+  a reconcile tick can never observe a torn/partial write.
+  `parseReviewFindings` tolerantly falls back to `changes-requested` (the
+  whole file as `summary`, no anchored findings, no `verified`/`notes`/
+  `looksGood`) for anything that isn't valid JSON in that shape — an agent
+  that ignores the contract must never silently read as a clean review.
+  `renderReviewFindingsMarkdown` renders the parsed verdict into the
+  Hermes-style sectioned body actually posted: `**Verdict:**` line, then
+  `### Critical` (severity `blocker`/`major`), `### Warnings`
+  (`minor`/unset), `### Suggestions` (`nit`) — each with `- None` when
+  empty — followed by `### Verified`/`### Notes`/`### Looks Good` when
+  non-empty. A freeform (non-JSON) review renders verbatim instead, since
+  its `summary` holds the whole file, not one sentence.
 
   A missing file is treated as **inconclusive**, not "no findings" and not
   "clean" — but not on the very first tick that observes it missing.
