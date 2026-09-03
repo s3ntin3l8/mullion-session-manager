@@ -79,16 +79,6 @@ const previewSchema = {
     additionalProperties: false,
     properties: {
       slug: { type: "string", minLength: 1, maxLength: 64 },
-      // Issue #942 — AGENTS.override.md dropped: it's the one file that can
-      // silently shadow AGENTS.md for Codex, and the scaffold shouldn't
-      // hand a target repo a second file with that footgun (see
-      // ScaffoldOptions.mirrors's own doc comment, mullion-scaffold.ts).
-      mirrors: {
-        type: "array",
-        items: { type: "string", enum: ["GEMINI.md"] },
-        maxItems: 1,
-        uniqueItems: true,
-      },
       // Issue #942 — see ScaffoldOptions.includeContributingPointer's own
       // doc comment (mullion-scaffold.ts).
       includeContributingPointer: { type: "boolean" },
@@ -145,17 +135,15 @@ function resolveWithin(root: string, relPath: string): string {
 // dock-config once something's already there, so their existence has to
 // actually be probed here, not just the region-upsert targets.
 function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] {
-  const mirrors = options.mirrors ?? [];
   const paths = [
     "AGENTS.md",
     // Issue #942 (this restructure) — CLAUDE.md is unconditional, same
-    // reasoning as AGENTS.md above (not in `...mirrors`, which is opt-in):
+    // reasoning as AGENTS.md above (not opt-in like CONTRIBUTING.md below):
     // without this, readExistingFiles below never sees a real repo's own
     // CLAUDE.md, computeScaffold treats it as absent, and the apply path
     // would silently OVERWRITE a real, possibly 200-line CLAUDE.md with a
     // scaffold-only `@AGENTS.md` import file instead of upserting into it.
     "CLAUDE.md",
-    ...mirrors,
     path.join(".claude", "skills", slug, "SKILL.md"),
     path.join(".claude", "agents", `${slug}-reviewer.md`),
     options.symlinkAgentsSkills
@@ -377,7 +365,6 @@ export async function projectSetupRoute(app: FastifyInstance) {
 
       const options: ScaffoldOptions = {
         slug: request.body.slug,
-        mirrors: request.body.mirrors,
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
@@ -518,7 +505,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           title: `chore: scaffold Mullion integration (${record.slug})`,
           head: record.branch,
           base,
-          body: "Adds a Mullion briefing region to AGENTS.md, a CLAUDE.md @AGENTS.md import (Claude Code does not read AGENTS.md natively — the import is what loads it), a project skill, a reviewer subagent, and (if opted in) GEMINI.md/CONTRIBUTING.md pointers — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.",
+          body: "Adds a Mullion briefing region to AGENTS.md, a CLAUDE.md @AGENTS.md import (Claude Code does not read AGENTS.md natively — the import is what loads it), a project skill, a reviewer subagent, and (if opted in) a CONTRIBUTING.md pointer — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.",
         });
         previews.delete(request.body.previewId);
         return { ok: true, mode: "pull-request", prUrl: pr.htmlUrl, prNumber: pr.number };
