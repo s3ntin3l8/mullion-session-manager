@@ -321,6 +321,123 @@ describe("upsertIssueTask (#490a)", () => {
     });
   });
 
+  // #1016 — an issue with GitHub sub-issues is a tracking epic, not leaf
+  // work: it must never be auto-claimable. Real-DB tests, same reasoning as
+  // #701 above (the demotion path relies on a real UPDATE...WHERE CAS, not
+  // something a mocked app.db could exercise faithfully).
+  describe("epic guard (#1016)", () => {
+    function rowFor(issueNumber: number) {
+      return app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issueNumber)))
+        .get()!;
+    }
+
+    it("ingests an issue with sub-issues into backlog, not ready", () => {
+      upsertIssueTask(app, projectId, {
+        number: 960,
+        title: "Tracking epic",
+        body: null,
+        htmlUrl: "https://x/960",
+        subIssues: { total: 5, completed: 0 },
+      });
+
+      expect(rowFor(960).status).toBe("backlog");
+    });
+
+    it("still ingests a leaf issue (no sub-issues) into ready", () => {
+      upsertIssueTask(app, projectId, {
+        number: 961,
+        title: "Leaf work",
+        body: null,
+        htmlUrl: "https://x/961",
+        subIssues: { total: 0, completed: 0 },
+      });
+
+      expect(rowFor(961).status).toBe("ready");
+    });
+
+    it("demotes a ready task to backlog when a later sighting reveals sub-issues", () => {
+      upsertIssueTask(app, projectId, {
+        number: 962,
+        title: "Was leaf-shaped",
+        body: null,
+        htmlUrl: "https://x/962",
+      });
+      expect(rowFor(962).status).toBe("ready");
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 962,
+        title: "Was leaf-shaped",
+        body: null,
+        htmlUrl: "https://x/962",
+        subIssues: { total: 2, completed: 0 },
+      });
+
+      const row = rowFor(962);
+      expect(row.status).toBe("backlog");
+      expect(mockBroadcastTaskEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: row.id,
+          projectId,
+          kind: "transition",
+          from: "ready",
+          to: "backlog",
+        }),
+      );
+    });
+
+    it("does not demote a claimed task when a later sighting reveals sub-issues", () => {
+      upsertIssueTask(app, projectId, {
+        number: 963,
+        title: "Already claimed",
+        body: null,
+        htmlUrl: "https://x/963",
+      });
+      app.db
+        .update(tasks)
+        .set({ status: "claimed" })
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, 963)))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, {
+        number: 963,
+        title: "Already claimed",
+        body: null,
+        htmlUrl: "https://x/963",
+        subIssues: { total: 2, completed: 0 },
+      });
+
+      const row = rowFor(963);
+      expect(row.status).toBe("claimed");
+      expect(mockBroadcastTaskEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "transition" }),
+      );
+    });
+
+    it("a webhook-sourced re-sighting (subIssues omitted) never demotes", () => {
+      upsertIssueTask(app, projectId, {
+        number: 964,
+        title: "Leaf-shaped",
+        body: null,
+        htmlUrl: "https://x/964",
+      });
+      expect(rowFor(964).status).toBe("ready");
+
+      upsertIssueTask(app, projectId, {
+        number: 964,
+        title: "Leaf-shaped (retitled)",
+        body: null,
+        htmlUrl: "https://x/964",
+      });
+
+      expect(rowFor(964).status).toBe("ready");
+    });
+  });
+
   // Relabel-resurrection — a task auto-failed by syncUnlabeledIssueToLocal
   // for losing the tracking label springs back to ready/backlog the moment
   // a re-sighting confirms the label is present again. Real-DB tests, same
@@ -400,6 +517,27 @@ describe("upsertIssueTask (#490a)", () => {
       });
 
       expect(rowFor(951).status).toBe("backlog");
+    });
+
+    it("resurrects to backlog, not ready, when the issue carries sub-issues (#1016)", () => {
+      upsertIssueTask(app, projectId, {
+        number: 9510,
+        title: "Epic task",
+        body: null,
+        htmlUrl: "https://x/9510",
+        subIssues: { total: 3, completed: 0 },
+      });
+      failTask(9510);
+
+      upsertIssueTask(app, projectId, {
+        number: 9510,
+        title: "Epic task",
+        body: null,
+        htmlUrl: "https://x/9510",
+        subIssues: { total: 3, completed: 0 },
+      });
+
+      expect(rowFor(9510).status).toBe("backlog");
     });
 
     it("does not resurrect a task that failed because its issue was closed", () => {

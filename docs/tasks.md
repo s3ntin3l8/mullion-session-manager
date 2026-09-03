@@ -216,9 +216,17 @@ full design.
   the board is the interactive "make this claimable" trigger.
 - **A watcher-ingested issue** is inserted directly into `ready` — i.e.
   auto-claim-eligible — **unless** its body contains a line reading
-  `Manual: true`, in which case it lands in `backlog` instead. This is the
-  opt-out: an ingested issue is autonomous by default, matching the "make
-  this production-grade and auto-claimable" goal.
+  `Manual: true`, or it carries GitHub sub-issues (`#1016` — it's a tracking
+  epic, not leaf work: dispatching it produces a zero-commit turn), in either
+  of which cases it lands in `backlog` instead. This is the opt-out: an
+  ingested issue is autonomous by default, matching the "make this
+  production-grade and auto-claimable" goal. An issue that _gains_ sub-issues
+  after already being ingested `ready` is demoted back to `backlog` the same
+  way, but only while it's still untouched (`ready`, no session ever
+  attached) — a task already claimed or further along keeps going regardless
+  of what GitHub reports about its children afterward, and the reverse (all
+  children close, the epic becomes claimable again) is not automatic; a
+  human drags it back to `ready`.
 - **`claimed` is the queue, not a reconciler-observed transient state**
   (task-claim queueing, rate-limit-storm fix — see Concurrency below for
   the full design). A manual claim or an auto-claim candidate always
@@ -535,10 +543,18 @@ Five columns on `tasks`, all nullable — `parentIssueNumber` /
 `parentIssueRepo` (the parent's own `"owner/repo"`, which can differ from
 the child's project repo: cross-repo sub-issues are first-class in GitHub's
 model) / `parentIssueTitle` / `subIssueTotal` / `subIssueCompleted`. Unlike
-`dependencyCount`, nullability here carries no fail-closed meaning — this
-is **display-only** and never gates a claim decision, so "not yet observed"
-and "known to have no parent" don't need to be distinguishable the way they
-do for dependencies.
+`dependencyCount`, nullability here carries no fail-closed meaning for the
+four parent-identity columns — they stay **display-only**, so "not yet
+observed" and "known to have no parent" don't need to be distinguishable the
+way they do for dependencies.
+
+**`subIssueTotal` is the one exception, since `#1016`.** `subIssueTotal > 0`
+means this issue itself is a tracking epic, and `upsertIssueTask` now reads
+it at ingest (and on every re-sighting) to keep an epic issue out of `ready`
+— see the Lifecycle section above. `subIssueTotal === null` ("not yet
+observed" — a webhook-sourced sighting) still doesn't fail closed the way an
+unresolved `dependencyCount` does: it simply defers the epic check to the
+next poll sweep, which always carries a real `sub_issues_summary`.
 
 `parentIssueNumber`/`parentIssueRepo`/`subIssueTotal`/`subIssueCompleted`
 follow the same three-state write lockstep `dependencyCount` established in
