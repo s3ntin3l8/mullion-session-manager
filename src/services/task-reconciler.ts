@@ -2663,34 +2663,54 @@ export function resolveMaxAutoReturnRounds(project: {
  * transition), BOTH the round increment and the "reviewing" -> "in_progress"
  * status write are rolled back, CAS'd on the exact `autoReturnRounds` value
  * this call itself just wrote, so a genuinely later attempt can still use
- * the round. Issue #973 — this used to leave `status` at "in_progress"
- * (a quirk carried over from the review-feedback loop this function was
+ * the round. Issue #973 — this used to leave `status` at "in_progress" (a
+ * quirk carried over from the review-feedback loop this function was
  * extracted from, Hermes review PR #580, deliberately preserved rather than
  * fixed at the time) while `sessionId` still pointed at the OLD session
- * `reseedTaskIfSessionExited` was trying to replace — a session already
- * confirmed gone-or-going for "review"'s `force: true` callers. task-state.ts
- * treats "in_progress" as session-liveness-dependent ("agent's turn ended /
- * session died") but "reviewing" as not, so that stale combination left the
- * task exposed to session-reconciler.ts's session-death hook: once THAT
- * session was independently noticed dead (a separate, later reconcile pass),
- * it flipped the task straight to "failed" with a misleading "session
- * exited" reason that had nothing to do with the actual re-seed spawn
- * failure — a real incident (task 258971, PR #136, 2026-09-02; root cause:
- * this host under heavy load at the time — see the fix commit's own
- * message). Rolling `status` back too undoes every write THIS call itself
- * made (status, the round, `lastAutoReturnReason`) — not `reviewFindings`/
- * `lastReviewVerdict`/the posted PR comment from an earlier, already-
- * committed step, which correctly survive — landing the task back in
- * "reviewing", invisible to the liveness/budget checks that only run
- * against "claimed"/"in_progress". For a level-triggered reason ("ci",
- * "pr-comment" — re-evaluated against live external state every sweep)
- * this also acts as a natural retry: the next tick calls this function
- * again as long as the underlying condition persists, with no separate
- * retry/backoff mechanism needed. "review" is edge-triggered on a findings
- * file appearing (already unlinked and ingest-marked by the time this
- * runs), so a failure there does NOT self-retry — it still needs a human to
- * notice the stalled "reviewing" task — but at least no longer masquerades
- * as an unrelated session death.
+ * `reseedTaskIfSessionExited` was trying to replace. task-state.ts treats
+ * "in_progress" as session-liveness-dependent ("agent's turn ended / session
+ * died") but "reviewing" as not, so an "in_progress" task left pointing at a
+ * dead-or-dying `sessionId` for any length of time is exposed to
+ * session-reconciler.ts's session-death hook flipping it to "failed" with a
+ * misleading "session exited" reason that has nothing to do with the real
+ * re-seed failure. Rolling `status` back too undoes every write THIS call
+ * itself made (status, the round, `lastAutoReturnReason`) — not
+ * `reviewFindings`/`lastReviewVerdict`/the posted PR comment from an
+ * earlier, already-committed step, which correctly survive — landing the
+ * task back in "reviewing", invisible to the liveness/budget checks that
+ * only run against "claimed"/"in_progress". For a level-triggered reason
+ * ("ci", "pr-comment" — re-evaluated against live external state every
+ * sweep) this also acts as a natural retry: the next tick calls this
+ * function again as long as the underlying condition persists, with no
+ * separate retry/backoff mechanism needed. "review" is edge-triggered on a
+ * findings file appearing (already unlinked and ingest-marked by the time
+ * this runs), so a failure there does NOT self-retry — it still needs a
+ * human to notice the stalled "reviewing" task — but at least no longer
+ * masquerades as an unrelated session death.
+ *
+ * This closes the INDEFINITE version of that exposure (a re-seed that fails
+ * outright and returns), but not the WINDOW between the forward CAS above
+ * and this rollback — which spans the entire re-seed attempt, `force:
+ * true`'s own terminate-then-spawn included. The incident this fixes (task
+ * 258971, PR #136, 2026-09-02) actually raced inside that window, not after
+ * it, and this change alone does not close it: `reseedTaskIfSessionExited`'s
+ * `terminate()` call hung for a full 90s systemd `TimeoutStopSec` (the prior
+ * session's process wasn't responding to SIGTERM) before being SIGKILLed,
+ * and a concurrent `reconcileExitedSessions` tick landed 27s into that hang
+ * — likely because `isMasterAlive`'s `stdout.trim() === "active"` check
+ * (session-process.ts) treats a scope mid-"deactivating" from OUR OWN
+ * in-flight `stopScope()` call identically to one that's genuinely gone,
+ * with nothing recording "a termination we ourselves started is still in
+ * flight for this id." That tick flipped the task to "failed" via
+ * session-death a full 63 seconds before this function's own rollback ever
+ * ran — which, with `status: "in_progress"` now required in this rollback's
+ * own CAS below, correctly no-ops in that exact sequence (status was
+ * already "failed"), rather than resurrecting a task something else had
+ * already resolved. Closing that race properly means either bounding
+ * `stopScope()` with its own timeout or making session liveness checks
+ * aware of an in-flight, self-initiated termination — both bigger,
+ * separate changes; see the fix commit's own message for specifics and the
+ * follow-up issue it links.
  *
  * Deliberately does NOT call `syncTaskTransition` for this rollback (unlike
  * the real "in_progress -> reviewing" transition elsewhere in this file,
