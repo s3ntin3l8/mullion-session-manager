@@ -27,10 +27,11 @@ context if you're running inside a Mullion-hosted session.
   `make lint && make typecheck && make test && make format-check`
   (repo-wide — covers `frontend/` too).
 - **Get a review, and close the loop on it.** Hermes reviews automatically
-  on open — don't also `@s3ntin3l8-hermes Review` right after opening the PR,
-  or you'll trigger a redundant second review. A re-review can be requested
-  the same way (`@s3ntin3l8-hermes Review` on the PR) after pushing fixes,
-  but keep it to a couple of rounds — don't loop on it indefinitely. Fixing
+  on open (`.github/workflows/hermes.yml`'s `auto-review` job) — don't also
+  `@s3ntin3l8-hermes Review` right after opening the PR, or you'll trigger a
+  redundant second review. A re-review can be requested the same way
+  (`@s3ntin3l8-hermes Review` on the PR) after pushing fixes, but keep it to
+  a couple of rounds — don't loop on it indefinitely. Fixing
   the code is not enough to address feedback — reply to each inline comment
   via the GitHub API, then resolve the thread via the GraphQL
   `resolveReviewThread` mutation. See "Addressing review feedback" below for
