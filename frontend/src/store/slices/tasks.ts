@@ -131,8 +131,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
-    deleteTask: async (id) => {
-      await api.deleteTask(id);
+    deleteTask: async (id, opts) => {
+      await api.deleteTask(id, opts);
       void get().refreshTasks();
     },
 

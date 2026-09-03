@@ -266,7 +266,10 @@ describe("store.createTask / updateTask / deleteTask (local-board CRUD, 6.9/#233
       if (url === "/api/tasks/2" && init?.method === "PATCH") {
         return jsonResponse(200, makeTask({ id: 2, status: "ready", boardOrder: 1 }));
       }
-      if (url === "/api/tasks/2" && init?.method === "DELETE") {
+      if (
+        (url === "/api/tasks/2" || url === "/api/tasks/2?force=true") &&
+        init?.method === "DELETE"
+      ) {
         return new Response(null, { status: 204 });
       }
       throw new Error(`unhandled fetch in test: ${url}`);
@@ -314,6 +317,17 @@ describe("store.createTask / updateTask / deleteTask (local-board CRUD, 6.9/#233
     await useDashboardStore.getState().deleteTask(2);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/tasks/2",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  // #1014 (Abandon) — force is opt-in via the querystring, mirroring
+  // api/hosts.ts's deleteHost cascade pattern; a plain call must never send
+  // it.
+  it("deleteTask with force sends ?force=true", async () => {
+    await useDashboardStore.getState().deleteTask(2, { force: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/2?force=true",
       expect.objectContaining({ method: "DELETE" }),
     );
   });

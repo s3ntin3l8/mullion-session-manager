@@ -54,7 +54,12 @@ export const tasksApi = {
     },
   ) => request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
-  deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+  // #1014 (Abandon) — `force` bypasses the server's preserved-branch and
+  // still-tracked-issue guards, mirroring the Hosts cascade-delete pattern
+  // (api/hosts.ts's deleteHost): a plain delete first, and only on a 409
+  // does the UI re-prompt and re-issue with force.
+  deleteTask: (id: number, opts?: { force?: boolean }) =>
+    request<void>(`/api/tasks/${id}${opts?.force ? "?force=true" : ""}`, { method: "DELETE" }),
 
   // #746 — bulk companion to deleteTask, scoped to `done` tasks only. A
   // single call; capped server-side (20/call) — `result.remaining > 0`
