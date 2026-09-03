@@ -83,41 +83,44 @@ export async function resolveTaskIssueContext(
   const token = await resolveGitHubToken(app, repoRef);
   if (!token) return null;
 
-  const comments = await listIssueComments(
-    token,
-    repoRef.owner,
-    repoRef.repo,
-    task.issueNumber,
-    MAX_FETCHED_COMMENTS,
-  );
+  // parentIssueRepo is `"owner/repo"` (#701's own doc comment, schema.ts) —
+  // a parent can live in a different repo than the child's own project.
+  const slashIndex = task.parentIssueRepo?.indexOf("/") ?? -1;
+  const parentOwner = slashIndex > 0 ? task.parentIssueRepo!.slice(0, slashIndex) : null;
+  const parentRepo = slashIndex > 0 ? task.parentIssueRepo!.slice(slashIndex + 1) : null;
+  const hasParent = task.parentIssueNumber !== null && parentOwner !== null && parentRepo !== null;
 
-  let parent: TaskPromptParent | null = null;
-  if (task.parentIssueNumber !== null && task.parentIssueRepo !== null) {
-    // parentIssueRepo is `"owner/repo"` (#701's own doc comment, schema.ts) —
-    // a parent can live in a different repo than the child's own project.
-    const slashIndex = task.parentIssueRepo.indexOf("/");
-    const parentOwner = slashIndex > 0 ? task.parentIssueRepo.slice(0, slashIndex) : null;
-    const parentRepo = slashIndex > 0 ? task.parentIssueRepo.slice(slashIndex + 1) : null;
-    if (parentOwner && parentRepo) {
-      const [parentIssue, parentComments] = await Promise.all([
-        getIssue(token, parentOwner, parentRepo, task.parentIssueNumber),
-        listIssueComments(
+  // The task's own comments and the parent's issue+comments are three
+  // independent GitHub calls (different issue numbers, possibly different
+  // repos) — run them together rather than sequentially awaiting the own-
+  // comments call before even starting the parent lookup (Hermes review,
+  // this PR: the sequential shape doubled round-trip latency on every claim/
+  // retry/reject/rebase/CI-return/PR-review-return/review-feedback spawn
+  // that has a parent, for no correctness reason).
+  const [comments, parentIssue, parentComments] = await Promise.all([
+    listIssueComments(token, repoRef.owner, repoRef.repo, task.issueNumber, MAX_FETCHED_COMMENTS),
+    hasParent ? getIssue(token, parentOwner, parentRepo, task.parentIssueNumber!) : null,
+    hasParent
+      ? listIssueComments(
           token,
           parentOwner,
           parentRepo,
-          task.parentIssueNumber,
+          task.parentIssueNumber!,
           MAX_FETCHED_COMMENTS,
-        ),
-      ]);
-      parent = {
-        number: task.parentIssueNumber,
-        repo: task.parentIssueRepo,
-        title: parentIssue.title,
-        body: parentIssue.body,
-        comments: parentComments,
-      };
-    }
-  }
+        )
+      : [],
+  ]);
+
+  const parent: TaskPromptParent | null =
+    hasParent && parentIssue
+      ? {
+          number: task.parentIssueNumber!,
+          repo: task.parentIssueRepo!,
+          title: parentIssue.title,
+          body: parentIssue.body,
+          comments: parentComments,
+        }
+      : null;
 
   // Siblings — the local DB only, zero GitHub calls, same relation
   // TaskDetail.tsx's own Hierarchy section already uses (matched on BOTH
