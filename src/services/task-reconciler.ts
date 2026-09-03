@@ -79,6 +79,7 @@ import {
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
 import { resolveReleaseMerge } from "./release-merge.js";
+import { isRateLimitGraceActive } from "./task-rate-limit-grace.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
 
 /**
@@ -677,10 +678,53 @@ async function checkReviewingGate(
         ? rawDetail
         : `${rawDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}…`;
   const detail = truncatedDetail !== null ? ` (${truncatedDetail})` : "";
+  // #1015 follow-up — explicit "rate_limit" prefix so a post-grace failure
+  // can be distinguished from the generic "agent ended with no commits" case
+  // in the GitHub issue comment. Deliberately only the exact "rate_limit"
+  // label — every other api_error classification ("overloaded", "auth …",
+  // free-text detail) reads as a different class of failure and doesn't get
+  // the prefix.
+  const rateLimitPrefix =
+    info?.errorState === "api_error" && info?.errorDetail === "rate_limit"
+      ? "rate_limit quota exhausted — "
+      : "";
   return {
     ok: false,
-    failureReason: `agent ended its turn with no commits on ${task.branchName}${detail}`,
+    failureReason: `${rateLimitPrefix}agent ended its turn with no commits on ${task.branchName}${detail}`,
   };
+}
+
+// #1015 follow-up — minimal inline version of "has the worker moved HEAD
+// past baseSha". Mirrors checkReviewingGate's git-status check above so the
+// grace-window lookup uses the same source of truth (and the same fail-open
+// posture: any error resolving status returns false, meaning "no commits"
+// — the safer failure mode, since the alternative is letting a transient
+// git-status blip kick a recoverable rate_limit task straight into the
+// no-commits failure path).
+async function hasCommitsPastBase(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+  task: typeof tasks.$inferSelect,
+): Promise<boolean> {
+  if (!task.baseSha || !task.worktreePath) return false;
+  // Skip the git-status proxy for non-local hosts — same posture as
+  // checkReviewingGate's own remote-host fail-open (no proxied git-commit
+  // route exists yet, so the gate's eventual fail-open fires for the same
+  // reason). Defaulting to false here means grace MAY apply — same
+  // "failing the task is worse than keeping it alive" fail-safe as the
+  // try/catch below.
+  if (project.hostId !== LOCAL_HOST_ID) return false;
+  try {
+    const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
+    if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
+      return false;
+    }
+    const { hash } = statusResult.value.status;
+    if (hash === null) return false;
+    return !task.baseSha.startsWith(hash);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3700,10 +3744,45 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // system but is unreachable via this path now.
           if (
             task.status === "in_progress" &&
-            derived.status === "finished" &&
+            (derived.status === "finished" || derived.status === "api_error") &&
             resolvedTaskMaster.enabled &&
-            turnFinishedSinceClaim(info, task)
+            info !== null &&
+            // Fresh-signal guard. turnFinishedSinceClaim prevents the
+            // finished-latch snap-back (RC5, #722/#726) for the "finished"
+            // path; for the api_error path, errorAt IS the fresh signal
+            // (errorState is set/cleared atomically by stop_failure/
+            // turn_start hooks — no stale-latch problem to guard against),
+            // and lastTurnEndedAt is null because stop_failure is its own
+            // hook event that does NOT set lastTurnEndedAt — see
+            // hook-handlers.ts's stop_failure handler.
+            (derived.status === "finished"
+              ? turnFinishedSinceClaim(info, task)
+              : info.errorAt !== null)
           ) {
+            // #1015 follow-up — rate-limit grace window. Detects the
+            // "rate_limit: subscription quota exhausted" stop_failure
+            // pattern: the agent's turn ended on a rate limit and might
+            // recover if we wait. Skip this tick (leave the task in_progress
+            // with its session and worktree intact) while grace is active;
+            // once it expires (or the errorDetail isn't a recognizable
+            // rate_limit), fall through to the normal no-commits gate.
+            const hasCommits = await hasCommitsPastBase(app, project, task);
+            if (
+              isRateLimitGraceActive(
+                {
+                  errorState: info.errorState,
+                  errorAt: info.errorAt,
+                  errorDetail: info.errorDetail,
+                },
+                {
+                  graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes,
+                  hasCommitsPastBase: hasCommits,
+                },
+              )
+            ) {
+              continue;
+            }
+
             // See the matching gate/comment on the claimed -> reviewing
             // branch above — same "don't strand it in reviewing" reasoning.
             const gate = await checkReviewingGate(app, task, project, info);

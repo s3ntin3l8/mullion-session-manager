@@ -4677,6 +4677,143 @@ describe("reconcileTasks", () => {
       expect((await getTask(app, taskId)).status).toBe("reviewing");
       await app.close();
     });
+
+    // #1015 follow-up — rate_limit stop_failure on an in_progress task with
+    // no commits past base used to fall straight into checkReviewingGate and
+    // fail immediately. The grace window holds the task in_progress while
+    // the agent's subscription quota cools down, with no commits getting
+    // failed/salvaged for the configured graceMinutes.
+    it("keeps an in_progress task with api_error + rate_limit + no commits alive during the grace window", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      const errorAt = Date.now() - 60_000;
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now(),
+            errorState: "api_error",
+            errorAt,
+            errorDetail: "rate_limit",
+          }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      // Grace skips the gate entirely — no WIP salvage, no terminate.
+      expect(mockCommitWipChanges).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("fails the task with a rate_limit-prefixed reason once the grace window expires", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      // 6 minutes ago — past the 5-minute grace window.
+      const errorAt = Date.now() - 6 * 60_000;
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now(),
+            errorState: "api_error",
+            errorAt,
+            errorDetail: "rate_limit",
+          }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+      mockCommitWipChanges.mockResolvedValue({ committed: true });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("rate_limit");
+      expect(row.failureReason).toContain("no commits");
+
+      await app.close();
+    });
+
+    it("does not grace a non-rate_limit errorDetail (e.g. overloaded) — fails immediately", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now(),
+            errorState: "api_error",
+            errorAt: Date.now() - 60_000,
+            errorDetail: "overloaded",
+          }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+      mockCommitWipChanges.mockResolvedValue({ committed: true });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).not.toContain("rate_limit");
+
+      await app.close();
+    });
+
+    it("lets the task advance to reviewing once the agent recovers (errorState clears) within the grace window", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      const errorAt = Date.now() - 60_000;
+      const getSpy = vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now(),
+            errorState: "api_error",
+            errorAt,
+            errorDetail: "rate_limit",
+          }),
+      } as never);
+      // First reconcile — grace active, task stays in_progress.
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("in_progress");
+
+      // Simulate recovery: agent's Stop hook fired again with no error, so
+      // errorState is now "idle" AND the worker made commits before
+      // hitting the rate-limit error.
+      getSpy.mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("abcdef1", true));
+
+      await reconcileTasks(app);
+
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
   });
 
   describe("review-findings loop (processReviewingTasks)", () => {
