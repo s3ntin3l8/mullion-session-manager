@@ -398,17 +398,6 @@ export function TaskCard({
             : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
-      {/* Sequential review phase (branchdam-mobile #83's investigation) —
-          the board-card counterpart to TaskDetail.tsx's own "External
-          review" section; see that file's comment for why this isn't
-          nested under the round badge above — a task can reach this stage
-          with autoReturnRounds still 0 (a "clean" verdict on the very
-          first round never auto-returns at all). */}
-      {task.status === "reviewing" && task.externalReviewRequestedAt !== null && (
-        <div className="task-card-external-review">
-          {task.externalReviewNote ?? "Waiting on an external review."}
-        </div>
-      )}
       {task.sessionId !== null && (
         <TaskSessionSlot
           session={workerSession ?? undefined}

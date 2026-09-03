@@ -713,27 +713,19 @@ export const tasks = sqliteTable(
     // read it back later, not just at ingestion time — re-parsing the
     // rendered reviewFindings prose is not a gate worth betting a merge on.
     lastReviewVerdict: text("last_review_verdict"),
-    // Sequential review phase (branchdam-mobile #83's investigation) — set
-    // the moment Task Master's OWN review converges (a "clean" verdict, or
-    // its auto-return round cap spent — task-reconciler.ts's
-    // processExternalReviewRequests) and the PR is marked ready for review.
-    // Null means the task is still in the internal-review stage: the PR (if
-    // any) is still a draft, and no external reviewer (Hermes, a repo's own
-    // `claude.yml`/Codex workflow, a human) has been asked to look at it
-    // yet. This is deliberately NOT the same signal as `prNumber !== null`
-    // (a draft exists from the moment "-> reviewing" runs) — the whole
-    // point is that undrafting now happens LATER than PR creation, once
-    // Task Master is done fixing what it can fix itself, so the external
-    // reviewer only ever sees a diff Task Master already believes is
-    // final. See docs/tasks.md's review-phase section.
+    // Retired dead weight — PR #989's sequential-review-phase design (issues
+    // #981/#982/#991, closed as superseded) used these two columns to
+    // sequence a task's PR undraft around an external, GitHub-Actions-
+    // triggered reviewer's convergence. Retired: such a workflow now
+    // excludes Task Master's own branches from its automatic trigger
+    // entirely (see docs/tasks.md's "External review workflows"), so there
+    // is no external reviewer left to sequence with. No code reads or
+    // writes these anymore. Left in place rather than dropped — this repo's
+    // migrations are additive-only by convention (no prior DROP COLUMN
+    // exists), and `tasks` has an inbound FK from `sessions`; two unused
+    // nullable columns are inert. See the PR that retired the code that
+    // used them.
     externalReviewRequestedAt: integer("external_review_requested_at", { mode: "timestamp" }),
-    // Sequential review phase — the human-readable status of the external
-    // stage, surfaced in the task drawer. Same separate-column posture as
-    // mergeError/releaseError above (clearGithubSyncError must not clobber
-    // it, and it answers a different question than lastReviewVerdict,
-    // which is Task Master's OWN review, not the external one). Null before
-    // `externalReviewRequestedAt` is set, or once the external reviewer's
-    // verdict no longer blocks anything.
     externalReviewNote: text("external_review_note"),
     // 6.4/6.9 — intended as part of the Tier-1 durable subset, but NOT
     // actually synced today and always null in practice: nothing in src/
