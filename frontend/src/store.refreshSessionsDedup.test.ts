@@ -38,7 +38,12 @@ function session(id: number, overrides: Partial<Session> = {}): Session {
     alive: true,
     subscriberCount: 1,
     activity: "idle",
-    lastActivityAt: Date.now(),
+    // Fixed, not Date.now() — this fixture is called independently for a
+    // mock's response AND a later assertion's expected value; two live
+    // Date.now() calls can straddle a millisecond boundary under load,
+    // producing a flaky off-by-one-ms mismatch unrelated to the actual
+    // behavior under test (caught by CI, not reproducible locally).
+    lastActivityAt: 1_700_000_000_000,
     attention: false,
     attentionAt: null,
     lastTitle: null,
