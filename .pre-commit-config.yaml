@@ -14,10 +14,10 @@ repos:
       - id: check-json
       - id: check-merge-conflict
       # Enforces this repo's "never commit directly to main" rule (see
-      # CLAUDE.md's Git workflow section) locally, not just via branch
-      # protection on the remote — catches the mistake before a push even
-      # happens. Default protected branches (master, main) already cover
-      # this repo's default branch; no args needed.
+      # AGENTS.md) locally, not just via branch protection on the remote —
+      # catches the mistake before a push even happens. Default protected
+      # branches (master, main) already cover this repo's default branch;
+      # no args needed.
       - id: no-commit-to-branch
 
   - repo: local
@@ -86,22 +86,25 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      # Issue #942 — guards against GEMINI.md/AGENTS.override.md silently
-      # re-acquiring a content-bearing copy of AGENTS.md's own briefing
-      # region (see the script's own header comment for the full
+      # Issue #942 — guards against CLAUDE.md/GEMINI.md/AGENTS.override.md
+      # silently re-acquiring a content-bearing copy of AGENTS.md's own
+      # briefing region (see the script's own header comment for the full
       # reasoning); AGENTS.md itself is no longer read by this check at all,
-      # so it isn't in the trigger pattern below. This hook is the fast
-      # staged-file path; the unconditional working-tree probe that also
-      # catches an untracked AGENTS.override.md (e.g. one just created by
-      # the Agent Rules Editor, never staged) comes from `npm run lint`'s
+      # so it isn't in the trigger pattern below. Any of the three may or
+      # may not exist in a given commit (this repo has no GEMINI.md at
+      # all) — the check treats an absent file as clean. This hook is the
+      # fast staged-file path; the unconditional working-tree probe that
+      # also catches an untracked AGENTS.override.md (e.g. one just created
+      # by the Agent Rules Editor, never staged) comes from `npm run lint`'s
       # check:briefing-sync step. Deliberately kept `files:`-scoped rather
-      # than `always_run: true`, per this repo's file-scoped hook convention
-      # (see CLAUDE.md's Worktrees section).
+      # than `always_run: true`, per this repo's own developer-worktree
+      # tooling convention (see CONTRIBUTING.md's "Developer worktrees"
+      # section).
       - id: briefing-sync
-        name: no content-bearing briefing mirror/override (GEMINI.md / AGENTS.override.md)
+        name: no content-bearing briefing mirror/override (CLAUDE.md / GEMINI.md / AGENTS.override.md, if present)
         entry: node scripts/check-briefing-sync.mjs
         language: system
-        files: '^(AGENTS\.override|GEMINI)\.md$'
+        files: '^(AGENTS\.override|GEMINI|CLAUDE)\.md$'
         pass_filenames: false
         stages: [pre-commit]
 

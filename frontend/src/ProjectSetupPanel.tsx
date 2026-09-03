@@ -168,10 +168,11 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         Scaffold Mullion integration
       </div>
       <div className="agent-rules-panel-notice">
-        Commits an AGENTS.md briefing region, a starter project skill, and a starter reviewer
-        subagent into this project's own repo, and opens a pull request — for codex and agy, which
-        need a repo-level skill file rather than Mullion's per-project skill/reviewer settings (see
-        the Mullion Briefing panel).
+        Commits an AGENTS.md briefing region, a CLAUDE.md @AGENTS.md import (Claude Code doesn't
+        read AGENTS.md on its own — the import is what puts it in context), a starter project skill,
+        and a starter reviewer subagent into this project's own repo, and opens a pull request — for
+        codex and agy, which need a repo-level skill file rather than Mullion's per-project
+        skill/reviewer settings (see the Mullion Briefing panel).
       </div>
       {error && <div className="agent-rules-panel-notice error">{error}</div>}
       <div className="settings-row">

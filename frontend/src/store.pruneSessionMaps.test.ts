@@ -11,7 +11,7 @@ import type { Session, NotificationEvent } from "./api/index.js";
 // conservative boundary: a session id is only pruned once it's absent from
 // the live GET /api/sessions response entirely — a session that's merely
 // `status: "killed"` (the DB row's own soft-delete — see this repo's
-// CLAUDE.md on the "intent, not process state" session model) still comes
+// AGENTS.md on the "intent, not process state" session model) still comes
 // back from that endpoint and must NOT be pruned, since Sidebar's
 // hideEndedSessions toggle can still be showing it.
 function makeSession(overrides: Partial<Session> = {}): Session {

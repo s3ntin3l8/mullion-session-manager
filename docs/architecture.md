@@ -1,9 +1,18 @@
 # Architecture
 
 A tour of the repo's layout: what lives where, and which subsystem doc owns
-the detail. See also `CLAUDE.md`'s "non-obvious model" note on sessions and
-workspaces before touching `src/services/pty-manager.ts` or the terminal WS
-protocol.
+the detail.
+
+**The non-obvious session model** — read this before touching
+`src/services/pty-manager.ts` or the terminal WS protocol: a session is a
+host PTY attached via `dtach`, running inside a transient `systemd --user`
+scope so it survives service redeploys/restarts. The `sessions` DB row
+records _intent_ (has this been explicitly killed?); live process state
+lives only in `PtyManager`'s in-memory map, and routes merge the two rather
+than trusting the DB column alone. `sessions.command` and
+`workspaces.layout` are deliberately **opaque blobs** — the backend never
+parses a shell command line or a dockview layout, it just stores and
+replays what it's given.
 
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
@@ -194,3 +203,9 @@ protocol.
   (fully supported native host deployment — see
   [`../deploy/README.md`](../deploy/README.md)).
 - `docs/` — see [`README.md`](README.md) for the full index.
+- `.github/workflows/` — thin callers of the reusable workflows in
+  `s3ntin3l8/.github` — see [`ci-cd.md`](ci-cd.md).
+- `.claude/` — `settings.json` + `hooks/session-start.sh`: a SessionStart
+  hook that installs deps and tooling so
+  [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web)
+  sessions can build, test, and lint. Runs only in the remote env.

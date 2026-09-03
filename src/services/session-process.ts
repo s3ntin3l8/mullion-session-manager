@@ -1,7 +1,8 @@
 // Extracted from pty-manager.ts (systemd `--user` scope naming/lifecycle and
 // dtach-scope process listing only — see that file's own header comment on
-// why it's flagged as this repo's highest-risk file, and CLAUDE.md's pointer
-// to docs/architecture.md before touching it or the terminal WS protocol).
+// why it's flagged as this repo's highest-risk file, and
+// docs/architecture.md's "non-obvious session model" note before touching
+// it or the terminal WS protocol).
 //
 // This module owns everything that talks to `systemctl --user` keyed off a
 // bare session id string — scope naming (scopeUnitName), stopping a scope

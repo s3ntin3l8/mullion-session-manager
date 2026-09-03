@@ -15,25 +15,38 @@ This is the feature currently otherwise undocumented outside source comments
 ## AGENTS.md leads
 
 Issue #942 made `AGENTS.md` a project's single source of truth for standing
-operating instructions. Every CLI Mullion hosts (Claude Code, Codex,
-opencode, agy) reads it **natively** — Mullion never parses it, extracts a
-region from it, or re-injects a copy of its content into a session. There is
-no read-side "committed briefing" mechanism in `project-briefing.ts` at all
-anymore (it was removed by #942, along with the old `AGENTS.md` →
-`CLAUDE.md` → `.agents/briefing.md` fallback chain); a project that wants
-standing instructions for agents just writes them into `AGENTS.md` like it
-would for a human contributor.
+operating instructions. There is no read-side "committed briefing" mechanism
+in `project-briefing.ts` at all anymore (it was removed by #942, along with
+the old `AGENTS.md` → `CLAUDE.md` → `.agents/briefing.md` fallback chain); a
+project that wants standing instructions for agents just writes them into
+`AGENTS.md` like it would for a human contributor.
 
-`CLAUDE.md`/`GEMINI.md` are one-line **pointers** to `AGENTS.md`, not
-content mirrors — see "Scaffolding it into the repo instead" below for how
-the scaffold keeps it that way. `AGENTS.override.md` is the one file that
-can still silently shadow `AGENTS.md` (Codex reads it _instead of_
-`AGENTS.md` when it exists — `src/services/agent-rules.ts`'s precedence
-table); the scaffold no longer offers it as an option, though an existing,
-hand-authored one is left untouched. `scripts/check-briefing-sync.mjs`
-(wired into `make lint`/pre-commit for this repo) fails loud if either
-`GEMINI.md` or `AGENTS.override.md` ever re-acquires a content-bearing copy
-of the old `<!-- mullion:briefing:start/end -->` region.
+**Not every CLI reads `AGENTS.md` natively.** Codex, opencode, and agy do —
+Mullion never parses it, extracts a region, or re-injects a copy of its
+content for those three. **Claude Code does not**: its own memory docs are
+explicit — "Claude Code reads `CLAUDE.md`, not `AGENTS.md`" — confirmed
+empirically (a session with both files present at a repo root loads only
+`CLAUDE.md`). That's why `CLAUDE.md` is scaffolded as a one-line
+`@AGENTS.md` **import**, not a prose pointer: a prose "read AGENTS.md" line
+relies on the agent choosing to open the file (the exact failure this repo's
+own `hooks.ts` documents for a different injection path), while `@AGENTS.md`
+is expanded by Claude Code into the session's auto-loaded context at launch
+— see "Scaffolding it into the repo instead" below.
+
+`AGENTS.override.md` is the one file that can still silently shadow
+`AGENTS.md` (Codex reads it _instead of_ `AGENTS.md` when it exists —
+`src/services/agent-rules.ts`'s precedence table); the scaffold no longer
+offers it as an option, though an existing, hand-authored one is left
+untouched. `scripts/check-briefing-sync.mjs` (wired into `make lint`/
+pre-commit for this repo) fails loud if `CLAUDE.md`, `GEMINI.md`, or
+`AGENTS.override.md` ever re-acquires a content-bearing copy of the old
+`<!-- mullion:briefing:start/end -->` region.
+
+There is no `GEMINI.md` in this repo, or in the scaffold's output: agy reads
+project-scope `AGENTS.md` natively (verified empirically — `agy` in this
+repo, run with `--new-project` to register it and answer a repo-specific
+question, cited `AGENTS.md` as its source), so a `GEMINI.md` pointer to the
+same file would be redundant.
 
 ## The pinned note
 
@@ -170,21 +183,26 @@ three artifacts into a real, reviewable pull request:
 
 1. **Preview** computes the target file set — a scaffolded `AGENTS.md`
    briefing region (created fresh, or upserted in place if the file
-   already has one), a starter `.claude/skills/<slug>/SKILL.md`, a starter
+   already has one), a **`CLAUDE.md` `@AGENTS.md` import** (unconditional,
+   same reasoning as `AGENTS.md` itself — without it, a Claude Code session
+   in the target repo would never see `AGENTS.md`'s content at all), a
+   starter `.claude/skills/<slug>/SKILL.md`, a starter
    `.claude/agents/<slug>-reviewer.md`, and a `.agents/skills/<slug>` mirror
    for codex's/agy's own project-scope discovery — writes it into a scratch
-   worktree under `.mullion-worktrees/`, and shows the diff. Two more
-   entries are opt-in: a one-line `GEMINI.md` **pointer** to `AGENTS.md`
-   (never a content copy — see "AGENTS.md leads" above), and a short
-   pointer paragraph upserted into `CONTRIBUTING.md` (created fresh if the
-   project doesn't have one yet) pointing at `AGENTS.md`'s Workflow
-   Conventions section, since that file's own process-rules section
-   otherwise drifts from `AGENTS.md` the same way `CLAUDE.md`/`GEMINI.md`
-   used to. **Never clobbers content that's already there**: only the
-   `AGENTS.md`/`GEMINI.md`/`CONTRIBUTING.md` marked regions are designed
-   for repeated safe upserts (that's the whole point of the marker
-   delimiters, and each pointer touches nothing outside its own marked
-   region); the skill, reviewer, and an optional starter `.crs/dock.json`
+   worktree under `.mullion-worktrees/`, and shows the diff. One more entry
+   is opt-in: a short pointer paragraph upserted into `CONTRIBUTING.md`
+   (created fresh if the project doesn't have one yet) pointing at
+   `AGENTS.md`'s Workflow Conventions section, since that file's own
+   process-rules section otherwise drifts from `AGENTS.md` the same way
+   `CLAUDE.md` used to. **Never clobbers content that's already there**:
+   only the `AGENTS.md`/`CLAUDE.md`/`CONTRIBUTING.md` marked regions are
+   designed for repeated safe upserts (that's the whole point of the marker
+   delimiters, and each pointer/import touches nothing outside its own
+   marked region) — including a target repo that already has its own
+   `CLAUDE.md`/`AGENTS.md` content with real overlap: the import is
+   appended, so the agent then loads both in full, and the preview diff is
+   what lets a reviewer catch and drop that if it's unwanted before
+   merging; the skill, reviewer, and an optional starter `.crs/dock.json`
    (see [`dock.md`](dock.md)) are each "create once, never overwrite" — a
    re-scaffold over a repo that already committed or hand-edited them
    leaves that content alone.

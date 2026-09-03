@@ -55,9 +55,9 @@ export default tseslint.config(
     },
   },
   {
-    // `.wt/` (issue #277's worktree-isolation feature, CLAUDE.md's
-    // Worktrees section — developer workspaces for isolating concurrent
-    // agent sessions) holds full, separate checkouts of this same repo —
+    // `.wt/` (issue #277's worktree-isolation feature, AGENTS.md's "two
+    // worktree concepts" invariant — developer workspaces for isolating
+    // concurrent agent sessions) holds full, separate checkouts of this same repo —
     // each with its own `src/` (and `frontend/`, already excluded above via
     // the unanchored "frontend/" pattern matching at any depth). Without
     // this, `eslint .` from root also re-lints every active worktree's own
@@ -77,7 +77,7 @@ export default tseslint.config(
     // list; multiple concurrent ones present at once produced the same
     // failure. `.mullion-worktrees/` is yet another instance of the same
     // class of directory — Mullion's OWN product feature
-    // (git-worktree.ts, CLAUDE.md's Worktrees section), also full separate
+    // (git-worktree.ts, AGENTS.md's "two worktree concepts" invariant), also full separate
     // checkouts, also gitignored via `.git/info/exclude`, and also missing
     // here until now: a live Task Master worktree (e.g. a `claimed` task)
     // hits this exact same failure the moment `eslint .`/`make lint` runs

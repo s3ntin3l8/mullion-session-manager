@@ -1,7 +1,7 @@
 // Extracted from pty-manager.ts (the ring buffer + its indivisible byte-level
 // logic only — see that file's own header comment on why it's flagged as
-// this repo's highest-risk file, and CLAUDE.md's pointer to
-// docs/architecture.md before touching it or the terminal WS protocol).
+// this repo's highest-risk file, and docs/architecture.md's "non-obvious
+// session model" note before touching it or the terminal WS protocol).
 //
 // Deliberately NOT included here, even though a prior audit's rough cluster
 // listed them alongside this ring buffer: `inAltScreen`, `mouseTracking`,

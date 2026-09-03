@@ -500,7 +500,7 @@ reflects as offline immediately instead of waiting on 7.2's 3-missed-heartbeat w
 is deliberately status-only: it does **not** cascade-terminate the host's sessions the way
 `DELETE /api/hosts/:id?cascade=true` does — every dtach session an agent hosts is
 bootstrapped into its own `systemd-run` scope specifically so it survives an agent process
-restart (see `deploy/mullion-agent.service`, and CLAUDE.md's "non-obvious model" note), and
+restart (see `deploy/mullion-agent.service`, and AGENTS.md's "non-obvious session model" note), and
 deregistration fires on _every_ graceful `SIGTERM`, including a routine
 `systemctl --user restart` during a redeploy — not only a permanent decommission. Cascading
 session termination there, as #248's original text literally describes, would have killed

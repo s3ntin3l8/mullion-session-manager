@@ -496,7 +496,7 @@ function branchClaimedByResumableTask(
  * is nullable, so the `row.cwd ?? project.cwd` fallback is mandatory (same
  * as resolveSessionCwdTargets above). For `LOCAL_HOST_ID` only, merges
  * `app.pty.get(String(id))?.liveCwd` when `isGitRepo(liveCwd)` passes —
- * CLAUDE.md's rule that live process state lives only in PtyManager's
+ * AGENTS.md's rule that live process state lives only in PtyManager's
  * in-memory map and must be merged, not read from the DB column alone.
  * Also matches `tasks.worktreePath` equality (schema.ts) — a durable
  * reference that survives the worker session's own removal (its `status`

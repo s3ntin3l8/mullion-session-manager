@@ -3,7 +3,7 @@
 //
 //   - liveness: the DB row's own `status` column ("active"/"killed"/
 //     "exited") merged with whether PtyManager's in-memory map currently
-//     sees the process alive — see CLAUDE.md's "non-obvious model" note: the
+//     sees the process alive — see AGENTS.md's "non-obvious session model" note: the
 //     DB row records intent (has this been explicitly killed?), live process
 //     state lives only in PtyManager's map, and callers merge the two rather
 //     than trusting either alone.
@@ -203,12 +203,13 @@ export function deriveSessionStatus({
   // `alive: false` is the ordinary, ambiguous "not (re)attached in THIS
   // process yet" case — e.g. every single session immediately after a
   // backend restart/redeploy, before the terminal WS reattaches or the 30s
-  // reconciler sweep runs (see CLAUDE.md's "routes merge the two rather than
-  // trusting the DB column alone"). Treating that as "exited" would flash
-  // every session on the board as gone on every restart — a real regression,
-  // not a fix. Sessions in that ambiguous state instead fall through to the
-  // agent-activity checks below with their idle/no-signal defaults, same
-  // behavior as before this module existed.
+  // reconciler sweep runs (see AGENTS.md's "non-obvious session model" note
+  // on routes merging the two rather than trusting the DB column alone).
+  // Treating that as "exited" would flash every session on the board as
+  // gone on every restart — a real regression, not a fix. Sessions in that
+  // ambiguous state instead fall through to the agent-activity checks
+  // below with their idle/no-signal defaults, same behavior as before this
+  // module existed.
   if (dbStatus === "killed" || dbStatus === "exited") {
     return make("exited", formatExitedDetail(info.endedReason, info.exitCode));
   }

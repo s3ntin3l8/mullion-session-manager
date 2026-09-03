@@ -75,7 +75,7 @@ export function addEvent(
 // dashboard accumulates one entry per session id it has EVER seen,
 // unbounded. Pruned here (alongside every successful refreshSessions()
 // call) rather than at kill/delete time directly: per this repo's own
-// CLAUDE.md ("the sessions DB row records intent... live process state
+// AGENTS.md ("the sessions DB row records intent... live process state
 // lives only in PtyManager's in-memory map"), a killed session's DB row
 // survives and GET /api/sessions keeps returning it — Sidebar's
 // hideEndedSessions toggle can still show a killed/exited row — so pruning

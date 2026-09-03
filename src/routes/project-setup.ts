@@ -148,6 +148,13 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
   const mirrors = options.mirrors ?? [];
   const paths = [
     "AGENTS.md",
+    // Issue #942 (this restructure) — CLAUDE.md is unconditional, same
+    // reasoning as AGENTS.md above (not in `...mirrors`, which is opt-in):
+    // without this, readExistingFiles below never sees a real repo's own
+    // CLAUDE.md, computeScaffold treats it as absent, and the apply path
+    // would silently OVERWRITE a real, possibly 200-line CLAUDE.md with a
+    // scaffold-only `@AGENTS.md` import file instead of upserting into it.
+    "CLAUDE.md",
     ...mirrors,
     path.join(".claude", "skills", slug, "SKILL.md"),
     path.join(".claude", "agents", `${slug}-reviewer.md`),
@@ -511,7 +518,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           title: `chore: scaffold Mullion integration (${record.slug})`,
           head: record.branch,
           base,
-          body: "Adds a Mullion briefing region, a project skill, a reviewer subagent, and (if opted in) GEMINI.md/CONTRIBUTING.md pointers — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.",
+          body: "Adds a Mullion briefing region to AGENTS.md, a CLAUDE.md @AGENTS.md import (Claude Code does not read AGENTS.md natively — the import is what loads it), a project skill, a reviewer subagent, and (if opted in) GEMINI.md/CONTRIBUTING.md pointers — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.",
         });
         previews.delete(request.body.previewId);
         return { ok: true, mode: "pull-request", prUrl: pr.htmlUrl, prNumber: pr.number };
