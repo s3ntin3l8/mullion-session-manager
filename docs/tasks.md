@@ -962,6 +962,16 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
 - **Drain background jobs before ending the turn.** An outstanding one
   suppresses the completion signal entirely, so the task rides out its
   budget instead of reaching review.
+- **Review your own diff before committing.** The worker cannot see from
+  inside the worktree that its diff goes to a separately spawned reviewer
+  (below) that cannot edit files there and draws on a small, never-reset
+  round budget shared with CI and PR-comment auto-returns (see "The round
+  budget" below) — a defect the worker catches itself costs nothing, and the
+  same defect caught downstream spends one of very few automatic chances to
+  fix it. Deliberately CLI-neutral (no named command or subagent): it has to
+  hold on whatever CLI and target repo Task Master is running against, the
+  same reasoning `buildTaskMasterPreamble`'s own doc comment gives for
+  naming no verification commands either.
 - **Commit, and leave the worktree clean.** Untracked files block approval
   exactly as hard as uncommitted edits — promotion refuses a dirty tree, and
   `git status --porcelain` counts untracked as dirty. Uncommitted work also
