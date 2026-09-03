@@ -14,6 +14,12 @@ export type MdBlock =
   | { type: "heading"; level: 2 | 3; spans: MdSpan[] }
   | { type: "bullet"; spans: MdSpan[] }
   | { type: "paragraph"; lines: MdSpan[][] }
+  // A fenced code block (see FENCE_RE below), lines verbatim including the
+  // ``` delimiters. Kept distinct from "paragraph" so the renderer can use
+  // <pre> and preserve indentation — a plain paragraph's <p>/<br> rendering
+  // collapses leading whitespace, which would mangle indented escape-hatch
+  // content (Python/YAML/indented shell).
+  | { type: "fence"; lines: string[] }
   // A blank line that split two bullet runs apart in the source — CommonMark
   // would close/reopen the list there rather than merging them into one.
   // Renders as nothing; its only job is stopping the renderer's own
@@ -59,6 +65,7 @@ export function parseSimpleMarkdown(src: string): MdBlock[] {
   const blocks: MdBlock[] = [];
   let paragraphLines: MdSpan[][] = [];
   let inFence = false;
+  let fenceLines: string[] = [];
 
   const flushParagraph = () => {
     if (paragraphLines.length > 0) {
@@ -69,18 +76,23 @@ export function parseSimpleMarkdown(src: string): MdBlock[] {
 
   for (const line of src.replace(/\r\n/g, "\n").split("\n")) {
     if (FENCE_RE.test(line)) {
-      inFence = !inFence;
-      // The fence delimiter itself is also just literal text here — this
-      // parser never renders a distinct code-block element, it only stops
-      // treating the lines between a pair of these as markdown structure.
-      paragraphLines.push([{ type: "text", text: line }]);
+      if (!inFence) {
+        flushParagraph();
+        inFence = true;
+        fenceLines = [line];
+      } else {
+        inFence = false;
+        fenceLines.push(line);
+        blocks.push({ type: "fence", lines: fenceLines });
+        fenceLines = [];
+      }
       continue;
     }
     if (inFence) {
-      // Verbatim, not parseInlineSpans(line) — an unclosed fence's content
-      // could itself contain "**"/"`" sequences that have nothing to do
-      // with this app's own bold/code syntax.
-      paragraphLines.push([{ type: "text", text: line }]);
+      // Verbatim, never parseInlineSpans/parsed as structure — an unclosed
+      // fence's content could itself contain "**"/"`"/"#"/"-" sequences
+      // that have nothing to do with this app's own markdown syntax.
+      fenceLines.push(line);
       continue;
     }
     if (line.trim() === "") {
@@ -110,5 +122,11 @@ export function parseSimpleMarkdown(src: string): MdBlock[] {
     paragraphLines.push(parseInlineSpans(line));
   }
   flushParagraph();
+  // An unterminated fence (no closing ``` in the source) still renders its
+  // content verbatim rather than dropping it — the no-drop guarantee this
+  // module's header describes applies here too.
+  if (fenceLines.length > 0) {
+    blocks.push({ type: "fence", lines: fenceLines });
+  }
   return blocks;
 }

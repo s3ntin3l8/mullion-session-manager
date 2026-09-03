@@ -105,21 +105,28 @@ describe("parseSimpleMarkdown", () => {
     });
   });
 
-  it("falls through unrecognized constructs (a fenced code block) as literal paragraph text, never dropped", () => {
+  it("falls through unrecognized constructs (a fenced code block) as a literal fence block, never dropped", () => {
     const src = ["Reproduces with:", "```ts", "const x = 1;", "```", "That's the bug."].join("\n");
     const blocks = parseSimpleMarkdown(src);
     // Every source line survives somewhere, verbatim, none silently dropped.
     const allText = blocks
-      .flatMap((b) => (b.type === "paragraph" ? b.lines.flat() : b.type === "break" ? [] : b.spans))
-      .map((s) => s.text)
+      .flatMap((b) =>
+        b.type === "paragraph"
+          ? b.lines.flat().map((s) => s.text)
+          : b.type === "fence"
+            ? b.lines
+            : b.type === "break"
+              ? []
+              : b.spans.map((s) => s.text),
+      )
       .join("\n");
     for (const line of src.split("\n")) {
       expect(allText).toContain(line);
     }
-    // The fence markers are not recognized as anything special -- literal text.
-    expect(blocks.some((b) => b.type === "paragraph" && JSON.stringify(b).includes("```ts"))).toBe(
-      true,
-    );
+    // The fence markers are not recognized as anything special -- literal
+    // text, kept in a dedicated "fence" block (not "paragraph") so the
+    // renderer can preserve indentation via <pre>.
+    expect(blocks.some((b) => b.type === "fence" && b.lines.includes("```ts"))).toBe(true);
     // No structural block was manufactured out of any fence-internal line.
     expect(blocks.some((b) => b.type === "heading" || b.type === "bullet")).toBe(false);
   });
@@ -133,20 +140,28 @@ describe("parseSimpleMarkdown", () => {
   it("does not reinterpret heading/bullet-shaped lines inside a fenced code block", () => {
     const src = ["```", "## config", "- run --flag", "```"].join("\n");
     const blocks = parseSimpleMarkdown(src);
-    expect(blocks.every((b) => b.type === "paragraph")).toBe(true);
-    const allText = blocks
-      .flatMap((b) => (b.type === "paragraph" ? b.lines.flat() : []))
-      .map((s) => s.text)
-      .join("\n");
-    expect(allText).toContain("## config");
-    expect(allText).toContain("- run --flag");
+    expect(blocks).toEqual([{ type: "fence", lines: ["```", "## config", "- run --flag", "```"] }]);
   });
 
-  it("preserves a blank line inside a fence verbatim, without splitting into two paragraph blocks", () => {
+  it("preserves a blank line inside a fence verbatim, without splitting into two blocks", () => {
     const src = ["```", "line one", "", "line two", "```"].join("\n");
     const blocks = parseSimpleMarkdown(src);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].type).toBe("paragraph");
+    expect(blocks).toEqual([{ type: "fence", lines: ["```", "line one", "", "line two", "```"] }]);
+  });
+
+  // Hermes review round 2, PR #1000 — fenced content used to land in a
+  // <p>/<br> paragraph, which HTML collapses leading whitespace inside;
+  // a dedicated block type lets the renderer use <pre> instead.
+  it("keeps a fenced code block's leading indentation in its lines verbatim", () => {
+    const src = ["```", "def f():", "    return 1", "```"].join("\n");
+    const blocks = parseSimpleMarkdown(src);
+    expect(blocks).toEqual([{ type: "fence", lines: ["```", "def f():", "    return 1", "```"] }]);
+  });
+
+  it("closes an unterminated fence at end of input instead of dropping its content", () => {
+    const src = ["```", "no closing fence"].join("\n");
+    const blocks = parseSimpleMarkdown(src);
+    expect(blocks).toEqual([{ type: "fence", lines: ["```", "no closing fence"] }]);
   });
 
   // Hermes review, PR #1000 (Suggestion) — CommonMark closes and reopens a

@@ -827,6 +827,26 @@
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   border-radius: 3px;
   padding: 1px 4px;
+  /* Hermes review, PR #1000 — a long inline span (e.g. a file:line ref)
+     has no natural break point; without this it clips against the
+     panel's overflow-y: auto instead of wrapping. */
+  overflow-wrap: anywhere;
+}
+.task-detail-review-findings pre {
+  margin: 0 0 8px;
+  padding: 4px 6px;
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 3px;
+  /* pre-wrap, not the default pre: preserves fenced content's leading
+     indentation (the point of this block type) while still wrapping long
+     lines instead of overflowing the panel horizontally. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-detail-review-findings pre:last-child {
+  margin-bottom: 0;
 }
 .task-detail-footer {
   font-size: 10.5px;

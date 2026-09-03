@@ -84,4 +84,15 @@ describe("ui/Markdown", () => {
     expect(lists[0]?.querySelectorAll("li")).toHaveLength(1);
     expect(lists[1]?.querySelectorAll("li")).toHaveLength(1);
   });
+
+  // Hermes review round 2, PR #1000 (Suggestion) — fenced content used to
+  // render inside a <p>/<br>, and HTML collapses a <p>'s leading
+  // whitespace; a dedicated <pre> element preserves it.
+  it("renders a fenced code block in a <pre>, preserving leading indentation", () => {
+    const { container } = render(<Markdown text={"```\ndef f():\n    return 1\n```"} />);
+    const pre = container.querySelector("pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.textContent).toContain("    return 1");
+    expect(container.querySelector("p")).toBeNull();
+  });
 });
