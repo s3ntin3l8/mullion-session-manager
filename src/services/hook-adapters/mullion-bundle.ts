@@ -178,6 +178,13 @@ export function installBundleSkills(destRoot: string): void {
     }
   }
 
+  // Hermes review, PR #1011 — if `skillsDir` ever resolves to a directory
+  // with zero skill subdirectories (a malformed release tarball, not a
+  // case this codebase ships today), `skillNames` is empty here, so this
+  // prune removes every marker-carrying `mullion-*` dir under `destRoot` —
+  // identical to what an empty-bundle `uninstallBundleSkills` call would
+  // do. Deliberate, not a bug: an install that ships no skills at all has
+  // nothing legitimate left to keep installed.
   const currentDestNames = new Set(skillNames.map((name) => `${INSTALLED_SKILL_PREFIX}${name}`));
   let existingEntries: Dirent[];
   try {
