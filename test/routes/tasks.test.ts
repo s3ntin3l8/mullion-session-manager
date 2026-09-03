@@ -280,6 +280,51 @@ describe("tasks route", () => {
     await app.close();
   });
 
+  // Issue #957/#958 — model/smallModel columns were added to the tasks table
+  // (drizzle 0056) but omitted from TASK_ROW_COLUMNS, the exact silent-drop
+  // that previously bit #816/#818 (see this suite's own comment above).
+  // Pins both endpoints, same posture as the sub-issue hierarchy test above —
+  // deliberately reading the GET path, not a POST's `.returning()`, since a
+  // `.returning()` bypasses TASK_ROW_COLUMNS entirely and would pass either way.
+  it("exposes the model and smallModel columns on GET /api/tasks and GET /api/tasks/:id", async () => {
+    const app = await buildApp();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "demo-model", cwd: "/tmp/demo-model" },
+    });
+    const projectId = project.json().id;
+
+    const [row] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 45,
+        title: "An opencode-backed task",
+        status: "backlog",
+        model: "anthropic/claude-sonnet-4-5",
+        smallModel: "openrouter/minimax-m3",
+      })
+      .returning({ id: tasks.id })
+      .all();
+
+    const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
+    const listed = (listRes.json() as { id: number }[]).find((t) => t.id === row.id);
+    expect(listed).toMatchObject({
+      model: "anthropic/claude-sonnet-4-5",
+      smallModel: "openrouter/minimax-m3",
+    });
+
+    const singleRes = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+    expect(singleRes.json()).toMatchObject({
+      model: "anthropic/claude-sonnet-4-5",
+      smallModel: "openrouter/minimax-m3",
+    });
+
+    await app.close();
+  });
+
   it("lists a locally-created task with a null issue link", async () => {
     const app = await buildApp();
 

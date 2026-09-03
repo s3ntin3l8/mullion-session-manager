@@ -190,6 +190,13 @@ const TASK_ROW_COLUMNS = {
   agent: tasks.agent,
   reviewAgent: tasks.reviewAgent,
   agentCommand: tasks.agentCommand,
+  // Issue #957/#958 — the resolved opencode model(s) the worker actually ran
+  // under, recorded at claim time (task-model-resolve.ts). Was previously
+  // missing here, the exact TASK_ROW_COLUMNS silent-drop that bit #816/#818
+  // (see this file's own doc comments below) — GET /api/tasks and
+  // GET /api/tasks/:id would have returned `undefined` for both.
+  model: tasks.model,
+  smallModel: tasks.smallModel,
   prUrl: tasks.prUrl,
   prNumber: tasks.prNumber,
   // Hermes review, PR #818 — merge-on-approve (#816) and autorelease (#744)
