@@ -472,6 +472,29 @@ export function TaskDetail({
         </div>
       )}
 
+      {/* Sequential review phase (branchdam-mobile #83's investigation) —
+          deliberately NOT nested inside the reviewSessionId block above:
+          today this only ever renders for a task that DOES have a review
+          agent (processExternalReviewRequests's own candidate query
+          requires reviewSessionId — a task with no review agent configured
+          is out of scope for now, see task-reconciler.ts's own comment and
+          issue #981), but it's a semantically separate stage from the
+          internal review, so it stays visually separate too rather than
+          implying "part of the review agent's own output." Reset to null
+          on any reject/re-review that returns to "reviewing"
+          (task-reconciler.ts's own "-> reviewing" write), so this is
+          gated on "reviewing" for the OTHER direction too — a task left in
+          "done" (externalReviewRequestedAt only ever survives past "done"
+          today, never cleared there) must not keep showing a stale note. */}
+      {task.status === "reviewing" && task.externalReviewRequestedAt !== null && (
+        <div className="task-detail-section">
+          <div className="task-detail-section-title">External review</div>
+          <div className="task-detail-review-hint">
+            {task.externalReviewNote ?? "Waiting on an external review."}
+          </div>
+        </div>
+      )}
+
       <div className="task-detail-footer">
         Created {formatRelativeAge(new Date(task.createdAt).getTime())}
         {/* Task-claim queueing (rate-limit-storm fix) — queuedAt (joined

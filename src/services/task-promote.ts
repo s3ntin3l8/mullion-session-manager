@@ -4,11 +4,25 @@
 // A PR is now opened as a DRAFT as soon as a task reaches "reviewing"
 // (openDraftPRForTask, called best-effort from task-reconciler.ts), not
 // only at approve — draft, because CI (ci-cd.yml/codeql.yml both trigger
-// on plain `pull_request:`, drafts included) and a human/review-agent can
-// then see real signal on the diff before a human commits to approving it.
-// hermes.yml's own `pull_request.draft == false` gate means Hermes never
-// reviews the draft, only once approve flips it ready — the two reviewers
-// sequence by construction, no coordination needed here.
+// on plain `pull_request:`, drafts included) and Task Master's own review
+// agent can then see real signal on the diff before anyone commits to it.
+//
+// branchdam-mobile task 348423 / PR #83's investigation: undrafting used to
+// happen at approve, i.e. at the exact moment a task flips to "done" —
+// hermes.yml's `pull_request.draft == false` gate meant the external
+// reviewer's very first look at the diff arrived on (or after) a task
+// already considered finished, with nowhere for its findings to land
+// (`done` is terminal — task-state.ts). That was never "the two reviewers
+// sequence by construction"; it was two reviewers racing the exact same
+// instant, with the external one structurally guaranteed to lose. Undraft
+// now happens earlier — at the moment Task Master's OWN review converges
+// (`task.externalReviewRequestedAt`, task-reconciler.ts's
+// processExternalReviewRequests) — so the external reviewer only ever sees
+// a diff Task Master already believes is done fixing, and its verdict is
+// ingested (or at least visible) while the task is still "reviewing", not
+// after. `promoteTaskToPR`'s own mark-ready call below is now a human-
+// override safety net, not the primary sequencing point — see its own
+// comment.
 //
 // Approve (promoteTaskToPR) now has two paths: the common one marks an
 // already-open draft ready-for-review; the fallback recreates the old
@@ -486,6 +500,17 @@ export async function promoteTaskToPR(
       // elsewhere resolved to a non-draft). GitHub's GraphQL mutation
       // errors when called on a PR that's already ready, which would fail
       // approve on every retry — skip it once already true.
+      //
+      // Sequential review phase (PR #83's investigation): by the time this
+      // sweep-driven approve runs, `pr.draft` is normally already false —
+      // processExternalReviewRequests undrafted it once Task Master's own
+      // review converged. This branch only still fires for a HUMAN
+      // approving early (a deliberate override that skips waiting on an
+      // external reviewer entirely — see task-reconciler.ts's own comment
+      // on that override), or a task claimed before this shipped. Kept
+      // rather than removed: a draft PR can never be merged, so dropping
+      // this would leave processMergeRequests spinning on a human-approved
+      // task forever.
       if (pr.draft) {
         await markPullRequestReadyForReview(token, pr.nodeId);
       }
@@ -543,6 +568,60 @@ export async function promoteTaskToPR(
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ false);
+}
+
+export type RequestExternalReviewOutcome =
+  | { ok: true }
+  | { ok: false; reason: "no-pr" | "no-repo" | "no-token" | "mark-ready-failed"; detail?: string };
+
+/**
+ * Sequential review phase (branchdam-mobile #83's investigation) — marks a
+ * task's PR ready for review once Task Master's OWN review has converged.
+ * task-reconciler.ts's processExternalReviewRequests decides WHEN
+ * (a "clean" verdict, an auto-return round cap spent, or no internal review
+ * agent configured at all); this only performs the GitHub write, the same
+ * split preparePromotion/pushForPromotion above already draws between
+ * deciding and doing.
+ *
+ * Idempotent, same posture as promoteTaskToPR's own already-ready check
+ * above: a PR that's already ready for review (a human approved early
+ * through that path, or a previous call here succeeded but the caller's
+ * own CAS write on `externalReviewRequestedAt` lost a race afterward) is
+ * left alone rather than erroring on GitHub's "already ready" mutation
+ * failure.
+ */
+export async function requestExternalReviewForTask(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRow,
+): Promise<RequestExternalReviewOutcome> {
+  if (task.prNumber === null) return { ok: false, reason: "no-pr" };
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return { ok: false, reason: "no-repo" };
+  const token = await resolveGitHubToken(app, repoRef, "write");
+  if (!token) return { ok: false, reason: "no-token" };
+
+  try {
+    const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+    if (pr.draft) {
+      await markPullRequestReadyForReview(token, pr.nodeId);
+    }
+    clearGithubSyncError(app, task.id);
+    return { ok: true };
+  } catch (err) {
+    const detail =
+      err instanceof GitHubWriteScopeError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    recordGithubSyncError(
+      app,
+      task.id,
+      `Failed to mark the PR ready for external review: ${detail}`,
+    );
+    return { ok: false, reason: "mark-ready-failed", detail };
+  }
 }
 
 /**
