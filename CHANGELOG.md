@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.8](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.7...v0.3.8) (2026-09-03)
+
+
+### Bug Fixes
+
+* **settings:** Models pane crash and broken persistence ([#957](https://github.com/s3ntin3l8/mullion-session-manager/issues/957)/[#958](https://github.com/s3ntin3l8/mullion-session-manager/issues/958)) ([#996](https://github.com/s3ntin3l8/mullion-session-manager/issues/996)) ([f930d5f](https://github.com/s3ntin3l8/mullion-session-manager/commit/f930d5f72bee608197aad7d906614a12bc95902d))
+* **tasks:** re-seed vs. session-death ([#1001](https://github.com/s3ntin3l8/mullion-session-manager/issues/1001)) ([411d958](https://github.com/s3ntin3l8/mullion-session-manager/commit/411d9580528f3c2f915f1ec9470d8f870774010c))
+
 ## [0.3.7](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.6...v0.3.7) (2026-09-03)
 
 
