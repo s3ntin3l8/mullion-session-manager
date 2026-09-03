@@ -2702,15 +2702,22 @@ export function resolveMaxAutoReturnRounds(project: {
  * in-flight `stopScope()` call identically to one that's genuinely gone,
  * with nothing recording "a termination we ourselves started is still in
  * flight for this id." That tick flipped the task to "failed" via
- * session-death a full 63 seconds before this function's own rollback ever
- * ran — which, with `status: "in_progress"` now required in this rollback's
- * own CAS below, correctly no-ops in that exact sequence (status was
- * already "failed"), rather than resurrecting a task something else had
- * already resolved. Closing that race properly means either bounding
- * `stopScope()` with its own timeout or making session liveness checks
- * aware of an in-flight, self-initiated termination — both bigger,
- * separate changes; see the fix commit's own message for specifics and the
- * follow-up issue it links.
+ * session-death 63 seconds before this function's own rollback ran, AND (the
+ * established mechanism behind the incident's own ENOENT, verified against
+ * this host's disk state — see the fix commit's message) removed the task's
+ * worktree via `removeWorktreeIfClean`. The re-seed's OWN spawn — already in
+ * flight, re-seeding into that exact SAME worktree path per this function's
+ * own doc comment above — then ran with a `cwd` that no longer existed:
+ * `spawnChild(cmd, args, { cwd })` reports a nonexistent `cwd` as `spawn
+ * <cmd> ENOENT` on the COMMAND, not the directory (Node/libuv's well-known
+ * "cwd" spawn-error shape), which is exactly the "spawn systemd-run ENOENT"
+ * the original bug report opened on — a red herring for this incident;
+ * systemd-run itself was never missing. By the time this function's own
+ * rollback ran, `status: "in_progress"` in its CAS below correctly no-ops
+ * (status was already "failed"), rather than resurrecting a task
+ * session-death had already resolved. Closing the underlying race needs a
+ * bigger, separate change — session-death's own worktree removal must not
+ * race an in-flight re-seed for the same task — tracked in #988.
  *
  * Deliberately does NOT call `syncTaskTransition` for this rollback (unlike
  * the real "in_progress -> reviewing" transition elsewhere in this file,
