@@ -633,6 +633,30 @@ describe("TaskDetail", () => {
     expect(container.querySelector(".task-detail-review-findings")).toBeNull();
   });
 
+  it("renders findings markdown, including a second stacked auto-return round", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindings: [
+          "## Round 1",
+          "",
+          "### Critical",
+          "- [blocker] **cmd/main.go:10** — missing error check.",
+          "",
+          "## Round 2",
+          "",
+          "**Verdict:** clean",
+        ].join("\n"),
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("heading", { level: 2, name: "Round 2" })).toBeInTheDocument();
+    expect(screen.getByText("cmd/main.go:10", { selector: "strong" })).toBeInTheDocument();
+  });
+
   it("shows a round indicator once the review has auto-returned to the worker", () => {
     tasks = [makeTask({ id: 1, status: "in_progress", reviewSessionId: 5, autoReturnRounds: 1 })];
     sessions = [makeSession({ id: 5 })];
