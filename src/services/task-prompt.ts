@@ -466,6 +466,13 @@ function renderTextSection(heading: string, items: string[], omitIfEmpty: boolea
   return [`### ${heading}`, ...items.map((s) => `- ${s}`), ""];
 }
 
+/** Every real one-sentence `summary` in this file's own test fixtures is
+ * under 100 characters; this leaves generous headroom above that before
+ * treating a `summary` as the old contract's whole-paragraph shape instead
+ * — see `renderReviewFindingsMarkdown`'s own doc comment (Hermes review,
+ * PR #992). */
+const MAX_STRUCTURED_SUMMARY_LENGTH = 300;
+
 /**
  * Renders a parsed verdict into the markdown body its four consumers post
  * or feed a worker: the PR-review body/comment body (`task-reconciler.ts`),
@@ -494,6 +501,11 @@ function renderTextSection(heading: string, items: string[], omitIfEmpty: boolea
  * doc comment). Wrapping that in a "**Verdict:**" line and section headings
  * would render a multi-kilobyte bold line above four empty sections —
  * instead, return it verbatim in every mode, exactly as before this change.
+ * The same escape hatch also fires for a STRUCTURED review whose `summary`
+ * is suspiciously long (see `MAX_STRUCTURED_SUMMARY_LENGTH` below): valid
+ * JSON in the old contract shape (the whole review dumped into `summary`)
+ * still parses as `structured: true`, so length is the only signal left to
+ * catch it.
  */
 export function renderReviewFindingsMarkdown(
   parsed: ParsedReviewFindings,
@@ -514,6 +526,15 @@ export function renderReviewFindingsMarkdown(
     return lines.join("\n").trimEnd();
   }
 
+  // Hermes review, PR #992 — `structured` only means `raw` parsed as the
+  // JSON shape; it says nothing about whether the reviewer actually kept
+  // `summary` to the one-sentence verdict `buildReviewPrompt` now asks for
+  // (the OLD contract asked for the whole review in this one field, and
+  // that shape still parses cleanly). Past this length, `summary` no longer
+  // looks like "one sentence" — render it verbatim rather than wrap a
+  // paragraph in "**Verdict:**" above four empty "- None" sections.
+  if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH) return parsed.summary;
+
   const findingsMode = mode === "review-body" ? "count" : "bullets";
   // A `changes-requested` verdict whose findings are ALL nits/warnings (no
   // blocker/major) would otherwise post a REQUEST_CHANGES review above an
@@ -528,11 +549,11 @@ export function renderReviewFindingsMarkdown(
       ? " (non-blocking findings only)"
       : "";
   const verdictLabel = parsed.verdict === "clean" ? "clean" : "changes requested";
+  // Hermes review, PR #992 — an empty `summary` (the reviewer left it
+  // blank) must not leave a dangling " — " with nothing after it.
+  const summarySuffix = parsed.summary ? ` — ${parsed.summary}` : "";
 
-  const lines: string[] = [
-    `**Verdict:** ${verdictLabel}${nonBlockingNote} — ${parsed.summary}`,
-    "",
-  ];
+  const lines: string[] = [`**Verdict:** ${verdictLabel}${nonBlockingNote}${summarySuffix}`, ""];
   lines.push(...renderFindingsSection("Critical", critical, findingsMode));
   lines.push(...renderFindingsSection("Warnings", warnings, findingsMode));
   lines.push(...renderFindingsSection("Suggestions", suggestions, findingsMode));

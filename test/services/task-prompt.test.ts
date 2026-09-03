@@ -493,6 +493,30 @@ describe("renderReviewFindingsMarkdown", () => {
     expect(out).not.toContain("###");
   });
 
+  // Hermes review, PR #992 — valid JSON in the OLD contract shape (the
+  // whole review dumped into `summary`) still parses as `structured: true`;
+  // length is the only signal left to catch it and avoid wrapping a
+  // paragraph in "**Verdict:**" above four empty "- None" sections.
+  it("returns a suspiciously long structured summary verbatim too, even though it parsed as JSON", () => {
+    const longSummary =
+      "Reviewed the full diff across every changed file. ".repeat(8) + "No issues found.";
+    expect(longSummary.length).toBeGreaterThan(300);
+    const parsed = parseReviewFindings(JSON.stringify({ verdict: "clean", summary: longSummary }));
+    expect(parsed.structured).toBe(true);
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toBe(longSummary);
+    expect(out).not.toContain("**Verdict:**");
+    expect(out).not.toContain("###");
+  });
+
+  it("does not leave a dangling em-dash when the reviewer left summary empty", () => {
+    const parsed = parseReviewFindings(JSON.stringify({ verdict: "clean", summary: "" }));
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toContain("**Verdict:** clean\n");
+    expect(out).not.toContain("— \n");
+    expect(out).not.toMatch(/— *$/m);
+  });
+
   it("renders a legacy-shape (verdict/summary/findings only) JSON review with sections and no Verified", () => {
     const out = renderReviewFindingsMarkdown(parseReviewFindings(CLEAN_JSON));
     expect(out).toContain("**Verdict:** clean — Reviewed the diff and ran `go test ./...`");
