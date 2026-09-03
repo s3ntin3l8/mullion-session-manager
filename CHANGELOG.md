@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.7](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.6...v0.3.7) (2026-09-03)
+
+
+### Features
+
+* AGENTS.md leads — retire content mirrors, redesign DB briefing as a pinned note ([#971](https://github.com/s3ntin3l8/mullion-session-manager/issues/971)) ([140948a](https://github.com/s3ntin3l8/mullion-session-manager/commit/140948a763b9f3d94be52dc3f7c5b719bb24b898))
+* AGENTS.md leads, part 2 — CLAUDE.md imports it, GEMINI.md retired ([#980](https://github.com/s3ntin3l8/mullion-session-manager/issues/980)) ([4e309ea](https://github.com/s3ntin3l8/mullion-session-manager/commit/4e309eabe960eb6fb88243bea190d606d71696bb))
+* configurable opencode model selection ([#957](https://github.com/s3ntin3l8/mullion-session-manager/issues/957), [#958](https://github.com/s3ntin3l8/mullion-session-manager/issues/958)) ([#961](https://github.com/s3ntin3l8/mullion-session-manager/issues/961)) ([b1ef580](https://github.com/s3ntin3l8/mullion-session-manager/commit/b1ef5809f7b5ff4babfdac04f2dbf437b1ae122a))
+* **tasks:** descriptive task branch names (mullion/task-&lt;id&gt;-&lt;slug&gt;) ([#994](https://github.com/s3ntin3l8/mullion-session-manager/issues/994)) ([fe4a157](https://github.com/s3ntin3l8/mullion-session-manager/commit/fe4a157c51c2587ba10f3e5451093bb52246be3e))
+* **tasks:** sequential review phase — undraft on internal convergence, gate auto-approve on the external verdict ([#989](https://github.com/s3ntin3l8/mullion-session-manager/issues/989)) ([6daa15a](https://github.com/s3ntin3l8/mullion-session-manager/commit/6daa15a781278eaa37ee89b98efb0eeab9bd0c17))
+
+
+### Bug Fixes
+
+* **agent-rules:** agy reads project AGENTS.md natively, not GEMINI.md ([c390646](https://github.com/s3ntin3l8/mullion-session-manager/commit/c3906462738e36a06b64fa5b46f85301c459d265))
+* clear prUrl and prNumber together in retryTask, repair the DB read ([#986](https://github.com/s3ntin3l8/mullion-session-manager/issues/986)) ([8b7f239](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b7f2396d5037c91597645b3dda07f0e91f39f03))
+* client-side 429 backoff — Retry-After-aware breaker + root ErrorBoundary ([#970](https://github.com/s3ntin3l8/mullion-session-manager/issues/970)) ([9712542](https://github.com/s3ntin3l8/mullion-session-manager/commit/97125425d7bd98dd3e5ee9e9afd51ef3a463c10e))
+* **tasks:** deny brainstorming skill for Task Master workers ([#966](https://github.com/s3ntin3l8/mullion-session-manager/issues/966)) ([f77a8a1](https://github.com/s3ntin3l8/mullion-session-manager/commit/f77a8a19b582df0ff1e5b67c3c1703113203097f))
+* **tasks:** force-with-lease pushes, stop erasing sync errors, surface round-cap state ([#976](https://github.com/s3ntin3l8/mullion-session-manager/issues/976)) ([253b605](https://github.com/s3ntin3l8/mullion-session-manager/commit/253b605f2dfbb8c9db0cc6860be0a9c16143f1e6))
+* **tasks:** structure the Task Master review body into Hermes-style sections ([#992](https://github.com/s3ntin3l8/mullion-session-manager/issues/992)) ([8b94655](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b94655ee6a6b1581c8e5f5f95b604dd4fd67ecf))
+* **ui:** enlarge task detail drawer close icon to fill button box ([#962](https://github.com/s3ntin3l8/mullion-session-manager/issues/962)) ([c98402a](https://github.com/s3ntin3l8/mullion-session-manager/commit/c98402a25647a14568bef74df9a1ae050c0d314f))
+
 ## [0.3.6](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.5...v0.3.6) (2026-08-30)
 
 
