@@ -255,6 +255,49 @@ export async function buildApp() {
   await app.register(sensible);
   await app.register(securityPlugin);
 
+  // Issue #1006 — the frontend's global 429 gate (frontend/src/api/client.ts)
+  // tells a global-bucket 429 apart from a per-route one by comparing the
+  // response's x-ratelimit-limit header against the configured
+  // RATE_LIMIT_MAX. That discriminator silently breaks if any per-route
+  // limiter happens to share the same max: a single per-route 429 (e.g. the
+  // 10/min login limiter) would then look global and freeze the whole
+  // dashboard for the Retry-After window — worse than the bug it fixes.
+  // test/plugins/security.test.ts only pins this against the schema
+  // DEFAULT (300); an operator who tunes RATE_LIMIT_MAX to any value a
+  // per-route limiter also uses (5/10/20/30/60/90/120/200/1000, per this
+  // repo's own routes/*.ts) needs the SAME guarantee at their own actual
+  // value, which only a runtime check can give. Collected via onRoute
+  // (registered right after securityPlugin so it sees every route,
+  // including internalRoutes' below on the agent-role branch) and asserted
+  // at both of this function's return points — see
+  // assertNoRateLimitMaxCollision's own call sites. Unlike the
+  // MULLION_TRUST_GATEWAY check above, this one necessarily runs AFTER
+  // every route (and every resource-binding plugin ahead of them —
+  // hooksPlugin's socket, ptyPlugin, ...) has already registered, since it
+  // needs the full route table. `await app.close()` before throwing
+  // releases those resources first — in production the process exits
+  // right after anyway, but a test process reusing the same worker across
+  // many `buildApp()` calls (test/setup.ts's per-worker SESSIONS_DIR) would
+  // otherwise leak a bound hooks.sock that the next test's own buildApp()
+  // then fails to (re)bind.
+  const perRouteRateLimitMaxes: number[] = [];
+  app.addHook("onRoute", (routeOptions) => {
+    const max = (routeOptions.config as { rateLimit?: { max?: number } } | undefined)?.rateLimit
+      ?.max;
+    if (typeof max === "number") perRouteRateLimitMaxes.push(max);
+  });
+  async function assertNoRateLimitMaxCollision(): Promise<void> {
+    if (perRouteRateLimitMaxes.includes(app.config.RATE_LIMIT_MAX)) {
+      await app.close();
+      throw new Error(
+        `RATE_LIMIT_MAX=${app.config.RATE_LIMIT_MAX} collides with a per-route rate limiter's ` +
+          "own max — this breaks the frontend's global-vs-per-route 429 discriminator " +
+          "(frontend/src/api/client.ts, issue #1006), which relies on no per-route limiter ever " +
+          "sharing the app-wide ceiling. Choose a different RATE_LIMIT_MAX.",
+      );
+    }
+  }
+
   // The SSRF-pinning agents (issue #250) are lazily built module state shared
   // by every outbound caller, not a plugin — but they pool keep-alive sockets,
   // so they still need releasing on shutdown or a closed app can keep the
@@ -299,6 +342,7 @@ export async function buildApp() {
     // never verifies an inbound one.
     await app.register(requestNoncePlugin);
     await app.register(internalRoutes);
+    await assertNoRateLimitMaxCollision();
     return app;
   }
 
@@ -448,5 +492,6 @@ export async function buildApp() {
   // satisfied by ptyPlugin above; it no-ops for the "agent" role internally.
   await app.register(controlSocketPlugin);
 
+  await assertNoRateLimitMaxCollision();
   return app;
 }

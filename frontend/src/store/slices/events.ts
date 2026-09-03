@@ -56,17 +56,21 @@ export const createEventsSlice: StateCreator<DashboardState, [], [], EventsSlice
     if (Date.now() < getSessionRefreshBlockedUntil()) {
       return;
     }
-    // refreshSessions() has no in-flight/overlap guard of its own (unlike
-    // refreshGitStatuses/refreshTasks) — deliberately not adding one here.
-    // Five mutations (createSession/renameSession/deleteSession/
-    // promoteSession/declinePromote) await it to observe their own write;
-    // PR #477 showed a naive in-flight dedup on a function like that
-    // silently drops the mutation's own result. Not warranted anyway: on
-    // the live host, GET /api/sessions took 7-14ms for 66KB gzipped (317
-    // sessions) — far below this throttle window, so overlap isn't a
-    // realistic concern. refreshSessions() also rethrows on failure, so
-    // .catch() here is required, not stylistic — this call has no awaiting
-    // caller and would otherwise surface as an unhandled rejection.
+    // refreshSessions() gained in-flight coalescing (issue #1008,
+    // sessions.ts's refreshSessionsActiveRun/refreshSessionsQueuedRun) —
+    // but deliberately NOT the bare "share the in-flight promise" shape
+    // PR #477 warned against for a function five mutations
+    // (createSession/renameSession/deleteSession/promoteSession/
+    // declinePromote) await to observe their own write. A call arriving
+    // here while one is already in flight gets queued behind it instead of
+    // sharing it, so this call's own eventual fetch still starts strictly
+    // after whatever was already running — see sessions.ts's own doc
+    // comment for the full reasoning. In practice overlap is still rare:
+    // on the live host, GET /api/sessions took 7-14ms for 66KB gzipped
+    // (317 sessions) — far below this throttle window. refreshSessions()
+    // also rethrows on failure, so .catch() here is required, not
+    // stylistic — this call has no awaiting caller and would otherwise
+    // surface as an unhandled rejection.
     void get()
       .refreshSessions()
       .catch(() => {});

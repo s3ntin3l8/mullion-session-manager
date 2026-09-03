@@ -796,6 +796,21 @@ export interface GitStatusesBatchResult {
   sessions: Record<string, GitStatus | null>;
 }
 
+// GET /api/projects/git-refs' response shape (issue #1007) — batches
+// GitBranchesResult + GitHubPRsStatus for many projects into one request,
+// replacing the former one-request-pair-per-project fan-out
+// (store/slices/git.ts's old refreshGitRefs). `null` per id mirrors the
+// per-project routes' 204 case (not a repo / no open PRs); an id simply
+// absent from either map means "transiently unavailable, keep last-known-
+// good" — same convention as GitStatusesBatchResult above. Kept in two
+// separate maps for the same reason as that type: `branches` and `prs` are
+// independent per-project facts with independent failure modes (a repo can
+// resolve branches with no GitHub remote at all), not one merged record.
+export interface GitRefsBatchResult {
+  branches: Record<string, GitBranchesResult | null>;
+  prs: Record<string, GitHubPRsStatus | null>;
+}
+
 // U4 — mirrors src/services/dock-config.ts's DockConfigReadResult 1:1. The
 // raw, per-project `.crs/dock.json` (never the merged global+Docker view
 // GET /api/projects/:id/dock returns — see that module's own doc comment

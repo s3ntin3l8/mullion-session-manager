@@ -1,16 +1,26 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useDashboardStore } from "./store/index.js";
-import type { Project, GitBranchesResult, GitHubPRsStatus } from "./api/index.js";
+import type {
+  Project,
+  GitBranchesResult,
+  GitHubPRsStatus,
+  GitRefsBatchResult,
+} from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 // refreshGitRefs' `projectIds` param (see that action's own doc comment in
 // slices/git.ts) — a production incident had every project's git-branches +
 // github/prs refetched on a single project's WS event, exhausting the
-// git-branches route's 30/min rate limit within seconds under CI load.
-// These tests lock in that a scoped call only fetches/overwrites the named
+// git-branches route's 30/min rate limit within seconds under CI load. A
+// second incident (issue #1005/#1007, the 0.3.8 update) hit the same 30/min
+// ceiling via a different trigger — repeated page reloads, each firing one
+// request pair per project. Both are why refreshGitRefs now issues a SINGLE
+// batched GET /api/projects/git-refs request instead of N pairs. These
+// tests lock in that a scoped call only asks for (and overwrites) the named
 // projects and leaves the rest of the cached maps untouched, while an
-// unscoped call still does the original full replace.
+// unscoped call still does the original full replace — same contract as
+// before batching, just over one request instead of N.
 
 const PROJECT_1: Project = {
   id: 1,
@@ -45,17 +55,32 @@ const EMPTY_PRS: GitHubPRsStatus = {
   prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
 };
 
+/** Parses `ids=1,2,3` off a `/api/projects/git-refs?ids=...` URL. */
+function idsFromGitRefsUrl(url: string): number[] {
+  const match = /^\/api\/projects\/git-refs\?ids=([\d,]+)$/.exec(url);
+  if (!match) throw new Error(`not a git-refs batch url: ${url}`);
+  return match[1].split(",").map(Number);
+}
+
+/** Default batch response: `branch-<id>` + empty PRs for every requested id. */
+function defaultBatchResponse(ids: number[]): GitRefsBatchResult {
+  const branches: Record<string, GitBranchesResult> = {};
+  const prs: Record<string, GitHubPRsStatus> = {};
+  for (const id of ids) {
+    branches[id] = branchesFor(`branch-${id}`);
+    prs[id] = EMPTY_PRS;
+  }
+  return { branches, prs };
+}
+
 describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const branchesMatch = /^\/api\/projects\/(\d+)\/git-branches$/.exec(url);
-      if (branchesMatch) return jsonResponse(200, branchesFor(`branch-${branchesMatch[1]}`));
-      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
-      if (prsMatch) return jsonResponse(200, EMPTY_PRS);
-      throw new Error(`unexpected fetch: ${url}`);
+      const ids = idsFromGitRefsUrl(url);
+      return jsonResponse(200, defaultBatchResponse(ids));
     });
     vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({
@@ -74,13 +99,14 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
 
     expect(useDashboardStore.getState().gitBranchesByProject[1]).toEqual(branchesFor("branch-1"));
     expect(useDashboardStore.getState().gitBranchesByProject[2]).toEqual(branchesFor("branch-2"));
-    expect(fetchMock).toHaveBeenCalledTimes(4); // 2 projects x (branches + prs)
+    expect(fetchMock).toHaveBeenCalledTimes(1); // one batched request for every project
   });
 
   it("scopes the fetch to just the named project ids", async () => {
     await useDashboardStore.getState().refreshGitRefs([1]);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2); // only project 1's branches + prs
+    expect(fetchMock).toHaveBeenCalledTimes(1); // one batched request, scoped to project 1 only
+    expect(idsFromGitRefsUrl(String(fetchMock.mock.calls[0][0]))).toEqual([1]);
     expect(useDashboardStore.getState().gitBranchesByProject[1]).toEqual(branchesFor("branch-1"));
   });
 
@@ -123,19 +149,15 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
     });
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const branchesMatch = /^\/api\/projects\/(\d+)\/git-branches$/.exec(url);
-      if (branchesMatch) {
-        if (branchesMatch[1] === "1") await project1Gate;
-        return jsonResponse(200, branchesFor(`branch-${branchesMatch[1]}`));
-      }
-      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
-      if (prsMatch) return jsonResponse(200, EMPTY_PRS);
-      throw new Error(`unexpected fetch: ${url}`);
+      const ids = idsFromGitRefsUrl(url);
+      if (ids.includes(1)) await project1Gate;
+      return jsonResponse(200, defaultBatchResponse(ids));
     });
 
     const firstRun = useDashboardStore.getState().refreshGitRefs([1]);
-    // Arrives while project 1's fetch is still hung on project1Gate — must
-    // not be silently dropped just because a refresh is already running.
+    // Arrives while project 1's batch request is still hung on
+    // project1Gate — must not be silently dropped just because a refresh
+    // is already running.
     const secondRun = useDashboardStore.getState().refreshGitRefs([2]);
     expect(secondRun).toBe(firstRun); // same in-flight promise, queued behind it
 
@@ -156,14 +178,9 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
     });
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const branchesMatch = /^\/api\/projects\/(\d+)\/git-branches$/.exec(url);
-      if (branchesMatch) {
-        if (branchesMatch[1] === "2") await project2Gate;
-        return jsonResponse(200, branchesFor(`branch-${branchesMatch[1]}`));
-      }
-      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
-      if (prsMatch) return jsonResponse(200, EMPTY_PRS);
-      throw new Error(`unexpected fetch: ${url}`);
+      const ids = idsFromGitRefsUrl(url);
+      if (ids.includes(2)) await project2Gate;
+      return jsonResponse(200, defaultBatchResponse(ids));
     });
     useDashboardStore.setState({
       gitBranchesByProject: { 1: branchesFor("branch-1"), 99: branchesFor("stale") },

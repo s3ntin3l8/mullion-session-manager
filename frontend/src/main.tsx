@@ -35,6 +35,7 @@ import "@fontsource/jetbrains-mono/latin-500.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./styles/index.css";
+import { claimPostUpdateReload } from "./postUpdateReload.js";
 
 // A retriable lazy() (lib/retriableLazy.ts) fixes the case where a dynamic
 // import() rejects for a reason a fresh attempt can recover from (a flaky
@@ -102,8 +103,21 @@ window.addEventListener("vite:preloadError", () => {
 // Safe here specifically because this app's reconnect path (WS backoff,
 // PTY reattach/redraw) is already a first-class, tested scenario — a
 // reload just triggers the same reconnect a network blip would.
+//
+// `onNeedReload` (issue #1008) routes the reload through
+// claimPostUpdateReload() instead of registerSW()'s own unconditional
+// `window.location.reload()` default — this trigger and
+// ServerInfoSection.tsx's update-status-poll trigger are otherwise
+// unaware of each other, and the tab that initiated an update usually has
+// both wired up at once.
 if (import.meta.env.PROD) {
-  void import("virtual:pwa-register").then(({ registerSW }) => registerSW());
+  void import("virtual:pwa-register").then(({ registerSW }) =>
+    registerSW({
+      onNeedReload: () => {
+        if (claimPostUpdateReload()) window.location.reload();
+      },
+    }),
+  );
 }
 
 // Root-level ErrorBoundary (issue #959). The existing ErrorBoundary

@@ -325,14 +325,14 @@ throttles itself.
   behavior.
 
   The same global-bucketing extends to the **app-wide** `RATE_LIMIT_MAX`
-  (default **100/minute**, see `src/plugins/env.ts` and
-  `src/plugins/security.ts:86-119`) which gates every HTTP request that
-  doesn't have its own per-route limit: behind Traefik, every real client
-  on the deployment shares that one bucket. A reload fan-out (App.tsx's
-  mount effects, the live 4s session poll) plus concurrent activity from
-  every other browser and PWA tab in the deployment is what the ceiling
-  is actually protecting — not "this one user did too much." The
-  frontend's own 429-aware backoff (issue #959, see
+  (default **300/minute**, see `src/plugins/env.ts` and
+  `src/plugins/security.ts:86-119`) which gates every `/api` and `/ws`
+  request that doesn't have its own per-route limit: behind Traefik, every
+  real client on the deployment shares that one bucket. A reload fan-out
+  (App.tsx's mount effects, the live 4s session poll) plus concurrent
+  activity from every other browser and PWA tab in the deployment is what
+  the ceiling is actually protecting — not "this one user did too much."
+  The frontend's own 429-aware backoff (issue #959, see
   `frontend/src/api/client.ts`'s `RateLimitedError` + per-endpoint
   breaker and `frontend/src/store/slices/sessions.ts`'s
   `sessionRefreshBlockedUntil`) is the part that turns a 429 from
@@ -340,6 +340,16 @@ throttles itself.
   reload that lands on a still-blocked bucket can cascade into a
   4s-cadence 429 storm that itself keeps the bucket blocked. Bumping
   `RATE_LIMIT_MAX` alone is **not** the fix; the client-side backoff is.
+
+  The static app shell (`/`, hashed JS/CSS/font assets, the service worker,
+  icons, manifest) is exempt from this bucket entirely (issue #1005) —
+  before that fix, a cold page load's ~17 static requests shared the same
+  bucket as every `/api` call, so exceeding the ceiling made `/` itself
+  429, which is what turns a transient throttle into an unrecoverable
+  reload loop (a reload can't "back off" past a 429 on the page it's
+  trying to reload). See `src/plugins/security.ts`'s `STATIC_SHELL_PATTERN`
+  comment for why this is an explicit allowlist rather than a negation of
+  `/api` + `/ws`.
 
 - **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
   `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/

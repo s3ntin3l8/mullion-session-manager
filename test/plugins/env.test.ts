@@ -42,7 +42,7 @@ describe("env plugin", () => {
     expect(app.config.DATABASE_URL).toBe("file:./data/app.db");
     expect(app.config.DB_ENCRYPTION_KEY).toBe("");
     expect(app.config.CORS_ORIGIN).toBe("");
-    expect(app.config.RATE_LIMIT_MAX).toBe(100);
+    expect(app.config.RATE_LIMIT_MAX).toBe(300);
     expect(app.config.RATE_LIMIT_WINDOW).toBe("1 minute");
     expect(app.config.PROJECTS_ROOTS).toBe("");
     expect(app.config.CRS_CONFIG_DIR).toBe("~/.config/crs");

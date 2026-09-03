@@ -24,7 +24,7 @@ a way that doesn't coerce to `false`).
 | `HOST`              | `127.0.0.1`       | interface `app.listen()` binds to; loopback-only by default, see [`auth.md`](auth.md#network-exposure-issue-603) |
 | `LOG_LEVEL`         | `info`            | pino log level                                                                                                   |
 | `CORS_ORIGIN`       | _(empty)_         | comma-separated allowlist; empty disables CORS                                                                   |
-| `RATE_LIMIT_MAX`    | `100`             | max requests per window                                                                                          |
+| `RATE_LIMIT_MAX`    | `300`             | max `/api` + `/ws` requests per window — the static app shell is exempt (issue #1005)                            |
 | `RATE_LIMIT_WINDOW` | `1 minute`        | rate-limit window                                                                                                |
 | `FRONTEND_DIST`     | `./frontend/dist` | built frontend assets; served at `/` once present                                                                |
 | `PROJECTS_ROOTS`    | _(empty)_         | comma-separated dirs to scan for `GET /api/projects/discover`                                                    |

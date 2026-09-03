@@ -7,6 +7,7 @@ import type {
   DeleteBranchResult,
   RemoveWorktreeResult,
   GitStatusesBatchResult,
+  GitRefsBatchResult,
   GitFileDiffResponse,
   GitPullResult,
 } from "./types.js";
@@ -55,6 +56,19 @@ export const gitApi = {
     request<GitBranchesResult | undefined>(
       `/api/projects/${projectId}/git-branches${detail ? "?detail=1" : ""}`,
     ),
+
+  // Batch branches + open-PR list (issue #1007): replaces store/slices/
+  // git.ts's former one-request-pair-per-project fan-out (22 requests for
+  // 11 projects — what actually blew through git-branches'/github/prs' own
+  // 30/min limiters during the 0.3.8 update incident, issue #1005) with a
+  // single request. `null` per id means the same "durably nothing to show"
+  // 204 case the per-project routes have; an id absent from either map
+  // means "transiently unavailable," same last-known-good convention as
+  // getProjectGitStatuses above.
+  getProjectGitRefsBatch: (ids: number[]): Promise<GitRefsBatchResult> => {
+    if (ids.length === 0) return Promise.resolve({ branches: {}, prs: {} });
+    return request<GitRefsBatchResult>(`/api/projects/git-refs?ids=${ids.join(",")}`);
+  },
 
   // Manual git fetch trigger — runs `git fetch origin` for this project now.
   postProjectGitFetch: (projectId: number) =>

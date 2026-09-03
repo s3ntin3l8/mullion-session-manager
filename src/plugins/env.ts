@@ -3,6 +3,12 @@ import env from "@fastify/env";
 import { existsSync, readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
 
+// Exported so RATE_LIMIT_MAX's schema default and
+// test/plugins/security.test.ts's "no per-route limiter matches the global
+// max" guard (issue #1006) share one source of truth instead of two
+// literals that could silently drift apart.
+export const GLOBAL_RATE_LIMIT_MAX_DEFAULT = 300;
+
 // Exported (not just used below) so test/setup.ts can derive the full list
 // of config keys it needs to reset to a clean slate for every test file —
 // see that file's comment for why deleting these one by one, per failing
@@ -50,9 +56,18 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Raised from 100 → 300 (issue #1005/#1008): this ceiling now only
+    // governs /api + /ws traffic — plugins/security.ts's allowList exempts
+    // the static app shell — so the arithmetic behind the old default no
+    // longer applies. A cold page load's API cost is ~17 requests once
+    // #1007's git-refs batching lands; 300 leaves headroom for several
+    // reloads/tabs within a minute without raising the ceiling so far it
+    // stops being abuse protection. Not a substitute for the client-side
+    // backoff (docs/auth.md's "Current limitations") — that still matters
+    // once real usage approaches this number.
     RATE_LIMIT_MAX: {
       type: "number",
-      default: 100,
+      default: GLOBAL_RATE_LIMIT_MAX_DEFAULT,
     },
     RATE_LIMIT_WINDOW: {
       type: "string",
