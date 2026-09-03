@@ -345,6 +345,7 @@ export interface AppSettings {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    rateLimitGraceMinutes: number;
     // #741 — Task Master's own install-wide worker-agent default, split out
     // of settings.launchers.defaultAgent (which only drives the terminal
     // launcher) so terminal and Task Master agent defaults are independent.
@@ -510,6 +511,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxConcurrent: -1,
     budgetMinutes: -1,
     progressCommentMinutes: -1,
+    rateLimitGraceMinutes: -1,
     skipPermissions: "inherit",
     reviewCiWaitMinutes: 15,
     defaultAgent: "claude",
@@ -808,6 +810,15 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       // dangerous floor to guard, unlike maxConcurrent) and must survive
       // untouched.
       progressCommentMinutes: safeSentinelNumber(settings.taskMaster.progressCommentMinutes, {
+        sentinel: -1,
+        min: 0,
+        max: 1440,
+      }),
+      // -1 = inherit; 0 is a legitimate "fail immediately on rate_limit" value
+      // (the explicit opt-out, same "0 is a real floor" shape as
+      // budgetMinutes/progressCommentMinutes above — there's no "unlimited"
+      // reading, just "off") and must survive untouched.
+      rateLimitGraceMinutes: safeSentinelNumber(settings.taskMaster.rateLimitGraceMinutes, {
         sentinel: -1,
         min: 0,
         max: 1440,

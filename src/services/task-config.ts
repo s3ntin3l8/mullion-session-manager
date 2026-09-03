@@ -17,6 +17,7 @@ export interface TaskMasterEnvDefaults {
   maxConcurrent: number;
   budgetMinutes: number;
   progressCommentMinutes: number;
+  rateLimitGraceMinutes: number;
   skipPermissions: boolean;
 }
 
@@ -26,6 +27,7 @@ export interface ResolvedTaskMasterConfig {
   maxConcurrent: number;
   budgetMinutes: number;
   progressCommentMinutes: number;
+  rateLimitGraceMinutes: number;
   skipPermissions: boolean;
   reviewCiWaitMinutes: number;
 }
@@ -49,6 +51,10 @@ export function resolveTaskMaster(
       taskMaster.progressCommentMinutes === -1
         ? envDefaults.progressCommentMinutes
         : taskMaster.progressCommentMinutes,
+    rateLimitGraceMinutes:
+      taskMaster.rateLimitGraceMinutes === -1
+        ? envDefaults.rateLimitGraceMinutes
+        : taskMaster.rateLimitGraceMinutes,
     skipPermissions:
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions
@@ -65,6 +71,7 @@ function envDefaultsFromConfig(app: FastifyInstance): TaskMasterEnvDefaults {
     maxConcurrent: app.config.MULLION_TASK_MAX_CONCURRENT,
     budgetMinutes: app.config.MULLION_TASK_BUDGET_MINUTES,
     progressCommentMinutes: app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES,
+    rateLimitGraceMinutes: app.config.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES,
     skipPermissions: app.config.MULLION_TASK_SKIP_PERMISSIONS,
   };
 }
