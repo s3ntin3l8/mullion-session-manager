@@ -145,6 +145,7 @@ describe("project-setup route", () => {
     expect(body.files).toEqual(
       expect.arrayContaining([
         "AGENTS.md",
+        "CLAUDE.md",
         ".claude/skills/demo/SKILL.md",
         ".claude/agents/demo-reviewer.md",
       ]),
@@ -154,6 +155,7 @@ describe("project-setup route", () => {
     // The scratch worktree really exists and really has the files.
     const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
     expect(fs.existsSync(path.join(worktreeDir, "AGENTS.md"))).toBe(true);
+    expect(fs.existsSync(path.join(worktreeDir, "CLAUDE.md"))).toBe(true);
     expect(fs.existsSync(path.join(worktreeDir, ".claude", "skills", "demo", "SKILL.md"))).toBe(
       true,
     );
@@ -420,6 +422,41 @@ describe("project-setup route", () => {
     expect(onDisk).toContain("Code of Conduct");
     expect(onDisk).toContain("Be excellent to each other.");
     expect(onDisk).toContain("AGENTS.md");
+
+    await app.close();
+  });
+
+  // Issue #942 (this restructure) — CLAUDE.md is unconditional, not
+  // opt-in, so the route's own readExistingFiles must ALWAYS pick it up so
+  // computeScaffold upserts into it rather than treating it as absent and
+  // overwriting a real, hand-authored CLAUDE.md with a scaffold-only
+  // `@AGENTS.md` import file. A computeScaffold-only unit test can't catch
+  // a missing entry in the route's own scaffoldableRelPaths() read list —
+  // this has to go through the real preview route (same reasoning as the
+  // CONTRIBUTING.md test above).
+  it("upserts the @AGENTS.md import into an already-committed CLAUDE.md instead of overwriting it", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+
+    const customClaude =
+      "# CLAUDE.md — Demo Project\n\n## Architecture\n\nSome hand-written architecture notes nobody wants clobbered.\n";
+    fs.writeFileSync(path.join(repoDir, "CLAUDE.md"), customClaude);
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "hand-written CLAUDE.md", "--no-verify"]);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/preview`,
+      payload: { slug: "demo" },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().files).toContain("CLAUDE.md");
+
+    const worktreeDir = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+    const onDisk = fs.readFileSync(path.join(worktreeDir, "CLAUDE.md"), "utf8");
+    expect(onDisk).toContain("## Architecture");
+    expect(onDisk).toContain("Some hand-written architecture notes nobody wants clobbered.");
+    expect(onDisk).toContain("@AGENTS.md");
 
     await app.close();
   });

@@ -29,7 +29,7 @@ const OFFLINE_AFTER_MISSED = 3;
 /**
  * Live-state health tracker for remote hosts — the same DB-row-records-
  * intent / in-memory-map-records-liveness split PtyManager uses for
- * sessions (see CLAUDE.md's "non-obvious model"). A host's `hosts` row is
+ * sessions (see AGENTS.md's "non-obvious session model" invariant). A host's `hosts` row is
  * never touched by heartbeat results; this tracker is the only place "is it
  * actually up right now" lives. One instance per app, decorated onto it —
  * mirrors github-activity-tracker.ts's ActivityTracker, not git-fetcher.ts's

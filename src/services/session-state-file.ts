@@ -1,7 +1,7 @@
 // Extracted from pty-manager.ts (state-file persistence only, issue #323 —
 // see that file's own header comment on why it's flagged as this repo's
-// highest-risk file, and CLAUDE.md's pointer to docs/architecture.md before
-// touching it or the terminal WS protocol).
+// highest-risk file, and docs/architecture.md's "non-obvious session
+// model" note before touching it or the terminal WS protocol).
 //
 // This module owns the generic, Session-state-agnostic mechanics of a
 // per-session `<sessionsDir>/<id>.state.json` file: its path, its on-disk

@@ -212,7 +212,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
   // DELETE /api/hosts/:id?cascade=true does. Every dtach session an agent
   // hosts is bootstrapped into its own systemd-run scope specifically so it
   // survives an agent process restart (see mullion-agent.service's own doc
-  // comment, and CLAUDE.md's "non-obvious model") — and this endpoint fires
+  // comment, and AGENTS.md's "non-obvious session model" invariant) — and this endpoint fires
   // on *every* graceful SIGTERM an agent receives, including a routine
   // `systemctl --user restart` during a redeploy, not just a permanent
   // decommission. Cascade-killing live sessions on every restart would

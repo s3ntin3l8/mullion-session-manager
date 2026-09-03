@@ -26,14 +26,15 @@ export const coverageConfig: CoverageOptions = {
 // tree, so re-running another checkout's tests from here either duplicates
 // work or fails outright on missing deps.
 //
-// - `.wt/` (issue #277's worktree-isolation feature, CLAUDE.md's Worktrees
-//   section) — developer workspaces for isolating concurrent agent sessions.
-//   Gitignored at the repo level.
+// - `.wt/` (issue #277's worktree-isolation feature, AGENTS.md's "two
+//   worktree concepts" invariant) — developer workspaces for isolating
+//   concurrent agent sessions. Gitignored at the repo level.
 // - `.claude/worktrees/` — the same class of directory under a different
 //   root (agent-isolation worktrees), gitignored via `.git/info/exclude`'s
 //   `**/.claude/worktrees/`.
 // - `.mullion-worktrees/` — Mullion's OWN product feature
-//   (`src/services/git-worktree.ts`, CLAUDE.md's Worktrees section), also
+//   (`src/services/git-worktree.ts`, AGENTS.md's "two worktree concepts"
+//   invariant), also
 //   full separate checkouts, also gitignored via `.git/info/exclude`: a live
 //   Task Master worktree (`.mullion-worktrees/mullion-task-<id>`, e.g. while
 //   a task sits `claimed`) hits the exact same failure mode the other two

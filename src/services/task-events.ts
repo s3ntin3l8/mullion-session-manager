@@ -20,7 +20,8 @@ export type { TaskEvent };
 // indexing off the sessions list (NotificationBell.tsx). A task in
 // "backlog"/"ready" has no session to key an event on, and widening
 // NotificationEvent to accommodate one would be a large, high-risk change
-// to the file CLAUDE.md's own header warns against touching casually — for
+// to the file AGENTS.md's own "non-obvious session model" invariant warns
+// against touching casually — for
 // a benefit this dedicated channel delivers directly instead.
 //
 // Built on ws-broadcast.ts's createBroadcastChannel — the same shared

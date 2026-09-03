@@ -6,8 +6,8 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./test/setup.ts"],
     // `frontend/` is its own npm workspace with its own vitest.config.ts
-    // (run via `cd frontend && npm run test`, see CLAUDE.md's Makefile
-    // table) — without this, Vitest's default broad `**/*.test.*` include
+    // (run via `cd frontend && npm run test`, see README.md's Commands
+    // section) — without this, Vitest's default broad `**/*.test.*` include
     // pattern also swept up frontend/src/*.test.ts(x) from here, running
     // them a second time against this root config/node_modules instead of
     // frontend's. That happened to stay silently harmless while every

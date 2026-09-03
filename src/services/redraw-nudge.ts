@@ -1,7 +1,7 @@
 // Extracted from pty-manager.ts (the redraw-nudge state machine only — see
 // that file's own header comment on why it's flagged as this repo's
-// highest-risk file, and CLAUDE.md's pointer to docs/architecture.md before
-// touching it or the terminal WS protocol).
+// highest-risk file, and docs/architecture.md's "non-obvious session
+// model" note before touching it or the terminal WS protocol).
 //
 // Why this exists at all — Milestone 1 found empirically that dtach's own
 // `-r winch` redraw request (see Session.attachClient()'s dtach spawn args)

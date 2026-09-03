@@ -154,6 +154,7 @@ Backend (repo root):
   `frontend/` too)
 - `make build` — production build to `dist/`
 - `make clean` — remove `node_modules`, `dist`, and caches
+- `make help` — list every target (the `.DEFAULT_GOAL`)
 - `npm run db:generate` — generate a migration from schema changes
 - `npm run db:migrate` — apply migrations (also run automatically at startup)
 - `npm run db:seed` — seed initial data

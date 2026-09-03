@@ -74,7 +74,7 @@ jobs:
   # test/e2e/README.md's "What stays manual" section), so a stock
   # ubuntu-latest runner with a real Chromium is sufficient.
   #
-  # Deliberately NOT added to CLAUDE.md's required-status-checks list yet:
+  # Deliberately NOT added to docs/ci-cd.md's required-status-checks list yet:
   # this is the suite's first run anywhere outside a developer's own
   # machine, so it needs a stretch of real, unattended CI runs (network
   # variance on the Chromium download, shared-runner resource limits under
@@ -152,7 +152,7 @@ jobs:
   # ssh-agent-helper-install.mjs's own header comment and docs/ssh-agent.md
   # have both carried since #879.
   #
-  # Deliberately NOT added to CLAUDE.md's required-status-checks list yet —
+  # Deliberately NOT added to docs/ci-cd.md's required-status-checks list yet —
   # same reasoning as test-e2e above: this is the job's first run anywhere
   # outside a developer's own machine (this repo's CI has never run on a
   # Windows runner before), so it needs a stretch of unattended real runs
@@ -311,7 +311,7 @@ jobs:
   # format of whatever this same job just built, so there's no way to
   # verify it without real macOS hardware.
   #
-  # Deliberately NOT added to CLAUDE.md's required-status-checks list yet —
+  # Deliberately NOT added to docs/ci-cd.md's required-status-checks list yet —
   # same reasoning as test-windows: this is the job's first run anywhere
   # outside a developer's own machine (this repo's CI has never run on a
   # macOS runner before), so it needs a stretch of unattended real runs

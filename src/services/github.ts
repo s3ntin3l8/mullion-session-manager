@@ -676,7 +676,7 @@ const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
  * no required/non-required distinction at all). #755's red-CI-return gate
  * uses this to avoid returning a task to the worker over a red but
  * non-required check (this repo's own `test-e2e`, deliberately not
- * required — see CLAUDE.md's CI/CD section).
+ * required — see docs/ci-cd.md).
  *
  * Returns `null`, never throws, on ANY lookup failure. The GitHub App's
  * "read" token scope (`READ_PERMISSIONS`, github-app.ts) does not include

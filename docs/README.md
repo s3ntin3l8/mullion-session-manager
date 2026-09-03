@@ -51,6 +51,13 @@ when you'd reach for it.
   into a session at `SessionStart`; read this if you're an agent CLI
   running inside a Mullion-managed session.
 
+## Contributing
+
+- [`ci-cd.md`](ci-cd.md) — the reusable-workflow callers, permissions rules,
+  `ci-cd.yml` structure, test sharding, and required branch-protection
+  checks. See [`../CONTRIBUTING.md`](../CONTRIBUTING.md) for the day-to-day
+  contributor workflow (setup, the pre-push gate, PR title, worktrees).
+
 ## Background
 
 - [`architecture.md`](architecture.md) — the plugins/routes/services tour:

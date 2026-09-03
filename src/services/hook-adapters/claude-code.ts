@@ -76,7 +76,7 @@ export function resolveClaudePluginCacheDir(): string {
 // env-var hook-config mechanism, so `--settings <file>` is the only way to
 // inject hooks without writing into `~/.claude` or the target repo. That
 // makes this adapter's `commandTransform` the ONE deliberate, narrow
-// exception to CLAUDE.md's "the backend never parses a shell command line"
+// exception to AGENTS.md's "the backend never parses a shell command line"
 // invariant — scoped to appending one flag, and only once `matches()` has
 // confirmed this is an unchained, literal `claude ...` invocation.
 

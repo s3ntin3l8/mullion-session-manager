@@ -87,7 +87,8 @@ Task Master's `mullion-task-<id>` worktrees already have their own
 automatic reconciliation — created at claim time, removed on `→ done`/
 `→ failed` when clean, with a boot-time orphan sweep and a fresh-claim-time
 clear (see [`tasks.md`](tasks.md#worktree-lifecycle) and
-`CLAUDE.md`'s Worktrees section). GitPanel's manual actions are the
+`.claude/skills/mullion-review-invariants/SKILL.md`'s "two worktree
+concepts" section). GitPanel's manual actions are the
 human-triggered counterpart that covers **every** worktree, not just
 task-scoped ones — and, per the task-branch guard above, can knowingly
 break a task's own automatic lifecycle if used with `force` on a

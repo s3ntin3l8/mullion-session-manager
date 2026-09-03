@@ -4,9 +4,9 @@
 // compare it against. This exercises the REPURPOSED script via execFile
 // (precedent: test/scripts/self-update.test.ts), against per-test fixture
 // directories, using the script's BRIEFING_SYNC_ROOT override so it never
-// touches this repo's own AGENTS.md/GEMINI.md — it now guards a narrower
-// invariant: neither GEMINI.md nor AGENTS.override.md may re-acquire a
-// content-bearing copy of the old `mullion:briefing` region.
+// touches this repo's own AGENTS.md/CLAUDE.md — it now guards a narrower
+// invariant: none of CLAUDE.md, GEMINI.md, or AGENTS.override.md may
+// re-acquire a content-bearing copy of the old `mullion:briefing` region.
 //
 // One case deliberately does NOT set BRIEFING_SYNC_ROOT: without it, the
 // script falls back to the real repo root, which is the only path
@@ -58,7 +58,7 @@ describe("scripts/check-briefing-sync.mjs", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("passes when neither GEMINI.md nor AGENTS.override.md exist", async () => {
+  it("passes when none of CLAUDE.md, GEMINI.md, or AGENTS.override.md exist", async () => {
     fs.writeFileSync(path.join(root, "AGENTS.md"), withRegion("AGENTS.md"));
 
     const { stdout } = await runScript(root);
@@ -78,6 +78,18 @@ describe("scripts/check-briefing-sync.mjs", () => {
     expect(stdout).toContain("OK");
   });
 
+  it("passes when CLAUDE.md carries only an @AGENTS.md import, no mullion:briefing region", async () => {
+    fs.writeFileSync(path.join(root, "AGENTS.md"), withRegion("AGENTS.md"));
+    fs.writeFileSync(
+      path.join(root, "CLAUDE.md"),
+      "# CLAUDE.md\n\n<!-- mullion:pointer:start -->\n@AGENTS.md\n<!-- mullion:pointer:end -->\n",
+    );
+
+    const { stdout } = await runScript(root);
+
+    expect(stdout).toContain("OK");
+  });
+
   it("fails when GEMINI.md re-acquires a content-bearing mullion:briefing region", async () => {
     fs.writeFileSync(path.join(root, "AGENTS.md"), withRegion("AGENTS.md"));
     fs.writeFileSync(path.join(root, "GEMINI.md"), withRegion("GEMINI.md"));
@@ -87,6 +99,18 @@ describe("scripts/check-briefing-sync.mjs", () => {
     expect(error).toBeTruthy();
     expect(error.code).toBe(1);
     expect(error.stdout).toContain("GEMINI.md carries its own");
+    expect(error.stdout).toContain("single source of truth");
+  });
+
+  it("fails when CLAUDE.md carries a content-bearing mullion:briefing region", async () => {
+    fs.writeFileSync(path.join(root, "AGENTS.md"), withRegion("AGENTS.md"));
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), withRegion("CLAUDE.md"));
+
+    const error = await runScript(root).catch((e) => e);
+
+    expect(error).toBeTruthy();
+    expect(error.code).toBe(1);
+    expect(error.stdout).toContain("CLAUDE.md carries its own");
     expect(error.stdout).toContain("single source of truth");
   });
 
@@ -101,8 +125,9 @@ describe("scripts/check-briefing-sync.mjs", () => {
     expect(error.stdout).toContain("AGENTS.override.md carries its own");
   });
 
-  it("reports both files independently when both re-acquire a region", async () => {
+  it("reports all three files independently when all three re-acquire a region", async () => {
     fs.writeFileSync(path.join(root, "AGENTS.md"), withRegion("AGENTS.md"));
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), withRegion("CLAUDE.md"));
     fs.writeFileSync(path.join(root, "GEMINI.md"), withRegion("GEMINI.md"));
     fs.writeFileSync(path.join(root, "AGENTS.override.md"), withRegion("AGENTS.override.md"));
 
@@ -110,6 +135,7 @@ describe("scripts/check-briefing-sync.mjs", () => {
 
     expect(error).toBeTruthy();
     expect(error.code).toBe(1);
+    expect(error.stdout).toContain("CLAUDE.md carries its own");
     expect(error.stdout).toContain("GEMINI.md carries its own");
     expect(error.stdout).toContain("AGENTS.override.md carries its own");
   });

@@ -9,8 +9,22 @@ cd frontend && npm install
 ```
 
 See the [Quick Start](README.md#-quick-start) in `README.md` for running the
-app locally, and [`CLAUDE.md`](CLAUDE.md) for the full architecture/layout
-tour.
+app locally, and [`docs/architecture.md`](docs/architecture.md) for the full
+architecture/layout tour.
+
+## Developer worktrees (`.wt/`)
+
+Isolate your own concurrent agent sessions on this codebase under `.wt/`,
+e.g. `.wt/<slug>` — gitignored at the repo level. A new worktree does **not**
+inherit `node_modules`: run `npm ci` at the repo root **and**
+`cd frontend && npm ci` before testing or building.
+
+- **Path exclusion:** tooling configs that glob the repo (Vitest, ESLint)
+  must exclude `.wt/**` to prevent duplicate workspace runs or dependency
+  collisions.
+- **Commit hooks:** `.pre-commit-config.yaml` uses file-based path scopes
+  (`files:`) rather than generic `types_or:`, so a hook only checks the
+  workspace it actually applies to.
 
 ## Before opening a PR
 
@@ -63,3 +77,9 @@ boundary, not a bug), so the automated Hermes review that normally runs on
 `opened` won't complete for fork PRs — a maintainer can still trigger it
 manually by commenting `@s3ntin3l8-hermes Review` on the PR, which runs in
 the base repo's context.
+
+## Addressing review feedback, and post-merge cleanup
+
+See [`AGENTS.md`](AGENTS.md)'s "Addressing review feedback" and "Post-merge
+cleanup" sections for the exact commands — the reply-and-resolve two-step for
+inline PR comments, and the branch/worktree cleanup after a merge.

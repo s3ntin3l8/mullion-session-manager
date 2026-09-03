@@ -35,6 +35,16 @@ describe("ProjectSetupPanel", () => {
     expect(screen.getByText("Preview")).toBeDisabled();
   });
 
+  // Issue #942 (this restructure) — CLAUDE.md is unconditional (no
+  // checkbox, no request-body field), so the only thing to guard against
+  // drift is the notice copy that tells the user it's part of what gets
+  // committed.
+  it("the notice mentions CLAUDE.md as part of what gets committed", () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+    expect(screen.getByText(/CLAUDE\.md/)).toBeInTheDocument();
+  });
+
   it("sends the entered slug and checked options, and shows the returned diff", async () => {
     const fetchMock = mockFetch({
       preview: () =>
