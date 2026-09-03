@@ -61,6 +61,71 @@ describe("deepMerge", () => {
     const result = deepMerge(base, { terminal: null });
     expect(result).toEqual({ terminal: { fontSize: 14 } });
   });
+
+  // Regression (issue #957/#958): opencode.implementerModel and friends are
+  // this schema's first fields whose default is `null`. Before the
+  // `defaults` param existed, `sameType(base, value)` unconditionally
+  // rejected the patch whenever EITHER side was null — so a null-defaulted
+  // field could never receive its first value (null -> string) NOR be
+  // cleared back to null once set (string -> null). A value picked in
+  // Settings -> Models would silently never persist through
+  // PATCH /api/settings. These mirror frontend/src/settingsMerge.test.ts's
+  // identical cases for the frontend copy.
+  describe("a field whose declared default is null", () => {
+    it("accepts a first-ever value (null -> string)", () => {
+      const defaults = { model: null as string | null };
+      const base = { model: null as string | null };
+      const result = deepMerge(base, { model: "anthropic/claude-sonnet-4-5" }, defaults);
+      expect(result.model).toBe("anthropic/claude-sonnet-4-5");
+    });
+
+    it("accepts clearing an already-set value back to null (string -> null)", () => {
+      const defaults = { model: null as string | null };
+      const base = { model: "anthropic/claude-sonnet-4-5" as string | null };
+      const result = deepMerge(base, { model: null }, defaults);
+      expect(result.model).toBeNull();
+    });
+
+    it("still rejects a non-scalar patch (object) for a null-defaulted field", () => {
+      const defaults = { model: null as unknown };
+      const base = { model: null as unknown };
+      const result = deepMerge(base, { model: { nested: true } }, defaults);
+      expect(result.model).toBeNull();
+    });
+
+    // Code review on the first version of this fix caught that a
+    // null-defaulted field accepted ANY scalar type (string/number/boolean),
+    // not just the field's actual `string | null` type — a
+    // `{opencode:{implementerModel: 42}}` PATCH would have silently
+    // corrupted a string field (sanitizeSettings doesn't touch
+    // settings.opencode, so nothing would repair it). `defaultValue === null`
+    // proves nullability but nothing about the non-null type, so the check
+    // is narrowed to `string` specifically (every current null-defaulted
+    // field's real type), not "any JSON scalar."
+    it("rejects a number or boolean patch for a null-defaulted (string-typed) field", () => {
+      const defaults = { model: null as unknown };
+      const base = { model: null as unknown };
+      expect(deepMerge(base, { model: 42 }, defaults).model).toBeNull();
+      expect(deepMerge(base, { model: true }, defaults).model).toBeNull();
+    });
+  });
+
+  it("a field whose default is non-null still rejects null (no unintended relaxation)", () => {
+    const defaults = { theme: "dark" };
+    const base = { theme: "dark" };
+    const result = deepMerge(base, { theme: null }, defaults);
+    expect(result.theme).toBe("dark");
+  });
+
+  it("a {opencode:{implementerModel:...}} patch survives deepMerge end to end, same failure mode as the taskMaster case below", () => {
+    // Uses the real DEFAULT_SETTINGS shape (not a synthetic fixture) —
+    // mergeSettings(patch) is `deepMerge(DEFAULT_SETTINGS, patch)`, i.e.
+    // base === defaults at this call site, so this exercises the
+    // `defaults = base` fallback path exactly like getStoredSettings does
+    // on a fresh DB.
+    const result = mergeSettings({ opencode: { implementerModel: "anthropic/claude-sonnet-4-5" } });
+    expect(result.opencode.implementerModel).toBe("anthropic/claude-sonnet-4-5");
+  });
 });
 
 describe("sanitizeSettings", () => {

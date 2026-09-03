@@ -533,10 +533,41 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // Reached only when at least one side isn't a plain object (deepMerge
 // recurses instead when both are), so an object-vs-anything-else mismatch is
 // always rejected here.
-function sameType(base: unknown, value: unknown): boolean {
+//
+// `defaultValue` is that field's value in the STATIC DEFAULT_SETTINGS tree
+// (threaded through deepMerge's recursion below, distinct from `base` which
+// is the current, possibly-already-patched value at that key) — the only
+// reliable signal for "is this field declared nullable," since `base` drifts
+// away from null the moment the field is first set.
+//
+// Regression: `opencode.implementerModel`/`reviewerModel`/`defaultSmallModel`
+// (issue #957/#958) are this schema's first fields whose default is `null`.
+// Before this nullability check existed, such a field could never transition
+// null -> a value (`sameType(null, "x")` was always false) NOR back from a
+// value -> null (`sameType("x", null)` was also always false) — Settings ->
+// Models could show a selection in the dropdown but it silently never
+// persisted (caught by Settings.models.test.tsx). Every other existing
+// field's default is non-null, so this branch is unreached for them and
+// their behavior is unchanged.
+//
+// Restricted to `string` (not "any scalar") deliberately: `defaultValue`
+// only proves the field is NULLABLE, not what its non-null type is — there's
+// no runtime signal for that beyond the default itself. Every field that
+// takes this branch today (all three opencode.* fields) is `string | null`,
+// so this is exact, not a guess. A code-review pass on the first version of
+// this fix caught that accepting number/boolean too would let a
+// wrong-typed PATCH (e.g. `{opencode:{implementerModel: 42}}`) silently
+// corrupt the field — sanitizeSettings doesn't touch settings.opencode, so
+// nothing would repair it. If a genuinely nullable number/boolean field is
+// ever added to this schema, this check needs revisiting (e.g. threading an
+// explicit type tag rather than inferring from `defaultValue`).
+function sameType(base: unknown, value: unknown, defaultValue: unknown): boolean {
   if (isPlainObject(base) || isPlainObject(value)) return false;
   if (Array.isArray(base)) return Array.isArray(value);
   if (Array.isArray(value)) return false;
+  if (defaultValue === null) {
+    return value === null || typeof value === "string";
+  }
   if (base === null || value === null) return false;
   return typeof base === typeof value;
 }
@@ -549,18 +580,28 @@ function sameType(base: unknown, value: unknown): boolean {
 // a bracket-notation write — a prototype-pollution vector. Keys present in
 // the patch but absent from `base` (i.e. not part of the known settings
 // shape) are silently dropped rather than merged in.
-export function deepMerge<T>(base: T, patch: unknown): T {
+//
+// `defaults` defaults to `base` itself when omitted — every existing
+// internal recursive call and the `deepMerge(DEFAULT_SETTINGS, stored)` call
+// in getStoredSettings below already satisfy `base === defaults` at the top
+// level, so this default is not a behavior change for them. A caller merging
+// a patch onto a value that has DRIFTED from the defaults (route handlers
+// merging a PATCH body onto the currently-stored settings) must pass
+// DEFAULT_SETTINGS explicitly — see routes/settings.ts's call site.
+export function deepMerge<T>(base: T, patch: unknown, defaults: T = base): T {
   if (!isPlainObject(patch)) return base;
   const baseObj = base as Record<string, unknown>;
+  const defaultsObj = defaults as Record<string, unknown>;
   const result: Record<string, unknown> = { ...baseObj };
   for (const key of Object.keys(baseObj)) {
     if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
     const baseValue = baseObj[key];
     const value = patch[key];
+    const defaultValue = defaultsObj[key];
     result[key] =
       isPlainObject(baseValue) && isPlainObject(value)
-        ? deepMerge(baseValue, value)
-        : sameType(baseValue, value)
+        ? deepMerge(baseValue, value, isPlainObject(defaultValue) ? defaultValue : baseValue)
+        : sameType(baseValue, value, defaultValue)
           ? value
           : baseValue;
   }

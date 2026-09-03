@@ -71,6 +71,56 @@ describe("settings route", () => {
     await app.close();
   });
 
+  // Regression (issue #957/#958): opencode.implementerModel's default is
+  // `null` — this schema's first field with a null default. The bug this
+  // pins is specific to the SECOND patch: by then `previous` (the settings
+  // read at the top of the PATCH handler) has already drifted away from
+  // DEFAULT_SETTINGS, so deepMerge can no longer infer the field's
+  // nullability from `previous` alone — only from the explicit
+  // DEFAULT_SETTINGS argument the route now passes. Before that fix, the
+  // first PATCH (null -> string) already failed too, but this two-step
+  // shape is what a real user does in Settings -> Models: pick a model,
+  // then clear it back to "None".
+  it("sets then clears an opencode.implementerModel patch (null -> string -> null)", async () => {
+    const app = await buildApp();
+
+    const set = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { opencode: { implementerModel: "anthropic/claude-sonnet-4-5" } },
+    });
+    expect(set.json().opencode.implementerModel).toBe("anthropic/claude-sonnet-4-5");
+
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { opencode: { implementerModel: null } },
+    });
+    expect(cleared.json().opencode.implementerModel).toBeNull();
+    // Siblings untouched by either patch.
+    expect(cleared.json().opencode.reviewerModel).toBeNull();
+
+    await app.close();
+  });
+
+  // Code review on the null-transition fix above caught that its first
+  // version over-widened: it accepted ANY scalar (string/number/boolean)
+  // for a null-defaulted field, not just that field's actual `string | null`
+  // type. A number here must still be dropped, exactly like a type-mismatch
+  // patch on any other field.
+  it("rejects a numeric opencode.implementerModel patch, leaving the field null", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { opencode: { implementerModel: 42 } },
+    });
+    expect(res.json().opencode.implementerModel).toBeNull();
+
+    await app.close();
+  });
+
   it("accumulates across independent PATCHes to different nested fields", async () => {
     const app = await buildApp();
 
