@@ -756,8 +756,9 @@ export async function projectsRoute(app: FastifyInstance) {
       rows.map(async (row) => {
         let currentBranch: string | null;
         // Issue #431 — the sidebar's rule-file indicator (which of
-        // CLAUDE.md/AGENTS.md/AGENTS.override.md/GEMINI.md this project
-        // actually has), same "ride along on this already-polled list"
+        // CLAUDE.md/AGENTS.md/AGENTS.override.md this project actually has
+        // — issue #977: GEMINI.md dropped, agy's project-scope file is
+        // AGENTS.md too), same "ride along on this already-polled list"
         // reasoning as currentBranch immediately above. A local project
         // does the cheap existsSync-only check directly; a remote one hits
         // the dedicated /internal/agent-rules/exists endpoint (Hermes

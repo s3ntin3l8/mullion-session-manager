@@ -80,7 +80,8 @@ export interface Project {
   // setting" (src/plugins/git-fetcher.ts). Mirrors the DB column 1:1.
   autoFetch: boolean | null;
   // Issue #431 — which project-scope agent-rules filenames exist for this
-  // project (CLAUDE.md, AGENTS.md, AGENTS.override.md, GEMINI.md), deduped
+  // project (CLAUDE.md, AGENTS.md, AGENTS.override.md — issue #977: agy's
+  // project-scope file is AGENTS.md too, not a separate GEMINI.md), deduped
   // across agents. Same "cheap enough to ride along on every GET
   // /api/projects" reasoning as currentBranch above — see
   // listExistingProjectRuleFileNames's own doc comment. Never includes
@@ -1072,6 +1073,14 @@ export interface Task {
   // ingested yet. Durable input to auto-approve's gate; not itself the
   // rendered findings text (see reviewFindings above).
   lastReviewVerdict: string | null;
+  // Sequential review phase — null while the task is still in the
+  // internal-review stage (its PR, if any, is still a draft); non-null
+  // once Task Master's own review converged and an external reviewer has
+  // been asked to look. externalReviewNote is the human-readable status of
+  // that stage, same independent-of-the-intent-column shape as mergeError/
+  // releaseError above.
+  externalReviewRequestedAt: string | null;
+  externalReviewNote: string | null;
   assignee: string | null;
   // Why a task went "failed" — session death, budget exceeded, or spawn
   // failure. Also carries the human's reject feedback while the task is

@@ -177,10 +177,10 @@ describe("project-setup route", () => {
     const second = await app.inject({
       method: "POST",
       url: `/api/projects/${projectId}/setup/preview`,
-      payload: { slug: "demo", mirrors: ["GEMINI.md"] },
+      payload: { slug: "demo", includeContributingPointer: true },
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json().files).toContain("GEMINI.md");
+    expect(second.json().files).toContain("CONTRIBUTING.md");
 
     await app.close();
   });
@@ -281,18 +281,18 @@ describe("project-setup route", () => {
     const secondPreview = await app.inject({
       method: "POST",
       url: `/api/projects/${projectId}/setup/preview`,
-      payload: { slug: "demo", mirrors: ["GEMINI.md"] },
+      payload: { slug: "demo", includeContributingPointer: true },
     });
     expect(secondPreview.statusCode).toBe(200);
     const body = secondPreview.json();
     // A fresh worktree re-derived off the real base branch shows the new
-    // mirror as an actual change — a stale, already-applied worktree
+    // pointer as an actual change — a stale, already-applied worktree
     // would still contain the FIRST preview's AGENTS.md/skill/reviewer as
-    // already-committed (no diff), and GEMINI.md wouldn't even be new
+    // already-committed (no diff), and CONTRIBUTING.md wouldn't even be new
     // relative to a HEAD that never had it — this only passes if the
     // worktree was genuinely rebuilt.
-    expect(body.files).toContain("GEMINI.md");
-    expect(body.diff).toContain("GEMINI.md");
+    expect(body.files).toContain("CONTRIBUTING.md");
+    expect(body.diff).toContain("CONTRIBUTING.md");
 
     await app.close();
   });

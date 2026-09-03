@@ -46,7 +46,7 @@ import {
   type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
-import { openDraftPRForTask } from "./task-promote.js";
+import { openDraftPRForTask, requestExternalReviewForTask } from "./task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
@@ -73,6 +73,7 @@ import {
   fetchRunsForHead,
   fetchRequiredStatusContexts,
   fetchCheckRunsForHead,
+  repoHasExternalReviewWorkflow,
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
@@ -2260,6 +2261,93 @@ async function attemptReturnPrCommentsToWorker(
  * disposition, same posture as the merge sweep's own per-`mergeableState`
  * table above.
  */
+type ExternalReviewGate = "satisfied" | "wait" | "blocked";
+
+/**
+ * Sequential review phase (branchdam-mobile #83's investigation) — the gate
+ * half of the redesign: whether auto-approve is allowed to flip this task
+ * to "done" given the external stage processExternalReviewRequests already
+ * entered (`task.externalReviewRequestedAt !== null` — auto-approve's own
+ * candidate query, below, already requires `prNumber IS NOT NULL`, and
+ * processExternalReviewRequests runs every tick before this, so a task
+ * reaching this check normally already has it set; a stale row from before
+ * this shipped, with it still null, is treated as "satisfied" rather than
+ * wedging auto-approve forever on a signal that will never arrive).
+ *
+ * `current` is `attemptAutoApprove`'s own already-resolved CI lookup —
+ * reused rather than re-resolved, since it already carries the PR's live
+ * head sha and repo ref this needs too.
+ */
+async function resolveExternalReviewGate(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  current: NonNullable<Awaited<ReturnType<typeof fetchCurrentCiStatus>>>,
+): Promise<ExternalReviewGate> {
+  if (task.externalReviewRequestedAt === null) return "satisfied";
+
+  // "write", NOT "read" — unlike fetchCurrentCiStatus above, this reads
+  // via the Contents API (repoHasExternalReviewWorkflow, below), which
+  // needs a `contents` permission. `READ_PERMISSIONS` (github-app.ts)
+  // deliberately doesn't grant one (#489's least-privilege split covers
+  // actions/metadata/pull_requests only) — adding it there would 422 every
+  // existing installation's token mint until a human re-approves the wider
+  // grant (see mintInstallationToken's own doc comment on exactly that
+  // failure mode), for a feature only reachable once a task is already
+  // most of the way to being approved and written to anyway.
+  // `WRITE_PERMISSIONS` already grants `contents: write` (pushing the
+  // task's branch needs it), so reusing that scope here costs nothing new
+  // and avoids the installation-wide re-approval entirely. mullion-reviewer
+  // caught this: a "read" token here would 403 the Contents call, degrade
+  // to `false` ("no reviewer"), and silently reproduce this diff's own
+  // defect for every App-authenticated install — the exact failure mode it
+  // exists to close.
+  const token = await resolveGitHubToken(app, current.repoRef, "write");
+  if (!token) return "wait";
+
+  // Sequential review phase — whether a reviewer exists at all is a static
+  // property of the repo's own workflow config, not something to wait and
+  // observe: repoHasExternalReviewWorkflow answers it from
+  // `.github/workflows/*` content directly, so there is no detection
+  // window here at all, and no window-vs-outage ambiguity to worry about —
+  // a lookup failure there already degrades to `false` on its own terms
+  // (see its own doc comment), same posture as every other best-effort
+  // GitHub read in this file.
+  const hasReviewer = await repoHasExternalReviewWorkflow(
+    token,
+    current.repoRef.owner,
+    current.repoRef.repo,
+  );
+  if (!hasReviewer) return "satisfied";
+
+  // A qualifying workflow exists — an external reviewer WILL run on this
+  // PR (or already has). Run completion is not review completion (PR #83's
+  // own Hermes run concluded 55s before its review was actually submitted
+  // — hermes.yml's self-hosted runner only relays the prompt; the agent
+  // posts the review asynchronously), so no run-level signal is consulted
+  // here at all — only the PR's aggregate review decision is, polled with
+  // no timeout, since its arrival is already known, not merely hoped for.
+  if (task.prNumber === null) return "wait";
+  let decision: string | null;
+  try {
+    decision = await getPullRequestReviewDecision(
+      token,
+      current.repoRef.owner,
+      current.repoRef.repo,
+      task.prNumber,
+    );
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id },
+      "task reconcile: external review-decision lookup failed — waiting to retry",
+    );
+    return "wait";
+  }
+  if (decision === "CHANGES_REQUESTED") return "blocked";
+  if (decision === "APPROVED") return "satisfied";
+  // REVIEW_REQUIRED or null — a review is expected but hasn't landed yet.
+  return "wait";
+}
+
 async function attemptAutoApprove(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -2300,6 +2388,20 @@ async function attemptAutoApprove(
   if (task.lastReviewVerdict !== "clean") return;
 
   if (!current || current.status !== "success") return;
+
+  const externalGate = await resolveExternalReviewGate(app, task, current);
+  if (externalGate === "wait") return;
+  if (externalGate === "blocked") {
+    app.db
+      .update(tasks)
+      .set({
+        externalReviewNote:
+          "External reviewer requested changes on this pull request — it needs a human to take it from here.",
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    return;
+  }
 
   const outcome = await approveTask(app, task, project, "auto-approve");
   if (outcome.ok) {
@@ -2668,10 +2770,12 @@ async function unlinkFindingsFileIfPresent(
  * Mullion resolves — but ONLY once its own NEXT independent review round
  * confirms the diff is no longer a "changes-requested" one, i.e. exactly
  * the same corroboration a human reviewer clicking Resolve would be acting
- * on. This function runs from processReviewingTasks at the moment a
- * "clean" verdict is durably ingested — never fires off an
- * "inconclusive"/crashed-reviewer verdict, which is not corroborating
- * evidence of anything.
+ * on. This function has two call sites, both gated on a "clean" verdict:
+ * `processReviewingTasks`, at the moment that verdict is durably ingested,
+ * and `attemptMerge`'s D1 self-heal, which re-checks the same
+ * `lastReviewVerdict` column on already-`done` rows (see the comment at
+ * that call site) — never fires off an "inconclusive"/crashed-reviewer
+ * verdict, which is not corroborating evidence of anything.
  *
  * Bounded to `mullionLogins` (`resolveMullionReviewLogins`, same set D0's
  * fix uses) — a human's own review thread is NEVER a candidate here,
@@ -3055,7 +3159,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           parsed
             ? {
                 body: commentBody + cappedNote,
-                reviewSummary: `${roundLabel}\n\n${parsed.summary}${cappedNote}`,
+                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
                 findings: parsed.findings,
                 verdict,
               }
@@ -3084,7 +3188,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           // Rendered, not the raw findings-file content — `shouldAutoReturn`
           // guarantees `parsed !== null` here, but `parsed` may be JSON; the
           // worker should read prose, not the wire format Mullion parses.
-          findings: renderReviewFindingsMarkdown(parsed!),
+          findings: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
           // #778 — resolved against the OWNING host's own sessionsDir; see
           // spawnReviewAgentNow's own comment for the full rationale.
           commitTitlePath: project.conventionalCommitTitles
@@ -3101,6 +3205,114 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
       }
     }),
   );
+}
+
+/**
+ * Sequential review phase (branchdam-mobile #83's investigation) — the
+ * trigger half of the redesign: decides WHEN Task Master's own review has
+ * converged and a task's PR should be marked ready for an external
+ * reviewer to see. Runs over every "reviewing" task with a PR AND a review
+ * agent (`reviewSessionId IS NOT NULL`) that hasn't had an external review
+ * requested yet — same `sessions` inner-join precondition
+ * processReviewingTasks above uses, so this only ever fires once that
+ * loop's own ingestion has actually run for this task.
+ *
+ * Scoped to `projects.autoApprove = true`, same candidate filter
+ * processAutoApprovals uses below — deliberately narrower than the full
+ * design (which sequences every project, autoApprove or not): PR A of this
+ * redesign only wires up the half that closes PR #83's actual defect
+ * (auto-approve racing an external reviewer). Marking a non-autoApprove
+ * project's PR ready earlier than approve, with nothing yet ingesting the
+ * external findings a human wouldn't otherwise see (that's 2c, hoisting
+ * attemptReturnPrCommentsToWorker out of this same autoApprove gate — a
+ * separate, larger PR), buys nothing yet and only widens this change's
+ * blast radius. See issue #982 / the plan doc for the full sequencing.
+ *
+ * A task with no review agent configured at all (`reviewSessionId ===
+ * null`) never reaches this sweep either — it already never reaches
+ * auto-approve (attemptAutoApprove's `if (task.lastReviewVerdict !==
+ * "clean") return` below can never pass for a verdict that's never
+ * written), so leaving it un-sequenced changes nothing about how such a
+ * task reaches "done" today. See issue #981 for wiring this case in
+ * properly instead of leaving it permanently unaddressed.
+ *
+ * "Converged" is either:
+ *  - the latest ingested verdict is "clean", or
+ *  - a round was wanted but the auto-return round cap was already spent
+ *    (processReviewingTasks above already parks this case for a human —
+ *    see its own `cappedNote`; this still asks an external reviewer to
+ *    look, on the theory that outside eyes on a diff Task Master gave up
+ *    fixing itself are still useful, not wasted).
+ *
+ * A concurrent reject/give-up/human-approve is handled by the CAS write
+ * below, not by re-checking `status` up front — same posture as every
+ * other sweep in this file.
+ */
+async function processExternalReviewRequests(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+  if (skipSweepIfGitHubRateLimited(app, "processExternalReviewRequests")) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        eq(projects.autoApprove, true),
+        isNotNull(tasks.prNumber),
+        isNotNull(tasks.reviewSessionId),
+        isNull(tasks.externalReviewRequestedAt),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  for (const { task, project } of rows) {
+    if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
+
+    const converged =
+      task.reviewFindingsIngestedSessionId === task.reviewSessionId &&
+      (task.lastReviewVerdict === "clean" ||
+        task.autoReturnRounds >= resolveMaxAutoReturnRounds(project));
+    if (!converged) continue;
+
+    const outcome = await requestExternalReviewForTask(app, task, project);
+    if (!outcome.ok) {
+      app.log.warn(
+        { taskId: task.id, reason: outcome.reason, detail: outcome.detail },
+        "task reconcile: failed to mark PR ready for external review — retrying",
+      );
+      continue;
+    }
+
+    // CAS'd on `externalReviewRequestedAt IS NULL` as well as `status =
+    // "reviewing"` — requestExternalReviewForTask's own mark-ready call is
+    // idempotent, so losing this race to a concurrent tick of this same
+    // sweep (or to a human approving in between) costs nothing beyond a
+    // redundant GitHub call already made above.
+    const updated = app.db
+      .update(tasks)
+      .set({
+        externalReviewRequestedAt: new Date(),
+        externalReviewNote: "Waiting on an external review.",
+      })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "reviewing"),
+          isNull(tasks.externalReviewRequestedAt),
+        ),
+      )
+      .run();
+    if (updated.changes === 0) continue;
+
+    app.log.info(
+      { taskId: task.id, prNumber: task.prNumber },
+      "task reconcile: marked PR ready for external review",
+    );
+  }
 }
 
 /**
@@ -3160,6 +3372,11 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // findings would never be processed on a tick with no claimed/in_progress
   // work at all.
   await processReviewingTasks(app);
+  // Sequential review phase — runs right after processReviewingTasks, same
+  // tick, for the identical reason the next comment gives: a verdict
+  // ingested (or a round cap reached) earlier in this pass is already
+  // visible and can trigger the undraft immediately, not a tick later.
+  await processExternalReviewRequests(app);
   // Runs right after processReviewingTasks, same tick — both re-read from
   // the DB, so a verdict ingested earlier in this pass is already visible
   // and can be acted on immediately, not deferred to the next tick.
@@ -3386,6 +3603,22 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 reviewSessionId: null,
                 reviewSeedDelivered: null,
                 reviewSpawnClaimedAt: null,
+                // mullion-reviewer finding: reviewFindingsIngestedSessionId/
+                // lastReviewVerdict survive a reject-and-re-review cycle
+                // (they're protected instead — a stale value is only ever
+                // trusted when it equals the FRESH reviewSessionId just
+                // nulled above), but externalReviewRequestedAt/
+                // externalReviewNote have no such guard: without nulling
+                // them here, a second "reviewing" episode would never
+                // re-enter processExternalReviewRequests's candidate query
+                // (it requires externalReviewRequestedAt IS NULL), so
+                // episode 1's stale note keeps rendering while THIS
+                // episode's internal review runs on a completely different
+                // diff, and once it converges, attemptAutoApprove's gate
+                // would poll the SAME PR's review decision without ever
+                // re-requesting review on the new commits.
+                externalReviewRequestedAt: null,
+                externalReviewNote: null,
                 // #761 — `?? task.prTitle`, not a bare overwrite: a later
                 // round that doesn't rewrite the title file (see
                 // `taskCommitTitlePath`'s own doc comment on why that's

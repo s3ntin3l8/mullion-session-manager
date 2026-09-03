@@ -46,10 +46,11 @@ There is no `GEMINI.md` in this repo: agy reads project-scope `AGENTS.md`
 natively (verified empirically — `agy` in this repo, run with
 `--new-project` to register it and answer a repo-specific question, cited
 `AGENTS.md` as its source), so a `GEMINI.md` pointer to the same file would
-be redundant. The scaffold's `GEMINI.md` mirror option (below) is
-known-unnecessary for the same reason but not yet removed —
-[issue #978](https://github.com/s3ntin3l8/mullion-session-manager/issues/978)
-tracks deprecating it.
+be redundant. For the same reason, the scaffold (below) no longer offers a
+`GEMINI.md` mirror option at all
+([issue #978](https://github.com/s3ntin3l8/mullion-session-manager/issues/978));
+an existing, hand-authored `GEMINI.md` in a target repo is left untouched,
+same as `AGENTS.override.md` above.
 
 ## The pinned note
 
@@ -216,18 +217,16 @@ three artifacts into a real, reviewable pull request:
    remote/token is configured, leaves it as a local branch you push
    yourself.
 
-**Known, accepted gap**: `scripts/check-briefing-sync.mjs` (the script
-that guards `GEMINI.md`/`CLAUDE.md`/`AGENTS.override.md` against
+The scaffold does not emit a `check-briefing-sync.mjs`-equivalent guard
+script into the target repo at all — `scripts/check-briefing-sync.mjs` (the
+script that guards `CLAUDE.md`/`GEMINI.md`/`AGENTS.override.md` against
 re-acquiring a content-bearing briefing region — see "AGENTS.md leads"
-above) is only emitted into the target repo when the `GEMINI.md` mirror is
-opted in, even though `CLAUDE.md` is unconditional — so a default scaffold
-(no `mirrors`) ships a `CLAUDE.md` with no local script guarding it. Not
-widened, because `scaffoldableRelPaths` never reads/writes the target's
-own `package.json` either way, so the script isn't wired into that repo's
-own `npm run lint` or a pre-commit hook regardless of when it's emitted —
-widening emission would add another unwired file, not close the gap. See
-the code comment above the emission check in `mullion-scaffold.ts` for the
-full reasoning.
+above) is specific to this repo's own `make lint`/pre-commit wiring, and
+`scaffoldableRelPaths` never reads/writes a target repo's own
+`package.json` either way, so a copied-in script would be unwired there
+regardless. A team that wants the same guard in its own repo can copy
+`scripts/check-briefing-sync.mjs` and wire it into its own lint/pre-commit
+setup by hand.
 
 The `.agents/skills/<slug>` mirror defaults to a **plain file copy** of the
 skill content, not a symlink — a symlink is a review-hostile diff, breaks on

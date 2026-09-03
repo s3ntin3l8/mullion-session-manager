@@ -7,6 +7,7 @@ import {
   fetchRequiredStatusContexts,
   fetchCheckRunsForHead,
   getDefaultBranch,
+  repoHasExternalReviewWorkflow,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -434,5 +435,170 @@ describe("fetchCheckRunsForHead", () => {
     await expect(
       fetchCheckRunsForHead("tok", "o", "check-runs-down-repo", "sha-head"),
     ).resolves.toEqual([]);
+  });
+});
+
+// Sequential review phase (branchdam-mobile #83's investigation) — one
+// owner/repo per test, unmocked global cache, same reasoning as
+// fetchRequiredStatusContexts's own describe block above.
+describe("repoHasExternalReviewWorkflow", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function listResponse(entries: { path: string; type: string }[]) {
+    return jsonResponse(200, entries);
+  }
+
+  function rawResponse(text: string) {
+    return new Response(text, { status: 200 });
+  }
+
+  it("returns true when a workflow file declares a ready_for_review pull_request trigger", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/hermes-review.yml")) {
+        return Promise.resolve(
+          rawResponse("on:\n  pull_request:\n    types: [opened, ready_for_review]\n"),
+        );
+      }
+      return Promise.resolve(
+        listResponse([{ path: ".github/workflows/hermes-review.yml", type: "file" }]),
+      );
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "has-reviewer-repo");
+    expect(result).toBe(true);
+  });
+
+  it("returns true for the block-list YAML form of types:", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/hermes-review.yml")) {
+        return Promise.resolve(
+          rawResponse(
+            "on:\n  pull_request:\n    types:\n      - opened\n      - ready_for_review\n",
+          ),
+        );
+      }
+      return Promise.resolve(
+        listResponse([{ path: ".github/workflows/hermes-review.yml", type: "file" }]),
+      );
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "block-list-types-repo");
+    expect(result).toBe(true);
+  });
+
+  // Hermes review, PR #989: a bare `[ \t]*\n` anchor on the `types:` line
+  // used to reject this form outright — a false negative that would have
+  // let auto-approve proceed as if no reviewer were configured.
+  it("returns true for the block-list form even with a trailing comment on the types: line", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/hermes-review.yml")) {
+        return Promise.resolve(
+          rawResponse(
+            "on:\n  pull_request:\n    types: # opt in explicitly\n      - opened\n      - ready_for_review\n",
+          ),
+        );
+      }
+      return Promise.resolve(
+        listResponse([{ path: ".github/workflows/hermes-review.yml", type: "file" }]),
+      );
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "trailing-comment-types-repo");
+    expect(result).toBe(true);
+  });
+
+  it("returns false when every workflow file exists but none mention ready_for_review", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/ci-cd.yml")) {
+        return Promise.resolve(rawResponse("on:\n  pull_request:\n"));
+      }
+      return Promise.resolve(listResponse([{ path: ".github/workflows/ci-cd.yml", type: "file" }]));
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "ci-only-repo");
+    expect(result).toBe(false);
+  });
+
+  it("returns false (fail closed) when the repo has no workflows directory at all", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "no-workflows-repo");
+    expect(result).toBe(false);
+  });
+
+  it("returns false (fail closed) on a network failure, never throws", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(
+      repoHasExternalReviewWorkflow("tok", "o", "network-down-workflows-repo"),
+    ).resolves.toBe(false);
+  });
+
+  it("ignores non-.yml/.yaml entries in the workflows directory", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/contents/.github/workflows/")) {
+        throw new Error("should never fetch a non-workflow file");
+      }
+      return Promise.resolve(
+        listResponse([
+          { path: ".github/workflows/README.md", type: "file" },
+          { path: ".github/workflows/scripts", type: "dir" },
+        ]),
+      );
+    });
+
+    const result = await repoHasExternalReviewWorkflow("tok", "o", "no-yaml-files-repo");
+    expect(result).toBe(false);
+  });
+
+  it("caches a successful lookup — a second call for the same repo makes no further request", async () => {
+    // A genuinely empty workflows directory (200, []) — not a 404 — is the
+    // "successful lookup" this caches; a 404 is a non-ok response and
+    // follows fetchRequiredStatusContexts's own "don't cache a failure"
+    // convention below.
+    fetchMock.mockResolvedValue(listResponse([]));
+    await repoHasExternalReviewWorkflow("tok", "o", "cache-hit-workflows-repo");
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    const second = await repoHasExternalReviewWorkflow("tok", "o", "cache-hit-workflows-repo");
+    expect(second).toBe(false);
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("does NOT cache a 404 (no workflows directory) — a retry makes a fresh request", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    await repoHasExternalReviewWorkflow("tok", "o", "no-cache-404-workflows-repo");
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    await repoHasExternalReviewWorkflow("tok", "o", "no-cache-404-workflows-repo");
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst * 2);
+  });
+
+  it("does NOT cache a failed lookup — a retry after a network failure makes a fresh request", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network down"));
+    fetchMock.mockResolvedValueOnce(
+      listResponse([{ path: ".github/workflows/hermes-review.yml", type: "file" }]),
+    );
+    fetchMock.mockResolvedValueOnce(
+      rawResponse("on:\n  pull_request:\n    types: [ready_for_review]\n"),
+    );
+
+    const first = await repoHasExternalReviewWorkflow(
+      "tok",
+      "o",
+      "retry-after-network-failure-repo",
+    );
+    expect(first).toBe(false);
+    const second = await repoHasExternalReviewWorkflow(
+      "tok",
+      "o",
+      "retry-after-network-failure-repo",
+    );
+    expect(second).toBe(true);
   });
 });

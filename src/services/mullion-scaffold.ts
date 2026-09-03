@@ -7,13 +7,13 @@ import type { DockControl } from "./project-config.js";
 // Issue #942 — a SEPARATE marker pair from MARKER_START/MARKER_END above:
 // those wrap a full mirrored copy of AGENTS.md's own briefing region (the
 // thing this issue is retiring), while these wrap a one-line POINTER back
-// to AGENTS.md instead. Reusing the same markers for both would make
-// CHECK_BRIEFING_SYNC_SCRIPT's own "does this file re-acquire a
-// mullion:briefing region" guard fire on every scaffolded GEMINI.md just
+// to AGENTS.md instead. Reusing the same markers for both would make this
+// repo's own scripts/check-briefing-sync.mjs's "does this file re-acquire a
+// mullion:briefing region" guard fire on its own committed CLAUDE.md just
 // for carrying the pointer it's SUPPOSED to carry — a new, distinct pair
 // keeps "a full mirror reappeared" (bad) and "the pointer this scaffold
 // itself wrote is present" (expected) unambiguous. Exported so tests (and
-// this repo's own committed GEMINI.md, which has to use the identical
+// this repo's own committed CLAUDE.md, which has to use the identical
 // literal) never risk drifting from a hardcoded copy of these strings.
 export const POINTER_MARKER_START = "<!-- mullion:pointer:start -->";
 export const POINTER_MARKER_END = "<!-- mullion:pointer:end -->";
@@ -67,30 +67,12 @@ export interface ScaffoldOptions {
    * since a pure function's own caller-independence is the whole point of
    * writing it this way. */
   slug: string;
-  /** Issue #942 — was `Array<"GEMINI.md" | "AGENTS.override.md">`, each
-   * mirror carrying a byte-identical copy of AGENTS.md's own briefing
-   * region (kept in sync by `scripts/check-briefing-sync.mjs`).
-   * `AGENTS.override.md` is no longer offered at all — per-agent
-   * precedence (`src/services/agent-rules.ts`) lets it silently shadow
-   * AGENTS.md for Codex, and this scaffold shouldn't hand a target repo a
-   * second file with that footgun built in (an existing hand-authored
-   * override is untouched; this only stops the scaffold from creating new
-   * ones). `GEMINI.md`, when opted in, is now a one-line POINTER to
-   * AGENTS.md, not a content mirror — see `agentsMdPointerBody` below —
-   * so there's nothing left to keep byte-identical. `CLAUDE.md` is
-   * deliberately NOT in this enum, even though it's also a pointer-shaped
-   * file below: unlike GEMINI.md's reader (agy, which reads project
-   * AGENTS.md natively — verified empirically), Claude Code does NOT read
-   * AGENTS.md on its own, so a target repo without a CLAUDE.md import gets
-   * nothing from this whole scaffold in a Claude Code session. That makes
-   * it unconditional, always emitted below, not an opt-in mirror. */
-  mirrors?: Array<"GEMINI.md">;
   /** Issue #942 — optional, opt-in only (a checkbox, never a default-on
    * mirror, since `CONTRIBUTING.md` is a human/GitHub convention Mullion
    * has no functional need to touch): upserts a short pointer paragraph
    * ("see AGENTS.md's Workflow Conventions section...") into
    * `CONTRIBUTING.md`, via the same marked-region upsert mechanism as
-   * `GEMINI.md`'s pointer above — never the whole file, never touching
+   * `CLAUDE.md`'s import above — never the whole file, never touching
    * anything outside the marked region, so an existing Code-of-Conduct/
    * dev-setup file is left completely alone. Creates a fresh
    * `CONTRIBUTING.md` (pointer only) when the option is on and none
@@ -186,24 +168,17 @@ function briefingRegionBody(slug: string): string {
   );
 }
 
-// Issue #942 — GEMINI.md is no longer a content mirror; it's a one-line
-// pointer back to AGENTS.md, the single source of truth every CLI already
-// reads natively.
-function agentsMdPointerBody(): string {
-  return "Read `AGENTS.md`.";
-}
-
 // Claude Code does NOT auto-load AGENTS.md (its own memory docs: "Claude
-// Code reads CLAUDE.md, not AGENTS.md" — confirmed empirically) — so unlike
-// GEMINI.md above, a prose "Read AGENTS.md." pointer here would deliver
-// nothing at all. The `@AGENTS.md` line below is an IMPORT: Claude Code
-// expands it into the session's auto-loaded context at launch (relative to
-// the importing file, max 4 hops). Deliberately contains NO backticks: an
-// import inside a code span or fenced block is skipped, so following the
-// backtick convention of agentsMdPointerBody above (`` `AGENTS.md` ``)
-// would silently turn this whole file into a no-op that still looks right
-// in review — see test/services/mullion-scaffold.test.ts's dedicated
-// regression assertion for this. The import sits alone on its own line, at
+// Code reads CLAUDE.md, not AGENTS.md" — confirmed empirically) — so a
+// prose "Read AGENTS.md." pointer here (the shape contributingPointerBody
+// below uses) would deliver nothing at all. The `@AGENTS.md` line below is
+// an IMPORT: Claude Code expands it into the session's auto-loaded context
+// at launch (relative to the importing file, max 4 hops). Deliberately
+// contains NO backticks: an import inside a code span or fenced block is
+// skipped, so following contributingPointerBody's own backtick convention
+// (`` `AGENTS.md` ``) would silently turn this whole file into a no-op that
+// still looks right in review — see test/services/mullion-scaffold.test.ts's
+// dedicated regression assertion for this. The import sits alone on its own line, at
 // column 0 of that line — not necessarily the file's first line: the
 // pointer markers (upsertMarkedRegion) or an existing CLAUDE.md's own
 // prose can sit above it, and that's fine, Claude Code scans the whole
@@ -232,20 +207,15 @@ function contributingPointerBody(): string {
 }
 
 /** Removes a pre-#942 byte-identical mirror region (the `MARKER_START`/
- * `MARKER_END` pair a scaffold used to write into `GEMINI.md`) before the
- * new pointer region is upserted into what's left. Without this, a
- * re-scaffold over a project that already adopted the old mirror option
- * would APPEND the new pointer region below the stale full-mirror content
- * instead of replacing it — and the freshly (re-)scaffolded
- * `check-briefing-sync.mjs` would then immediately fail against the very
- * `GEMINI.md` this scaffold just wrote, since that script fails the moment
- * `GEMINI.md` carries ANY `mullion:briefing:start/end` region at all. A
- * no-op when the old markers aren't present — the ordinary, post-#942
- * case. Also run against `CLAUDE.md` below: Mullion's own scaffold never
- * wrote `mullion:briefing` markers there (it was never a mirror target,
- * pre- or post-#942), but a hand-pasted legacy region is still possible,
- * and once `CLAUDE.md` is a guarded file (`GUARDED_FILES` below) it needs
- * the same protection GEMINI.md gets, for the same reason. */
+ * `MARKER_END` pair a scaffold used to write into `GEMINI.md`, the actual
+ * historical mirror target) from `CLAUDE.md` before the new pointer region
+ * is upserted into what's left. `CLAUDE.md` was never itself a mirror
+ * target, pre- or post-#942, but a hand-pasted legacy region is still
+ * possible there — leaving it in place would let a target repo's
+ * `CLAUDE.md` keep silently duplicating `AGENTS.md`'s own content instead
+ * of just pointing at it, and would append the new pointer region below
+ * that stale content rather than replacing it. A no-op when the old
+ * markers aren't present — the ordinary, post-#942 case. */
 function stripLegacyBriefingMirror(text: string): string {
   const startIdx = text.indexOf(MARKER_START);
   if (startIdx === -1) return text;
@@ -253,73 +223,6 @@ function stripLegacyBriefingMirror(text: string): string {
   if (endIdx === -1) return text;
   return text.slice(0, startIdx) + text.slice(endIdx + MARKER_END.length);
 }
-
-// Functionally equivalent to the script this repo (Mullion) ships at
-// scripts/check-briefing-sync.mjs — NOT byte-identical: that version's own
-// header comments cite Mullion's own issue history (#716, #942), which has
-// no meaning in a target repo this scaffold writes into. Both scripts guard
-// the identical invariant: AGENTS.md is the single source of truth for the
-// tier-1 briefing region, and none of CLAUDE.md (an `@AGENTS.md` import),
-// GEMINI.md (a plain pointer, opt-in), or AGENTS.override.md (no longer
-// offered by this scaffold at all, but not something Mullion can stop
-// someone from hand-creating) should ever re-acquire a content-bearing copy
-// of that region — Codex reads AGENTS.override.md *instead of* AGENTS.md
-// when it exists (src/services/agent-rules.ts's precedence table), so a
-// content-bearing copy there silently shadows the real briefing, and a
-// content-bearing CLAUDE.md/GEMINI.md just invites drift again.
-const CHECK_BRIEFING_SYNC_SCRIPT = `#!/usr/bin/env node
-// Guards against a content-bearing mirror or override reappearing once
-// AGENTS.md leads. AGENTS.md is this repo's single source of truth for the
-// tier-1 briefing region; CLAUDE.md/GEMINI.md are meant to stay pointers or
-// imports to it, and AGENTS.override.md (Codex reads it *instead of*
-// AGENTS.md when it exists) is the one file that can still silently shadow
-// AGENTS.md entirely. This fails loud the moment any of these files
-// re-acquires its own \`<!-- mullion:briefing:start/end -->\` region — it
-// does NOT compare region contents for equality; presence alone is the
-// problem now. A guarded file that doesn't exist is treated as clean, not
-// an error. Deliberately does NOT check that AGENTS.md itself still has a
-// region at all: that region is purely a scaffold upsert boundary here, not
-// something anything reads back, so a project that hand-writes AGENTS.md
-// without markers is not a regression this needs to catch. Scaffolded by
-// Mullion; safe to edit or remove once this project no longer needs this
-// guard.
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const root = process.env.BRIEFING_SYNC_ROOT ?? path.resolve(scriptDir, "..");
-
-const START = "<!-- mullion:briefing:start -->";
-const END = "<!-- mullion:briefing:end -->";
-const GUARDED_FILES = ["CLAUDE.md", "GEMINI.md", "AGENTS.override.md"];
-
-function hasRegion(relPath) {
-  const filePath = path.join(root, relPath);
-  if (!existsSync(filePath)) return false;
-  const src = readFileSync(filePath, "utf8");
-  const startIdx = src.indexOf(START);
-  const endIdx = src.indexOf(END, startIdx + START.length);
-  return startIdx !== -1 && endIdx !== -1;
-}
-
-let failed = false;
-for (const file of GUARDED_FILES) {
-  if (hasRegion(file)) {
-    console.log(
-      \`\${file} carries its own \${START} ... \${END} region — AGENTS.md is the single source \` +
-        \`of truth for the briefing now. Remove the region; \${file} should carry only a pointer \` +
-        "or import that sends the agent to AGENTS.md instead.",
-    );
-    failed = true;
-  }
-}
-
-if (failed) {
-  process.exit(1);
-}
-console.log("OK — no content-bearing briefing mirror or override found.");
-`;
 
 /**
  * Computes the target file set for scaffolding Mullion's tooling into a
@@ -368,13 +271,13 @@ export function computeScaffold(
   });
 
   // Issue #942 (this restructure) — CLAUDE.md gets an `@AGENTS.md` IMPORT,
-  // unconditional like AGENTS.md above, not opt-in like GEMINI.md's pointer
-  // below. Claude Code does not read AGENTS.md natively, so without this a
-  // target repo's Claude Code sessions would see nothing this scaffold
-  // wrote. Upserted into its own pointer marker pair, same posture as
-  // GEMINI.md/CONTRIBUTING.md's pointers: never touches content outside the
-  // marked region, so an existing multi-section CLAUDE.md keeps everything
-  // else. `stripLegacyBriefingMirror` guards against a hand-pasted legacy
+  // unconditional like AGENTS.md above, not opt-in like CONTRIBUTING.md's
+  // pointer below. Claude Code does not read AGENTS.md natively, so without
+  // this a target repo's Claude Code sessions would see nothing this
+  // scaffold wrote. Upserted into its own pointer marker pair, same posture
+  // as CONTRIBUTING.md's pointer: never touches content outside the marked
+  // region, so an existing multi-section CLAUDE.md keeps everything else.
+  // `stripLegacyBriefingMirror` guards against a hand-pasted legacy
   // briefing region (see that function's own doc comment).
   entries.push({
     path: "CLAUDE.md",
@@ -386,26 +289,6 @@ export function computeScaffold(
       claudeMdImportBody(),
     ),
   });
-
-  // Issue #942 — GEMINI.md, when opted in, gets a one-line POINTER upserted
-  // into its own marker pair (POINTER_MARKER_START/END, distinct from
-  // MARKER_START/END above), never a copy of AGENTS.md's own region.
-  // Preserves whatever else is already in the file (same "never touch
-  // outside the marked region" posture as the CONTRIBUTING.md pointer
-  // below) rather than overwriting the whole file.
-  if (options.mirrors?.includes("GEMINI.md")) {
-    const existingGemini = stripLegacyBriefingMirror(existingFiles["GEMINI.md"] ?? "");
-    entries.push({
-      path: "GEMINI.md",
-      kind: "file",
-      contents: upsertMarkedRegion(
-        existingGemini,
-        POINTER_MARKER_START,
-        POINTER_MARKER_END,
-        agentsMdPointerBody(),
-      ),
-    });
-  }
 
   // Issue #942 — CONTRIBUTING.md pointer, opt-in only. Creates a fresh
   // pointer-only file when none exists (the checkbox itself IS the
@@ -480,26 +363,6 @@ export function computeScaffold(
       path: path.join(".agents", "skills", slug, "SKILL.md"),
       kind: "file",
       contents: skillContent,
-    });
-  }
-
-  // Known, accepted gap: CLAUDE.md is unconditional (above) but this guard
-  // script is only emitted when GEMINI.md is opted in — so the DEFAULT
-  // scaffold (no mirrors) ships CLAUDE.md with no local script guarding it
-  // against re-acquiring a content-bearing briefing region. Not fixed by
-  // widening this condition: `scaffoldableRelPaths`
-  // (routes/project-setup.ts) never reads/writes the target's own
-  // `package.json`, so this script isn't wired into that repo's own
-  // `npm run lint` or a pre-commit hook either way — emitting it more often
-  // would add another unwired file to every scaffold, not close the gap.
-  // Emission stays tied to the one option (GEMINI.md) where a target repo
-  // has historically been most likely to hand-wire it in, per this repo's
-  // own precedent.
-  if (options.mirrors?.includes("GEMINI.md")) {
-    entries.push({
-      path: path.join("scripts", "check-briefing-sync.mjs"),
-      kind: "file",
-      contents: CHECK_BRIEFING_SYNC_SCRIPT,
     });
   }
 
