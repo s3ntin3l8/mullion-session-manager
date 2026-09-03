@@ -46,6 +46,41 @@
 // never sent. No Task Master target repo uses LFS today — if one starts to,
 // this needs its own fix (e.g. an explicit `git lfs push` before the
 // `--no-verify` push), not a blanket workaround.
+//
+// Force-with-lease (task 258971's investigation): a worker that amends or
+// rebases a commit it already ended a turn on rewrites history on a branch
+// Mullion has already pushed — the plain push this file used to always run
+// then rejects every subsequent attempt non-fast-forward, forever, since
+// nothing else in the auto-return path ever un-sticks it. Mullion owns the
+// `mullion/task-*` namespace exclusively (the worker preamble forbids
+// pushing at all), so a rewrite here is expected, not a hazard to block —
+// `pushBranch` below force-pushes with a lease whenever `branch` matches
+// that prefix, and pushes normally otherwise (a hand-made or
+// promoted-session branch a human owns).
+//
+// The lease reads `--force-with-lease=<branch>` with NO explicit `:<sha>` —
+// git fills that in from whatever `refs/remotes/origin/<branch>` already is
+// locally at push time. That's exactly why this fetches the branch
+// immediately beforehand: nothing in the auto-return path fetches on its
+// own, so a stale remote-tracking ref would make the (implicit) lease
+// reject a push it should allow, reproducing the exact stuck-in-review loop
+// this exists to fix. An earlier version of this fix resolved the sha with
+// an explicit `rev-parse` and passed it as `--force-with-lease=<branch>:<sha>`
+// — verified empirically (a real bare remote, three cases: a legitimate
+// rewrite, a genuinely stale/concurrently-moved branch, and a brand-new
+// branch with no tracking ref at all) to behave identically to the bare
+// form once the fetch above has already run, so the extra round-trip was
+// dropped as pure overhead.
+//
+// Honest limit: fetching immediately before every push means this always
+// leases against the freshest state it can see, so it does NOT protect
+// against a write that happened before that fetch — only against one
+// landing in the brief window between the fetch and the push itself (still
+// the direction we want to fail in, and the only case a bare `--force`
+// wouldn't cover at all). If the branch doesn't exist on the remote yet
+// (first push) the fetch fails to find it, `refs/remotes/origin/<branch>`
+// stays unresolved, and git treats the bare lease as an ordinary push in
+// that case (verified) — no separate no-lease fallback needed for it.
 import { spawn as spawnChild } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 
@@ -53,6 +88,16 @@ import { gitEnv } from "./git-env.js";
 // `--no-verify` means the timeout is no longer also budget for an arbitrary
 // repo's pre-push hook.
 const GIT_TIMEOUT_MS = 120_000;
+
+// Separate, shorter timeout for the pre-push fetch — a plain `git fetch` of
+// one branch never runs a repo's arbitrary hooks, so there's no pre-push-hook
+// analog to budget for here.
+const GIT_FETCH_TIMEOUT_MS = 30_000;
+
+// Mullion only ever creates and pushes branches under this prefix (see
+// task-promote.ts/git-worktree.ts) — forcing a push on anything else would
+// mean overwriting a hand-made or promoted-session branch a human owns.
+const FORCEABLE_BRANCH_PREFIX = "mullion/task-";
 
 export interface PushResult {
   ok: boolean;
@@ -73,45 +118,37 @@ function redact(text: string, ...secrets: string[]): string {
   return result;
 }
 
-/**
- * Pushes `branch` from `cwd` to `origin`, setting upstream tracking
- * (`-u`) — idempotent to call on a branch that's already fully pushed
- * (`git push` reports "Everything up-to-date" and exits 0), so callers
- * don't need to separately detect "has this been pushed before."
- *
- * Never throws. Every failure path (spawn error, non-zero exit, timeout)
- * resolves `{ ok: false, detail }` with `detail` already redacted of the
- * token — see this file's header comment on the argv-visibility caveat
- * this does NOT cover.
- */
-export function pushBranch(cwd: string, branch: string, token: string): Promise<PushResult> {
+/** Runs one git subcommand against `cwd` with the shared credential header,
+ * env, and timeout/kill-group handling — shared by `pushBranch`'s pre-push
+ * fetch, its sha lookup, and the push itself, so all three go through the
+ * exact same never-throws, always-redacted plumbing. On success resolves
+ * `{ ok: true, stdout }`; every failure path (spawn error, non-zero exit,
+ * timeout) resolves `{ ok: false, detail }` with `detail` already redacted
+ * of the token. */
+function runGitCommand(
+  cwd: string,
+  args: string[],
+  headerValue: string,
+  token: string,
+  encodedCredential: string,
+  timeoutMs: number,
+): Promise<{ ok: true; stdout: string } | { ok: false; detail: string }> {
   return new Promise((resolve) => {
-    const encodedCredential = Buffer.from(`x-access-token:${token}`).toString("base64");
-    const headerValue = `AUTHORIZATION: basic ${encodedCredential}`;
+    let stdout = "";
     let stderr = "";
     let settled = false;
 
     const child = spawnChild(
       "git",
-      [
-        "-C",
-        cwd,
-        "-c",
-        `http.extraHeader=${headerValue}`,
-        "push",
-        "--no-verify",
-        "-u",
-        "origin",
-        branch,
-      ],
+      ["-C", cwd, "-c", `http.extraHeader=${headerValue}`, ...args],
       // `detached: true` puts `child` in its own process group so the
       // timeout handler below can kill the whole group, not just the `git`
       // process itself — a pre-push hook's own children (e.g. `go test`,
       // `go install`) are otherwise left running past `child.kill()`.
-      { stdio: ["ignore", "ignore", "pipe"], env: gitEnv(), detached: true },
+      { stdio: ["ignore", "pipe", "pipe"], env: gitEnv(), detached: true },
     );
 
-    const finish = (result: PushResult) => {
+    const finish = (result: { ok: true; stdout: string } | { ok: false; detail: string }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -125,27 +162,85 @@ export function pushBranch(cwd: string, branch: string, token: string): Promise<
       } catch {
         // Process (group) may already be gone — nothing more to do.
       }
-      finish({ ok: false, detail: "git push timed out" });
-    }, GIT_TIMEOUT_MS);
+      finish({ ok: false, detail: `git ${args[0]} timed out` });
+    }, timeoutMs);
 
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
     child.on("error", (err) => {
       finish({
         ok: false,
-        detail: redact(`git push failed to start: ${err.message}`, token, encodedCredential),
+        detail: redact(`git ${args[0]} failed to start: ${err.message}`, token, encodedCredential),
       });
     });
     child.on("close", (code) => {
       if (code === 0) {
-        finish({ ok: true });
+        finish({ ok: true, stdout });
         return;
       }
       finish({
         ok: false,
-        detail: redact(stderr.trim() || `git push exited ${code}`, token, encodedCredential),
+        detail: redact(stderr.trim() || `git ${args[0]} exited ${code}`, token, encodedCredential),
       });
     });
   });
+}
+
+/**
+ * Pushes `branch` from `cwd` to `origin`, setting upstream tracking
+ * (`-u`) — idempotent to call on a branch that's already fully pushed
+ * (`git push` reports "Everything up-to-date" and exits 0), so callers
+ * don't need to separately detect "has this been pushed before."
+ *
+ * For a `mullion/task-*` branch (the only ones Mullion ever pushes to,
+ * outside a human's own promoted-session branch), fetches the branch first
+ * and force-pushes with a bare `--force-with-lease` (no explicit sha —
+ * see this file's header comment for why that's equivalent here) so a
+ * rewritten task branch can still be delivered. Any other branch is pushed
+ * exactly as before, never forced.
+ *
+ * Never throws. Every failure path (spawn error, non-zero exit, timeout)
+ * resolves `{ ok: false, detail }` with `detail` already redacted of the
+ * token — see this file's header comment on the argv-visibility caveat
+ * this does NOT cover.
+ */
+export async function pushBranch(cwd: string, branch: string, token: string): Promise<PushResult> {
+  const encodedCredential = Buffer.from(`x-access-token:${token}`).toString("base64");
+  const headerValue = `AUTHORIZATION: basic ${encodedCredential}`;
+  const forceable = branch.startsWith(FORCEABLE_BRANCH_PREFIX);
+
+  if (forceable) {
+    // Best-effort — freshens refs/remotes/origin/<branch> so the bare
+    // --force-with-lease below reads a value we just confirmed, not
+    // whatever this worktree's own tracking ref happened to hold. A
+    // failure here (network blip, or the branch genuinely doesn't exist on
+    // the remote yet) just means the lease falls back to whatever's
+    // already local — see this file's header comment for why that's still
+    // never worse than not fetching at all.
+    await runGitCommand(
+      cwd,
+      ["fetch", "--quiet", "origin", branch],
+      headerValue,
+      token,
+      encodedCredential,
+      GIT_FETCH_TIMEOUT_MS,
+    );
+  }
+
+  const pushArgs = ["push", "--no-verify", "-u", "origin", branch];
+  if (forceable) pushArgs.splice(1, 0, `--force-with-lease=${branch}`);
+
+  const result = await runGitCommand(
+    cwd,
+    pushArgs,
+    headerValue,
+    token,
+    encodedCredential,
+    GIT_TIMEOUT_MS,
+  );
+  return result.ok ? { ok: true } : { ok: false, detail: result.detail };
 }

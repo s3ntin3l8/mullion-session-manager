@@ -83,6 +83,7 @@ function makeTask(overrides: Partial<Task>): Task {
     reviewFindings: null,
     autoReturnRounds: 0,
     lastAutoReturnReason: null,
+    autoReturnCapped: false,
     worktreePath: null,
     branchName: null,
     agent: null,
@@ -309,6 +310,55 @@ describe("TaskDetail", () => {
       "href",
       "https://github.com/o/r/pull/9",
     );
+  });
+
+  // Item 3 — same "#N" treatment the issue link already gets.
+  it("shows the PR number next to the label, same as the issue link", () => {
+    tasks = [
+      makeTask({ id: 1, status: "done", prUrl: "https://github.com/o/r/pull/7", prNumber: 7 }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "Pull request #7" })).toBeInTheDocument();
+  });
+
+  it("prefers the branch-matched PR's number over the stale task.prNumber", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        prNumber: 7,
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 9,
+            title: "fix: the thing, round 2",
+            htmlUrl: "https://github.com/o/r/pull/9",
+            author: "mullion-bot",
+            headSha: "def456",
+            headBranch: "mullion/task-1",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "Pull request #9" })).toBeInTheDocument();
+  });
+
+  // Issue #972: retryTask can leave prUrl set with prNumber left null —
+  // the label must degrade to plain "Pull request" rather than "#null".
+  it("shows the plain label with no trailing number when prNumber is null", () => {
+    tasks = [makeTask({ id: 1, status: "done", prUrl: "https://github.com/o/r/pull/7" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "Pull request" })).toBeInTheDocument();
   });
 
   it("shows the resolved agent name from agentCommand", () => {
@@ -595,6 +645,27 @@ describe("TaskDetail", () => {
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/Round \d+ sent back to the worker automatically/)).toBeNull();
+  });
+
+  // Task 258971's investigation: a task parked in "reviewing" with its round
+  // budget spent looked identical to one mid-round — this asserts the
+  // capped wording renders instead once autoReturnCapped is true.
+  it("shows the round-cap wording, not the 'sent back automatically' wording, once autoReturnCapped is true", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        autoReturnRounds: 2,
+        autoReturnCapped: true,
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(
+      screen.getByText(/Round 2 — round cap reached, needs a human to take it from here/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/sent back to the worker automatically/)).toBeNull();
   });
 
   // #487 — the review agent used to spawn silently with no prompt when its

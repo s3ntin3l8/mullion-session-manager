@@ -1041,7 +1041,16 @@ describe("task-github-sync", () => {
       expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
     });
 
-    it("clears a previously-recorded sync error on a successful post", async () => {
+    // Task 258971's investigation: a push failure recorded by a DIFFERENT
+    // operation (pushForPromotion, task-promote.ts) must survive a
+    // successful review-comment post — this function only ever records its
+    // OWN failures, it must never clear an error some other write left
+    // behind. Before this fix, `postReviewFindingsComment` cleared
+    // `githubSyncError` on every success path, so a push failure recorded
+    // minutes earlier was silently erased by the very next routine review
+    // round, and the worker's own "if the board shows a GitHub sync error"
+    // escape hatch could never fire.
+    it("does NOT clear a sync error recorded by a different operation, on a successful post", async () => {
       const [row0] = app.db
         .insert(tasks)
         .values({
@@ -1050,7 +1059,7 @@ describe("task-github-sync", () => {
           prNumber: 9,
           title: "t",
           status: "reviewing",
-          githubSyncError: "stale error",
+          githubSyncError: "push rejected non-fast-forward",
         })
         .returning()
         .all();
@@ -1058,7 +1067,7 @@ describe("task-github-sync", () => {
       await postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" });
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
-      expect(row.githubSyncError).toBeNull();
+      expect(row.githubSyncError).toBe("push rejected non-fast-forward");
     });
 
     // #737 — verdict -> gating event, and the reviewer identity's token.
@@ -1132,7 +1141,15 @@ describe("task-github-sync", () => {
 
       it("downgrades to COMMENT from the primary identity when no reviewer App is configured", async () => {
         mockResolveReviewerToken.mockResolvedValue(null);
-        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+        // A real, uniquely-inserted row rather than baseTask()'s shared
+        // default id=1 — this assertion reads the row back from the DB, and
+        // id=1 accumulates unrelated `githubSyncError` writes from earlier
+        // tests in this file over the run.
+        const [task] = app.db
+          .insert(tasks)
+          .values({ projectId, issueNumber: 913, prNumber: 9, title: "t", status: "reviewing" })
+          .returning()
+          .all();
 
         await postReviewFindingsComment(app, task, project, {
           body: "## Round 1\n\nClean.",
@@ -1203,7 +1220,13 @@ describe("task-github-sync", () => {
         mockCreatePullRequestReview
           .mockRejectedValueOnce(new GitHubApiError("Validation Failed", 422))
           .mockResolvedValueOnce({ id: 557, htmlUrl: "https://github.com/o/r/pull/9#review-557" });
-        const task = baseTask({ issueNumber: null, prNumber: 9 });
+        // A real, uniquely-inserted row rather than baseTask()'s shared
+        // default id=1 — see the identical note above.
+        const [task] = app.db
+          .insert(tasks)
+          .values({ projectId, issueNumber: null, prNumber: 9, title: "t", status: "reviewing" })
+          .returning()
+          .all();
 
         await postReviewFindingsComment(app, task, project, {
           body: "## Round 1\n\nClean.",

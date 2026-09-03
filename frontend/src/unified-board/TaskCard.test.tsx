@@ -591,4 +591,14 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.queryByText(/Round/)).toBeNull();
   });
+
+  // Task 258971's investigation: "returned to worker" implies an automatic
+  // cycle still in motion — once the round budget is spent, the card must
+  // say a human is needed instead.
+  it("shows the round-cap wording, not 'returned to worker', once autoReturnCapped is true", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", autoReturnRounds: 2, autoReturnCapped: true })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Round 2 · round cap reached, needs a human/)).toBeInTheDocument();
+    expect(screen.queryByText(/returned to worker/)).toBeNull();
+  });
 });

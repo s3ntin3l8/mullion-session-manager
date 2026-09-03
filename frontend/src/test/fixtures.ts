@@ -120,6 +120,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     reviewFindings: null,
     autoReturnRounds: 0,
     lastAutoReturnReason: null,
+    autoReturnCapped: false,
     worktreePath: null,
     branchName: null,
     baseSha: null,

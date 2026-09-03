@@ -127,4 +127,106 @@ describe("git-push", () => {
     expect(result.detail).not.toContain(encoded);
     expect(result.detail).toContain("[redacted]");
   });
+
+  describe("force-with-lease for mullion/task-* branches (task 258971's investigation)", () => {
+    it("delivers a rewritten commit (amend) that a plain push would reject", async () => {
+      git(workdir, ["checkout", "-b", "mullion/task-6"]);
+      const first = await pushBranch(workdir, "mullion/task-6", TOKEN);
+      expect(first.ok).toBe(true);
+
+      // Simulate a worker amending the commit it already ended a turn on —
+      // this rewrites history on a branch Mullion already pushed.
+      fs.writeFileSync(path.join(workdir, "amend.txt"), "amended");
+      git(workdir, ["add", "-A"]);
+      git(workdir, ["commit", "--amend", "-m", "amended", "--no-verify"]);
+
+      const second = await pushBranch(workdir, "mullion/task-6", TOKEN);
+
+      expect(second).toEqual({ ok: true });
+      const log = git(bareRemote, ["log", "-1", "--format=%s", "mullion/task-6"]).trim();
+      expect(log).toBe("amended");
+    });
+
+    it("the underlying --force-with-lease rejects a push whose expected sha is stale", async () => {
+      // `pushBranch` fetches immediately before it pushes, so it always
+      // leases against the freshest remote state it can see — reproducing
+      // an actual race between that fetch and the push itself isn't
+      // practical in a single-process test. What IS testable, and what
+      // actually matters here, is that the lease mechanism itself rejects a
+      // stale expected sha: this is what protects against the ONE case
+      // fetch-then-lease can't observe (a push landing in the split second
+      // between our fetch and our push), and it's exactly the git behavior
+      // `pushBranch` relies on rather than a bare `--force`.
+      git(workdir, ["checkout", "-b", "mullion/task-7"]);
+      const first = await pushBranch(workdir, "mullion/task-7", TOKEN);
+      expect(first.ok).toBe(true);
+      const staleSha = git(workdir, ["rev-parse", "mullion/task-7"]).trim();
+
+      const otherClone = fs.mkdtempSync(path.join(os.tmpdir(), "git-push-test-other-"));
+      git(otherClone, ["clone", bareRemote, "."]);
+      git(otherClone, ["config", "user.email", "test@example.com"]);
+      git(otherClone, ["config", "user.name", "Test"]);
+      git(otherClone, ["checkout", "mullion/task-7"]);
+      fs.writeFileSync(path.join(otherClone, "concurrent.txt"), "concurrent");
+      git(otherClone, ["add", "-A"]);
+      git(otherClone, ["commit", "-m", "concurrent change", "--no-verify"]);
+      git(otherClone, ["push", "origin", "mullion/task-7"]);
+      fs.rmSync(otherClone, { recursive: true, force: true });
+
+      fs.writeFileSync(path.join(workdir, "amend.txt"), "amended");
+      git(workdir, ["add", "-A"]);
+      git(workdir, ["commit", "--amend", "-m", "amended locally", "--no-verify"]);
+
+      expect(() =>
+        git(workdir, [
+          "push",
+          `--force-with-lease=mullion/task-7:${staleSha}`,
+          "origin",
+          "mullion/task-7",
+        ]),
+      ).toThrow();
+      const log = git(bareRemote, ["log", "-1", "--format=%s", "mullion/task-7"]).trim();
+      expect(log).toBe("concurrent change");
+    });
+
+    it("pushes normally with no lease when the branch doesn't exist on the remote yet", async () => {
+      git(workdir, ["checkout", "-b", "mullion/task-8"]);
+
+      const result = await pushBranch(workdir, "mullion/task-8", TOKEN);
+
+      expect(result).toEqual({ ok: true });
+      const branches = git(bareRemote, ["branch", "--list", "mullion/task-8"]);
+      expect(branches).toContain("mullion/task-8");
+    });
+
+    it("never force-pushes a branch outside the mullion/task- prefix", async () => {
+      git(workdir, ["checkout", "-b", "hand-made-branch"]);
+      const first = await pushBranch(workdir, "hand-made-branch", TOKEN);
+      expect(first.ok).toBe(true);
+
+      const otherClone = fs.mkdtempSync(path.join(os.tmpdir(), "git-push-test-other2-"));
+      git(otherClone, ["clone", bareRemote, "."]);
+      git(otherClone, ["config", "user.email", "test@example.com"]);
+      git(otherClone, ["config", "user.name", "Test"]);
+      git(otherClone, ["checkout", "hand-made-branch"]);
+      fs.writeFileSync(path.join(otherClone, "concurrent.txt"), "concurrent");
+      git(otherClone, ["add", "-A"]);
+      git(otherClone, ["commit", "-m", "concurrent change", "--no-verify"]);
+      git(otherClone, ["push", "origin", "hand-made-branch"]);
+      fs.rmSync(otherClone, { recursive: true, force: true });
+
+      fs.writeFileSync(path.join(workdir, "amend.txt"), "amended");
+      git(workdir, ["add", "-A"]);
+      git(workdir, ["commit", "--amend", "-m", "amended locally", "--no-verify"]);
+
+      // A plain (non-forced) push here must reject non-fast-forward, same
+      // as before this change — a hand-made branch is never a candidate for
+      // the lease/force logic at all.
+      const result = await pushBranch(workdir, "hand-made-branch", TOKEN);
+
+      expect(result.ok).toBe(false);
+      const log = git(bareRemote, ["log", "-1", "--format=%s", "hand-made-branch"]).trim();
+      expect(log).toBe("concurrent change");
+    });
+  });
 });

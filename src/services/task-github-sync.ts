@@ -595,9 +595,27 @@ export async function isIssueStillTrackable(
  * transferred, a transient 5xx) doesn't also mean GitHub never hears about
  * this round at all.
  *
- * Same best-effort posture as every other write in this file: never
- * throws, logs and records `githubSyncError` on failure, clears it on
- * success.
+ * Same best-effort posture as every other write in this file: never throws,
+ * logs and records `githubSyncError` on failure. Unlike the rest of this
+ * file, does NOT clear `githubSyncError` on success (task 258971's
+ * investigation): an earlier, unrelated failure recorded by a DIFFERENT
+ * operation on this same task — most commonly `pushForPromotion`
+ * (task-promote.ts) recording a rejected push — must survive a successful
+ * comment/review post here, or the one durable signal a human has for "the
+ * push failed on Mullion's side" (see the worker preamble's own escape
+ * hatch) gets silently erased a couple of minutes later by the routine
+ * review-round comment that follows. This function's own failures usually
+ * self-correct: they're logged, and the next successful promote operation
+ * (task-promote.ts has five `clearGithubSyncError` call sites of its own)
+ * clears whatever this recorded. Pre-existing gap, NOT introduced by the
+ * above: if this function's own post fails on the round that hits the
+ * auto-return cap, nothing clears it — `reviewFindingsIngestedSessionId` is
+ * already CAS'd before this call runs (task-reconciler.ts), so a capped
+ * task never gets another `-> reviewing` round to retry the post, and never
+ * transitions again on its own for any later promote operation to piggyback
+ * a clear on. Low-impact in practice: a capped task already needs a human
+ * (see routes/tasks.ts's `autoReturnCapped`), and a stale sync error on one
+ * doesn't mislead anyone who's already looking at it for that reason.
  */
 export async function postReviewFindingsComment(
   app: FastifyInstance,
@@ -731,7 +749,8 @@ export async function postReviewFindingsComment(
           throw err;
         }
       }
-      clearGithubSyncError(app, task.id);
+      // Deliberately does NOT clearGithubSyncError here — see this
+      // function's own doc comment (task 258971's investigation).
       return;
     } catch (err) {
       app.log.warn(
@@ -747,7 +766,8 @@ export async function postReviewFindingsComment(
       if (task.issueNumber !== null) {
         try {
           await createComment(token, repoRef.owner, repoRef.repo, task.issueNumber, params.body);
-          clearGithubSyncError(app, task.id);
+          // Deliberately does NOT clearGithubSyncError here — see this
+          // function's own doc comment (task 258971's investigation).
           return;
         } catch (fallbackErr) {
           app.log.warn(
@@ -771,7 +791,8 @@ export async function postReviewFindingsComment(
   if (commentTarget === null) return;
   try {
     await createComment(token, repoRef.owner, repoRef.repo, commentTarget, params.body);
-    clearGithubSyncError(app, task.id);
+    // Deliberately does NOT clearGithubSyncError here — see this function's
+    // own doc comment (task 258971's investigation).
   } catch (err) {
     app.log.warn(
       { taskId: task.id, commentTarget, err },

@@ -1021,6 +1021,14 @@ export interface Task {
   // Which trigger most recently spent a round — "review" | "ci" |
   // "pr-comment". Null until the first auto-return.
   lastAutoReturnReason: "review" | "ci" | "pr-comment" | null;
+  // Task 258971's investigation: whether `autoReturnRounds` has reached the
+  // resolved per-project cap — derived server-side (routes/tasks.ts's
+  // withAutoReturnCapped) from the same resolveMaxAutoReturnRounds the
+  // reconciler itself uses, so this is never recomputed (and never drifts)
+  // client-side. A task can be `autoReturnRounds > 0` and NOT capped (still
+  // mid-round) or capped (parked in "reviewing" for a human) — TaskCard/
+  // TaskDetail's round badge must distinguish the two.
+  autoReturnCapped: boolean;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
