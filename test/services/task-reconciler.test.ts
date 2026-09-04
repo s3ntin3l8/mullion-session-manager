@@ -3770,6 +3770,10 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(2);
+        // Issue #1038 — this trigger has no other durable write to
+        // piggyback the announcement on, so it needs its own; assert it
+        // actually landed.
+        expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
 
         await app.close();
       });
@@ -4074,7 +4078,7 @@ describe("reconcileTasks", () => {
 
       it("posts a cap-reached comment and stays in 'reviewing' once the round budget is spent", async () => {
         const app = await buildApp();
-        await createPrCommentCandidate(app, { autoReturnRounds: 2 });
+        const { taskId } = await createPrCommentCandidate(app, { autoReturnRounds: 2 });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
         mockFetchPullRequestReviewThreads.mockResolvedValue({
@@ -4092,6 +4096,9 @@ describe("reconcileTasks", () => {
           9,
           expect.objectContaining({ body: expect.stringContaining("round cap (2)") }),
         );
+        // Issue #1038 — same reasoning as the red-CI cap test above: its
+        // own CAS'd write, no other durable write to piggyback on.
+        expect((await getTask(app, taskId)).autoReturnCapAnnouncedAt).not.toBeNull();
 
         // A second tick with the SAME (unchanged) comments must not post a
         // second cap-reached comment — deduped per round, same as #755's.
@@ -5158,6 +5165,27 @@ describe("reconcileTasks", () => {
       expect(row.autoReturnRounds).toBe(2);
       expect(row.reviewFindings).toContain("arriving after the cap");
       expect(row.sessionId).toBe(workerSession.json().id);
+      // Issue #1038 — the ground-truth "the machine actually stopped"
+      // signal, set in the same durable write as the findings above.
+      expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+
+      await app.close();
+    });
+
+    // Issue #1038 — the mirror image of the test above: a round that is
+    // NOT at the cap must never set the announcement, or the board would
+    // claim "needs a human" on a task that's still genuinely mid-cycle.
+    it("does not set the cap-announced marker on a round below the cap", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "Fix the null check on line 42.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(row.autoReturnRounds).toBe(1);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
 
       await app.close();
     });

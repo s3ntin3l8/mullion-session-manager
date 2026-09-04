@@ -570,6 +570,29 @@ export const tasks = sqliteTable(
     // be re-ingested (and re-commented) on every single tick forever. Null
     // means the current reviewSessionId's output hasn't been processed yet.
     reviewFindingsIngestedSessionId: integer("review_findings_ingested_session_id"),
+    // Task 259314's investigation (issue #1038) — the moment one of the three
+    // "reached its automatic round cap ... needs a human" comments was
+    // actually posted to GitHub, as opposed to autoReturnRounds merely
+    // reaching the resolved cap. The two are NOT the same instant:
+    // autoReturnTask bumps autoReturnRounds to the cap value at the START of
+    // the task's LAST permitted round (the worker is still running, and the
+    // review that follows it still spawns unconditionally — see
+    // processPendingReviewSpawns, which has no cap check by design, since
+    // that final review is the only thing telling a human what's still
+    // broken). Deriving "needs a human" from autoReturnRounds alone made the
+    // board claim the machine had stopped while it was still actively
+    // working the branch. This column is the ground truth instead: null
+    // means either not capped, or capped but the machine hasn't announced it
+    // yet (worker still finishing, or the confirming review still in
+    // flight); non-null means the cap notice actually landed on the PR and
+    // nothing further happens on its own — genuinely safe for a human to
+    // touch the branch. Set BEFORE the GitHub comment post at each of the
+    // three cap-notice sites in task-reconciler.ts (not after — a crash
+    // between the two must leave the banner correct, not stuck on "in
+    // flight" forever), and cleared at every site that puts the task back
+    // into motion (autoReturnTask, the Reject route, the reviewing<->
+    // in_progress transitions, claim, retry).
+    autoReturnCapAnnouncedAt: integer("auto_return_cap_announced_at", { mode: "timestamp" }),
     // #757 — the newest GitHub PR review comment (from an unresolved thread,
     // excluding Mullion's own review bot) already acted on by an auto-return
     // round. Prevents re-triggering a round for a comment already answered:

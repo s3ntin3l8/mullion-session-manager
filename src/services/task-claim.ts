@@ -811,6 +811,12 @@ export async function retryTask(
       worktreePath: result.row.cwd,
       agentCommand: command,
       seedDelivered,
+      // Issue #1038 — a give-up on a capped, announced "reviewing" task
+      // lands on "failed" without clearing this (give-up's own write only
+      // touches status/failureReason/completedAt), so a retry from there is
+      // the one path that can otherwise carry a stale announcement into a
+      // fresh in_progress run.
+      autoReturnCapAnnouncedAt: null,
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;

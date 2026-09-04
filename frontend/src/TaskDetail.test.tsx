@@ -89,6 +89,7 @@ function makeTask(overrides: Partial<Task>): Task {
     autoReturnRounds: 0,
     lastAutoReturnReason: null,
     autoReturnCapped: false,
+    autoReturnCapAnnouncedAt: null,
     worktreePath: null,
     branchName: null,
     agent: null,
@@ -677,10 +678,12 @@ describe("TaskDetail", () => {
     expect(screen.queryByText(/Round \d+ sent back to the worker automatically/)).toBeNull();
   });
 
-  // Task 258971's investigation: a task parked in "reviewing" with its round
-  // budget spent looked identical to one mid-round — this asserts the
-  // capped wording renders instead once autoReturnCapped is true.
-  it("shows the round-cap wording, not the 'sent back automatically' wording, once autoReturnCapped is true", () => {
+  // Issue #1038 — capped but not yet announced (autoReturnCapAnnouncedAt
+  // still null): autoReturnRounds hit the cap at the START of the last
+  // permitted round, but the worker/confirming review may still be running.
+  // This must NOT say "needs a human" — that's a stronger claim than the
+  // machine has actually made yet.
+  it("shows a review-in-flight wording, not 'needs a human', once capped but before the cap is announced", () => {
     tasks = [
       makeTask({
         id: 1,
@@ -688,6 +691,31 @@ describe("TaskDetail", () => {
         reviewSessionId: 5,
         autoReturnRounds: 2,
         autoReturnCapped: true,
+        autoReturnCapAnnouncedAt: null,
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(
+      screen.getByText(/Round 2 — review still in flight; nothing needs you yet/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/needs a human to take it from here/)).toBeNull();
+    expect(screen.queryByText(/sent back to the worker automatically/)).toBeNull();
+  });
+
+  // Task 258971's investigation, refined by issue #1038: a task parked in
+  // "reviewing" with its round budget spent AND the cap notice actually
+  // posted looked identical to one mid-round — this asserts the capped
+  // wording renders instead once autoReturnCapAnnouncedAt is set.
+  it("shows the round-cap wording, not the 'sent back automatically' wording, once the cap has been announced", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        autoReturnRounds: 2,
+        autoReturnCapped: true,
+        autoReturnCapAnnouncedAt: "2026-09-04T09:34:44.000Z",
       }),
     ];
     sessions = [makeSession({ id: 5 })];
@@ -696,6 +724,7 @@ describe("TaskDetail", () => {
       screen.getByText(/Round 2 — round cap reached, needs a human to take it from here/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/sent back to the worker automatically/)).toBeNull();
+    expect(screen.queryByText(/review still in flight/)).toBeNull();
   });
 
   // #487 — the review agent used to spawn silently with no prompt when its

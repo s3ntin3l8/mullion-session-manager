@@ -2037,6 +2037,21 @@ async function attemptReturnRedCiToWorker(
   const maxRounds = resolveMaxAutoReturnRounds(project);
   if (task.autoReturnRounds >= maxRounds) {
     if (ciCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
+    // Issue #1038 — unlike processReviewingTasks's cap notice, this trigger
+    // has no other durable write to piggyback on, so it gets its own,
+    // CAS'd write, set BEFORE the post for the same reason (a crash
+    // between write and post must leave the banner correct, not stuck).
+    // Checked BEFORE touching the dedup map or posting: a losing CAS means
+    // the task moved on (approve/reject/give-up) since this trigger last
+    // read it, and posting a "needs a human" comment — or marking the
+    // in-memory dedup map as if one had been posted — for a task that's no
+    // longer in "reviewing" would be wrong either way, not merely stale.
+    const announced = app.db
+      .update(tasks)
+      .set({ autoReturnCapAnnouncedAt: new Date() })
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+      .run();
+    if (announced.changes === 0) return true;
     if (
       !ciCapCommentedRounds.has(task.id) &&
       ciCapCommentedRounds.size >= MAX_CI_CAP_COMMENTED_ENTRIES
@@ -2197,6 +2212,18 @@ async function attemptReturnPrCommentsToWorker(
   const maxRounds = resolveMaxAutoReturnRounds(project);
   if (task.autoReturnRounds >= maxRounds) {
     if (prCommentCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
+    // Issue #1038 — same reasoning as the red-CI cap notice above: no other
+    // durable write to piggyback on, so its own CAS'd write, set before the
+    // post, and checked BEFORE touching the dedup map or posting — a
+    // losing CAS means the task moved on since this trigger last read it,
+    // and neither the comment nor the in-memory "already commented" mark
+    // should apply to a task that's no longer in "reviewing".
+    const announced = app.db
+      .update(tasks)
+      .set({ autoReturnCapAnnouncedAt: new Date() })
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+      .run();
+    if (announced.changes === 0) return true;
     if (
       !prCommentCapCommentedRounds.has(task.id) &&
       prCommentCapCommentedRounds.size >= MAX_PR_COMMENT_CAP_COMMENTED_ENTRIES
@@ -2654,6 +2681,11 @@ export async function autoReturnTask(
       status: "in_progress",
       autoReturnRounds: task.autoReturnRounds + 1,
       lastAutoReturnReason: opts.reason,
+      // Issue #1038 — every caller of autoReturnTask already gated on
+      // !capReached, so this is null already in every designed path; clear
+      // it explicitly anyway so this write is the one place that can never
+      // leave a stale announcement behind if that invariant ever slips.
+      autoReturnCapAnnouncedAt: null,
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
     .run();
@@ -2694,6 +2726,11 @@ export async function autoReturnTask(
         // column's own doc comment (schema.ts): "which trigger most
         // recently drove an auto-return round" — this one didn't.
         lastAutoReturnReason: task.lastAutoReturnReason,
+        // Issue #1038 — status and the round roll back together; this rides
+        // along for the same reason (see the main write's own comment
+        // above) — restores the pre-attempt value rather than assuming
+        // null, though every designed caller already had it null here.
+        autoReturnCapAnnouncedAt: task.autoReturnCapAnnouncedAt,
       })
       // Adding `status = "in_progress"` here (issue #973) is a real
       // semantic change, not just a tighter guard: status and the round now
@@ -3114,12 +3151,25 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // value AND the verdict `postReviewFindingsComment` maps onto a
         // gating review event below, and they can't be allowed to drift.
         const verdict = parsed?.verdict ?? "inconclusive";
+        // Issue #1038 — folded into this same durable write, not a
+        // follow-up write after the GitHub comment post below: the cap
+        // notice is about to be posted (see cappedNote), and this column is
+        // the ground truth "the machine actually stopped" signal the board
+        // reads. Setting it here, ahead of the post, means a crash between
+        // this write and the post leaves the banner CORRECT (needs a human)
+        // with only the notice comment missing — the opposite failure is
+        // worse: a separate write after a successful post that then crashes
+        // would leave a task with findings ingested and no announcement,
+        // which processReviewingTasks's own re-ingest guard just above
+        // means nothing would ever revisit.
+        const announcingCap = wantsAutoReturn && capReached;
         const updated = app.db
           .update(tasks)
           .set({
             reviewFindings: appendedFindings,
             reviewFindingsIngestedSessionId: task.reviewSessionId,
             lastReviewVerdict: verdict,
+            ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date() } : {}),
           })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
           .run();
@@ -3497,6 +3547,11 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 reviewSessionId: null,
                 reviewSeedDelivered: null,
                 reviewSpawnClaimedAt: null,
+                // Issue #1038 — a fresh review is about to spawn off this
+                // write (processPendingReviewSpawns has no cap check, by
+                // design), so any prior announcement is stale the instant
+                // this lands, same as the sibling session-id fields above.
+                autoReturnCapAnnouncedAt: null,
                 // #761 — `?? task.prTitle`, not a bare overwrite: a later
                 // round that doesn't rewrite the title file (see
                 // `taskCommitTitlePath`'s own doc comment on why that's
