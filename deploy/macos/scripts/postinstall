@@ -43,20 +43,40 @@ SSH_AUTH_SOCK_DEFAULT="$CONSOLE_HOME/Library/Group Containers/2BUA8C4S2C.com.1pa
 
 # Try to run helper install as the console user.
 # -H pins $HOME to CONSOLE_USER's home directory.
+# Capture stderr to a temp file so we can surface the real error to the user.
+STDERR_FILE="$(mktemp -t mullion-helper)"
+trap 'rm -f "$STDERR_FILE"' EXIT
 if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" -H \
-     "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_DEFAULT"; then
+     "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_DEFAULT" 2>"$STDERR_FILE"; then
+  rm -f "$STDERR_FILE"
+  trap - EXIT
   echo "mullion-helper: installed successfully for $CONSOLE_USER."
   echo "  SSH_AUTH_SOCK = $SSH_AUTH_SOCK_DEFAULT"
+  # Launchd label below MUST match LAUNCHD_LABEL in src/cli/ssh-agent-helper-install.mjs
+  # (currently "de.s3ntin3l8.mullion-helper" — keep both in sync if it ever changes).
   echo "  Launchd job: gui/$CONSOLE_UID/de.s3ntin3l8.mullion-helper"
 else
   EXIT_CODE=$?
+  STDERR_OUTPUT="$(cat "$STDERR_FILE")"
+  rm -f "$STDERR_FILE"
+  trap - EXIT
   echo ""
   echo "mullion-helper: 'helper install' exited with code $EXIT_CODE — the binary is still installed at $EXE."
+  echo ""
+  echo "Helper output:"
+  if [ -n "$STDERR_OUTPUT" ]; then
+    printf '%s\n' "$STDERR_OUTPUT" | sed 's/^/  /'
+  else
+    echo "  (no stderr)"
+  fi
 
-  # Diagnose common failure modes
-  if [ "$EXIT_CODE" -eq 4 ]; then
+  # Gatekeeper / launchd-code-signing hints are a SECONDARY signal — only
+  # surface them when the actual stderr mentions a relevant signature,
+  # quarantine, or load failure. Exit code 4 is not reliable: runInstall
+  # returns 1 for nearly every failure mode (Hermes review).
+  if printf '%s' "$STDERR_OUTPUT" | grep -qiE "malformed|not notarized|code signature|quarantine|cannot open.*for writing"; then
     echo ""
-    echo "This may be a permissions issue. Try:"
+    echo "This may be a Gatekeeper issue. Try:"
     echo "  1. Open System Settings → Privacy & Security → Security"
     echo "  2. Click 'Allow' next to the mullion-helper warning"
     echo "  3. Re-run: $EXE helper install --ssh-auth-sock <path>"
