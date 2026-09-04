@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
@@ -8,6 +8,8 @@ import { makePanelWrapper, components } from "./registry.js";
 import { useDashboardStore } from "../store/index.js";
 import { makeSession, makeProject } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
+import { ErrorBoundary } from "../ErrorBoundary.js";
+import { useRetriableLazy } from "../lib/retriableLazy.js";
 
 // Minimal stand-in for the dockview panel props every real wrapper receives
 // — only `params` is read by makePanelWrapper itself; `api`/`containerApi`
@@ -249,5 +251,152 @@ describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave stor
     vi.advanceTimersByTime(1000);
 
     expect(setTitle).not.toHaveBeenCalled();
+  });
+});
+
+// React 19's lazyInitializer (react/cjs/react.production.js) latches a
+// rejected dynamic import forever — the SAME lazy() payload re-throws the
+// identical cached error on every subsequent render, with zero new network
+// requests. Every real lazy-loaded panel wrapper (KanbanBoardOverlay,
+// BrowserPanelWrapper, BrowserPaneWrapper, plus App.tsx's Settings modal)
+// now builds its `lazy()` via useRetriableLazy, keyed on the same resetKey
+// "Reload pane" already bumps, instead of a module-level `lazy()`
+// singleton — this proves that pattern actually lets a retried import
+// succeed, using a harness component that mirrors those wrappers' exact
+// ErrorBoundary+Suspense+useRetriableLazy shape without depending on a real
+// (heavy, always-succeeding-in-jsdom) module import.
+describe("useRetriableLazy — 'Reload pane' can recover from a rejected dynamic import", () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("recovers once Reload pane rebuilds the lazy() payload and the retried import resolves", async () => {
+    const user = userEvent.setup();
+    let attempt = 0;
+    const loader = vi.fn(() => {
+      attempt += 1;
+      if (attempt === 1) {
+        return Promise.reject(new Error("Failed to fetch dynamically imported module"));
+      }
+      return Promise.resolve({ default: () => <div data-testid="loaded">loaded</div> });
+    });
+
+    function LazyHarness() {
+      const [resetKey, setResetKey] = useState(0);
+      const Lazy = useRetriableLazy(loader, resetKey);
+      return (
+        <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+          <Suspense fallback={<div data-testid="loading" />}>
+            {/* Same intentional new-identity-per-resetKey reasoning as the
+                real wrappers this harness mirrors — see registry.tsx's own
+                comments on this. */}
+            {/* eslint-disable-next-line react-hooks/static-components */}
+            <Lazy key={resetKey} />
+          </Suspense>
+        </ErrorBoundary>
+      );
+    }
+
+    render(<LazyHarness />);
+
+    expect(await screen.findByText("This pane crashed")).toBeInTheDocument();
+    expect(screen.queryByTestId("loaded")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Reload pane" }));
+
+    // A second, distinct loader() call is the load-bearing assertion here —
+    // without this fix (a module-level `lazy()` singleton reused across the
+    // remount), the payload's cached Rejected status would re-throw
+    // synchronously and the loader would never be called again.
+    expect(await screen.findByTestId("loaded")).toBeInTheDocument();
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("This pane crashed")).not.toBeInTheDocument();
+  });
+
+  it("shares one resolved payload across sibling mounts of the same loader, on the happy path", async () => {
+    const loader = vi.fn(() =>
+      Promise.resolve({ default: () => <div data-testid="loaded">loaded</div> }),
+    );
+
+    function LazyHarness() {
+      const Lazy = useRetriableLazy(loader, 0);
+      return (
+        <Suspense fallback={<div data-testid="loading" />}>
+          {/* Same intentional new-identity-per-resetKey reasoning as the
+              other harness above. */}
+          {/* eslint-disable-next-line react-hooks/static-components */}
+          <Lazy />
+        </Suspense>
+      );
+    }
+
+    const { unmount } = render(<LazyHarness />);
+    expect(await screen.findByTestId("loaded")).toBeInTheDocument();
+    expect(loader).toHaveBeenCalledTimes(1);
+    unmount();
+
+    // A second, independent mount of the SAME loader — e.g. opening a
+    // second browser pane after the first has already resolved. Without a
+    // cache shared across instances (keyed by loader identity), this would
+    // build a brand-new lazy() payload and briefly re-suspend even though
+    // the module is already loaded — the loading fallback (and a second
+    // loader() call) would show up here.
+    render(<LazyHarness />);
+    expect(screen.getByTestId("loaded")).toBeInTheDocument();
+    expect(screen.queryByTestId("loading")).not.toBeInTheDocument();
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The harness test above proves useRetriableLazy itself; this one proves the
+// actual production wiring — components.browserPane, i.e. BrowserPaneWrapper
+// as registered for real — recovers too, so a future revert back to a bare
+// module-level `lazy()` in registry.tsx would break this test.
+//
+// Mocking "../BrowserPane.js" with a THROWING GETTER (rather than a
+// rejecting import()) is what makes a controllable reject-once-then-succeed
+// possible here: loadBrowserPane's `.then((m) => ({ default: m.BrowserPane }))`
+// reads `m.BrowserPane` on every call, so a getter that throws on its first
+// access turns that `.then()` handler's promise rejection into exactly what
+// lazy() sees from a real "Failed to fetch dynamically imported module"
+// network failure — with no way to actually make jsdom's import() itself
+// reject on demand.
+let browserPaneImportAttempts = 0;
+vi.mock("../BrowserPane.js", () => ({
+  get BrowserPane() {
+    browserPaneImportAttempts += 1;
+    if (browserPaneImportAttempts === 1) {
+      throw new Error("Failed to fetch dynamically imported module");
+    }
+    return () => <div data-testid="browser-pane-loaded" />;
+  },
+}));
+
+describe("components.browserPane — 'Reload pane' recovers the real registered panel", () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    browserPaneImportAttempts = 0;
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("recovers after Reload pane once the retried import resolves", async () => {
+    const user = userEvent.setup();
+    const BrowserPaneWrapper = components.browserPane;
+    render(<BrowserPaneWrapper {...makeProps({ sessionId: 1 })} />);
+
+    expect(await screen.findByText("This pane crashed")).toBeInTheDocument();
+    expect(browserPaneImportAttempts).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "Reload pane" }));
+
+    expect(await screen.findByTestId("browser-pane-loaded")).toBeInTheDocument();
+    expect(browserPaneImportAttempts).toBe(2);
   });
 });
