@@ -73,6 +73,7 @@ import {
   fetchRunsForHead,
   fetchRequiredStatusContexts,
   fetchCheckRunsForHead,
+  getPRsStatus,
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
@@ -3174,6 +3175,18 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // alone already means "a capped task's findings were just
         // ingested" — no separate ingest-pointer comparison needed here.
         const announcingCap = capReached;
+        // Issue #1039 — the PR head SHA this round's ingested findings are
+        // actually about, read from the existing github-pr-poller.ts cache
+        // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
+        // a cache miss (poller hasn't hit this repo yet, or no prNumber)
+        // just leaves the column at its previous value, same as any other
+        // best-effort lookup in this loop.
+        let cachedHeadSha: string | undefined;
+        if (task.prNumber !== null) {
+          const repoRef = await resolveRepoRef(app, project);
+          const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
+          cachedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
+        }
         const updated = app.db
           .update(tasks)
           .set({
@@ -3181,6 +3194,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             reviewFindingsIngestedSessionId: task.reviewSessionId,
             lastReviewVerdict: verdict,
             ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date() } : {}),
+            ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
           })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
           .run();
@@ -3276,6 +3290,134 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
 }
 
 /**
+ * Issue #1039 — the follow-up half of #1038's fix. A capped, parked task
+ * (`autoReturnCapAnnouncedAt` non-null — see that column's own doc comment
+ * in schema.ts) has spent every automatic round it's allowed, but a human
+ * can still fix the underlying problem out-of-band by pushing directly to
+ * the PR branch instead of clicking Reject in the UI. Before this, nothing
+ * ever re-evaluated that task: `reviewSessionId` stays fixed, no new review
+ * spawns (processPendingReviewSpawns only spawns for a null reviewSessionId
+ * — see the docblock on `reconcileTasks` below), and `lastReviewVerdict`
+ * stays frozen at whatever the last automatic round produced — so a human
+ * had to hand-approve even a fix that visibly resolved everything.
+ *
+ * This re-arms exactly ONE more genuine review when the PR's head SHA has
+ * moved past the one the task's own findings were last ingested against —
+ * clearing `autoReturnCapAnnouncedAt`/`reviewSessionId`/`reviewSeedDelivered`/
+ * `reviewSpawnClaimedAt` so `processPendingReviewSpawns` picks the task back
+ * up, the same shape the `in_progress -> reviewing` transition below already
+ * produces (all four fields, not three — a successful spawn never clears its
+ * own `reviewSpawnClaimedAt` claim, so it's still set from the round that
+ * produced this parked state; leaving it would make processPendingReviewSpawns'
+ * own claim CAS refuse to spawn for up to REVIEW_SPAWN_CLAIM_STALE_MS, or
+ * permanently once this row stops matching this sweep's own query below).
+ * Deliberately does NOT touch `autoReturnRounds` — the human did the work,
+ * not the worker, so this doesn't spend a round. It also can't loop
+ * autonomously — each cycle requires a fresh, GENUINE head-SHA change —
+ * because this write always stamps `lastReviewedHeadSha` itself, even on a
+ * null-baseline re-arm (see below): without that, a re-arm whose own
+ * triggered review happened to ingest while the poller's cache was cold
+ * (routine, not rare — `CACHE_TTL_MS` is shorter than
+ * `GITHUB_POLL_INTERVAL_QUIET` can be) would leave the baseline null again,
+ * and the very next sweep tick would re-arm a second time with no human
+ * push anywhere in the cycle. If the triggered round comes back
+ * `changes-requested` again, `processReviewingTasks` re-announces the cap
+ * (still capped, same `autoReturnRounds`) and the task parks again exactly
+ * as before — now with a real baseline, so it stays parked until an actual
+ * push moves the SHA.
+ *
+ * Reads the PR's current head SHA from github-pr-poller.ts's own cache
+ * (`getPRsStatus`) rather than fetching it fresh — this sweep runs every
+ * reconcile tick, and a capped task can sit parked for a long time, so a
+ * live GitHub call per tick per parked task would be pure waste against
+ * data the poller already keeps warm independently.
+ */
+async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNotNull(tasks.autoReturnCapAnnouncedAt),
+        isNotNull(tasks.prNumber),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  for (const { task, project } of rows) {
+    const repoRef = await resolveRepoRef(app, project);
+    if (!repoRef) continue;
+    const cached = getPRsStatus(repoRef.owner, repoRef.repo);
+    if (!cached) continue;
+    const pr = cached.prs.find((p) => p.number === task.prNumber);
+    if (!pr) continue;
+
+    // No baseline (the poller's cache was cold at the last ingest) is
+    // treated as "unknown," not "unchanged": the two possible mistakes
+    // aren't symmetric. Backfilling silently here risks recording a SHA
+    // that's ALREADY the human's fix (the cache warmed up after the push,
+    // not before it) — permanently losing the exact push this feature
+    // exists to detect. Re-arming once on a null baseline costs one
+    // advisory review that re-parks if there was nothing to find; that's
+    // the safer direction to be wrong in.
+    if (task.lastReviewedHeadSha !== null && pr.headSha === task.lastReviewedHeadSha) continue;
+
+    // Narrowed by the query's own `isNotNull(tasks.autoReturnCapAnnouncedAt)`
+    // filter above — TypeScript can't see that across the two queries.
+    const announcedAt = task.autoReturnCapAnnouncedAt;
+    if (announcedAt === null) continue;
+
+    // CAS'd on the exact `autoReturnCapAnnouncedAt` value read above (not
+    // just non-null) so a concurrent Reject/Approve/Give-up — which each
+    // already clear or leave this task's row in a different shape — wins
+    // outright rather than this write clobbering a decision that landed in
+    // the gap between the read and this write. Also clears
+    // `reviewSpawnClaimedAt` — a successful spawn (spawnReviewAgentNow)
+    // never clears its own claim, only the `in_progress -> reviewing`
+    // transition and a failed spawn do, so it's still set from the round
+    // that produced this parked state; left as-is, processPendingReviewSpawns'
+    // own claim CAS would refuse to spawn a fresh review for up to
+    // REVIEW_SPAWN_CLAIM_STALE_MS (10 minutes) — or, once this row no
+    // longer matches the `isNotNull(autoReturnCapAnnouncedAt)` filter above
+    // after this write, forever.
+    // Also stamps `lastReviewedHeadSha` here, not just at the next ingest:
+    // without it, a null-baseline re-arm (the sha comparison above skips
+    // entirely when there's no prior baseline) could loop autonomously —
+    // if the fresh review that this re-arm triggers happens to ingest while
+    // the poller's cache is cold (routine, not rare: CACHE_TTL_MS is 60s,
+    // shorter than GITHUB_POLL_INTERVAL_QUIET can be), the ingest write's
+    // own best-effort lookup misses too, `lastReviewedHeadSha` stays null,
+    // the cap re-announces, and the NEXT sweep tick re-arms again — with no
+    // human push anywhere in the cycle. Setting it here closes that gap:
+    // the baseline is established the instant this fires, so only a
+    // GENUINE subsequent head-SHA change can trigger another re-arm.
+    app.db
+      .update(tasks)
+      .set({
+        autoReturnCapAnnouncedAt: null,
+        reviewSessionId: null,
+        reviewSeedDelivered: null,
+        reviewSpawnClaimedAt: null,
+        lastReviewedHeadSha: pr.headSha,
+      })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "reviewing"),
+          eq(tasks.autoReturnCapAnnouncedAt, announcedAt),
+        ),
+      )
+      .run();
+  }
+}
+
+/**
  * Phase 6 Task Master (6.2/#215) — the automatic-transition half of the
  * state machine (task-state.ts owns the legal-transition table; this is
  * what actually walks it). Polls every task in "claimed"/"in_progress" and:
@@ -3348,6 +3490,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // independence reasoning: a project with tasks awaiting autorelease needs
   // to keep being retried regardless of what's currently claimed/in_progress.
   await processReleaseRequests(app);
+  // Issue #1039 — same independence reasoning again: a capped, parked task
+  // waiting on a human's out-of-band push needs to keep being checked
+  // regardless of what's currently claimed/in_progress.
+  await reannounceCappedTasksAfterHumanPush(app);
 
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })

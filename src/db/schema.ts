@@ -604,6 +604,22 @@ export const tasks = sqliteTable(
     // every site that puts the task back into motion (autoReturnTask, the
     // Reject route, the reviewing<->in_progress transitions, claim, retry).
     autoReturnCapAnnouncedAt: integer("auto_return_cap_announced_at", { mode: "timestamp" }),
+    // Issue #1039 — the PR head SHA a review round's ingested findings were
+    // actually about, recorded at every ingest write alongside
+    // reviewFindingsIngestedSessionId above (task-reconciler.ts's
+    // processReviewingTasks). The one thing this exists to answer: has a
+    // human pushed a fix directly to the branch since the last review, on a
+    // task that's capped and parked (autoReturnCapAnnouncedAt non-null)?
+    // reannounceCappedTasksAfterHumanPush (task-reconciler.ts) compares this
+    // against the PR's current head SHA (read from the existing
+    // github-pr-poller.ts cache, `getPRsStatus` — no extra GitHub API call)
+    // and, on a mismatch, clears autoReturnCapAnnouncedAt/reviewSessionId to
+    // earn exactly one more genuine review — WITHOUT incrementing
+    // autoReturnRounds, since the human did the work, not the worker. Never
+    // cleared elsewhere: unlike autoReturnCapAnnouncedAt, a stale value here
+    // is self-correcting (the very next ingest overwrites it), not a signal
+    // that needs resetting on every resume path.
+    lastReviewedHeadSha: text("last_reviewed_head_sha"),
     // #757 — the newest GitHub PR review comment (from an unresolved thread,
     // excluding Mullion's own review bot) already acted on by an auto-return
     // round. Prevents re-triggering a round for a comment already answered:
