@@ -465,6 +465,23 @@ export const schema = {
       default: 15,
       minimum: 0,
     },
+    // Phase 6 Task Master safety envelope — wall-clock minutes the
+    // reconciler waits after a `rate_limit` stop_failure before
+    // failing a task, so a transient subscription-quota exhaustion
+    // doesn't kill a task that could resume once the quota refreshes.
+    // Reconciler-level behavior (no new task states); the task stays
+    // `in_progress` and the reconciler skips it on each tick until
+    // recovery or expiry. 0 = opt out — fail immediately on the
+    // first rate_limit. Default 5. Max 1440 (24h): quotas can be
+    // weekly/monthly, so an operator hitting a multi-day cooldown
+    // still wants a single value they can set rather than a forced
+    // restart loop.
+    MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: {
+      type: "number",
+      default: 5,
+      minimum: 0,
+      maximum: 1440,
+    },
     // Whether an unattended task spawn (claim/auto-claim/retry/review agent)
     // passes skipPermissions through to the agent's own flag. Default OFF:
     // an unattended agent bypassing every permission prompt is a deliberate
@@ -750,6 +767,7 @@ declare module "fastify" {
       MULLION_TASK_MAX_CONCURRENT: number;
       MULLION_TASK_BUDGET_MINUTES: number;
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
+      MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: number;
       MULLION_TASK_SKIP_PERMISSIONS: boolean;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;

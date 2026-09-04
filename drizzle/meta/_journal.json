@@ -428,6 +428,13 @@
       "when": 1788529032595,
       "tag": "0060_woozy_rage",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1788536914371,
+      "tag": "0061_slow_wolf_cub",
+      "breakpoints": true
     }
   ]
 }

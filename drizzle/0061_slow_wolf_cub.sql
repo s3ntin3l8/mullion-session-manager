@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `last_rate_limit_at` integer;
