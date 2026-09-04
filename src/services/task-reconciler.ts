@@ -3152,17 +3152,28 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // gating review event below, and they can't be allowed to drift.
         const verdict = parsed?.verdict ?? "inconclusive";
         // Issue #1038 — folded into this same durable write, not a
-        // follow-up write after the GitHub comment post below: the cap
-        // notice is about to be posted (see cappedNote), and this column is
-        // the ground truth "the machine actually stopped" signal the board
-        // reads. Setting it here, ahead of the post, means a crash between
-        // this write and the post leaves the banner CORRECT (needs a human)
-        // with only the notice comment missing — the opposite failure is
-        // worse: a separate write after a successful post that then crashes
-        // would leave a task with findings ingested and no announcement,
-        // which processReviewingTasks's own re-ingest guard just above
-        // means nothing would ever revisit.
-        const announcingCap = wantsAutoReturn && capReached;
+        // follow-up write after the GitHub comment post below: this column
+        // is the ground truth "the machine actually stopped" signal the
+        // board reads, and this write IS the moment a capped task's
+        // findings are durably ingested (reviewFindingsIngestedSessionId
+        // below), regardless of what the verdict turned out to be. Setting
+        // it here, ahead of the post, means a crash between this write and
+        // the post (reached only when wantsAutoReturn, i.e. changes were
+        // requested — see cappedNote below) leaves the banner CORRECT
+        // (needs a human) with only the notice comment missing.
+        //
+        // Hermes review (PR #1040) — deliberately `capReached` alone, NOT
+        // `wantsAutoReturn && capReached`: a capped task whose FINAL review
+        // comes back clean or inconclusive is just as genuinely parked as
+        // one that wanted (and was denied) another round — nothing
+        // auto-returns a non-"changes-requested" verdict either way — but
+        // gating on wantsAutoReturn left that case never announced, so the
+        // board kept claiming "review in flight" on a task nothing further
+        // would ever touch. This durable write only runs when a review's
+        // output is being ingested (isUsableSignal above), so `capReached`
+        // alone already means "a capped task's findings were just
+        // ingested" — no separate ingest-pointer comparison needed here.
+        const announcingCap = capReached;
         const updated = app.db
           .update(tasks)
           .set({
