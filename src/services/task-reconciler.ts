@@ -44,6 +44,7 @@ import {
   parseReviewFindings,
   parseCommitTitle,
   renderReviewFindingsMarkdown,
+  resolvePrTitle,
   type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
@@ -69,6 +70,7 @@ import {
   getPullRequestReviewDecision,
   createPullRequestReview,
   resolveReviewThread,
+  updatePullRequestTitle,
 } from "./github-write.js";
 import {
   computeCiStatus,
@@ -1510,6 +1512,30 @@ async function attemptMerge(
         // "Merge now" is the escape hatch for deciding to override it.
         // Counter-risk, stated deliberately: a non-required check that never
         // reports at all leaves this PR never auto-merging.
+        //
+        // #1035 — a red non-required TITLE-LINT check is a special case of
+        // "never auto-merging" that has a clean fix: derive the title and
+        // PATCH it. Same `attemptSelfHealPrTitle` the red-required path
+        // uses, so the matching logic lives in one place. Adding a
+        // `fetchCheckRunsForHead` call to the unstable path: cheap relative
+        // to the existing unstable backoff loop, and far cheaper than asking
+        // a human to manually edit the title or click "Merge now." Self-heal
+        // success: skip the mergeError record entirely (next tick re-reads
+        // mergeable_state and may now be "clean"). Failure: fall through to
+        // the original backoff behavior so a non-title-lint unstable state
+        // is unchanged.
+        const unstableCheckRuns = await fetchCheckRunsForHead(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          pr.headSha,
+        ).catch(() => []);
+        if (
+          unstableCheckRuns.length > 0 &&
+          (await attemptSelfHealPrTitle(app, task, repoRef, token, pr.title, unstableCheckRuns))
+        ) {
+          return;
+        }
         recordMergeError(app, task.id, "A non-required check is failing or still running");
         return;
       }
@@ -2128,6 +2154,77 @@ function autoApproveRetryBackoffMs(attempts: number): number {
 const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
 const ciCapCommentedRounds = new Map<number, number>();
 
+// #1035 — curated set of CI check names that flag a non-conventional PR
+// title. Curated short list (not substring/heuristic match) — see
+// `attemptSelfHealPrTitle`'s JSDoc for the full behavior contract.
+const PR_TITLE_LINT_CHECK_NAMES = new Set([
+  "lint-pr-title",
+  "pr-title",
+  "commitlint",
+  "conventional-commit-lint",
+]);
+
+/**
+ * #1035 — the actual self-heal, shared by both `attemptReturnRedCiToWorker`
+ * (required-check path: a red required title-lint check burns a round on a
+ * fix the worker can't make) and the `attemptMerge` `case "unstable"`
+ * branch below (non-required path: a red non-required title-lint check
+ * strands the task in `unstable` forever with no auto-merge, and no
+ * round-cap escape since no round is being spent). One helper so the
+ * matching logic — name set, "skip when the derived title is the same as
+ * what GitHub already shows," GitHub write — lives in one place.
+ *
+ * No-op when no failing check matches a name in the curated set, when the
+ * derived title is empty, when it matches GitHub's current title, or when
+ * the PATCH itself throws (logged, never propagated). Returns `true` iff a
+ * write was attempted AND that write targeted a different title from what
+ * the PR already had — the caller's signal to short-circuit ("we did the
+ * thing, don't also auto-return/post a non-required error for the same
+ * condition"). `false` on no-op AND on failed write — the caller should
+ * fall through to its original behavior in the latter case.
+ *
+ * `updatePullRequestTitle` itself does NOT compare against the current
+ * title (its own doc comment: "callers are expected to compare against the
+ * PR's current title first"), so this helper is the place that does.
+ */
+async function attemptSelfHealPrTitle(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  repoRef: GitHubRepoRef,
+  token: string,
+  prTitle: string,
+  checkRuns: { name: string; conclusion: string | null }[],
+): Promise<boolean> {
+  const failingTitleLint = checkRuns.some(
+    (c) =>
+      c.conclusion !== null &&
+      c.conclusion !== "success" &&
+      c.conclusion !== "skipped" &&
+      c.conclusion !== "cancelled" &&
+      c.conclusion !== "neutral" &&
+      PR_TITLE_LINT_CHECK_NAMES.has(c.name),
+  );
+  if (!failingTitleLint) return false;
+
+  const derivedTitle = resolvePrTitle(task);
+  if (!derivedTitle || derivedTitle === prTitle) return false;
+
+  try {
+    await updatePullRequestTitle(token, repoRef.owner, repoRef.repo, task.prNumber!, derivedTitle);
+    app.log.info(
+      { taskId: task.id, prNumber: task.prNumber, newTitle: derivedTitle },
+      "task reconcile: self-healed a PR-title lint failure by re-deriving the title (#1035)",
+    );
+    return true;
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id, prNumber: task.prNumber },
+      "task reconcile: PR-title self-heal PATCH failed — falling back to the original trigger's behavior",
+    );
+    return false;
+  }
+}
+
 async function attemptReturnRedCiToWorker(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -2175,6 +2272,26 @@ async function attemptReturnRedCiToWorker(
       c.conclusion !== "neutral",
   );
   if (!redRequired) return false;
+
+  // #1035 — BEFORE the auto-return-cap check: if the only failing required
+  // check is a title-lint one, self-heal the title instead of burning a
+  // round on a fix the worker is forbidden by buildTaskMasterPreamble from
+  // making. `attemptSelfHealPrTitle` is a no-op when no title-lint check
+  // failed, so the existing #755 contract for non-title-lint failures is
+  // unchanged. Short-circuit on success: caller (`attemptAutoApprove`) must
+  // not fall through to its own approve gates for this tick.
+  const pr = await getPullRequestByNumber(
+    token,
+    current.repoRef.owner,
+    current.repoRef.repo,
+    task.prNumber!,
+  ).catch(() => null);
+  if (
+    pr !== null &&
+    (await attemptSelfHealPrTitle(app, task, current.repoRef, token, pr.title, checkRuns))
+  ) {
+    return true;
+  }
 
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return false;
