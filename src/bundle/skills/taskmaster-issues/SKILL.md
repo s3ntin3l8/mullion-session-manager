@@ -100,10 +100,12 @@ claude`") is deliberately not picked up, only a line matching exactly
 
 Matching rules, all six:
 
-- **The key is case-insensitive; the value is not.** `Agent: Claude`
-  matches the line, then fails the (lowercase) allow-list of known agents
-  and falls through to the next tier with a warning — a bad value never
-  blocks pickup, it just doesn't do what you expected.
+- **The key is always case-insensitive. For `Agent:`/`ReviewAgent:`/the
+  `Model:` family, the value is not.** `Agent: Claude` matches the line,
+  then fails the (lowercase) allow-list of known agents and falls through
+  to the next tier with a warning — a bad value never blocks pickup, it
+  just doesn't do what you expected. `Manual:` is the one exception: its
+  whole line, value included, is matched case-insensitively (see below).
 - The value can't contain whitespace or a trailing comment —
   `Agent: claude # default` doesn't match.
 - It must be alone on the line: a `- ` bullet or `> ` quote prefix breaks
@@ -112,8 +114,8 @@ Matching rules, all six:
   plain regexes over the raw issue body with no markdown awareness. A
   directive still fires even if you paste it inside a fenced block.
 - First match wins if a directive line appears more than once.
-- `Manual:` matches only the literal value `true` — `Manual: yes` is
-  inert.
+- `Manual: true`/`Manual: True`/`Manual: TRUE` all match — only the word
+  `true` counts, in any casing; `Manual: yes` is inert.
 - The three `Model:`-family directives only affect opencode-claimed
   tasks; on claude/codex/agy they're silently inert. Their value must
   look like `provider/model` — more than one slash is fine, e.g.
