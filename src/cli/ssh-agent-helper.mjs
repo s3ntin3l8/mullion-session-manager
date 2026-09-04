@@ -23,11 +23,28 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Agent as UndiciAgent } from "undici";
 import { decodePairingPayload } from "./ssh-agent-bridge-pairing.mjs";
 import { attachInboundMux } from "./ssh-agent-bridge-mux.mjs";
 import { pipeFilteredNetSocketToChannel } from "./ssh-agent-filtered-relay.mjs";
 import { extractFlags, CliUsageError } from "./core.mjs";
 import { runInstall, runUninstall } from "./ssh-agent-helper-install.mjs";
+
+// Issue #1049 (Task 4) — `--insecure` lets `pair` and `run` talk to a
+// primary whose TLS cert is self-signed/internal-CA (Caddy/nginx dev
+// setups, Cloudflare origin-pinned, any reverse proxy that hasn't been
+// pointed at a public CA yet). The flag is the WHOLE POINT of this agent
+// for that user, so the dispatcher is unconditional at module scope and
+// only ever referenced when the flag is actually set — today's behavior
+// (strict verification) is unchanged for everyone else.
+//
+// Reused across every connection, not recreated per call: an undici Agent
+// is a real connection pool, and the global `fetch` + `WebSocket` in
+// Node ≥22 both accept it as the same `dispatcher` option (Node's global
+// WebSocket IS undici's). A `node:https.Agent` with the `agent` option
+// would only solve half of this — `fetch` ignores it — so we don't carry
+// two dispatcher types where one covers both.
+const INSECURE_DISPATCHER = new UndiciAgent({ connect: { rejectUnauthorized: false } });
 
 // Round 3 (PR2) — the `io` object every `runHelper` verb actually touches:
 // stdout/stderr for output, env for reading SSH_AUTH_SOCK/MULLION_HELPER_
@@ -97,17 +114,22 @@ export const WINDOWS_DEFAULT_SSH_AUTH_SOCK = "\\\\.\\pipe\\openssh-ssh-agent";
  * backoff ladder. */
 export class HandshakeRejectedError extends Error {}
 
-function toWsUrl(baseUrl, urlPath) {
+// Issue #1049 (Task 4) — `toWsUrl` returns the WSS URL plus whether the
+// caller asked to skip TLS verification, so every place that opens a
+// socket can pass the same `insecure` bit through to the connection
+// without re-deriving it from `baseUrl`.
+function toWsUrl(baseUrl, urlPath, opts = {}) {
   const url = new URL(urlPath, baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
+  return { url: url.toString(), insecure: opts.insecure === true };
 }
 
 // Round 3 (session renewal) — baseUrl is already validated http(s) by
 // loadCredential/isValidHttpBaseUrl below, so this is a plain path join,
-// symmetric with toWsUrl above but without the protocol rewrite.
-function toHttpUrl(baseUrl, urlPath) {
-  return new URL(urlPath, baseUrl).toString();
+// symmetric with toWsUrl above but without the protocol rewrite. Same
+// return shape as toWsUrl for the same `insecure` reason.
+function toHttpUrl(baseUrl, urlPath, opts = {}) {
+  return { url: new URL(urlPath, baseUrl).toString(), insecure: opts.insecure === true };
 }
 
 function sleep(ms) {
@@ -377,10 +399,10 @@ function saveCredential(io, credential) {
 }
 
 async function runPair(args, io) {
-  const { flags, rest } = extractFlags(args, { name: "string" });
+  const { flags, rest } = extractFlags(args, { name: "string", insecure: "boolean" });
   const [payload] = rest;
   if (!payload) {
-    throw new CliUsageError("usage: mullion helper pair <payload> [--name <name>]");
+    throw new CliUsageError("usage: mullion helper pair <payload> [--name <name>] [--insecure]");
   }
   const decoded = decodePairingPayload(payload);
   if (!decoded) {
@@ -389,7 +411,14 @@ async function runPair(args, io) {
     );
   }
 
-  const ws = new WebSocket(toWsUrl(decoded.baseUrl, "/ws/agent-bridge"));
+  // Issue #1049 (Task 4) — pass --insecure down to the WebSocket so the
+  // handshake can complete against a self-signed primary. The dispatcher
+  // is only attached when `insecure` is true; today's strict verification
+  // is unchanged for the common case.
+  const { url: wsUrl, insecure } = toWsUrl(decoded.baseUrl, "/ws/agent-bridge", {
+    insecure: flags.insecure,
+  });
+  const ws = new WebSocket(wsUrl, insecure ? { dispatcher: INSECURE_DISPATCHER } : undefined);
   let ready;
   try {
     ready = await handshake(ws, {
@@ -463,7 +492,11 @@ async function runPair(args, io) {
 // per-request shape) is confirmed working — issue #874, 8 and 16
 // simultaneous connections each round-tripped correctly.
 async function runRun(args, io) {
-  const { flags } = extractFlags(args, { "ssh-auth-sock": "string", "json-events": "boolean" });
+  const { flags } = extractFlags(args, {
+    "ssh-auth-sock": "string",
+    "json-events": "boolean",
+    insecure: "boolean",
+  });
   // Round 4 (issue #820, tray-repo prerequisites) — a tray needs something
   // more reliable than regex-matching the stderr prose below, which has
   // already been reworded three times across PR1/PR2/PR3. NDJSON on
@@ -590,12 +623,20 @@ async function runRun(args, io) {
     try {
       // CodeQL js/file-access-to-http — see the "Accepted risk" comment
       // near loadCredential above; same shape, same reasoning as runRun's
-      // own handshake call below.
-      const res = await fetch(toHttpUrl(current.baseUrl, "/api/bridges/renew"), {
+      // own handshake call below. Issue #1049 (Task 4): --insecure
+      // reaches the renewal fetch the same way it reaches the WS, so a
+      // self-signed primary that paired once can keep renewing too.
+      const { url: renewUrl, insecure: renewInsecure } = toHttpUrl(
+        current.baseUrl,
+        "/api/bridges/renew",
+        { insecure: flags.insecure },
+      );
+      const res = await fetch(renewUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ bridge_id: current.bridgeId, session_id: current.sessionId }),
         signal: AbortSignal.timeout(RENEW_TIMEOUT_MS),
+        ...(renewInsecure ? { dispatcher: INSECURE_DISPATCHER } : {}),
       });
       if (stopped) return;
       if (res.status === 401) {
@@ -661,7 +702,13 @@ async function runRun(args, io) {
     // from under it (see renewalPromise's own comment above).
     const presentedSessionId = credential.sessionId;
     try {
-      const ws = new WebSocket(toWsUrl(credential.baseUrl, "/ws/agent-bridge"));
+      // Issue #1049 (Task 4) — same --insecure handling as runPair: when
+      // set, attach INSECURE_DISPATCHER so a self-signed primary's WS
+      // handshake can complete.
+      const { url: wsUrl, insecure } = toWsUrl(credential.baseUrl, "/ws/agent-bridge", {
+        insecure: flags.insecure,
+      });
+      const ws = new WebSocket(wsUrl, insecure ? { dispatcher: INSECURE_DISPATCHER } : undefined);
       activeWs = ws;
       const ready = await handshake(ws, {
         type: "auth",
