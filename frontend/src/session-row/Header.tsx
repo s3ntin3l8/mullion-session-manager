@@ -42,12 +42,6 @@ export interface HeaderProps {
   agentLogo: string | null;
   showAgentFallback: boolean;
   agentBinary: string;
-  model?: string | null;
-  // Issue #958 — opencode's `small_model` config key. Rendered as a second,
-  // visually-secondary badge next to `model` (opacity modifier, same badge
-  // shape) only when set — most sessions don't have one, and non-opencode
-  // sessions never do.
-  smallModel?: string | null;
   dot: ReactNode;
   statusLabel: ReactNode;
   gitStatus: GitStatus | null | undefined;
@@ -80,8 +74,6 @@ export function Header({
   agentLogo,
   showAgentFallback,
   agentBinary,
-  model,
-  smallModel,
   dot,
   statusLabel,
   gitStatus,
@@ -125,16 +117,6 @@ export function Header({
         <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
       )}
       {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
-      {model && (
-        <span className="session-model-badge" title={`Model: ${model}`}>
-          {model.split("/").pop()}
-        </span>
-      )}
-      {smallModel && (
-        <span className="session-model-badge is-small" title={`Small model: ${smallModel}`}>
-          {smallModel.split("/").pop()}
-        </span>
-      )}
       {renaming ? (
         <input
           ref={renameInputRef}
