@@ -167,6 +167,13 @@ export function CreateProjectModal({
   // "Use global default" was already selected.
   const [launchersLoadError, setLaunchersLoadError] = useState(false);
   const [launchersRetryToken, setLaunchersRetryToken] = useState(0);
+  // Issue #1034 — the manual re-check affordance for release-please
+  // detection. Distinct from `submitting` (the full save-submit spinner)
+  // because the re-check is its own round-trip and can race with other
+  // edits; a separate boolean keeps the Re-check button disabled until the
+  // round trip resolves, without also blocking the rest of the modal.
+  const [recheckInFlight, setRecheckInFlight] = useState(false);
+  const [recheckError, setRecheckError] = useState<string | null>(null);
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
@@ -295,6 +302,34 @@ export function CreateProjectModal({
         message: err instanceof ApiError ? err.message : "Could not add project",
         code: err instanceof ApiError ? err.code : undefined,
       });
+    }
+  };
+
+  // Issue #1034 — manual re-check of release-please detection. Edit-mode
+  // only: there's no project row to re-check before the project exists.
+  // Refetches the project list on success so the sidebar/GitHubPanel see
+  // the new `conventionalCommitTitles` value without needing a separate
+  // store-update call from this component (the sidebar's own edit-modal
+  // caller already does this through updateProject's refreshProjects
+  // fire-and-forget; a direct call here covers the case where the user
+  // opens the modal from elsewhere — Settings, the kebab menu, etc.).
+  const handleRecheck = async () => {
+    if (projectId === undefined) return;
+    setRecheckInFlight(true);
+    setRecheckError(null);
+    try {
+      await api.recheckReleasePlease(projectId);
+      void useDashboardStore
+        .getState()
+        .refreshProjects()
+        .catch(() => {});
+    } catch (err) {
+      console.debug("[CreateProjectModal] release-please recheck failed", err);
+      setRecheckError(
+        err instanceof ApiError ? err.message : "Could not re-check release-please status",
+      );
+    } finally {
+      setRecheckInFlight(false);
     }
   };
 
@@ -572,13 +607,33 @@ export function CreateProjectModal({
                 />
                 Let the worker write the PR title
               </label>
+              {/* Issue #1034 — manual re-check of the release-please
+                  auto-enable sweep. The sweep is one-shot, so a repo that
+                  adopts release-please AFTER first detection never gets
+                  re-probed automatically; this button forces a fresh probe
+                  via POST /api/projects/:id/release-please/recheck. Sits
+                  next to the checkbox (not as the field's own row), since
+                  it's an action on this project, not a property of it. */}
+              <button
+                type="button"
+                className="create-modal-browse-btn"
+                disabled={recheckInFlight}
+                onClick={() => void handleRecheck()}
+              >
+                {recheckInFlight ? "Re-checking…" : "Re-check now"}
+              </button>
+              {recheckError && (
+                <span className="create-modal-field-hint error">{recheckError}</span>
+              )}
               <span className="create-modal-field-hint">
                 Task PRs are squash-merged, so the PR title becomes the commit message on main. Off:
                 the title is the GitHub issue title, verbatim — if that isn't prefixed feat:/fix:/…
                 , release-please skips it and cuts no release. On: the worker writes a "type(scope):
                 description" title for what it actually changed; an issue title that's already
                 conventional is kept either way. Mullion turns this on automatically for a repo it
-                detects using release-please — turning it off here sticks, even for that repo.
+                detects using release-please — turning it off here sticks, even for that repo. Use
+                "Re-check now" after the repo adopts release-please to pick up the change without
+                waiting for a fresh install.
               </span>
             </label>
           )}
