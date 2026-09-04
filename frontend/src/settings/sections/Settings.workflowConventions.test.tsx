@@ -151,4 +151,46 @@ describe("Settings -> Sessions -> workflow-conventions wizard", () => {
     );
     expect(useDashboardStore.getState().settings.sessions.workflowConventionsText).toBe("");
   });
+
+  // Regression for a review finding: a rejected preview request used to
+  // leave `previewText` at null with nothing rendering `previewError` at
+  // all, so clicking "Preview" after a failure silently did nothing.
+  it("shows an error (not a silent no-op) when the preview request fails, and Retry recovers", async () => {
+    let previewCalls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      if (url === "/api/workflow-conventions/questions" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, { questions: QUESTIONS }));
+      }
+      if (url === "/api/workflow-conventions/preview" && method === "POST") {
+        previewCalls += 1;
+        return previewCalls === 1
+          ? Promise.resolve(jsonResponse(500, { message: "boom" }))
+          : Promise.resolve(jsonResponse(200, { text: "Always branch and open a PR." }));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    await user.click(await screen.findByText("Generate with wizard"));
+    await screen.findByText("Direct commits, or always branch + PR?");
+    await user.click(screen.getByText("Always branch + PR"));
+    await user.click(screen.getByText("Preview"));
+
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+    // The question flow is NOT silently re-shown in place of any feedback.
+    expect(screen.queryByText("Direct commits, or always branch + PR?")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Retry"));
+
+    expect(
+      await screen.findByText(/This replaces your current workflow conventions text/),
+    ).toBeInTheDocument();
+  });
 });

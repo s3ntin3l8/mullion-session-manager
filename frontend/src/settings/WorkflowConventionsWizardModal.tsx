@@ -60,21 +60,30 @@ export function WorkflowConventionsWizardModal({
     setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
   };
 
+  const requestPreview = () => {
+    setPreviewError(null);
+    void api
+      .previewWorkflowConventionsText(answers)
+      .then((result) => setPreviewText(result.text))
+      .catch((err: unknown) => {
+        setPreviewError(err instanceof ApiError ? err.message : "Failed to build preview");
+      });
+  };
+
   const handleNext = () => {
     if (!questions) return;
     if (isLastQuestion) {
-      void api
-        .previewWorkflowConventionsText(answers)
-        .then((result) => setPreviewText(result.text))
-        .catch((err: unknown) => {
-          setPreviewError(err instanceof ApiError ? err.message : "Failed to build preview");
-        });
+      requestPreview();
       return;
     }
     setStepIndex((i) => i + 1);
   };
 
   const handleBack = () => {
+    if (previewError !== null) {
+      setPreviewError(null);
+      return;
+    }
     if (previewText !== null) {
       setPreviewText(null);
       return;
@@ -101,6 +110,25 @@ export function WorkflowConventionsWizardModal({
   } else if (!questions) {
     body = <div className="agent-rules-panel-notice">Loading…</div>;
     footer = null;
+  } else if (previewError) {
+    // Issue #937 review finding — a rejected previewWorkflowConventionsText
+    // call used to leave `previewText` at `null` with nothing rendering
+    // `previewError` at all (that branch only existed inside the
+    // `previewText !== null` case below, which a failure never reaches):
+    // clicking "Preview" after a network hiccup silently did nothing. This
+    // is its own dedicated step now, with a way back to either retry or
+    // return to the question flow.
+    body = <div className="agent-rules-panel-notice error">{previewError}</div>;
+    footer = (
+      <>
+        <button className="create-modal-cancel" onClick={handleBack}>
+          Back
+        </button>
+        <button className="create-modal-submit" onClick={requestPreview}>
+          Retry
+        </button>
+      </>
+    );
   } else if (previewText !== null) {
     body = (
       <>
@@ -108,7 +136,6 @@ export function WorkflowConventionsWizardModal({
           This replaces your current workflow conventions text. You can still hand-edit it afterward
           — nothing about the wizard's answers is remembered.
         </div>
-        {previewError && <div className="agent-rules-panel-notice error">{previewError}</div>}
         <textarea
           className="agent-rules-panel-textarea"
           value={previewText}
