@@ -6647,12 +6647,12 @@ describe("PtyManager", () => {
       });
       // The tier-0 file itself is a real on-disk write (settingsFiles),
       // not just an env-var reference — same short block hooks.ts pushes
-      // to the other three agents, `authEnabled` defaulting false here
+      // to the other three agents, `authEnabled` defaulting true here
       // (this describe block's own `manager` is constructed with no
       // authEnabled option — see the dedicated authEnabled test below for
-      // the `true` case).
+      // the explicit `false` case).
       expect(fs.readFileSync(tier0Path, "utf8")).toBe(
-        buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "1"), false),
+        buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "1"), true),
       );
     });
 

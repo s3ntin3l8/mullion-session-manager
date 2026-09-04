@@ -1,6 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -1477,7 +1477,7 @@ export class Session {
     this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
     this.sshAuthSock = opts.sshAuthSock ?? "";
-    this.authEnabled = opts.authEnabled ?? false;
+    this.authEnabled = opts.authEnabled ?? true;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
     this.injectMullionBundle = opts.injectMullionBundle ?? true;
@@ -3833,7 +3833,7 @@ export class PtyManager {
     // per-session-different) directory instead of the single stable path
     // this feature depends on.
     this.sshAuthSock = opts.sshAuthSock ? path.resolve(opts.sshAuthSock) : "";
-    this.authEnabled = opts.authEnabled ?? false;
+    this.authEnabled = opts.authEnabled ?? true;
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
     this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
     this.getInjectMullionBundle = opts.getInjectMullionBundle ?? (() => true);
@@ -4237,6 +4237,19 @@ export class PtyManager {
     } catch {
       // ENOENT (opencode tier-0 was never written, or the session was
       // never an opencode session).
+    }
+    // #949 — opencode also writes a seed file and a config directory per
+    // session; same lifecycle, same cleanup.
+    try {
+      unlinkSync(path.join(this.sessionsDir, `${id}.opencode-seed.md`));
+    } catch {
+      // ENOENT (opencode seed was never written).
+    }
+    try {
+      const configDir = path.join(this.sessionsDir, `${id}.opencode-config`);
+      rmSync(configDir, { recursive: true, force: true });
+    } catch {
+      // ENOENT or other (opencode config dir was never created).
     }
   }
 
