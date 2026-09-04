@@ -11,6 +11,7 @@ import type {
   SettingsPatch,
   PushSubscriptionPayload,
   BrowserCookieProfile,
+  WorkflowConventionQuestion,
 } from "./types.js";
 
 export const settingsApi = {
@@ -68,6 +69,20 @@ export const settingsApi = {
 
   deleteBrowserCookieProfile: (projectId: number, id: number) =>
     request<void>(`/api/projects/${projectId}/browser-cookies/${id}`, { method: "DELETE" }),
+
+  // Issue #937 — the workflow-conventions wizard's two read-only endpoints.
+  // Neither reads nor writes settings.sessions.workflowConventionsText
+  // itself; the caller (Settings.tsx's Sessions section) calls
+  // previewWorkflowConventionsText, shows the result, and — only on
+  // confirm — PATCHes it in via patchSettings above.
+  getWorkflowConventionQuestions: () =>
+    request<{ questions: WorkflowConventionQuestion[] }>("/api/workflow-conventions/questions"),
+
+  previewWorkflowConventionsText: (answers: Record<string, string>) =>
+    request<{ text: string }>("/api/workflow-conventions/preview", {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    }),
 };
 
 // Mirrors src/services/settings.ts's DEFAULT_SETTINGS 1:1 — the store seeds
@@ -174,6 +189,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     injectAgentGuide: true,
     injectProjectBriefing: true,
     injectMullionBundle: true,
+    workflowConventionsText: "",
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },

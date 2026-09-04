@@ -65,6 +65,13 @@ export interface SessionBackend {
     // (pty-manager.ts). Forwarded to a remote host verbatim
     // (RemoteBackend.spawn below), same as seedPrompt/env.
     briefingOverride?: string;
+    // Issue #937 — see CreateSessionOptions.workflowConventionsText's own
+    // doc comment (pty-manager.ts). Already fully resolved (both the
+    // project's injectWorkflowConventions column and the global text's
+    // non-emptiness) by session-lifecycle.ts before this is ever called —
+    // same "forwarded to a remote host verbatim" posture as
+    // briefingOverride above.
+    workflowConventionsText?: string;
     // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's
     // own doc comments (pty-manager.ts). Same "forwarded to a remote host
     // verbatim" posture as briefingOverride above.
@@ -287,6 +294,7 @@ class LocalBackend implements SessionBackend {
     projectId?: number;
     env?: Record<string, string>;
     briefingOverride?: string;
+    workflowConventionsText?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
     // Issue #957 — see CreateSessionOptions.model's own doc comment
@@ -512,6 +520,7 @@ class RemoteBackend implements SessionBackend {
     projectId?: number;
     env?: Record<string, string>;
     briefingOverride?: string;
+    workflowConventionsText?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
     // Issue #957 — see CreateSessionOptions.model's own doc comment

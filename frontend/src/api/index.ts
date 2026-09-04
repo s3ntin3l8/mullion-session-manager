@@ -152,6 +152,8 @@ export type {
   UpdateStatus,
   AppSettings,
   SettingsPatch,
+  WorkflowConventionQuestion,
+  WorkflowConventionOption,
   PushSubscriptionPayload,
   ProjectReleaseStatus,
   ReleaseDetectionResult,

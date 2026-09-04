@@ -46,6 +46,7 @@ export const projectsApi = {
         | "autoTagRelease"
         | "injectAgentGuide"
         | "injectProjectBriefing"
+        | "injectWorkflowConventions"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>

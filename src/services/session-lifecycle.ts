@@ -585,6 +585,26 @@ export async function createSessionRecord(
   const resolvedInjectProjectBriefing =
     project.injectProjectBriefing ?? globalSessionSettings.injectProjectBriefing;
 
+  // Issue #937 — the install-wide workflow-conventions text, gated the same
+  // way the boolean's own doc comment (schema.ts) describes: inject only
+  // when this project hasn't explicitly opted out AND there's actually a
+  // non-empty global text configured. Resolved to a SINGLE already-gated
+  // value here, on the primary — deliberately not threaded as a separate
+  // boolean + raw text the way injectAgentGuide/briefingOverride are two
+  // fields, because nothing downstream ever needs the boolean independently
+  // of the text (the frontend's per-project toggle reads the DB column
+  // directly, not anything echoed off a session): a single
+  // `string | undefined`, `briefingOverride`-shaped, is enough to reach a
+  // multi-host agent role with no settings DB of its own to read (see
+  // that field's own doc comment, pty-manager.ts). `undefined` here also
+  // fails CLOSED on a version-skewed remote build that strips the field —
+  // the right direction for a policy-text feature.
+  const resolvedInjectWorkflowConventions = project.injectWorkflowConventions ?? true;
+  const resolvedWorkflowConventionsText =
+    resolvedInjectWorkflowConventions && globalSessionSettings.workflowConventionsText.length > 0
+      ? globalSessionSettings.workflowConventionsText
+      : undefined;
+
   let spawnResult: {
     initialPromptApplied?: boolean;
     injectAgentGuide?: boolean;
@@ -615,6 +635,7 @@ export async function createSessionRecord(
       smallModel,
       injectAgentGuide: resolvedInjectAgentGuide,
       injectProjectBriefing: resolvedInjectProjectBriefing,
+      workflowConventionsText: resolvedWorkflowConventionsText,
       env,
       taskId,
     });

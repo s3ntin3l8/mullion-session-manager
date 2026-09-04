@@ -201,6 +201,24 @@ export interface CreateSessionOptions {
    * when set" posture as `injectAgentGuide` immediately above, for the
    * independent sessions.injectProjectBriefing setting. */
   injectProjectBriefing?: boolean;
+  /** Issue #937 — the install-wide workflow-conventions text, already fully
+   * resolved (gated on both the global text being non-empty AND this
+   * project's own injectWorkflowConventions column) by
+   * session-lifecycle.ts's createSessionRecord, on the PRIMARY, for the
+   * same multi-host reason `briefingOverride` above exists. Unlike
+   * injectAgentGuide/injectProjectBriefing immediately above, this is a
+   * SINGLE resolved `string | undefined`, not a separate boolean + raw
+   * text: nothing downstream needs the boolean independently of the text
+   * (the frontend's per-project toggle reads projects.injectWorkflowConventions
+   * directly, never anything echoed off a Session), so there is no live
+   * closure to fall back to and no caller-supplied override concept —
+   * every session for a project gets the same resolved value, same as
+   * injectAgentGuide/injectProjectBriefing's "no per-caller override"
+   * posture, just carrying a value instead of a boolean. `undefined` means
+   * "inject nothing" — see writeSessionWorkflowConventions's own doc
+   * comment (workflow-conventions.ts) for why that's also true of an empty
+   * string, unlike briefingOverride. */
+  workflowConventionsText?: string;
   /** Set ONLY for sessions spawned by Mullion's Task Master (worker, review
    * agent, retry, reject/auto-return re-seed — see task-claim.ts and
    * task-reconciler.ts's spawn sites). Threaded through to the opencode
@@ -1076,6 +1094,11 @@ export class Session {
   // session-lifecycle.ts's createSessionRecord; a caller that omits it
   // leaves writeSessionBriefing with no note to write for this session.
   private readonly briefingOverride: string | undefined;
+  // Issue #937 — see CreateSessionOptions.workflowConventionsText's own doc
+  // comment immediately above for why this is a single resolved value, not
+  // a boolean + raw text pair. Same "spawn-time snapshot, consumed once in
+  // bootstrapMaster()" posture as briefingOverride immediately above.
+  private readonly workflowConventionsText: string | undefined;
   // PR-5 — see HookAdapterContext.projectSkill/projectReviewerAgent's own
   // doc comments (hook-adapters/types.ts). Same producer/pass-through
   // posture as briefingOverride immediately above.
@@ -1464,6 +1487,7 @@ export class Session {
     projectId?: number;
     env?: Record<string, string>;
     briefingOverride?: string;
+    workflowConventionsText?: string;
     projectSkill?: string;
     projectReviewerAgent?: string;
     model?: string;
@@ -1494,6 +1518,7 @@ export class Session {
     this.seedPrompt = opts.seedPrompt;
     this.resumeAgentSessionId = opts.resumeAgentSessionId;
     this.briefingOverride = opts.briefingOverride;
+    this.workflowConventionsText = opts.workflowConventionsText;
     this.projectSkill = opts.projectSkill;
     this.projectReviewerAgent = opts.projectReviewerAgent;
     this.model = opts.model;
@@ -2056,6 +2081,7 @@ export class Session {
       resumeAgentSessionId: this.resumeAgentSessionId,
       env: this.env,
       briefingOverride: this.briefingOverride,
+      workflowConventionsText: this.workflowConventionsText,
       projectSkill: this.projectSkill,
       projectReviewerAgent: this.projectReviewerAgent,
       model: this.model,
@@ -3910,6 +3936,7 @@ export class PtyManager {
         projectId: opts.projectId,
         env: opts.env,
         briefingOverride: opts.briefingOverride,
+        workflowConventionsText: opts.workflowConventionsText,
         projectSkill: opts.projectSkill,
         projectReviewerAgent: opts.projectReviewerAgent,
         model: opts.model,

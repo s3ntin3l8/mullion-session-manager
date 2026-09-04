@@ -71,6 +71,13 @@ export interface SpawnSessionBody {
   // configuration — see the schema's own maxLength below for why it's
   // deliberately looser than project-tooling.ts's current save-time cap.
   briefingOverride?: string;
+  // Issue #937 — see CreateSessionOptions.workflowConventionsText's own
+  // doc comment (pty-manager.ts). Already resolved on the primary
+  // (gating both the project's injectWorkflowConventions column and the
+  // global text's non-emptiness), same "operator-authored, bounded"
+  // posture as briefingOverride above — see the schema's own maxLength
+  // below.
+  workflowConventionsText?: string;
   // PR-5 — see CreateSessionOptions.projectSkill/projectReviewerAgent's own
   // doc comments (pty-manager.ts). Same "operator-authored, bounded"
   // posture as briefingOverride above — see the schema's own maxLength
@@ -142,6 +149,12 @@ export const spawnSessionSchema = {
       // is already far under this via the write-side cap; this is purely
       // legacy-data headroom, not the current authoring limit.
       briefingOverride: { type: "string", maxLength: 8192 },
+      // Issue #937 — mirrors project-tooling.ts's
+      // MAX_PROJECT_TOOLING_FIELD_BYTES-style bound (see
+      // workflow-conventions.ts's own MAX_WORKFLOW_CONVENTIONS_BYTES,
+      // sized for multi-paragraph policy prose rather than a short pinned
+      // note).
+      workflowConventionsText: { type: "string", maxLength: 8192 },
       // PR-5 — unlike briefingOverride's maxLength above (derived from
       // project-briefing.ts's own post-clamp/header-prepend file-write cap,
       // a different pipeline these two fields never go through), this

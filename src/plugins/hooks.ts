@@ -21,6 +21,7 @@ import {
   sessionAgentGuidePath,
 } from "../services/agent-guide.js";
 import { readSessionBriefing } from "../services/project-briefing.js";
+import { readSessionWorkflowConventions } from "../services/workflow-conventions.js";
 import { isAuthEnabled } from "../services/auth.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
 
@@ -469,30 +470,43 @@ function handleConnection(
             effectiveInjectAgentGuide && agentGuideSourceExists()
               ? buildAgentGuideBlock(guidePath, isAuthEnabled(app.config))
               : null;
+          // Issue #937 — this Mullion install's own workflow-conventions
+          // text (settings.sessions.workflowConventionsText), gated by BOTH
+          // the project's own injectWorkflowConventions column and the
+          // global text's non-emptiness — but that gating already happened
+          // on the primary (session-lifecycle.ts's createSessionRecord), so
+          // there is no separate boolean to read off `session` here, unlike
+          // guideBlock/briefing above: readSessionWorkflowConventions
+          // reading `null` IS the "nothing to inject" signal, covering both
+          // gates at once. See writeSessionWorkflowConventions's own doc
+          // comment (workflow-conventions.ts) for why that file is written/
+          // unlinked that way.
+          const workflowConventionsBlock = readSessionWorkflowConventions(sessionsDir, sessionId);
           // Independent of injectAgentGuide — a different owner (the
           // PROJECT's own pinned note, not Mullion's doc) and a different
           // clock (this reads the per-session copy writeSessionBriefing
           // already wrote at spawn time, same as the opencode adapter's own
           // existsSync check does — see project-briefing.ts). Placed last
           // in additionalContext: issue #942's pre-implementation gap
-          // review settled the full, eventual four-item order across
-          // #949/#937/#942 as `[seed, tier-0 push (#949), workflow-
-          // conventions (#937), pinned note]` — seed first (it's "what to
-          // do right now" for a promote-flow launch), tier-0 next (Mullion
-          // mechanics orientation), workflow-conventions next (stable "how
-          // we work" policy), the pinned note last. `guideBlock` above IS
-          // that tier-0 push (#949 landed, `buildAgentGuideBlock` in
-          // agent-guide.ts); #937's workflow-conventions slot doesn't exist
-          // yet, so today's actual composition is `[seed, guideBlock,
-          // pinned note]` — the note is last either way, not because it's
-          // the operative instruction set (it never competes with
-          // AGENTS.md, which every CLI already reads natively) but because
-          // it's meant to be the MOST EMPHASIZED, timely note, and recency
-          // in a small context block favors that.
+          // review settled the full, four-item order across #949/#937/#942
+          // as `[seed, tier-0 push (#949), workflow-conventions (#937),
+          // pinned note]` — seed first (it's "what to do right now" for a
+          // promote-flow launch), tier-0 next (Mullion mechanics
+          // orientation), workflow-conventions next (stable "how we work"
+          // policy), the pinned note last. `guideBlock` above IS that
+          // tier-0 push (#949 landed, `buildAgentGuideBlock` in
+          // agent-guide.ts); `workflowConventionsBlock` immediately above IS
+          // #937's slot — the note is last either way, not because it's the
+          // operative instruction set (it never competes with AGENTS.md,
+          // which every CLI already reads natively) but because it's meant
+          // to be the MOST EMPHASIZED, timely note, and recency in a small
+          // context block favors that.
           const briefing = effectiveInjectProjectBriefing
             ? readSessionBriefing(sessionsDir, sessionId)
             : null;
-          const additionalContext = [seed, guideBlock, briefing].filter(Boolean).join("\n\n");
+          const additionalContext = [seed, guideBlock, workflowConventionsBlock, briefing]
+            .filter(Boolean)
+            .join("\n\n");
           if (socket.writable) {
             socket.write(`${JSON.stringify({ additionalContext })}\n`);
           }

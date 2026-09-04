@@ -199,6 +199,12 @@ export interface SessionTarget {
   // above. See CreateSessionOptions.briefingOverride's own doc comment
   // (pty-manager.ts) for the full multi-host reasoning this exists for.
   briefingOverride?: string;
+  // Issue #937 — for spawn() only, same "meaningless for openAttach"
+  // posture as seedPrompt/briefingOverride above. See
+  // CreateSessionOptions.workflowConventionsText's own doc comment
+  // (pty-manager.ts) — already fully resolved on the primary before this is
+  // ever built.
+  workflowConventionsText?: string;
   // PR-5 — for spawn() only, same posture as briefingOverride above. See
   // CreateSessionOptions.projectSkill/projectReviewerAgent's own doc
   // comments (pty-manager.ts).

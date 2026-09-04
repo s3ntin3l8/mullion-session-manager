@@ -92,7 +92,13 @@ replays what it's given.
   `project-setup` (`POST /api/projects/:id/setup/preview`/`apply` — scaffold
   a committed briefing region + starter skill/reviewer into a project's own
   repo as a real pull request, local-host projects only for now — see
-  [`project-briefing.md`](project-briefing.md#scaffolding-it-into-the-repo-instead)).
+  [`project-briefing.md`](project-briefing.md#scaffolding-it-into-the-repo-instead)),
+  `workflow-conventions` (`GET /api/workflow-conventions/questions`, `POST
+/api/workflow-conventions/preview` — the two read-only endpoints backing
+  the Settings → Sessions wizard; neither reads nor writes the actual
+  `settings.sessions.workflowConventionsText` value, which rides the
+  ordinary `PATCH /api/settings` path — see
+  [`project-briefing.md`](project-briefing.md#workflow-conventions-issue-937)).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
   `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC

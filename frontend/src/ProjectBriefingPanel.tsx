@@ -424,6 +424,19 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
             void updateProject(params.projectId, { injectProjectBriefing: value })
           }
         />
+        <InjectOverrideRow
+          label="Workflow conventions"
+          value={project?.injectWorkflowConventions ?? null}
+          // Issue #937 — unlike the two rows above, there's no matching
+          // GLOBAL boolean setting to read here (the global tier is the
+          // TEXT itself, Settings -> Sessions' "Workflow conventions"
+          // field) — `null` always inherits `true` (inject), so this is a
+          // fixed constant, not a store read.
+          globalValue={true}
+          onChange={(value) =>
+            void updateProject(params.projectId, { injectWorkflowConventions: value })
+          }
+        />
       </div>
       <div className="agent-rules-panel">
         <div className="agent-rules-panel-list cmux-scroll">

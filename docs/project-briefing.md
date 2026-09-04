@@ -242,10 +242,57 @@ remote-hosted project's scaffold request gets a clear `501`, not a silent
 no-op. Tracked in
 [issue #895](https://github.com/s3ntin3l8/mullion-session-manager/issues/895).
 
+## Workflow conventions (issue #937)
+
+A fourth, related but structurally different feature: an install-wide "how
+we work" policy (branch-vs-direct-commit, merge strategy, review process,
+post-merge cleanup, ...), injected into every session's starting context
+the same way the pinned note above is, unless a project has opted out.
+Unlike the pinned note/skill/reviewer above, this is **not** a
+`project_tooling` row and has **no per-project text** — a project that
+wants to diverge from the install-wide convention already has `AGENTS.md`
+for that (see "AGENTS.md leads" above), so a second, parallel per-project
+text field would only duplicate what the file already does well. The only
+per-project knob is a boolean: inject the global text, or don't.
+
+- **The global text** lives at `settings.sessions.workflowConventionsText`
+  (`src/services/settings.ts`), authored in **Settings → Sessions**. Empty
+  by default — a fresh install has no opinion yet — and an empty value is
+  its own independent "nothing to inject" gate, not just an uninteresting
+  default.
+- **Kickstarting it** uses a structured multiple-choice wizard ("Generate
+  with wizard" in that same Settings row), not an agent turn and not a
+  blank text box: workflow conventions are a small, finite set of
+  well-known policy choices
+  (`src/services/workflow-conventions.ts`'s
+  `WORKFLOW_CONVENTION_QUESTIONS`), a genuinely different shape of problem
+  from the pinned note/skill/reviewer above, which need a human (or an
+  agent, for #956's project-specific generation) because they require
+  actual prose about a specific project. `buildWorkflowConventionsText`
+  deterministically assembles the selected options' prose fragments — no
+  agent, no network — and the wizard **overwrites** the text field once,
+  on completion; it is a one-shot "regenerate from scratch" starter, not
+  an ongoing synced mode. From that point on the field is just a normal,
+  freely-editable textarea, with no distinction between wizard-written and
+  hand-edited text and no answer state kept around to reconcile against
+  later edits.
+- **The per-project toggle** is `projects.injectWorkflowConventions`
+  (nullable boolean, `schema.ts`) — same shape as the two per-project
+  overrides below: `null`/`true` = inject the global text, `false` =
+  don't (this project's own `AGENTS.md` is authoritative instead). Set
+  from the same "Session injection for this project" row the agent-guide/
+  project-briefing toggles live in (`ProjectBriefingPanel.tsx`).
+- **Delivery** rides the identical `[seed, tier-0, workflow-conventions,
+pinned note]` `additionalContext` ordering `hooks.ts` composes for
+  Claude Code/Codex/agy (see `agent-hooks.md`), and opencode's own
+  `instructions[]` channel for the fourth CLI — see that adapter's own
+  comment for why file presence alone (no separate ctx boolean) already
+  encodes both the toggle and the "non-empty global text" gate.
+
 ## Settings
 
-Two independent toggles under **Settings → Sessions** (default **on** for
-both):
+Three independent toggles under **Settings → Sessions** (default **on** for
+all three, except workflow conventions' own text default of ""):
 
 - **Inject project briefing** — gates the pointer/injection only; the
   per-session file is always written regardless, so turning this off
@@ -257,19 +304,25 @@ both):
   toggle, there's no separate per-skill toggle to reconcile this with — a
   plugin-sourced Claude Code skill is invisible to Mullion's own Skills
   Manager, so this one setting really does govern the whole thing.
+- **Workflow conventions** (issue #937, above) — a free-text field, not a
+  boolean toggle: injection is gated on that text being non-empty (and the
+  per-project toggle not being explicitly off), not on a separate on/off
+  switch of its own.
 
 See also **Inject agent guide** (`docs/agent-guide.md`'s own injection,
-independent of both settings above) and `docs/configuration.md` for every
-`@fastify/env`-validated setting — these three toggles are DB-backed runtime
-Settings, not environment variables, so they don't appear in that table.
+independent of every setting above) and `docs/configuration.md` for every
+`@fastify/env`-validated setting — these are DB-backed runtime Settings,
+not environment variables, so they don't appear in that table.
 
-**Per-project overrides (issue #884):** the agent-guide and project-briefing
-toggles — but not the tooling-bundle one, which gates a materially bigger
-mechanism (managed host-level installs for codex/agy, not just a
-SessionStart text injection) — can also be set per project, from the
-project's own settings panel (`ProjectBriefingPanel.tsx`'s "Session
-injection for this project" row). `null` (the default) inherits the global
-setting above; an explicit true/false overrides it for every session under
-that project. Resolved once, on the primary, at session-creation time — a
-toggle flip (global or per-project) takes effect on the session's _next_
-spawn, not retroactively for one already running.
+**Per-project overrides (issue #884, extended by #937):** the agent-guide,
+project-briefing, and workflow-conventions toggles — but not the
+tooling-bundle one, which gates a materially bigger mechanism (managed
+host-level installs for codex/agy, not just a SessionStart text injection)
+— can also be set per project, from the project's own settings panel
+(`ProjectBriefingPanel.tsx`'s "Session injection for this project" row).
+`null` (the default) inherits `true` for all three (there is no separate
+global BOOLEAN setting for workflow conventions to inherit from — the
+global tier there is the text itself); an explicit true/false overrides it
+for every session under that project. Resolved once, on the primary, at
+session-creation time — a toggle flip (global or per-project) takes effect
+on the session's _next_ spawn, not retroactively for one already running.

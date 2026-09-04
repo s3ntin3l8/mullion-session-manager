@@ -10,6 +10,7 @@ import { projects, sessions } from "../../src/db/schema.js";
 import type { ManagedBrowser } from "../../src/services/browser-manager.js";
 import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { sessionBriefingPath } from "../../src/services/project-briefing.js";
+import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conventions.js";
 
 // Real integration test against the actual listening Unix socket — same
 // "app.inject() can't drive this, so build a real app and connect a real
@@ -1169,6 +1170,114 @@ describe("hooksPlugin (issue #172)", () => {
         const briefing = fs.readFileSync(briefingPath, "utf8");
         expect(briefing).toContain("pinned note");
         expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: briefing });
+        socket.destroy();
+      });
+    });
+
+    describe("workflow conventions (issue #937)", () => {
+      // Unlike injectAgentGuide/injectProjectBriefing above, there is no
+      // separate boolean on the Session to gate this — session-lifecycle.ts
+      // already resolved the project's injectWorkflowConventions column AND
+      // the global text's non-emptiness into a single `workflowConventionsText`
+      // value before spawn, so passing it (or not) directly to
+      // app.pty.getOrCreate is enough to exercise both the "present" and
+      // "absent" cases here, same as briefingOverride's own tests do.
+      it("composes seed, guide block, workflow-conventions block, and pinned note in that order when all four are present", async () => {
+        app = await buildApp();
+        await app.ready();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: true, injectProjectBriefing: true } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          briefingOverride: "branch off origin/main",
+          workflowConventionsText: "always branch, never commit to main",
+        });
+        app.pty.stashSeed("1", "picks up where the last session left off");
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        const guideBlock = buildAgentGuideBlock(guidePath, false);
+        const workflowConventionsPath = sessionWorkflowConventionsPath(
+          path.dirname(app.pty.hookSocketPath),
+          "1",
+        );
+        const workflowConventions = fs.readFileSync(workflowConventionsPath, "utf8");
+        const briefingPath = sessionBriefingPath(path.dirname(app.pty.hookSocketPath), "1");
+        const briefing = fs.readFileSync(briefingPath, "utf8");
+        expect(JSON.parse(await replyPromise)).toEqual({
+          additionalContext: `picks up where the last session left off\n\n${guideBlock}\n\n${workflowConventions}\n\n${briefing}`,
+        });
+        expect(workflowConventions).toContain("always branch, never commit to main");
+        socket.destroy();
+      });
+
+      it("omits the workflow-conventions block when workflowConventionsText is undefined (opted out, or no global text configured)", async () => {
+        app = await buildApp();
+        await app.ready();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: true, injectProjectBriefing: false } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        const guideBlock = buildAgentGuideBlock(guidePath, false);
+        expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: guideBlock });
+        socket.destroy();
+      });
+
+      // Empty string is treated exactly like undefined for this field
+      // (unlike the pinned note's own deliberately different posture) — see
+      // writeSessionWorkflowConventions's own doc comment.
+      it("omits the workflow-conventions block for an empty-string workflowConventionsText — not the pinned note's 'header-only block' posture", async () => {
+        app = await buildApp();
+        await app.ready();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { sessions: { injectAgentGuide: false, injectProjectBriefing: false } },
+        });
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          workflowConventionsText: "",
+        });
+        await session.spawnOutcome();
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: "" });
         socket.destroy();
       });
     });

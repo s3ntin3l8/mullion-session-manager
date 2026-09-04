@@ -39,6 +39,14 @@ vi.mock("../../src/services/project-briefing.js", () => ({
   writeSessionBriefing: (...args: unknown[]) => mockWriteSessionBriefing(...args),
 }));
 
+const mockWriteSessionWorkflowConventions = vi.fn((..._args: unknown[]) => {
+  callOrder.push("writeSessionWorkflowConventions");
+});
+vi.mock("../../src/services/workflow-conventions.js", () => ({
+  writeSessionWorkflowConventions: (...args: unknown[]) =>
+    mockWriteSessionWorkflowConventions(...args),
+}));
+
 const mockApplyHookAdapters = vi.fn((command: string, _ctx: HookAdapterContext) => {
   callOrder.push("applyHookAdapters");
   return { command, envAdditions: {}, matched: false, emits: [] };
@@ -82,6 +90,7 @@ function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> =
     skipPermissions: false,
     initialPrompt: undefined,
     briefingOverride: undefined,
+    workflowConventionsText: undefined,
     ...overrides,
   };
 }
@@ -92,6 +101,7 @@ beforeEach(() => {
   callOrder.length = 0;
   mockWriteSessionAgentGuide.mockClear();
   mockWriteSessionBriefing.mockClear();
+  mockWriteSessionWorkflowConventions.mockClear();
   mockApplyHookAdapters.mockClear();
   mockGetAdapterInitialPromptArgs.mockClear();
   mockResolveForwarderPath.mockClear();
@@ -322,6 +332,7 @@ describe("buildLaunchPlan — agent guide injection", () => {
     expect(callOrder).toEqual([
       "writeSessionAgentGuide",
       "writeSessionBriefing",
+      "writeSessionWorkflowConventions",
       "applyHookAdapters",
     ]);
   });
@@ -357,6 +368,7 @@ describe("buildLaunchPlan — project briefing injection", () => {
     expect(callOrder).toEqual([
       "writeSessionAgentGuide",
       "writeSessionBriefing",
+      "writeSessionWorkflowConventions",
       "applyHookAdapters",
     ]);
   });
@@ -385,6 +397,35 @@ describe("buildLaunchPlan — project briefing injection", () => {
     buildLaunchPlan(baseSession({ briefingOverride: undefined }));
 
     expect(mockWriteSessionBriefing).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      console,
+      undefined,
+    );
+  });
+
+  // Issue #937 — session.workflowConventionsText is ALREADY fully gated by
+  // session-lifecycle.ts (both the project's injectWorkflowConventions
+  // column and the global text's non-emptiness), so buildLaunchPlan always
+  // writes it unconditionally too, same posture as the guide/briefing above
+  // — there is no separate boolean here for buildLaunchPlan to re-check.
+  it("writes the workflow-conventions text unconditionally, passed straight through as a plain string", () => {
+    buildLaunchPlan(
+      baseSession({ workflowConventionsText: "always branch, never commit to main" }),
+    );
+
+    expect(mockWriteSessionWorkflowConventions).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      console,
+      "always branch, never commit to main",
+    );
+  });
+
+  it("passes undefined when session.workflowConventionsText is undefined", () => {
+    buildLaunchPlan(baseSession({ workflowConventionsText: undefined }));
+
+    expect(mockWriteSessionWorkflowConventions).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       console,

@@ -98,6 +98,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     autoTagRelease: null,
     injectAgentGuide: null,
     injectProjectBriefing: null,
+    injectWorkflowConventions: null,
     ...overrides,
   };
 }

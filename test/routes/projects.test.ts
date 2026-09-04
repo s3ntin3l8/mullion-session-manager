@@ -999,6 +999,75 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Issue #937 — same nullable-override contract as injectAgentGuide/
+    // injectProjectBriefing above: null = inherit `true` (inject), true/
+    // false = explicit per-project override.
+    it("sets, then clears, injectWorkflowConventions", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "inject-workflow-conventions-p",
+          cwd: "/tmp/inject-workflow-conventions-p",
+        },
+      });
+      const { id } = created.json();
+      expect(created.json().injectWorkflowConventions).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { injectWorkflowConventions: false },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toMatchObject({ injectWorkflowConventions: false });
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { injectWorkflowConventions: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().injectWorkflowConventions).toBeNull();
+
+      await app.close();
+    });
+
+    // TASK_ROW_COLUMNS-style regression guard: PATCH's own `.returning()`
+    // proves the column round-trips through drizzle, but the frontend reads
+    // the toggle's current value off GET /api/projects (the list, not a
+    // per-project GET) — a column silently missing from THAT projection
+    // would leave the UI toggle looking dead while the DB write succeeded.
+    it("GET /api/projects includes injectWorkflowConventions in the list response", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          name: "inject-workflow-conventions-list",
+          cwd: "/tmp/inject-workflow-conventions-list",
+        },
+      });
+      const { id } = created.json();
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { injectWorkflowConventions: true },
+      });
+
+      const list = await app.inject({ method: "GET", url: "/api/projects" });
+      expect(list.statusCode).toBe(200);
+      const project = (
+        list.json() as Array<{ id: number; injectWorkflowConventions?: boolean }>
+      ).find((p) => p.id === id);
+      expect(project?.injectWorkflowConventions).toBe(true);
+
+      await app.close();
+    });
+
     it("accepts a PATCH carrying only autoApprove", async () => {
       const app = await buildApp();
       const created = await app.inject({

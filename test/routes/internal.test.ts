@@ -21,6 +21,7 @@ import {
 } from "../../src/services/request-signature.js";
 import { taskReviewFindingsPath, taskCommitTitlePath } from "../../src/services/task-prompt.js";
 import { sessionBriefingPath } from "../../src/services/project-briefing.js";
+import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conventions.js";
 
 // The agent's /internal/* API (issue #26) reaches the exact same PtyManager
 // spawn/liveness path as the primary's own routes (sessions.ts, terminal.ts)
@@ -2980,6 +2981,91 @@ describe("internal routes (agent role, issue #26)", () => {
     });
     expect(res.statusCode).toBe(201);
     await waitUntil(() => fakePtyChildren.length > before);
+
+    await app.close();
+  });
+
+  // Issue #937 — same "proves the field survives the actual HTTP round
+  // trip" bar as the briefingOverride test above, for the new
+  // workflowConventionsText spawn-body field (request body -> schema
+  // validation -> app.pty.getOrCreate -> writeSessionWorkflowConventions).
+  it("threads workflowConventionsText from the spawn body into the per-session workflow-conventions file", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "510",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        workflowConventionsText: "always branch, never commit to main",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const written = fs.readFileSync(
+      sessionWorkflowConventionsPath(app.config.SESSIONS_DIR, "510"),
+      "utf8",
+    );
+    expect(written).toContain("always branch, never commit to main");
+
+    await app.close();
+  });
+
+  it("rejects a workflowConventionsText over the schema's maxLength", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "511",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        workflowConventionsText: "a".repeat(8193),
+      },
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // Writer-side "empty means unlink, not a body-less file" behavior (see
+  // writeSessionWorkflowConventions's own doc comment) — a spawn body
+  // carrying an explicit empty string must leave no per-session file, unlike
+  // briefingOverride's own deliberately different empty-string posture.
+  it("writes no per-session file when workflowConventionsText is an empty string", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "512",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        workflowConventionsText: "",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    expect(fs.existsSync(sessionWorkflowConventionsPath(app.config.SESSIONS_DIR, "512"))).toBe(
+      false,
+    );
 
     await app.close();
   });

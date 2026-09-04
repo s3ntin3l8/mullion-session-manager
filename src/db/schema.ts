@@ -157,6 +157,22 @@ export const projects = sqliteTable("projects", {
   // briefingOverride's own design, plugins/hooks.ts's own comment).
   injectAgentGuide: integer("inject_agent_guide", { mode: "boolean" }),
   injectProjectBriefing: integer("inject_project_briefing", { mode: "boolean" }),
+  // Issue #937 — per-project override of whether Mullion's GLOBAL workflow
+  // conventions text (settings.sessions.workflowConventionsText) gets
+  // injected into this project's sessions. Same nullable-column
+  // shape/precedent as injectAgentGuide/injectProjectBriefing immediately
+  // above: null/true = inject, false = don't. Deliberately NOT a text
+  // column (unlike briefing above) — #937's own corrected design dropped a
+  // per-project text override entirely: a project that wants to diverge
+  // from the global convention text already has AGENTS.md for that, so
+  // this column only ever has to decide inject-or-don't, never carry a
+  // second copy of the text. Resolved the same way as
+  // injectAgentGuide/injectProjectBriefing (`project.injectWorkflowConventions
+  // ?? true`) — see session-lifecycle.ts's createSessionRecord — but unlike
+  // those two, there is no matching global BOOLEAN setting to fall back to;
+  // the global tier here is the TEXT itself (settings.ts), and an empty
+  // global text is its own independent "nothing to inject" gate.
+  injectWorkflowConventions: integer("inject_workflow_conventions", { mode: "boolean" }),
   // Phase 6 Task Master (6.2/#215) — optional per-project override of
   // launchers.defaultAgent for autonomous task claims. Nullable: unset
   // falls through to the global default. Resolution precedence (6.2's

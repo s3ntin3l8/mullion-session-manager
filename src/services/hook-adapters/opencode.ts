@@ -7,6 +7,7 @@ import {
   sessionAgentGuidePath,
 } from "../agent-guide.js";
 import { sessionBriefingPath } from "../project-briefing.js";
+import { sessionWorkflowConventionsPath } from "../workflow-conventions.js";
 import {
   resolveMullionBundleDir,
   deriveContentName,
@@ -245,6 +246,28 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
       contents: buildAgentGuideBlock(guidePath, ctx.authEnabled ?? true),
     });
     instructions.push(tier0Path);
+  }
+
+  // Issue #937 — this Mullion install's own workflow-conventions text.
+  // Same existsSync-on-the-per-session-copy posture as the guide block
+  // immediately above (a dangling `instructions` entry is a real failure
+  // for opencode's own config resolution, not just ignorable prose), but
+  // UNLIKE the guide/briefing blocks, there is no `ctx.injectWorkflowConventions`
+  // boolean to check here at all: session-lifecycle.ts's
+  // createSessionRecord already resolved both the project's
+  // injectWorkflowConventions column AND the global text's non-emptiness
+  // into a single value before this ever ran, and
+  // writeSessionWorkflowConventions (launch-plan.ts, runs before
+  // applyHookAdapters for the same ordering reason writeSessionAgentGuide/
+  // writeSessionBriefing do) unlinks the file rather than writing an
+  // empty-body one whenever that resolved value was `undefined` — so file
+  // presence alone already encodes both gates. Positioned between the
+  // guide block above and the briefing block below, matching hooks.ts's own
+  // `[seed, tier-0, workflow-conventions, pinned note]` ordering (issue
+  // #942) for the other three agents.
+  const workflowConventionsPath = sessionWorkflowConventionsPath(ctx.sessionsDir, ctx.sessionId);
+  if (existsSync(workflowConventionsPath)) {
+    instructions.push(workflowConventionsPath);
   }
 
   // Same existsSync-on-the-per-session-copy posture as the guide block

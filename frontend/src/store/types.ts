@@ -96,6 +96,7 @@ export interface ProjectsSlice {
         | "autoTagRelease"
         | "injectAgentGuide"
         | "injectProjectBriefing"
+        | "injectWorkflowConventions"
       >
     > &
       CreateProjectDirOptions,

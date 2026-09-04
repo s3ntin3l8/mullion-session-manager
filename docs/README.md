@@ -22,7 +22,9 @@ when you'd reach for it.
   promoted pull request.
 - [`project-briefing.md`](project-briefing.md) — a project's own briefing,
   skill, and reviewer subagent: DB-authored with no repo write, or
-  scaffolded into the repo itself as a real pull request.
+  scaffolded into the repo itself as a real pull request; also covers the
+  install-wide workflow-conventions text (issue #937) and its per-project
+  opt-out toggle.
 - [`multi-host.md`](multi-host.md) — run sessions on more than one machine
   from a single dashboard.
 

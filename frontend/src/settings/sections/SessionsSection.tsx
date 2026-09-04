@@ -3,6 +3,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
 import { NumberField, Row, Toggle } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit } from "../clamp.js";
+import { WorkflowConventionsWizardModal } from "../WorkflowConventionsWizardModal.js";
 
 export function SessionsSection() {
   const {
@@ -35,6 +36,12 @@ export function SessionsSection() {
   const [eventRetentionPerSessionDraft, setEventRetentionPerSessionDraft] = useState<number | null>(
     null,
   );
+
+  // Issue #937 — the wizard is a one-shot "regenerate from scratch" action,
+  // not a live-synced mode: it has no state of its own here beyond whether
+  // its modal is open. Applying its result just calls updateSettings the
+  // same way typing in the textarea below does.
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   return (
     <>
@@ -229,6 +236,38 @@ export function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { injectProjectBriefing: v } })}
         />
       </Row>
+      <div style={{ padding: "12px 0" }}>
+        <div style={{ fontSize: 13.5, fontWeight: 500 }}>Workflow conventions</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 3, marginBottom: 8 }}>
+          A single, install-wide "how we work" policy (branching, merge strategy, review process,
+          ...), carried into every session's starting context via the same SessionStart mechanism as
+          the agent guide/project briefing above — unless a project has opted out (see that
+          project's own toggle in its briefing panel). A project's own AGENTS.md is always
+          authoritative on top of this; this is a default, not an override.
+        </div>
+        <textarea
+          className="agent-rules-panel-textarea"
+          style={{ minHeight: 120 }}
+          value={s.workflowConventionsText}
+          placeholder="No workflow conventions configured yet — start typing, or generate a starting point with the wizard."
+          spellCheck={false}
+          onChange={(e) =>
+            updateSettings({ sessions: { workflowConventionsText: e.target.value } })
+          }
+        />
+        <div style={{ marginTop: 8 }}>
+          <button className="git-panel-fetch-btn" onClick={() => setWizardOpen(true)}>
+            Generate with wizard
+          </button>
+        </div>
+      </div>
+      {wizardOpen && (
+        <WorkflowConventionsWizardModal
+          onClose={() => setWizardOpen(false)}
+          onApply={(text) => updateSettings({ sessions: { workflowConventionsText: text } })}
+        />
+      )}
+
       <Row
         label="Inject Mullion tooling bundle"
         desc={

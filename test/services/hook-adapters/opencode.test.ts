@@ -20,6 +20,7 @@ const { resolveMcpServerPath } = await import("../../../src/services/hook-adapte
 const { buildAgentGuideBlock, sessionAgentGuidePath } =
   await import("../../../src/services/agent-guide.js");
 const { sessionBriefingPath } = await import("../../../src/services/project-briefing.js");
+const { sessionWorkflowConventionsPath } = await import("../../../src/services/workflow-conventions.js");
 const { resolveMullionBundleDir } =
   await import("../../../src/services/hook-adapters/mullion-bundle.js");
 
@@ -540,6 +541,84 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
       instructions: [
         path.join(sessionsDir, "42.opencode-tier0.md"),
+        sessionBriefingPath(sessionsDir, "42"),
+        path.join(sessionsDir, "42.opencode-seed.md"),
+      ],
+      mcp: expectedMcp(baseCtx),
+    });
+  });
+});
+
+describe("openCodeAdapter.prepareLaunch — workflow-conventions injection (issue #937)", () => {
+  // Same "real temp dir, real per-session file, existsSync-gated" posture
+  // as the agent-guide/briefing injection describe blocks above.
+  let sessionsDir: string;
+  let baseCtx: {
+    sessionId: string;
+    sessionsDir: string;
+    hookSocketPath: string;
+    hookToken: string;
+    controlSocketPath: string;
+    forwarderPath: string;
+    injectAgentGuide: boolean;
+  };
+
+  beforeEach(() => {
+    sessionsDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-workflow-conventions-"));
+    baseCtx = {
+      sessionId: "42",
+      sessionsDir,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      hookToken: "token123",
+      controlSocketPath: path.join(sessionsDir, "mullion.sock"),
+      forwarderPath: "/abs/path/forwarder.mjs",
+      injectAgentGuide: false,
+    };
+  });
+
+  afterEach(() => {
+    rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  // Unlike injectAgentGuide/injectProjectBriefing above, there is no
+  // ctx.injectWorkflowConventions boolean at all — see opencode.ts's own
+  // comment on that block for why file presence alone already encodes both
+  // gates session-lifecycle.ts resolved on the primary.
+  it("points OPENCODE_CONFIG_CONTENT's instructions at this session's own workflow-conventions file when the per-session copy exists", () => {
+    writeFileSync(
+      sessionWorkflowConventionsPath(sessionsDir, "42"),
+      "always branch, never commit to main",
+    );
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      instructions: [sessionWorkflowConventionsPath(sessionsDir, "42")],
+      mcp: expectedMcp(baseCtx),
+    });
+  });
+
+  it("omits the workflow-conventions pointer from instructions when the per-session copy doesn't exist (opted out, or no global text configured)", () => {
+    const plan = openCodeAdapter.prepareLaunch({ ...baseCtx });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      mcp: expectedMcp(baseCtx),
+    });
+  });
+
+  it("exact instructions order is [guide tier-0, workflow-conventions, briefing, seed] when all four are present", () => {
+    writeFileSync(
+      sessionWorkflowConventionsPath(sessionsDir, "42"),
+      "workflow conventions content",
+    );
+    writeFileSync(sessionBriefingPath(sessionsDir, "42"), "briefing content");
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+      seedPrompt: "resume the refactor",
+    });
+    expect(JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT)).toEqual({
+      instructions: [
+        path.join(sessionsDir, "42.opencode-tier0.md"),
+        sessionWorkflowConventionsPath(sessionsDir, "42"),
         sessionBriefingPath(sessionsDir, "42"),
         path.join(sessionsDir, "42.opencode-seed.md"),
       ],
