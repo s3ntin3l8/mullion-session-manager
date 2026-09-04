@@ -124,6 +124,12 @@ export function TaskDetail({
 
   const workerSession =
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
+  // Issue #1038 — see TaskCard.tsx's own comment on the same distinction:
+  // autoReturnCapped flips true at the START of the last permitted round,
+  // while the worker (and then the confirming review) may still be running.
+  // Not genuinely "needs a human" until one of the three cap-notice
+  // comments has actually landed on the PR.
+  const capAnnounced = task.autoReturnCapAnnouncedAt !== null;
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
   const prsStatus = prsByProject[task.projectId];
   const matchedPr =
@@ -452,24 +458,38 @@ export function TaskDetail({
       {task.reviewSessionId !== null && (
         <div className="task-detail-section task-detail-review-section">
           <div className="task-detail-section-title">Review</div>
+          {/* Issue #1038 — three states, not two: capped-but-not-announced
+              (autoReturnCapped true, capAnnounced false) still means a
+              worker session or the confirming review may be actively
+              running — "nothing further happens" is only true once
+              capAnnounced, the actual "the machine stopped" signal. This
+              section has no `task.status` gate (unlike TaskCard's round
+              badge), so it can render this hint while status is still
+              "in_progress" — the widest instance of the original bug: the
+              old two-state version said "needs a human" through the
+              entire final worker run. */}
           <div className="task-detail-review-hint">
-            {task.autoReturnRounds > 0 && task.autoReturnCapped
+            {task.autoReturnRounds > 0 && capAnnounced
               ? "It has already spent every automatic round this task is allowed — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
-              : task.autoReturnRounds > 0
-                ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
-                : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
+              : task.autoReturnRounds > 0 && task.autoReturnCapped
+                ? "It has spent its last automatic round and a final review is still confirming the outcome — it still cannot approve, reject, or otherwise transition this task; that's your call above, once it stops."
+                : task.autoReturnRounds > 0
+                  ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
+                  : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
           </div>
           {task.autoReturnRounds > 0 && (
             <div
               className={
-                task.autoReturnCapped
+                capAnnounced
                   ? "task-detail-review-round task-detail-review-round-capped"
                   : "task-detail-review-round"
               }
             >
-              {task.autoReturnCapped
+              {capAnnounced
                 ? `Round ${task.autoReturnRounds} — round cap reached, needs a human to take it from here`
-                : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
+                : task.autoReturnCapped
+                  ? `Round ${task.autoReturnRounds} — review still in flight; nothing needs you yet`
+                  : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
             </div>
           )}
           {task.reviewSeedDelivered === false && (

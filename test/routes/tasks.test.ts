@@ -325,6 +325,48 @@ describe("tasks route", () => {
     await app.close();
   });
 
+  // Issue #1038 — the first route-level test for autoReturnCapAnnouncedAt.
+  // TASK_ROW_COLUMNS has silently dropped a new column four times already
+  // (#816, #818, #957, lastReviewVerdict — see this file's own doc comment
+  // on that list) — every prior case typechecked clean while every GET
+  // response returned `undefined` at runtime. Asserted through the actual
+  // GET path, not a POST's `.returning()`, which bypasses TASK_ROW_COLUMNS
+  // entirely and would pass even if this column were missing from it.
+  it("exposes autoReturnCapAnnouncedAt on GET /api/tasks and GET /api/tasks/:id", async () => {
+    const app = await buildApp();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "demo-cap-announced", cwd: "/tmp/demo-cap-announced" },
+    });
+    const projectId = project.json().id;
+
+    const announcedAt = new Date("2026-09-04T09:34:44.000Z");
+    const [row] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "capped and announced",
+        status: "reviewing",
+        autoReturnRounds: 2,
+        autoReturnCapAnnouncedAt: announcedAt,
+      })
+      .returning({ id: tasks.id })
+      .all();
+
+    const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
+    const listed = (listRes.json() as { id: number }[]).find((t) => t.id === row.id);
+    expect(listed).toMatchObject({ autoReturnCapAnnouncedAt: announcedAt.toISOString() });
+
+    const singleRes = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+    expect(singleRes.json()).toMatchObject({
+      autoReturnCapAnnouncedAt: announcedAt.toISOString(),
+    });
+
+    await app.close();
+  });
+
   it("lists a locally-created task with a null issue link", async () => {
     const app = await buildApp();
 
@@ -1114,6 +1156,41 @@ describe("tasks route", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ status: "in_progress" });
+
+      await app.close();
+    });
+
+    // Issue #1038 — Reject is the escape hatch a capped, genuinely
+    // parked task relies on; it must clear autoReturnCapAnnouncedAt in the
+    // same write, or the board would keep claiming "needs a human" on a
+    // task a human has, in fact, just acted on.
+    it("POST /api/tasks/:id/reject clears a stale cap-announced marker", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "reject-clears-cap-p", cwd: "/tmp" },
+      });
+      const { tasks } = await import("../../src/db/schema.js");
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "capped and announced",
+          status: "reviewing",
+          autoReturnRounds: 2,
+          autoReturnCapAnnouncedAt: new Date(),
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${row.id}/reject`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ status: "in_progress", autoReturnCapAnnouncedAt: null });
 
       await app.close();
     });

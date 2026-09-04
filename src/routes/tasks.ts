@@ -166,6 +166,14 @@ const TASK_ROW_COLUMNS = {
   // which trigger most recently spent a round.
   autoReturnRounds: tasks.autoReturnRounds,
   lastAutoReturnReason: tasks.lastAutoReturnReason,
+  // Issue #1038 — see schema.ts's doc comment on this column for why it's
+  // distinct from autoReturnRounds reaching the cap: this is when the
+  // machine actually announced it stopped, not when the counter merely hit
+  // the ceiling. Surfaced as-is (no derived-field treatment like
+  // autoReturnCapped below) — the frontend combines this with
+  // autoReturnCapped/reviewFindingsIngestedSessionId itself to render the
+  // three-state distinction (see TaskCard.tsx/TaskDetail.tsx).
+  autoReturnCapAnnouncedAt: tasks.autoReturnCapAnnouncedAt,
   // Task 258971's investigation: declared on the frontend Task type
   // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
   // silent-drop that bit #816/#818 (see that PR's own doc comment above).
@@ -1237,6 +1245,13 @@ export async function tasksRoute(app: FastifyInstance) {
           // still-running session, which is a bigger change than this
           // fix's scope.
           claimedAt: new Date(),
+          // Issue #1038 — Reject is exactly the escape hatch a capped,
+          // announced task relies on (it doesn't spend a round, see
+          // task-reconciler.ts's autoReturnRounds doc comment), so this is
+          // the one clear site most likely to fire on an announced task.
+          // Clearing it here, same write, means the board stops claiming
+          // "needs a human" the instant a human has, in fact, acted.
+          autoReturnCapAnnouncedAt: null,
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
         .returning()

@@ -186,6 +186,16 @@ export function TaskCard({
     task.reviewSessionId !== null &&
     task.reviewFindingsIngestedSessionId !== task.reviewSessionId;
 
+  // Issue #1038 — autoReturnCapped alone answers "has the round budget been
+  // spent," not "has the machine actually stopped." autoReturnRounds hits
+  // the cap at the START of the last permitted round (see task-reconciler.ts's
+  // autoReturnTask), while a worker session is still running and one more
+  // review is still guaranteed to spawn afterward — so a capped task isn't
+  // genuinely parked for a human until one of the three cap-notice comments
+  // has actually landed on the PR (autoReturnCapAnnouncedAt non-null). Below
+  // that point it's still working, same bucket as reviewInFlight below.
+  const capAnnounced = task.autoReturnCapAnnouncedAt !== null;
+
   return (
     <div
       className={`task-card${severityClass ? ` ${severityClass}` : ""}${task.blockedState === "blocked" ? " task-card-is-blocked" : ""}${dropTarget ? " kanban-card-drop-target" : ""}`}
@@ -382,20 +392,24 @@ export function TaskCard({
           round indicator in the drawer).
           Task 258971's investigation: "returned to worker" is only true
           while a round is actually still cycling — once autoReturnCapped is
-          true, the task is genuinely parked (its round budget is spent and
-          nothing further happens automatically), and the badge must say so
-          rather than implying progress that isn't happening. */}
+          true, the task is (eventually) genuinely parked.
+          Issue #1038 — three states, not two: capped-but-not-announced still
+          reads as in-progress (a worker session or the confirming review may
+          still be running), not "needs a human" — that wording is reserved
+          for capAnnounced, the actual "the machine stopped" signal. */}
       {task.status === "reviewing" && task.autoReturnRounds > 0 && (
         <div
           className={
-            task.autoReturnCapped
+            capAnnounced
               ? "task-card-review-round task-card-review-round-capped"
               : "task-card-review-round"
           }
         >
-          {task.autoReturnCapped
+          {capAnnounced
             ? `Round ${task.autoReturnRounds} · round cap reached, needs a human`
-            : `Round ${task.autoReturnRounds} · returned to worker`}
+            : task.autoReturnCapped
+              ? `Round ${task.autoReturnRounds} · review in flight`
+              : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
       {task.sessionId !== null && (
@@ -425,7 +439,13 @@ export function TaskCard({
       {task.status === "claimed" && task.sessionId === null && (
         <div className="task-card-hint">Queued — waiting for a free slot</div>
       )}
-      {reviewInFlight && <div className="task-card-hint">Review in progress</div>}
+      {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
+          > 0), it already covers "still working" (capped-but-not-announced)
+          or "needs a human" (capped-and-announced); this generic hint would
+          otherwise repeat the former and contradict the latter. */}
+      {reviewInFlight && task.autoReturnRounds === 0 && (
+        <div className="task-card-hint">Review in progress</div>
+      )}
     </div>
   );
 }

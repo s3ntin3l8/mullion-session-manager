@@ -1045,6 +1045,17 @@ export interface Task {
   // mid-round) or capped (parked in "reviewing" for a human) — TaskCard/
   // TaskDetail's round badge must distinguish the two.
   autoReturnCapped: boolean;
+  // Issue #1038 — a capped task is NOT yet "parked for a human" the instant
+  // autoReturnCapped flips true: autoReturnRounds reaches the cap at the
+  // START of the last permitted round, while a worker session is still
+  // running and one more review is still guaranteed to spawn afterward
+  // (nothing gates spawning a review, only auto-*returning* one). This is
+  // null until one of the three "needs a human" notices has actually been
+  // posted to the PR — the genuine "the machine has stopped" signal.
+  // TaskCard/TaskDetail combine autoReturnCapped + this field to render
+  // three states, not two: not capped / capped-but-not-announced (still
+  // working) / capped-and-announced (needs a human).
+  autoReturnCapAnnouncedAt: string | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned

@@ -592,13 +592,62 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.queryByText(/Round/)).toBeNull();
   });
 
-  // Task 258971's investigation: "returned to worker" implies an automatic
-  // cycle still in motion — once the round budget is spent, the card must
-  // say a human is needed instead.
-  it("shows the round-cap wording, not 'returned to worker', once autoReturnCapped is true", () => {
-    tasks = [makeTask({ id: 1, status: "reviewing", autoReturnRounds: 2, autoReturnCapped: true })];
+  // Issue #1038 — capped but not yet announced: autoReturnRounds hit the
+  // cap at the START of the last permitted round, while a worker session
+  // (or the confirming review that follows it) may still be running. The
+  // card must not claim "needs a human" until one of the three cap-notice
+  // comments has actually landed on the PR.
+  it("shows a review-in-flight wording, not 'needs a human', once capped but before the cap is announced", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        autoReturnRounds: 2,
+        autoReturnCapped: true,
+        autoReturnCapAnnouncedAt: null,
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Round 2 · review in flight/)).toBeInTheDocument();
+    expect(screen.queryByText(/needs a human/)).toBeNull();
+    expect(screen.queryByText(/returned to worker/)).toBeNull();
+  });
+
+  // Task 258971's investigation, refined by issue #1038: "returned to
+  // worker" implies an automatic cycle still in motion — once the round
+  // budget is spent AND the cap notice has actually been posted, the card
+  // must say a human is needed instead.
+  it("shows the round-cap wording, not 'returned to worker', once the cap has been announced", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        autoReturnRounds: 2,
+        autoReturnCapped: true,
+        autoReturnCapAnnouncedAt: "2026-09-04T09:34:44.000Z",
+      }),
+    ];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText(/Round 2 · round cap reached, needs a human/)).toBeInTheDocument();
     expect(screen.queryByText(/returned to worker/)).toBeNull();
+    expect(screen.queryByText(/review in flight/)).toBeNull();
+  });
+
+  // Issue #1038 — the round badge already covers "still working"/"needs a
+  // human" once a round has been spent; the generic "Review in progress"
+  // hint must not also render and repeat/contradict it.
+  it("suppresses the generic 'Review in progress' hint once a round badge is showing", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindingsIngestedSessionId: null,
+        autoReturnRounds: 1,
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Round 1 · returned to worker/)).toBeInTheDocument();
+    expect(screen.queryByText("Review in progress")).toBeNull();
   });
 });

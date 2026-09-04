@@ -3770,6 +3770,10 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(2);
+        // Issue #1038 — this trigger has no other durable write to
+        // piggyback the announcement on, so it needs its own; assert it
+        // actually landed.
+        expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
 
         await app.close();
       });
@@ -4074,7 +4078,7 @@ describe("reconcileTasks", () => {
 
       it("posts a cap-reached comment and stays in 'reviewing' once the round budget is spent", async () => {
         const app = await buildApp();
-        await createPrCommentCandidate(app, { autoReturnRounds: 2 });
+        const { taskId } = await createPrCommentCandidate(app, { autoReturnRounds: 2 });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
         mockFetchPullRequestReviewThreads.mockResolvedValue({
@@ -4092,6 +4096,9 @@ describe("reconcileTasks", () => {
           9,
           expect.objectContaining({ body: expect.stringContaining("round cap (2)") }),
         );
+        // Issue #1038 — same reasoning as the red-CI cap test above: its
+        // own CAS'd write, no other durable write to piggyback on.
+        expect((await getTask(app, taskId)).autoReturnCapAnnouncedAt).not.toBeNull();
 
         // A second tick with the SAME (unchanged) comments must not post a
         // second cap-reached comment — deduped per round, same as #755's.
@@ -5158,6 +5165,105 @@ describe("reconcileTasks", () => {
       expect(row.autoReturnRounds).toBe(2);
       expect(row.reviewFindings).toContain("arriving after the cap");
       expect(row.sessionId).toBe(workerSession.json().id);
+      // Issue #1038 — the ground-truth "the machine actually stopped"
+      // signal, set in the same durable write as the findings above.
+      expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+
+      await app.close();
+    });
+
+    // Issue #1038 — the mirror image of the test above: a round that is
+    // NOT at the cap must never set the announcement, or the board would
+    // claim "needs a human" on a task that's still genuinely mid-cycle.
+    it("does not set the cap-announced marker on a round below the cap", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+      writeFindings(app, taskId, 0, "Fix the null check on line 42.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("in_progress");
+      expect(row.autoReturnRounds).toBe(1);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+
+      await app.close();
+    });
+
+    // Hermes review, PR #1040 — a capped task's FINAL review can come back
+    // clean or inconclusive, not just changes-requested. Nothing
+    // auto-returns a non-"changes-requested" verdict either way, so this
+    // task is just as genuinely parked as one whose last round wanted
+    // (and was denied) another — gating the announcement on
+    // `wantsAutoReturn && capReached` left this case unannounced forever,
+    // and the board kept claiming "review in flight" on a task nothing
+    // further would ever touch. No cap-reached comment posts here (that
+    // text specifically means "you wanted another round and couldn't have
+    // one," which isn't true for a clean verdict) — only the DB marker.
+    it("sets the cap-announced marker on a capped task's clean final verdict, with no cap-reached comment posted", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "p-bounded-clean", cwd: "/tmp" },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "already at the round cap, final review is clean",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          autoReturnRounds: 2,
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          prNumber: 9,
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      mockFinishedSessionIds(app, reviewSession.json().id);
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+      });
+      writeFindings(app, task.id, 2, JSON.stringify({ verdict: "clean", summary: "All good." }));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      expect(row.autoReturnRounds).toBe(2);
+      expect(row.lastReviewVerdict).toBe("clean");
+      expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+      // The normal clean-verdict review comment still posts (proving
+      // postReviewFindingsComment actually ran here, not just skipped for
+      // lack of a token/PR) — but its body must not carry the "round cap"
+      // wording, which specifically claims another round was wanted and
+      // denied.
+      expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+        "tok",
+        "o",
+        "r",
+        9,
+        expect.objectContaining({ body: expect.not.stringContaining("round cap") }),
+      );
 
       await app.close();
     });
