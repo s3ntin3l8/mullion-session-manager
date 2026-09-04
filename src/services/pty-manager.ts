@@ -3766,8 +3766,9 @@ export class PtyManager {
   // process start): threaded into every Session this manager creates so
   // its bootstrapMaster() can pass it through to buildLaunchPlan for the
   // opencode adapter's own tier-0 push. Optional in opts, defaulting
-  // false, so existing `new PtyManager({ sessionsDir })` call sites
-  // (tests, mainly) keep compiling unchanged.
+  // true (session-scope safe direction), so existing
+  // `new PtyManager({ sessionsDir })` call sites (tests, mainly) keep
+  // compiling unchanged.
   private readonly authEnabled: boolean;
   // Issue #437c — a live accessor, not a cached boolean: unlike
   // sshAuthSock above (a boot-time app.config constant),
