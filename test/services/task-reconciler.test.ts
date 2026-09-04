@@ -119,6 +119,7 @@ const {
   mockMergePullRequest,
   mockUpdatePullRequestBranch,
   mockDeleteRemoteBranch,
+  mockUpdatePullRequestTitle,
   mockFetchRunsForHead,
   mockFetchRequiredStatusContexts,
   mockFetchCheckRunsForHead,
@@ -158,6 +159,15 @@ const {
   mockMergePullRequest: vi.fn(),
   mockUpdatePullRequestBranch: vi.fn(),
   mockDeleteRemoteBranch: vi.fn(),
+  // #1035 — PR-title-lint self-heal. Pass-through default (wired below)
+  // would risk hitting GitHub over the network, so this is NOT a pass-through:
+  // no pre-existing test's task exercises the self-heal path, and a leaked
+  // .mockResolvedValueOnce from one #1035 test would silently no-op elsewhere
+  // (rather than the explicit fail-closed "fail GitHub calls" we want).
+  // Defaults to a resolved promise — the real impl returns void, so this just
+  // needs to satisfy the await. The reset below re-establishes this every
+  // beforeEach.
+  mockUpdatePullRequestTitle: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
   mockFetchRequiredStatusContexts: vi.fn(),
   mockFetchCheckRunsForHead: vi.fn(),
@@ -257,6 +267,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     mergePullRequest: mockMergePullRequest,
     updatePullRequestBranch: mockUpdatePullRequestBranch,
     deleteRemoteBranch: mockDeleteRemoteBranch,
+    updatePullRequestTitle: mockUpdatePullRequestTitle,
     createPullRequestReview: mockCreatePullRequestReview,
     getPullRequestReviewDecision: mockGetPullRequestReviewDecision,
     fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
@@ -484,6 +495,12 @@ describe("reconcileTasks", () => {
     mockMergePullRequest.mockReset();
     mockUpdatePullRequestBranch.mockReset();
     mockDeleteRemoteBranch.mockReset();
+    // #1035 — no pre-existing test's task reaches the self-heal path
+    // (the only consumer is the new red-required title-lint and the new
+    // unstable-non-required title-lint tests below), so this is reset (not
+    // cleared) to drop any .mockResolvedValueOnce/.mockRejectedValueOnce
+    // beforeEach.
+    mockUpdatePullRequestTitle.mockReset().mockResolvedValue(undefined);
     // #744 — same reasoning: no pre-existing test's task ever sets
     // releaseRequestedAt, so these are only ever reached inside the
     // dedicated autorelease describe block below.
@@ -2046,6 +2063,68 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // #1035 — a red NON-required title-lint check (e.g. one that's
+    // deliberately not in branch protection) leaves the task in
+    // `unstable` with no auto-merge and no round-cap escape (no round is
+    // being spent), so the task strands indefinitely. Self-heal: same
+    // `attemptSelfHealPrTitle` helper the red-required path uses; no
+    // round consumed, no mergeError recorded (the next tick will
+    // re-read mergeable_state and may now be "clean").
+    it("self-heals a non-required title-lint 'unstable' failure rather than leaving the task stuck", async () => {
+      const app = await buildApp();
+      // Insert directly with a non-conventional title and a Conventional
+      // `prTitle` (what the worker would have ingested) — the helper
+      // re-derives the conventional one. Bypasses
+      // `createDoneTaskWithPendingMerge`'s no-overrides shape.
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-unstable-self-heal-${Math.random()}`, cwd: "/tmp" },
+      });
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "Add a thing",
+          status: "done",
+          claimedAt: new Date(),
+          completedAt: new Date(),
+          prNumber: 9,
+          prUrl: "https://github.com/o/r/pull/9",
+          prTitle: "feat: add a thing",
+          mergeRequestedAt: new Date(),
+        })
+        .returning()
+        .all();
+      const taskId = row.id;
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeableState: "unstable", title: "Add a thing" }),
+      );
+      mockFetchCheckRunsForHead.mockResolvedValue([
+        { name: "lint-pr-title", conclusion: "failure" },
+      ]);
+
+      await reconcileTasks(app);
+
+      expect(mockUpdatePullRequestTitle).toHaveBeenCalledWith(
+        "tok",
+        "o",
+        "r",
+        9,
+        "feat: add a thing",
+      );
+      const finalRow = await getTask(app, taskId);
+      // No mergeError recorded — the self-heal short-circuits before
+      // recordMergeError, so the task isn't recorded as stranded.
+      expect(finalRow.mergeError).toBeNull();
+      // mergeRequestedAt is preserved — the task IS still pending merge,
+      // the next tick just needs to see the title-lint check clear and
+      // mergeable_state -> "clean".
+      expect(finalRow.mergeRequestedAt).not.toBeNull();
+
+      await app.close();
+    });
+
     it("backs off and retries on a real conflict ('dirty') rather than giving up", async () => {
       const app = await buildApp();
       const { taskId } = await createDoneTaskWithPendingMerge(app);
@@ -3536,6 +3615,10 @@ describe("reconcileTasks", () => {
       mockPromoteTaskToPR.mockImplementation(actualTaskPromoteModule.promoteTaskToPR);
       mockFetchRequiredStatusContexts.mockResolvedValue(null);
       mockFetchCheckRunsForHead.mockResolvedValue([]);
+      // #1035 — same reasoning as the explicit reset in the outer
+      // beforeEach: a leaked .mockResolvedValueOnce from one #1035 test
+      // can't bleed forward into an unrelated auto-approve test.
+      mockUpdatePullRequestTitle.mockReset().mockResolvedValue(undefined);
     });
 
     it("auto-approves once the latest verdict is clean and CI reads success", async () => {
@@ -3954,6 +4037,87 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      // #1035 — a red REQUIRED title-lint check (e.g.
+      // `wagoid/commitlint-github-action`) used to fall straight into the
+      // #755 red-required-CI-return path: the worker is forbidden by
+      // buildTaskMasterPreamble from editing the PR itself (task-prompt.ts),
+      // so returning them burns one of a small, non-renewing number of
+      // auto-return rounds on a fix the worker can't actually make. The
+      // self-heal here derives a Conventional Commits title via
+      // resolvePrTitle (#761/#1037) and PATCHes the PR's title — same
+      // helper #782's re-sync sites use — no round consumed, no worker
+      // needed. Picked over `lint-pr-title` (the wagoid action's default
+      // job name) deliberately: wagoid is the most-deployed action today,
+      // but the choice of job name is configurable, so the matching list
+      // is small + curated rather than a single name.
+      it("self-heals a red REQUIRED title-lint check by re-deriving the PR title (no round consumed)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, {
+          // Non-conventional issue title — what the PR title currently
+          // still shows, before the self-heal. `resolvePrTitle` falls
+          // through this to `task.prTitle` (the conventional title the
+          // worker's `taskCommitTitlePath` file ingested at the "-> reviewing"
+          // transition), so the self-heal re-derives that one.
+          title: "Add a thing",
+          prTitle: "feat: add a thing",
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ title: "Add a thing" }));
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["lint-pr-title"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(checkRun("lint-pr-title", "failure"));
+
+        await reconcileTasks(app);
+
+        // Self-heal short-circuits BEFORE auto-return: task stays in
+        // reviewing, no round consumed, no lastAutoReturnReason written,
+        // and updatePullRequestTitle was called with a Conventional
+        // Commits title that resolves the failing check.
+        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+        expect(mockUpdatePullRequestTitle).toHaveBeenCalledWith(
+          "tok",
+          "o",
+          "r",
+          9,
+          "feat: add a thing",
+        );
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+        expect(row.lastAutoReturnReason).toBeNull();
+
+        await app.close();
+      });
+
+      // Companion direction: a red REQUIRED check that ISN'T a title-lint
+      // one must still auto-return — the existing #755 contract is
+      // untouched for everything except the title-lint names. Without this
+      // guard, a bug that matched too liberally (e.g. substring instead of
+      // exact match) would silently swallow every required-CI failure and
+      // strands the task in "reviewing" forever instead.
+      it("still auto-returns the worker for a red REQUIRED check that isn't a title-lint check (#1035 regression guard)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
+
+        await reconcileTasks(app);
+
+        // No self-heal attempted (check name not in the title-lint set),
+        // so the original #755 contract fires: auto-return, status ->
+        // in_progress, round incremented.
+        expect(mockUpdatePullRequestTitle).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("ci");
 
         await app.close();
       });
