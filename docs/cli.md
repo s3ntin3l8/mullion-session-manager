@@ -295,10 +295,14 @@ socket-wide posture from `docs/socket-api.md`.
 
 ### helper
 
-- `mullion helper pair <payload> [--name <name>]` — redeems a pairing payload
-  (generated from Settings → Hosts → SSH agent bridges on the primary) and
-  persists the resulting session credential.
-- `mullion helper run [--ssh-auth-sock <path>] [--json-events]` —
+- `mullion helper pair <payload> [--name <name>] [--insecure]` — redeems a
+  pairing payload (generated from Settings → Hosts → SSH agent bridges on
+  the primary) and persists the resulting session credential. `--insecure`
+  disables TLS certificate verification on the WebSocket connection to the
+  primary — intended for self-signed or internal-CA primaries (Caddy/nginx
+  dev, Cloudflare origin-pinned, etc.); leave it off against any primary
+  you actually trust to issue its own certificates.
+- `mullion helper run [--ssh-auth-sock <path>] [--json-events] [--insecure]` —
   long-running; forwards this machine's SSH agent to every enrolled agent
   host via the primary, using the credential `pair` persisted.
   `--ssh-auth-sock` overrides this process's own `SSH_AUTH_SOCK` env var —
@@ -306,7 +310,8 @@ socket-wide posture from `docs/socket-api.md`.
   `--json-events` additionally writes newline-delimited JSON connection
   events to stdout; see
   [`ssh-agent.md`](ssh-agent.md#structured-events---json-events) for the
-  event shapes.
+  event shapes. `--insecure` has the same meaning as on `pair` above, and
+  must match what `pair` was run with against the same primary.
 - `mullion helper install [--ssh-auth-sock <path>]` — generates and
   registers a launchd job (macOS), systemd `--user` unit (Linux), or
   Windows Scheduled Task that supervises `run`, so you don't have to

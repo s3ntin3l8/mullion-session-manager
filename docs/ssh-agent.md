@@ -173,6 +173,12 @@ Two ways to get it running:
   node mullion-helper/dist/cli/mullion.mjs helper run
   ```
 
+  Pass `--insecure` on both `pair` and `run` if the primary uses a
+  self-signed or internal-CA certificate (Caddy/nginx dev, Cloudflare
+  origin-pinned, ...) — it must match between the two against the same
+  primary. Leave it off against any primary you actually trust to issue
+  its own certificates.
+
   A recent Node is the only dependency — `mullion helper` uses Node's
   built-in `WebSocket` client, unavailable before Node 22, and the tarball's
   own `package.json` (`engines.node`) states the exact floor this release
