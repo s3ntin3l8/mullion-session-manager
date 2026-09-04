@@ -598,6 +598,72 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
 
       await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
     });
+
+    // Issue #1047, regression guard. The original test above only asserts
+    // on `connectedBridges` cleanup, which is a side effect of the close
+    // path — `ws`'s Receiver calls `websocket.close()` BEFORE
+    // `emit('error', err)`, so the existing close handler runs regardless
+    // of whether the route attached an "error" listener, and the test
+    // passed whether or not the fix was in place (Hermes review).
+    //
+    // This test isolates the route's own error listener. The route is
+    // the only thing that registers a listener for the window between
+    // upgrade completion and handshake — MuxConnection only attaches its
+    // `teardown` error listener AFTER a successful handshake. The
+    // fastify-websocket plugin also attaches a generic
+    // `(error) => { fastify.log.error(error) }` listener, which alone
+    // would swallow the error; this test strips that one too so the only
+    // listener left protecting the server is the route's `() => {}`.
+    // Without the fix, that strip leaves the WebSocket with zero error
+    // listeners, the receiver's emit('error') throws, and the test
+    // process gets an `uncaughtException`.
+    it("attaches an error listener on the bridge-route WebSocket so a pre-handshake transport error doesn't crash the server (issue #1047)", async () => {
+      const { app, port } = await buildAndListen();
+
+      // Open the WS but deliberately do NOT send a handshake — that's the
+      // window where only the route's own listeners (and the
+      // fastify-websocket plugin's generic one) are on the socket.
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
+
+      // Wait for the route handler to attach its listeners (server-side
+      // socket is registered synchronously during the upgrade, but we
+      // give the event loop a tick in case anything is deferred).
+      const wss = (app as { websocketServer?: { clients: Set<NodeWebSocket> } }).websocketServer;
+      expect(wss).toBeDefined();
+      await waitUntil(() => (wss!.clients.size > 0));
+      const serverWs = [...wss!.clients][0];
+
+      // Strip the fastify-websocket plugin's generic error logger — its
+      // only job is to swallow errors, so leaving it in place would mask
+      // whether the ROUTE'S listener (the one this PR adds) is needed.
+      for (const listener of serverWs.listeners("error")) {
+        const src = (listener as (...args: unknown[]) => unknown).toString();
+        if (src.includes("fastify.log.error")) {
+          serverWs.off("error", listener as (...args: unknown[]) => void);
+        }
+      }
+
+      // Capture any uncaughtException the malformed-frame write triggers.
+      const uncaught: Error[] = [];
+      const onUncaught = (err: Error) => uncaught.push(err);
+      process.on("uncaughtException", onUncaught);
+
+      // Malformed frame: RSV bits set, which the receiver rejects with
+      // "Invalid WebSocket frame: RSV2 and RSV3 must be clear" and
+      // surfaces as 'error' on the WebSocket. Without the route's
+      // `() => {}` listener and with the fastify one removed, this
+      // throw has nowhere to go and surfaces as uncaughtException.
+      ws._socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      process.off("uncaughtException", onUncaught);
+
+      expect(uncaught).toEqual([]);
+    });
   });
 
   describe("MuxConnection wrapping (issue #820, PR5b)", () => {
