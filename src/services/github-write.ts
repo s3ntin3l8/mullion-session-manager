@@ -423,6 +423,11 @@ export async function getPullRequestByNumber(
   title: string;
   state: "open" | "closed";
   merged: boolean;
+  // #1015 (archive), review fix — GitHub's own `merged_at` (ISO 8601, null
+  // until merged), a deliberate addition to this whitelisted shape so the
+  // archive-merged backfill route can record the PR's actual merge time
+  // instead of "whenever this endpoint happened to run."
+  mergedAt: string | null;
   mergeable: boolean | null;
   mergeableState: string;
 }> {
@@ -436,6 +441,7 @@ export async function getPullRequestByNumber(
     title: string;
     state: "open" | "closed";
     merged: boolean;
+    merged_at: string | null;
     mergeable: boolean | null;
     mergeable_state: string;
   }>(token, owner, repo, "GET", `/pulls/${number}`);
@@ -450,6 +456,7 @@ export async function getPullRequestByNumber(
     title: result.title,
     state: result.state,
     merged: result.merged,
+    mergedAt: result.merged_at,
     mergeable: result.mergeable,
     mergeableState: result.mergeable_state,
   };

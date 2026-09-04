@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveRepoRef } from "../services/host-git.js";
@@ -225,6 +225,53 @@ export async function webhookRoutes(app: FastifyInstance) {
               projectId: pid,
               pr: typeof pr === "object" ? pr : {},
             });
+            // #1015 (archive) — the ONLY place a PR merged directly on
+            // github.com (not through Mullion's own merge-on-approve sweep)
+            // is ever observed: task-reconciler.ts's processMergeRequests
+            // sweep only polls a done task's PR when mergeRequestedAt is
+            // set, which never happens for a hand-merge. `merged` is only
+            // meaningful on a "closed" delivery — GitHub always sends it,
+            // `false` for a close-without-merge.
+            if (
+              // CodeQL flagged `pr !== null` here as comparing inconvertible
+              // types — `if (!pr) break` above already excludes null (and
+              // undefined), so it was dead code, not a real guard.
+              prAction === "closed" &&
+              typeof pr === "object" &&
+              "merged" in pr &&
+              pr.merged === true &&
+              "number" in pr &&
+              typeof pr.number === "number"
+            ) {
+              const now = new Date();
+              const matchedTask = app.db
+                .select({ id: tasks.id, status: tasks.status })
+                .from(tasks)
+                .where(
+                  and(
+                    eq(tasks.projectId, projectId),
+                    eq(tasks.prNumber, pr.number),
+                    isNull(tasks.mergedAt),
+                  ),
+                )
+                .get();
+              if (matchedTask) {
+                // archivedAt is auto-set only when the task is ALREADY
+                // `done` at merge time (the common case — approve runs
+                // before a human merges the PR). A PR merged early, while
+                // the task still sits in reviewing, only gets mergedAt here
+                // — an accepted gap, not worth a poller for.
+                app.db
+                  .update(tasks)
+                  .set(
+                    matchedTask.status === "done"
+                      ? { mergedAt: now, archivedAt: now }
+                      : { mergedAt: now },
+                  )
+                  .where(eq(tasks.id, matchedTask.id))
+                  .run();
+              }
+            }
             break;
           }
           case "workflow_run": {

@@ -184,6 +184,13 @@ export function TaskDetail({
           Move to Ready/Claim. */}
       <div className="task-detail-actions-row">
         <TaskActions task={task} />
+        {/* #1015 (archive) — same done/failed restriction as the server
+            (routes/tasks.ts's POST/DELETE /api/tasks/:id/archive): archiving
+            in_progress/reviewing would hide a task whose worker is still
+            running, or from whoever's approval it's waiting on. */}
+        {(task.status === "done" || task.status === "failed") && (
+          <ArchiveTaskAction taskId={task.id} archivedAt={task.archivedAt} />
+        )}
         {/* Independent review, PR #477 — mirrors routes/tasks.ts's own
             DELETE restriction exactly (no linked GitHub issue, status still
             backlog/ready): a locally-created task that turns out to be a
@@ -517,6 +524,39 @@ export function TaskDetail({
           <> · Completed {formatRelativeAge(new Date(task.completedAt).getTime())}</>
         )}
       </div>
+    </div>
+  );
+}
+
+// #1015 (archive) — no confirm step, unlike DeleteTaskAction below: archiving
+// is reversible (Unarchive clears only archivedAt, see api/tasks.ts's own
+// doc comment), so it doesn't need the same "click again to confirm" gate a
+// destructive action does.
+function ArchiveTaskAction({ taskId, archivedAt }: { taskId: number; archivedAt: string | null }) {
+  const archiveTask = useDashboardStore((s) => s.archiveTask);
+  const unarchiveTask = useDashboardStore((s) => s.unarchiveTask);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (archivedAt !== null) await unarchiveTask(taskId);
+      else await archiveTask(taskId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update archive state");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="task-detail-actions">
+      <button className="notif-gate-btn" disabled={submitting} onClick={run}>
+        {archivedAt !== null ? "Unarchive" : "Archive"}
+      </button>
+      {error && <span className="task-detail-error">{error}</span>}
     </div>
   );
 }

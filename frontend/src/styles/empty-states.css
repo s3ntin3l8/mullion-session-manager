@@ -467,6 +467,12 @@
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
+.task-card-archived {
+  font-size: 10px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .task-card-sync-error {
   display: inline-flex;
   align-items: center;

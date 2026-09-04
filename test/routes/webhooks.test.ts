@@ -1168,6 +1168,128 @@ describe("webhook routes", () => {
     });
   });
 
+  // #1015 (archive) — the ONLY place a PR merged directly on github.com
+  // (not through Mullion's own merge-on-approve sweep) is ever observed.
+  describe("pull_request merge signal (#1015)", () => {
+    it("sets mergedAt and archivedAt on a done task when its PR merges", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-merge-signal");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-merge-signal-p1", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({ projectId: project.id, title: "shipped", status: "done", prNumber: 77 })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        pull_request: { number: 77, merged: true },
+        repository: { full_name: "acme/widgets-merge-signal" },
+      });
+      const sig = signPayload(payload, TEST_SECRET);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": sig,
+          "x-github-event": "pull_request",
+        },
+        payload,
+      });
+      expect(res.statusCode).toBe(200);
+
+      const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(updated.mergedAt).not.toBeNull();
+      expect(updated.archivedAt).not.toBeNull();
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("sets mergedAt only (not archivedAt) when the task hasn't reached done yet", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-merge-signal-early");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-merge-signal-p2", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({ projectId: project.id, title: "merged early", status: "reviewing", prNumber: 78 })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        pull_request: { number: 78, merged: true },
+        repository: { full_name: "acme/widgets-merge-signal-early" },
+      });
+      const sig = signPayload(payload, TEST_SECRET);
+      await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": sig,
+          "x-github-event": "pull_request",
+        },
+        payload,
+      });
+
+      const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(updated.mergedAt).not.toBeNull();
+      expect(updated.archivedAt).toBeNull();
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("does not set mergedAt when a PR is closed WITHOUT merging", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-merge-signal-unmerged");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-merge-signal-p3", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({ projectId: project.id, title: "closed unmerged", status: "done", prNumber: 79 })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        pull_request: { number: 79, merged: false },
+        repository: { full_name: "acme/widgets-merge-signal-unmerged" },
+      });
+      const sig = signPayload(payload, TEST_SECRET);
+      await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": sig,
+          "x-github-event": "pull_request",
+        },
+        payload,
+      });
+
+      const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(updated.mergedAt).toBeNull();
+      expect(updated.archivedAt).toBeNull();
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+  });
+
   describe("dependency-aware claiming (#667)", () => {
     beforeAll(() => {
       process.env.MULLION_TASK_MASTER_ENABLED = "true";

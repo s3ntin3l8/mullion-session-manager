@@ -260,6 +260,29 @@ describe("github-write service", () => {
     });
   });
 
+  // #1015 (archive), review fix — the archive-merged backfill route prefers
+  // this over "whenever the route happened to run."
+  it("getPullRequestByNumber passes through merged_at as mergedAt", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        number: 9,
+        html_url: "u",
+        node_id: "n",
+        draft: false,
+        head: { sha: "abc123", ref: "mullion/task-9" },
+        base: { ref: "main" },
+        title: "t",
+        state: "closed",
+        merged: true,
+        merged_at: "2026-01-01T12:00:00Z",
+        mergeable: null,
+        mergeable_state: "unknown",
+      }),
+    );
+    const result = await getPullRequestByNumber("tok", "owner", "repo", 9);
+    expect(result.mergedAt).toBe("2026-01-01T12:00:00Z");
+  });
+
   it("getPullRequestByNumber passes through mergeable: null (GitHub still computing it)", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, {

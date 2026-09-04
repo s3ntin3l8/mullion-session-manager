@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
@@ -72,6 +72,20 @@ const clearDoneTasksSchema = {
     properties: {
       projectIds: { type: "array", items: { type: "integer", minimum: 1 } },
       deleteBranches: { type: "boolean" },
+    },
+  },
+};
+
+// #1015 (archive), review fix — mirrors clearDoneTasksSchema above, which
+// this route was otherwise modeled on directly; a malformed body (e.g.
+// projectIds sent as a string) would previously fall through to drizzle's
+// inArray and 500 instead of 400.
+const archiveMergedTasksSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      projectIds: { type: "array", items: { type: "integer", minimum: 1 } },
     },
   },
 };
@@ -237,6 +251,13 @@ const TASK_ROW_COLUMNS = {
   startedAt: tasks.startedAt,
   reviewingAt: tasks.reviewingAt,
   completedAt: tasks.completedAt,
+  // #1015 (archive) — see schema.ts's own doc comments on why these are two
+  // separate columns. Both added here alongside the schema/migration and the
+  // frontend Task type in the same commit — this list has twice silently
+  // dropped a new column before (#816/#818, task 258971's lastReviewVerdict
+  // above), typechecking clean while the API response quietly omitted it.
+  mergedAt: tasks.mergedAt,
+  archivedAt: tasks.archivedAt,
 };
 
 /**
@@ -985,6 +1006,157 @@ export async function tasksRoute(app: FastifyInstance) {
       }
 
       return { deleted, failed, branches, remaining };
+    },
+  );
+
+  // #1015 (archive) — orthogonal to `status`, not a status transition: hides
+  // a `done`/`failed` task from the board's default view without touching
+  // its status, its prNumber -> task linkage, or any of the services that
+  // branch on `status === "done"`. Restricted to done/failed for the same
+  // reason Abandon's force-delete is: archiving an in_progress/reviewing
+  // task would hide it from the board while its worker keeps running (and
+  // holding a maxConcurrent slot), or from the person whose approval it's
+  // waiting on.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/archive", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+    if (existing.status !== "done" && existing.status !== "failed") {
+      return reply.conflict(
+        `Cannot archive a task that hasn't finished (status: ${existing.status})`,
+      );
+    }
+    const [updated] = app.db
+      .update(tasks)
+      .set({ archivedAt: new Date() })
+      .where(eq(tasks.id, taskId))
+      .returning()
+      .all();
+    return updated;
+  });
+
+  // Clears ONLY archivedAt, never mergedAt — mergedAt is a fact about the
+  // PR (see schema.ts's own doc comment), unarchiving doesn't make it
+  // un-merged.
+  app.delete<{ Params: { id: string } }>("/api/tasks/:id/archive", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+    const [updated] = app.db
+      .update(tasks)
+      .set({ archivedAt: null })
+      .where(eq(tasks.id, taskId))
+      .returning()
+      .all();
+    return updated;
+  });
+
+  // #1015 (archive) — both the backfill for tasks that merged before this
+  // feature existed (or while the app was down — webhooks have no replay)
+  // and the ongoing reconciliation path for a merge task-reconciler.ts never
+  // observed (mergeOnApprove off, so nothing ever set mergeRequestedAt to
+  // arm that sweep). Modeled directly on /api/tasks/clear-done above: same
+  // MAX_CLEAR_DONE_BATCH-shaped cap, same "check the install-wide rate
+  // limit once per request, not once per task" reasoning.
+  //
+  // Review fix — candidates gate on `isNull(tasks.mergedAt)`, not just
+  // `isNull(tasks.archivedAt)`. Unarchive (DELETE .../archive) deliberately
+  // clears only archivedAt, leaving mergedAt set — the same
+  // isNull(mergedAt) guard the other two merge-observation paths
+  // (webhooks.ts, task-reconciler.ts's markTaskMerged) already use so a
+  // manual unarchive sticks. Without it, this route (meant to be re-run
+  // periodically) would re-confirm the same already-known merge and
+  // silently re-archive a task the user just asked to bring back.
+  app.post<{ Body: { projectIds?: number[] } }>(
+    "/api/tasks/archive-merged",
+    { schema: archiveMergedTasksSchema },
+    async (request) => {
+      const { projectIds } = request.body ?? {};
+
+      const doneUnmergedWithPr = and(
+        eq(tasks.status, "done"),
+        isNotNull(tasks.prNumber),
+        isNull(tasks.mergedAt),
+      );
+      const candidates =
+        projectIds && projectIds.length > 0
+          ? app.db
+              .select()
+              .from(tasks)
+              .where(and(doneUnmergedWithPr, inArray(tasks.projectId, projectIds)))
+              .all()
+          : app.db.select().from(tasks).where(doneUnmergedWithPr).all();
+
+      const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
+      const remaining = candidates.length - attempted.length;
+
+      const rateLimited = isGitHubRateLimited();
+      const archived: number[] = [];
+      const failed: { id: number; error: string }[] = [];
+
+      for (const task of attempted) {
+        if (rateLimited) {
+          failed.push({ id: task.id, error: "GitHub rate limit is in effect — try again shortly" });
+          continue;
+        }
+        const project = getProjectOr404(task.projectId);
+        if (!project) {
+          failed.push({ id: task.id, error: "Project not found" });
+          continue;
+        }
+        const repoRef = await resolveRepoRef(app, project);
+        if (!repoRef) {
+          failed.push({ id: task.id, error: "Could not resolve the project's GitHub repo" });
+          continue;
+        }
+        const token = await resolveGitHubToken(app, repoRef, "read");
+        if (!token) {
+          failed.push({ id: task.id, error: "No GitHub token available" });
+          continue;
+        }
+        let mergedAt: string | null;
+        try {
+          const pr = await getPullRequestByNumber(
+            token,
+            repoRef.owner,
+            repoRef.repo,
+            task.prNumber!,
+          );
+          if (!pr.merged) {
+            failed.push({ id: task.id, error: "PR is not merged" });
+            continue;
+          }
+          mergedAt = pr.mergedAt;
+        } catch (err) {
+          app.log.warn(
+            { err, taskId: task.id, prNumber: task.prNumber },
+            "archive-merged: failed to confirm PR merge state",
+          );
+          failed.push({ id: task.id, error: "Could not confirm PR merge state" });
+          continue;
+        }
+        const now = new Date();
+        app.db
+          .update(tasks)
+          // Review fix — prefers GitHub's own merged_at (the PR's actual
+          // merge time) over "whenever this endpoint happened to run," which
+          // matters for the backfill case: a task merged days before this
+          // route is ever called would otherwise get a misleading mergedAt.
+          // Falls back to `now` only when GitHub genuinely doesn't have one
+          // (shouldn't happen once pr.merged is confirmed true, but the type
+          // is nullable) or a prior run already set one.
+          .set({
+            mergedAt: task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now),
+            archivedAt: now,
+          })
+          .where(eq(tasks.id, task.id))
+          .run();
+        archived.push(task.id);
+      }
+
+      return { archived, failed, remaining };
     },
   );
 

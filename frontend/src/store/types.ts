@@ -285,6 +285,9 @@ export interface TasksSlice {
     },
   ) => Promise<Task>;
   deleteTask: (id: number, opts?: { force?: boolean }) => Promise<void>;
+  // #1015 (archive)
+  archiveTask: (id: number) => Promise<Task>;
+  unarchiveTask: (id: number) => Promise<Task>;
   // #746 — a single call (server-capped at 20 rows); the caller loops on
   // `result.remaining > 0` to finish a larger sweep. See TasksToolbar.tsx's
   // own "Clear done" handler.

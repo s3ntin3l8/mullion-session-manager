@@ -214,6 +214,20 @@ export function UnifiedBoard({
     writeBool(STORAGE_KEYS.taskHideDone, hideDone);
   }, [hideDone]);
   const toggleHideDone = () => setHideDone((prev) => !prev);
+  // #1015 (archive) — unlike hideDone above, this DOES route through the
+  // visibleTasks filter below rather than a column's `collapsed` prop: an
+  // archived task should vanish from the column COUNT too, not just be
+  // visually collapsed. Safe to do so because archiving is restricted to
+  // done/failed (routes/tasks.ts), so an archived task can never sit in a
+  // DRAG_EDITABLE_STATUSES column — no absoluteDropIndex translation is at
+  // risk the way it would be for backlog/ready.
+  const [showArchived, setShowArchived] = useState(() =>
+    readBool(STORAGE_KEYS.taskShowArchived, false),
+  );
+  useEffect(() => {
+    writeBool(STORAGE_KEYS.taskShowArchived, showArchived);
+  }, [showArchived]);
+  const toggleShowArchived = () => setShowArchived((prev) => !prev);
   // #701 — parent/phase filter. Empty string = "All" (the default); a
   // reserved sentinel (not a real "repo#number" key, which always contains
   // "#") stands in for "(no parent)" so it can share the same string state
@@ -284,8 +298,9 @@ export function UnifiedBoard({
           `${t.parentIssueRepo}#${t.parentIssueNumber}` === selectedParentKey,
       );
     }
+    if (!showArchived) result = result.filter((t) => t.archivedAt === null);
     return result;
-  }, [tasks, activeProjectIds, blockedOnly, hasBlockedTask, selectedParentKey]);
+  }, [tasks, activeProjectIds, blockedOnly, hasBlockedTask, selectedParentKey, showArchived]);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -531,6 +546,8 @@ export function UnifiedBoard({
             onCreated={() => setCreating(false)}
             hideDone={hideDone}
             onToggleHideDone={toggleHideDone}
+            showArchived={showArchived}
+            onToggleShowArchived={toggleShowArchived}
             activeProjectIds={activeProjectIds}
             clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
           />

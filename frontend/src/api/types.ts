@@ -1144,6 +1144,13 @@ export interface Task {
   startedAt: string | null;
   reviewingAt: string | null;
   completedAt: string | null;
+  // #1015 (archive) — mergedAt is a FACT (this task's own PR actually
+  // merged, recorded wherever Mullion already observes PR merge state);
+  // archivedAt is user-visible state (hidden from the board by default).
+  // Deliberately separate — see routes/tasks.ts's TASK_ROW_COLUMNS/
+  // db/schema.ts's own doc comments.
+  mergedAt: string | null;
+  archivedAt: string | null;
 }
 
 // Mirrors src/services/update-checker.ts's UpdateCheckResult.

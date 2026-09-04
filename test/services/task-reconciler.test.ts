@@ -3207,6 +3207,65 @@ describe("reconcileTasks", () => {
       });
     });
 
+    // #1015 (archive) — same call sites the autorelease arm above tests,
+    // same "already-done"/"clean" distinction: only case "clean" (a real
+    // merge just happened) and an "already-done" verdict backed by
+    // `pr.merged === true` (never a PR closed WITHOUT merging) may record
+    // mergedAt/archivedAt.
+    describe("markTaskMerged (#1015)", () => {
+      it("sets mergedAt and archivedAt when the task's own PR actually merges (clean)", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, false);
+        const taskId = await createDoneTaskWithPendingMerge(app, projectId, 9);
+        mockGetPullRequestByNumber.mockResolvedValue(releasePr({ number: 9 }));
+        mockMergePullRequest.mockResolvedValue({ merged: true, sha: "sha-merged" });
+        mockDeleteRemoteBranch.mockResolvedValue(undefined);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt).not.toBeNull();
+        expect(row.archivedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("sets mergedAt and archivedAt when a human merged it directly on GitHub (already-done, merged)", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, false);
+        const taskId = await createDoneTaskWithPendingMerge(app, projectId, 9);
+        mockGetPullRequestByNumber.mockResolvedValue(
+          releasePr({ number: 9, state: "closed", merged: true }),
+        );
+
+        await reconcileTasks(app);
+
+        expect(mockMergePullRequest).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt).not.toBeNull();
+        expect(row.archivedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("does NOT set mergedAt on a PR closed WITHOUT merging (already-done, not merged)", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, false);
+        const taskId = await createDoneTaskWithPendingMerge(app, projectId, 9);
+        mockGetPullRequestByNumber.mockResolvedValue(
+          releasePr({ number: 9, state: "closed", merged: false }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt).toBeNull();
+        expect(row.archivedAt).toBeNull();
+
+        await app.close();
+      });
+    });
+
     describe("the sweep itself (processReleaseRequests)", () => {
       it("does nothing while inside the quiet window", async () => {
         const app = await buildApp();

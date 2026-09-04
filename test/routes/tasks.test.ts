@@ -3335,5 +3335,280 @@ describe("tasks route", () => {
         await app.close();
       });
     });
+
+    describe("archive (#1015)", () => {
+      it("archives a done task and returns the updated row", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/archive-done");
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "shipped", status: "done" })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${row.id}/archive` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ id: row.id, archivedAt: expect.any(String) });
+
+        // Review-worthy: a GET-path assertion, not just the POST's own
+        // .returning() — TASK_ROW_COLUMNS has twice silently dropped a new
+        // column before (#816/#818), typechecking clean while the GET
+        // response quietly omitted it.
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const found = (listed.json() as { id: number; archivedAt: string | null }[]).find(
+          (t) => t.id === row.id,
+        );
+        expect(found?.archivedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("archives a failed task", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/archive-failed");
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "gave up on this one", status: "failed" })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${row.id}/archive` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ archivedAt: expect.any(String) });
+
+        await app.close();
+      });
+
+      it("refuses to archive a task that hasn't finished", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/archive-in-progress");
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "still working", status: "in_progress" })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${row.id}/archive` });
+        expect(res.statusCode).toBe(409);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const found = (listed.json() as { id: number; archivedAt: string | null }[]).find(
+          (t) => t.id === row.id,
+        );
+        expect(found?.archivedAt).toBeNull();
+
+        await app.close();
+      });
+
+      it("unarchives, clearing archivedAt but leaving mergedAt alone", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/unarchive");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "merged and archived",
+            status: "done",
+            mergedAt: new Date(),
+            archivedAt: new Date(),
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}/archive` });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.archivedAt).toBeNull();
+        expect(body.mergedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("404s archiving/unarchiving an unknown task", async () => {
+        const app = await buildApp();
+        const archiveRes = await app.inject({ method: "POST", url: "/api/tasks/999999/archive" });
+        expect(archiveRes.statusCode).toBe(404);
+        const unarchiveRes = await app.inject({
+          method: "DELETE",
+          url: "/api/tasks/999999/archive",
+        });
+        expect(unarchiveRes.statusCode).toBe(404);
+        await app.close();
+      });
+    });
+
+    describe("POST /api/tasks/archive-merged (#1015)", () => {
+      it("archives a done task once its PR is confirmed merged", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-archive-merged");
+        const app = await buildApp();
+        await connectPat(app, "ghp_archive_merged_ok");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockResolvedValue({ merged: true } as Awaited<
+            ReturnType<typeof githubWrite.getPullRequestByNumber>
+          >);
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "backfill me",
+            status: "done",
+            prNumber: 55,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ archived: [row.id], failed: [], remaining: 0 });
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const found = (listed.json() as { id: number; mergedAt: string | null }[]).find(
+          (t) => t.id === row.id,
+        );
+        expect(found?.mergedAt).not.toBeNull();
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
+
+      it("reports (not archives) a done task whose PR isn't actually merged", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-archive-not-merged");
+        const app = await buildApp();
+        await connectPat(app, "ghp_archive_not_merged");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockResolvedValue({ merged: false } as Awaited<
+            ReturnType<typeof githubWrite.getPullRequestByNumber>
+          >);
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "not merged yet", status: "done", prNumber: 56 })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          archived: [],
+          failed: [{ id: row.id, error: "PR is not merged" }],
+        });
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
+
+      // Review fix — the candidate filter must gate on mergedAt, not
+      // archivedAt. Unarchive (DELETE /api/tasks/:id/archive) deliberately
+      // clears only archivedAt, leaving mergedAt set; without this the
+      // route (meant to be re-run periodically) would re-confirm the same
+      // already-known merge and silently re-archive a task the user just
+      // asked to bring back.
+      it("does not re-archive a task the user manually unarchived", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/archive-merged-no-reunarchive");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "merged, then manually unarchived",
+            status: "done",
+            prNumber: 57,
+            mergedAt: new Date(),
+            archivedAt: new Date(),
+          })
+          .returning()
+          .all();
+
+        const unarchiveRes = await app.inject({
+          method: "DELETE",
+          url: `/api/tasks/${row.id}/archive`,
+        });
+        expect(unarchiveRes.statusCode).toBe(200);
+        expect(unarchiveRes.json().archivedAt).toBeNull();
+
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi.spyOn(githubWrite, "getPullRequestByNumber");
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ archived: [], failed: [], remaining: 0 });
+        // The task never matched the candidate query at all — no GitHub
+        // round-trip should have happened.
+        expect(getPrSpy).not.toHaveBeenCalled();
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const found = (listed.json() as { id: number; archivedAt: string | null }[]).find(
+          (t) => t.id === row.id,
+        );
+        expect(found?.archivedAt).toBeNull();
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
+
+      // Review fix — was registered with no body schema at all, unlike its
+      // sibling /api/tasks/clear-done; a malformed body fell through to
+      // drizzle's inArray and would 500 instead of 400.
+      it("400s a malformed body instead of 500ing", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: "not-an-array" },
+        });
+        expect(res.statusCode).toBe(400);
+        await app.close();
+      });
+
+      it("reports (not archives) when the PR lookup throws", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-archive-pr-error");
+        const app = await buildApp();
+        await connectPat(app, "ghp_archive_pr_error");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockRejectedValue(new Error(" network timeout"));
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "will fail", status: "done", prNumber: 99 })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          archived: [],
+          failed: [{ id: row.id, error: "Could not confirm PR merge state" }],
+        });
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
+    });
   });
 });

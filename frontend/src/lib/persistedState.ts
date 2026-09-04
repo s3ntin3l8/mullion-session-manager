@@ -48,6 +48,8 @@ export const STORAGE_KEYS = {
   taskParentFilter: "crs.taskParentFilter",
   // #746
   taskHideDone: "crs.taskHideDone",
+  // #1015
+  taskShowArchived: "crs.taskShowArchived",
   // Making notifications relevant/scannable — SessionTimeline.tsx's kind
   // filter and "Only attention" quick toggle previously reset to their
   // defaults on every panel remount (plain useState); persisting them here

@@ -280,6 +280,14 @@ export function TaskCard({
             {task.subIssueCompleted ?? 0}/{task.subIssueTotal}
           </span>
         )}
+        {/* #1015 (archive) — hidden by default (UnifiedBoard.tsx's
+            showArchived toggle), so this badge only ever renders once the
+            user has explicitly asked to see archived tasks. */}
+        {task.archivedAt !== null && (
+          <span className="task-card-archived" title="Archived">
+            Archived
+          </span>
+        )}
         {matchedPr && (
           <a
             className="task-card-pr"

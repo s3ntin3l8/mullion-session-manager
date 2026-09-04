@@ -596,6 +596,14 @@ export async function retryTask(
         sessionId: null,
         prUrl: null,
         prNumber: null,
+        // Review fix (#1015) — a failed task can be archived (hidden from
+        // the board by default) without losing its Retry affordance;
+        // resuming it must un-hide it too, or it vanishes from the board
+        // the instant it starts running again (still holding a
+        // maxConcurrent slot) until someone happens to toggle "Show
+        // archived". mergedAt is left alone: nothing ever sets it on a
+        // non-`done` task, so there's nothing to clear.
+        archivedAt: null,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "failed")))
       .run();
