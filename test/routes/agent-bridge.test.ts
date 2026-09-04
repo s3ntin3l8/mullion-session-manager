@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { WebSocket as NodeWebSocket } from "ws";
 import { buildTestApp } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { decodePairingPayload, issuePairingCode } from "../../src/services/bridge-registry.js";
@@ -560,6 +561,41 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       const closePromise = waitForClose(ws);
       ws.close();
       await closePromise;
+      await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
+    });
+
+    // Issue #1047 — a transport-level error (ECONNRESET, malformed frame,
+    // TLS handshake failure, midstream reset) fires the WebSocket's "error"
+    // event before its "close". Without an "error" listener attached,
+    // Node's EventEmitter throws on the unhandled "error" event and the
+    // server process dies before the existing "close" handler can run its
+    // connectedBridges cleanup. Uses the `ws` package's client (not the
+    // global WebSocket) to reach `_socket` for the raw-byte trigger the
+    // protocol parser actually rejects — the global WebSocket has no way
+    // to bypass its own framing.
+    it("removes the bridge from connectedBridges when a transport-level error fires the WS error event (issue #1047)", async () => {
+      const { app, port } = await buildAndListen();
+      const pairRes = await app.inject({ method: "POST", url: "/api/bridges" });
+      const { code } = decodePairingPayload(pairRes.json().pairing_payload)!;
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
+      const reply = await new Promise<HandshakeReply>((resolve, reject) => {
+        ws.once("message", (data) => resolve(JSON.parse(data.toString("utf8"))));
+        ws.once("error", reject);
+        ws.send(JSON.stringify({ type: "pair", code }));
+      });
+      expect(app.connectedBridges.has(reply.bridge_id!)).toBe(true);
+
+      // Raw bytes that fail the server's frame parser — the receiver
+      // rejects them with "Invalid WebSocket frame: …" and emits "error"
+      // on the WebSocket before "close". Exactly the failure shape issue
+      // #1047 reproduces: a transport-level fault that lands BEFORE close.
+      ws._socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
+
       await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
     });
   });
