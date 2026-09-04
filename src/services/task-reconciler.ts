@@ -3192,6 +3192,25 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             task.lastRateLimitAt = capturedAt;
           }
         }
+        // Hermes review (PR #1027, round 3) — review-agent path needs
+        // the same durable fallback the worker path got in round 2.
+        // The live `isRateLimitGraceActive` check below requires
+        // `errorState === "api_error"`; once `staleErrorSeconds` (default
+        // 30 min) clears the session's error state, a review agent
+        // with `rateLimitGraceMinutes > 30` falls through to
+        // `isUsableSignal` and gets posted as inconclusive — the
+        // truncation round 2 fixed for workers but only on the worker
+        // side. The durable `lastRateLimitAt` column survives the
+        // session TTL, so this fallback covers the long-grace case for
+        // review agents too. Same scope guard as the worker path: the
+        // durable `continue` only applies when there's no live
+        // `api_error` (a fresh non-rate_limit error must still fall
+        // through to the inconclusive path, not be silently graced).
+        if (info !== null && parsed === null && derived.status !== "api_error") {
+          if (isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)) {
+            continue;
+          }
+        }
         if (
           info !== null &&
           parsed === null &&
@@ -3889,22 +3908,12 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               // In-grace (round 2): the durable lastRateLimitAt is
               // recent. Two sub-cases — the session's `errorState` may
               // still be `api_error` (live) or have been TTL-cleared
-              // (post-30min). Both reach this block; the session-info
-              // pre-check inside isRateLimitGraceActive only accepts the
-              // former, so the in-grace branch needs to handle both.
-              // hasCommitsPastBase is the discriminator: if the agent
-              // made progress between rate_limits, advance to reviewing
-              // rather than staying in grace.
-              const inGrace = isTaskInRateLimitGrace(
-                task,
-                resolvedTaskMaster.rateLimitGraceMinutes,
-              );
-              const hasCommits = inGrace ? await hasCommitsPastBase(app, project, task) : false;
-              // The live (api_error) grace check has its own pre-checks
-              // (errorState, errorDetail); a non-rate_limit api_error
-              // short-circuits to false and falls through to the
-              // checkReviewingGate below. An overloaded/auth/etc. error
-              // therefore fails via the no-commits gate, as before.
+              // (post-30min). The live (api_error) grace check has its
+              // own pre-checks (errorState, errorDetail); a
+              // non-rate_limit api_error short-circuits to false and
+              // falls through to the checkReviewingGate below. An
+              // overloaded/auth/etc. error therefore fails via the
+              // no-commits gate, as before.
               const liveGrace = isRateLimitGraceActive(
                 {
                   errorState: info.errorState,
@@ -3913,15 +3922,43 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 { lastRateLimitAt: task.lastRateLimitAt },
                 {
                   graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes,
-                  hasCommitsPastBase: inGrace ? hasCommits : false,
+                  hasCommitsPastBase: false,
                 },
               );
-              if (inGrace && !hasCommits) {
-                // Durable signal + no commits = stay in grace.
-                continue;
-              }
               if (liveGrace) {
                 continue;
+              }
+              // Hermes review (PR #1027, round 3) — only durable-continue
+              // when there's NO live `api_error` on the session. A
+              // session that captured a `rate_limit` (`lastRateLimitAt`
+              // is recent) and then within the window hit a DIFFERENT
+              // `api_error` (`overloaded`, `authentication_failed`, ...)
+              // must fall through to the gate and fail — gracing a
+              // non-rate_limit error contradicts the documented scope
+              // ("graceful survival is scoped EXCLUSIVELY to
+              // `rate_limit`"). The TTL-cleared case (session
+              // `errorState` is `idle`/`null`) is the one that needs
+              // the durable signal — the live api_error case is
+              // handled by `liveGrace` above.
+              if (derived.status !== "api_error") {
+                const inGrace = isTaskInRateLimitGrace(
+                  task,
+                  resolvedTaskMaster.rateLimitGraceMinutes,
+                );
+                if (inGrace) {
+                  const hasCommits = await hasCommitsPastBase(app, project, task);
+                  if (!hasCommits) {
+                    // Durable signal + no live api_error + no commits =
+                    // stay in grace. The agent's quota may still
+                    // recover; checkReviewingGate would only fail us
+                    // anyway, and the alternative (failing now) is
+                    // strictly worse for a multi-day cooldown.
+                    continue;
+                  }
+                  // hasCommits: the agent DID make progress between
+                  // rate_limits — advance to reviewing rather than
+                  // staying in grace. Fall through to the gate below.
+                }
               }
             }
 

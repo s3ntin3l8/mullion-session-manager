@@ -4906,6 +4906,63 @@ describe("reconcileTasks", () => {
 
       await app.close();
     });
+
+    // Hermes review, round 3 (PR #1027) — a task that captured a
+    // rate_limit (durable lastRateLimitAt is recent) and then within the
+    // grace window hit a DIFFERENT api_error (`overloaded`,
+    // `authentication_failed`, ...) must NOT be graced. The durable
+    // continue is gated on `derived.status !== "api_error"` so a
+    // fresh non-rate_limit error falls through to the no-commits gate
+    // and fails. Without this guard, the documented scope ("graceful
+    // survival is scoped EXCLUSIVELY to `rate_limit`") would be
+    // violated by error-class cascades within the grace window.
+    it("does NOT grace a non-rate_limit api_error that follows a rate_limit within the window (worker path)", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 60 } },
+      });
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      // Pre-seed lastRateLimitAt to 1 minute ago (well within the 60-min
+      // grace window) — represents a prior rate_limit that the durable
+      // column captured. The current session is now `api_error` with
+      // `errorDetail: "overloaded"` — a different error class.
+      app.db
+        .update(tasks)
+        .set({ lastRateLimitAt: new Date(Date.now() - 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now(),
+            errorState: "api_error",
+            errorAt: Date.now() - 30_000,
+            errorDetail: "overloaded",
+          }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+      mockCommitWipChanges.mockResolvedValue({ committed: true });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Non-rate_limit error on a live api_error session must NOT be
+      // graced — the documented scope is exclusive to `rate_limit`.
+      // The task fails via checkReviewingGate (no commits past base).
+      // The failure reason may carry a "rate_limit" prefix because
+      // checkReviewingGate's persistedRateLimit heuristic adds one
+      // whenever the durable column is recent (Hermes review, round
+      // 3, suggested-noting: "informational and acknowledged in the
+      // comment; fine to leave") — what matters here is the task IS
+      // failed (not stuck in grace) despite the durable column.
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("no commits");
+
+      await app.close();
+    });
   });
 
   describe("review-findings loop (processReviewingTasks)", () => {
@@ -5514,6 +5571,59 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
       expect(row.reviewFindings).toContain("Reviewed the diff; no issues.");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+
+      await app.close();
+    });
+
+    // Hermes review, round 3 (PR #1027) — the review-agent path
+    // needed the same durable-column fallback the worker path got in
+    // round 2. Without this, a review agent with
+    // `rateLimitGraceMinutes > 30` (the documented 1440 cap for
+    // weekly/monthly cooldowns) would fall through to the
+    // `isUsableSignal` inconclusive path once the session's
+    // `errorState` TTLs at `staleErrorSeconds` (default 30 min). The
+    // durable `lastRateLimitAt` is the only signal that survives the
+    // TTL — this test pre-seeds it and confirms the review task stays
+    // in grace (no inconclusive comment, no auto-return) even though
+    // the review session reports idle/post-TTL.
+    it("keeps a reviewing task alive via the durable lastRateLimitAt after the review session's errorState is TTL-cleared", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 60 } },
+      });
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // Pre-seed lastRateLimitAt to 1 minute ago (well within the 60-min
+      // grace). No findings file written — simulates a review agent
+      // that hit a quota mid-review and then the session's error
+      // state TTL-cleared, with the durable column carrying the
+      // signal.
+      app.db
+        .update(tasks)
+        .set({ lastRateLimitAt: new Date(Date.now() - 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      // Review session now reports idle (post-TTL-clear state) — what
+      // a session looks like after `staleErrorSeconds` cleared its
+      // `errorState`/`errorDetail`. `derived.status` will be `idle`,
+      // NOT `api_error`. Without the durable fallback the
+      // reconciler would have posted an inconclusive verdict.
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () => (String(id) === String(reviewSessionId) ? fakeInfo() : fakeInfo()),
+          }) as never,
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Durable grace — task stays in reviewing, no comment posted,
+      // no auto-return, no failure.
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
 
       await app.close();
     });
