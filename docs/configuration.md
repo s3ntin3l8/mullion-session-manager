@@ -17,18 +17,18 @@ a way that doesn't coerce to `false`).
 
 ## Core
 
-| Variable            | Default           | Description                                                                                                      |
-| ------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`          | `development`     | `development` \| `production` \| `test`                                                                          |
-| `PORT`              | `3000`            | HTTP listen port                                                                                                 |
-| `HOST`              | `127.0.0.1`       | interface `app.listen()` binds to; loopback-only by default, see [`auth.md`](auth.md#network-exposure-issue-603) |
-| `LOG_LEVEL`         | `info`            | pino log level                                                                                                   |
-| `CORS_ORIGIN`       | _(empty)_         | comma-separated allowlist; empty disables CORS                                                                   |
-| `RATE_LIMIT_MAX`    | `300`             | max `/api` + `/ws` requests per window — the static app shell is exempt (issue #1005)                            |
-| `RATE_LIMIT_WINDOW` | `1 minute`        | rate-limit window                                                                                                |
-| `FRONTEND_DIST`     | `./frontend/dist` | built frontend assets; served at `/` once present                                                                |
-| `PROJECTS_ROOTS`    | _(empty)_         | comma-separated dirs to scan for `GET /api/projects/discover`                                                    |
-| `CRS_CONFIG_DIR`    | `~/.config/crs`   | global launcher/dock config dir (a project's own `.crs/` wins)                                                   |
+| Variable            | Default           | Description                                                                                                                                                                                                                                                                                  |
+| ------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`          | `development`     | `development` \| `production` \| `test`                                                                                                                                                                                                                                                      |
+| `PORT`              | `3000`            | HTTP listen port                                                                                                                                                                                                                                                                             |
+| `HOST`              | `127.0.0.1`       | interface `app.listen()` binds to; loopback-only by default, see [`auth.md`](auth.md#network-exposure-issue-603)                                                                                                                                                                             |
+| `LOG_LEVEL`         | `info`            | pino log level                                                                                                                                                                                                                                                                               |
+| `CORS_ORIGIN`       | _(empty)_         | comma-separated allowlist; empty disables CORS                                                                                                                                                                                                                                               |
+| `RATE_LIMIT_MAX`    | `300`             | max `/api` + `/ws` requests per window — the static app shell is exempt (issue #1005). Must not collide with any per-route limiter's own max (5/10/20/30/60/90/120/200/1000 in this repo), or boot hard-fails to preserve the frontend's global-vs-per-route 429 discriminator (issue #1006) |
+| `RATE_LIMIT_WINDOW` | `1 minute`        | rate-limit window                                                                                                                                                                                                                                                                            |
+| `FRONTEND_DIST`     | `./frontend/dist` | built frontend assets; served at `/` once present                                                                                                                                                                                                                                            |
+| `PROJECTS_ROOTS`    | _(empty)_         | comma-separated dirs to scan for `GET /api/projects/discover`                                                                                                                                                                                                                                |
+| `CRS_CONFIG_DIR`    | `~/.config/crs`   | global launcher/dock config dir (a project's own `.crs/` wins)                                                                                                                                                                                                                               |
 
 ## Database and sessions
 
