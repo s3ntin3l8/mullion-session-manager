@@ -36,6 +36,57 @@ import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
 import "./styles/index.css";
 
+// A retriable lazy() (lib/retriableLazy.ts) fixes the case where a dynamic
+// import() rejects for a reason a fresh attempt can recover from (a flaky
+// network blip, an ad-blocker). It can't fix a stale chunk reference: after
+// a deploy rotates content hashes, this tab's already-loaded index.html
+// still points at the OLD hashed filename, which the server no longer
+// serves — 404, every time, no matter how many times it's retried. Vite
+// fires this event for that case (a dynamic import failing to even fetch
+// its target chunk); the only real fix there is a hard reload to pick up
+// the new index.html and its current hashes.
+//
+// Vite's own preload-helper wraps EVERY dynamic import() the build has
+// code-split, not just this specific "stale chunk" case — so this fires for
+// the exact same transient failures (a flaky network blip) the retriable
+// lazy panels above are built to recover from locally, via their own
+// ErrorBoundary's "Reload pane". This listener deliberately does NOT call
+// event.preventDefault(): leaving it unprevented means Vite still re-throws
+// the original error into the promise chain afterward (see its own
+// `if (!e.defaultPrevented) throw err` — preventing it would instead
+// resolve that chain with `undefined`, which is worse: `lazy()`'s own
+// `.then((m) => ({ default: m.X }))` would then throw a confusing "Cannot
+// read properties of undefined" instead of the real error), so a panel's
+// local retry machinery still gets a fair, undisturbed shot at the error
+// exactly as if this listener didn't exist. The reload below just runs
+// alongside that as a second line of defense for the one case local retry
+// can't fix — a panel briefly showing "This pane crashed" right before the
+// reload lands is an acceptable trade for not permanently blinding the
+// local retry path.
+//
+// Guarded the same way api/client.ts's recentlyAttemptedAuthExpiryReload /
+// recordAuthExpiryReloadAttempt guard a reload-on-expiry: a wall-clock
+// window (not an unconditional one-shot) so a genuinely later, unrelated
+// preload failure still gets its own reload attempt, and the sessionStorage
+// access itself is try/catched — storage can throw in privacy mode / with
+// storage disabled, and if recording the attempt fails there is no way to
+// remember "a reload was already tried," so this deliberately skips
+// reloading at all rather than risking an unbounded loop.
+const PRELOAD_ERROR_RELOAD_GUARD_KEY = "mullion:preload-error-reload-attempted-at";
+const PRELOAD_ERROR_RELOAD_GUARD_WINDOW_MS = 3 * 60 * 1000;
+window.addEventListener("vite:preloadError", () => {
+  try {
+    const last = sessionStorage.getItem(PRELOAD_ERROR_RELOAD_GUARD_KEY);
+    const recentlyAttempted =
+      last !== null && Date.now() - Number(last) < PRELOAD_ERROR_RELOAD_GUARD_WINDOW_MS;
+    if (recentlyAttempted) return;
+    sessionStorage.setItem(PRELOAD_ERROR_RELOAD_GUARD_KEY, String(Date.now()));
+  } catch {
+    return;
+  }
+  window.location.reload();
+});
+
 // Issue #87 — registerType: "autoUpdate" (vite.config.ts) only makes the
 // SERVICE WORKER itself take over immediately (skipWaiting/clientsClaim);
 // it does nothing to an already-open tab's already-loaded JS on its own.

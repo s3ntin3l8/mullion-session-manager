@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
@@ -62,6 +62,7 @@ import { useAttentionNotifications } from "./hooks/useAttentionNotifications.js"
 import { usePanelOpener } from "./hooks/usePanelOpener.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { ensurePushSubscribed } from "./pushClient.js";
+import { useRetriableLazy } from "./lib/retriableLazy.js";
 
 // B2 — code-split Settings' ~2,700-line modal out of the initial bundle via
 // React.lazy (the two browser/preview panes and the Kanban board get the
@@ -71,7 +72,14 @@ import { ensurePushSubscribed } from "./pushClient.js";
 // shows first, so splitting those would only move the cost, not remove it.
 // Resolves `{ default }` because Settings.tsx uses a named export, not a
 // default export.
-const LazySettings = lazy(() => import("./Settings.js").then((m) => ({ default: m.Settings })));
+//
+// This is a loader FUNCTION, not a `lazy()` call — the actual `lazy()`
+// payload is built inside App() by useRetriableLazy, keyed on
+// settingsRetryKey. A module-level `lazy()` singleton here would latch a
+// rejected dynamic import forever (see useRetriableLazy's own comment for
+// the full trace), leaving Settings' own "Reload pane" unable to ever
+// retry a chunk-load failure on a later reopen.
+const loadSettings = () => import("./Settings.js").then((m) => ({ default: m.Settings }));
 
 // Settings-specific Suspense fallback — the modal shell (backdrop + a
 // centered spinner in place of the panel body) so clicking the gear icon
@@ -156,6 +164,11 @@ export function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
+  // Bumped on the Settings ErrorBoundary's own reset — see loadSettings'
+  // header comment for why a fresh lazy() payload (not just remounting)
+  // is what actually lets a later reopen retry a chunk-load failure.
+  const [settingsRetryKey, setSettingsRetryKey] = useState(0);
+  const LazySettings = useRetriableLazy(loadSettings, settingsRetryKey);
   // Bumped on every dockview layout change so the toolbar's pane count and
   // the mobile switcher's tab list re-render off dockviewApi.panels, which
   // dockview itself doesn't expose as reactive state.
@@ -1708,8 +1721,19 @@ export function App() {
         // wrapper — not `.settings-backdrop` directly — is what competes in
         // `.app`'s stacking context.
         <div style={{ position: "fixed", inset: 0, zIndex: 60 }}>
-          <ErrorBoundary onReset={() => setSettingsOpen(false)}>
+          <ErrorBoundary
+            onReset={() => {
+              setSettingsOpen(false);
+              setSettingsRetryKey((k) => k + 1);
+            }}
+          >
             <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
+              {/* useRetriableLazy deliberately returns a NEW component
+                  identity per settingsRetryKey — that's the whole retry
+                  mechanism (see its own comment) — so this intentionally
+                  isn't the stable once-per-render component reference the
+                  rule expects. */}
+              {/* eslint-disable-next-line react-hooks/static-components */}
               <LazySettings
                 onClose={() => setSettingsOpen(false)}
                 initialSection={settingsSection}
