@@ -301,7 +301,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
 
     await user.click(
       screen.getByRole("checkbox", {
-        name: /Use the worker's own Conventional Commits title for the PR/,
+        name: /Let the worker write the PR title/,
       }),
     );
     await user.click(screen.getByRole("button", { name: "Save changes" }));

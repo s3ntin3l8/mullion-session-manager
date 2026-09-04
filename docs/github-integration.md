@@ -103,6 +103,19 @@ degradation (a repo without an `on: push` trigger on its release workflow
 never gets a release PR out of a task landing, so the sweep waits forever —
 the human still needs the manual **Run** button there).
 
+**Conventional Commits title auto-enable (`project-release-please.ts`).**
+Separately from the Release section above, Mullion probes a repo's root for
+`release-please-config.json`/`.release-please-manifest.json` via the GitHub
+contents API (`detectReleasePleaseConfig`, github.ts) — a repo-root
+directory listing, riding the same `contents: read` scope the base read
+token already carries, no additional scope needed. Deliberately not the
+Actions-workflow detection above: most real release-please repos call an
+org-level reusable workflow rather than naming the file
+`release-please.yml`/`.yaml`, so that narrower, filename-based check
+routinely misses them (see [Task Master's own writeup](tasks.md) of the
+incident this fixed). See tasks.md's "Detection and auto-enable" for the
+one-shot/human-wins mechanics.
+
 ### Device flow ("Connect with GitHub" button, opt-in)
 
 This requires one-time setup by whoever operates the Mullion instance:

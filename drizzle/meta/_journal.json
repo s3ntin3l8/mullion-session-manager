@@ -435,6 +435,13 @@
       "when": 1788536914371,
       "tag": "0061_slow_wolf_cub",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1788538968210,
+      "tag": "0062_wakeful_roland_deschain",
+      "breakpoints": true
     }
   ]
 }

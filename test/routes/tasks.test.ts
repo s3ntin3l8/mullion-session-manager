@@ -2114,6 +2114,178 @@ describe("tasks route", () => {
 
       await app.close();
     });
+
+    // #761 — prTitle was written by task-reconciler.ts and read by
+    // task-promote.ts, but never added to TASK_ROW_COLUMNS, the exact
+    // silent-drop this suite's own comment above records biting #816/#818.
+    // Deliberately reads the GET path, not a POST/insert's own row, since
+    // TASK_ROW_COLUMNS is what a `.returning()` bypasses entirely.
+    it("GET /api/tasks and GET /api/tasks/:id include prTitle", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "pr-title-p", cwd: "/tmp/pr-title-columns" },
+      });
+      const { tasks } = await import("../../src/db/schema.js");
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "pr-title-columns",
+          status: "reviewing",
+          prTitle: "fix(tasks): stop it exploding on Tuesdays",
+        })
+        .returning()
+        .all();
+
+      const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
+      const listed = (listRes.json() as Array<{ id: number }>).find((t) => t.id === row.id);
+      expect(listed).toMatchObject({ prTitle: "fix(tasks): stop it exploding on Tuesdays" });
+
+      const detailRes = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+      expect(detailRes.json()).toMatchObject({
+        prTitle: "fix(tasks): stop it exploding on Tuesdays",
+      });
+
+      await app.close();
+    });
+
+    // withPrTitleFallback (routes/tasks.ts) — the actual "should a human
+    // look at this" signal, deliberately NOT the same as `prTitle === null`
+    // (see that function's own doc comment): only true when the project
+    // wants Conventional Commits titles, a PR exists, and the title that
+    // would actually be used isn't Conventional-Commits-shaped.
+    describe("prTitleFallback", () => {
+      async function projectWithFlag(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        cwd: string,
+        conventionalCommitTitles: boolean,
+      ) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: cwd, cwd: `/tmp/${cwd}` },
+        });
+        const projectId = res.json().id as number;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { conventionalCommitTitles },
+        });
+        return projectId;
+      }
+
+      it("is true when the flag is on, a PR is open, and neither title is conventional", async () => {
+        const app = await buildApp();
+        const projectId = await projectWithFlag(app, "pr-title-fallback-true", true);
+        const { tasks } = await import("../../src/db/schema.js");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "[T2-7b] OTG: fail stage on BLAKE3 mismatch",
+            status: "reviewing",
+            prUrl: "https://github.com/o/r/pull/1",
+            prTitle: null,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+        expect(res.json()).toMatchObject({ prTitleFallback: true });
+
+        await app.close();
+      });
+
+      it("is false when the issue title is already conventional, even with prTitle null", async () => {
+        const app = await buildApp();
+        const projectId = await projectWithFlag(app, "pr-title-fallback-issue-ok", true);
+        const { tasks } = await import("../../src/db/schema.js");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "fix(tasks): stop it exploding on Tuesdays",
+            status: "reviewing",
+            prUrl: "https://github.com/o/r/pull/1",
+            prTitle: null,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+        expect(res.json()).toMatchObject({ prTitleFallback: false });
+
+        await app.close();
+      });
+
+      it("is false when the worker supplied a usable prTitle", async () => {
+        const app = await buildApp();
+        const projectId = await projectWithFlag(app, "pr-title-fallback-worker-ok", true);
+        const { tasks } = await import("../../src/db/schema.js");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "[T2-7b] OTG: fail stage on BLAKE3 mismatch",
+            status: "reviewing",
+            prUrl: "https://github.com/o/r/pull/1",
+            prTitle: "fix(sync): fail the stage on a BLAKE3 mismatch",
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+        expect(res.json()).toMatchObject({ prTitleFallback: false });
+
+        await app.close();
+      });
+
+      it("is false when the project has the flag off", async () => {
+        const app = await buildApp();
+        const projectId = await projectWithFlag(app, "pr-title-fallback-flag-off", false);
+        const { tasks } = await import("../../src/db/schema.js");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "[T2-7b] OTG: fail stage on BLAKE3 mismatch",
+            status: "reviewing",
+            prUrl: "https://github.com/o/r/pull/1",
+            prTitle: null,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+        expect(res.json()).toMatchObject({ prTitleFallback: false });
+
+        await app.close();
+      });
+
+      it("is false when no PR has been opened yet", async () => {
+        const app = await buildApp();
+        const projectId = await projectWithFlag(app, "pr-title-fallback-no-pr", true);
+        const { tasks } = await import("../../src/db/schema.js");
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "[T2-7b] OTG: fail stage on BLAKE3 mismatch",
+            status: "in_progress",
+            prUrl: null,
+            prTitle: null,
+          })
+          .returning()
+          .all();
+
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+        expect(res.json()).toMatchObject({ prTitleFallback: false });
+
+        await app.close();
+      });
+    });
   });
 
   describe("local task CRUD (6.9/#233)", () => {

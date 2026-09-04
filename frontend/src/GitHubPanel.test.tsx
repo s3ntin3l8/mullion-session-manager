@@ -21,6 +21,7 @@ import { jsonResponse } from "./test/jsonResponse.js";
 const RELEASE_NOT_CONFIGURED: ProjectReleaseStatus = {
   detection: { kind: "not-configured" },
   pr: null,
+  conventionalTitlesWarning: false,
 };
 
 const STATUS: GitHubStatus = {
@@ -349,6 +350,7 @@ describe("GitHubPanel", () => {
     const RELEASE_NO_PR: ProjectReleaseStatus = {
       detection: { kind: "found", workflow: RELEASE_WORKFLOW },
       pr: null,
+      conventionalTitlesWarning: false,
     };
 
     function releasePrFixture(
@@ -394,6 +396,50 @@ describe("GitHubPanel", () => {
       expect(screen.queryByText("Release")).not.toBeInTheDocument();
     });
 
+    // The branchdam-mobile incident's own shape: `detection.kind` is
+    // "not-configured" (ReleaseSection itself renders nothing, per the test
+    // above) AND the repo genuinely has release-please config committed with
+    // conventionalCommitTitles off. conventionalTitlesWarning is a SIBLING
+    // signal, not a variant of `detection` — this must render regardless of
+    // ReleaseSection returning null.
+    it("renders the Conventional Commits warning even when detection is not-configured", async () => {
+      const release: ProjectReleaseStatus = {
+        detection: { kind: "not-configured" },
+        pr: null,
+        conventionalTitlesWarning: true,
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("Release");
+      expect(screen.getByText(/release-please configured/)).toBeInTheDocument();
+    });
+
+    it("does not render the warning when conventionalTitlesWarning is false", async () => {
+      vi.stubGlobal("fetch", mockFetchRelease({ release: RELEASE_NOT_CONFIGURED }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("acme/widgets");
+      expect(screen.queryByText(/release-please configured/)).not.toBeInTheDocument();
+    });
+
+    // Regression: a repo can have BOTH detection.kind === "found" (a real
+    // workflow file detectReleaseWorkflow recognizes) AND
+    // conventionalTitlesWarning true at once — 2 of the 14 release-please
+    // repos surveyed for this feature name their workflow file
+    // release-please.yml while ALSO committing release-please-config.json.
+    // ReleaseSection renders its own "Release" header for "found"; the
+    // warning must slot into that SAME section, not add a second one.
+    it("renders exactly one Release header when detection is found and the warning also fires", async () => {
+      const release: ProjectReleaseStatus = {
+        ...RELEASE_NO_PR,
+        conventionalTitlesWarning: true,
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("release-please configured", { exact: false });
+      expect(screen.getAllByText("Release")).toHaveLength(1);
+      expect(screen.getByText("No release PR open")).toBeInTheDocument();
+    });
+
     // Regression: "not-configured" and "no-actions-scope" must NOT collapse
     // to the same "render nothing" outcome — that's the exact ambiguity
     // docs/github-integration.md already regrets for the CI dot ("no UI
@@ -401,7 +447,11 @@ describe("GitHubPanel", () => {
     // that DOES use release-please but has a scope-limited token should
     // say so, not look identical to one that simply doesn't use it.
     it("shows a note, not nothing, when the token can't check for a release-please workflow", async () => {
-      const release: ProjectReleaseStatus = { detection: { kind: "no-actions-scope" }, pr: null };
+      const release: ProjectReleaseStatus = {
+        detection: { kind: "no-actions-scope" },
+        pr: null,
+        conventionalTitlesWarning: false,
+      };
       vi.stubGlobal("fetch", mockFetchRelease({ release }));
       render(<GitHubPanel params={{ projectId: 27 }} />);
 
@@ -424,6 +474,7 @@ describe("GitHubPanel", () => {
       const release: ProjectReleaseStatus = {
         detection: { kind: "found", workflow: RELEASE_WORKFLOW },
         pr: releasePrFixture({ mergeableState: "behind" }),
+        conventionalTitlesWarning: false,
       };
       vi.stubGlobal("fetch", mockFetchRelease({ release }));
       render(<GitHubPanel params={{ projectId: 22 }} />);
@@ -438,10 +489,12 @@ describe("GitHubPanel", () => {
       const cleanRelease: ProjectReleaseStatus = {
         detection: { kind: "found", workflow: RELEASE_WORKFLOW },
         pr: releasePrFixture(),
+        conventionalTitlesWarning: false,
       };
       const mergedRelease: ProjectReleaseStatus = {
         detection: { kind: "found", workflow: RELEASE_WORKFLOW },
         pr: null,
+        conventionalTitlesWarning: false,
       };
       let releaseCallCount = 0;
       vi.stubGlobal(
@@ -504,6 +557,7 @@ describe("GitHubPanel", () => {
       const release: ProjectReleaseStatus = {
         detection: { kind: "found", workflow: RELEASE_WORKFLOW },
         pr: releasePrFixture(),
+        conventionalTitlesWarning: false,
       };
       vi.stubGlobal(
         "fetch",

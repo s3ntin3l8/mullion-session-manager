@@ -97,6 +97,8 @@ function makeTask(overrides: Partial<Task>): Task {
     agentCommand: null,
     prUrl: null,
     prNumber: null,
+    prTitle: null,
+    prTitleFallback: false,
     mergeRequestedAt: null,
     mergeError: null,
     releaseRequestedAt: null,
@@ -368,6 +370,35 @@ describe("TaskDetail", () => {
     tasks = [makeTask({ id: 1, status: "done", prUrl: "https://github.com/o/r/pull/7" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.getByRole("link", { name: "Pull request" })).toBeInTheDocument();
+  });
+
+  // #761's second silent layer: a project wants Conventional Commits
+  // titles, a PR is open, but the title in use isn't Conventional-Commits-
+  // shaped — previously surfaced nowhere but one server-side app.log.warn.
+  it("shows the PR title fallback warning when the server flags prTitleFallback", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        prTitleFallback: true,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/PR title fell back to the raw issue title/)).toBeInTheDocument();
+  });
+
+  it("does not show the PR title fallback warning when prTitleFallback is false", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        prTitleFallback: false,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/PR title fell back to the raw issue title/)).not.toBeInTheDocument();
   });
 
   it("shows the resolved agent name from agentCommand", () => {

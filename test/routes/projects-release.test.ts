@@ -11,8 +11,12 @@ import fs from "node:fs";
 // same posture as test/routes/ws-github.test.ts.
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { setRepoPRsStatus, invalidatePRsCache, computePRSummary } =
-  await import("../../src/services/github.js");
+const {
+  setRepoPRsStatus,
+  invalidatePRsCache,
+  computePRSummary,
+  clearReleasePleaseConfigCacheForTests,
+} = await import("../../src/services/github.js");
 const { clearReleaseWorkflowCacheForTests, clearReleasePrCacheForTests } =
   await import("../../src/services/github-write.js");
 const { resetGitHubRateLimitForTests } = await import("../../src/services/github-fetch.js");
@@ -89,6 +93,9 @@ describe("release-please routes (#744)", () => {
     // otherwise silently answer a later, differently-mocked test too.
     clearReleaseWorkflowCacheForTests();
     clearReleasePrCacheForTests();
+    // Same reasoning for detectReleasePleaseConfig's own 1h cache
+    // (conventionalTitlesWarning) — same "acme/widgets" key reused file-wide.
+    clearReleasePleaseConfigCacheForTests();
     // Same reasoning for #759's own rate-limit budget — also process-wide
     // module state, and a test in this file deliberately trips it.
     resetGitHubRateLimitForTests();
@@ -112,6 +119,7 @@ describe("release-please routes (#744)", () => {
     invalidatePRsCache("acme", "widgets");
     clearReleaseWorkflowCacheForTests();
     clearReleasePrCacheForTests();
+    clearReleasePleaseConfigCacheForTests();
     resetGitHubRateLimitForTests();
   });
 
@@ -149,6 +157,12 @@ describe("release-please routes (#744)", () => {
     prDetail?: (number: number) => Response;
     dispatch?: () => Response;
     merge?: () => Response;
+    // conventionalTitlesWarning's own detectReleasePleaseConfig probe — a
+    // repo-root contents listing. Defaults to "no release-please config
+    // files present" (a 404), same "nothing there unless overridden"
+    // posture as releasePrsAll above, so every existing test in this file
+    // that doesn't care about the warning gets a stable false.
+    contents?: () => Response;
   }) {
     return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -196,6 +210,11 @@ describe("release-please routes (#744)", () => {
       if (url === "https://api.github.com/repos/acme/widgets/actions/workflows/2/dispatches") {
         return Promise.resolve(
           (overrides.dispatch ?? (() => new Response(null, { status: 204 })))(),
+        );
+      }
+      if (url === "https://api.github.com/repos/acme/widgets/contents") {
+        return Promise.resolve(
+          (overrides.contents ?? (() => new Response("nope", { status: 404 })))(),
         );
       }
       if (url === "https://api.github.com/repos/acme/widgets/pulls/12/merge") {
@@ -290,6 +309,13 @@ describe("release-please routes (#744)", () => {
           mergeableState: "clean",
           ciStatus: "success",
         },
+        // githubApiRouter's own /contents route defaults to a 404 (no
+        // release-please config files), so both this test's own probe and
+        // the create-time auto-enable sweep's probe see a real negative —
+        // `conventionalCommitTitles` never gets turned on and no warning
+        // fires. See the dedicated "conventionalTitlesWarning" describe
+        // block below for the incident-shaped positive case.
+        conventionalTitlesWarning: false,
       });
     });
 
@@ -303,6 +329,7 @@ describe("release-please routes (#744)", () => {
       expect(res.json()).toEqual({
         detection: { kind: "found", workflow: RELEASE_WORKFLOW },
         pr: null,
+        conventionalTitlesWarning: false,
       });
     });
 
@@ -315,7 +342,11 @@ describe("release-please routes (#744)", () => {
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ detection: { kind: "not-configured" }, pr: null });
+      expect(res.json()).toEqual({
+        detection: { kind: "not-configured" },
+        pr: null,
+        conventionalTitlesWarning: false,
+      });
     });
 
     it("returns detection: no-actions-scope, distinct from not-configured, when the token can't list workflows", async () => {
@@ -329,7 +360,11 @@ describe("release-please routes (#744)", () => {
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ detection: { kind: "no-actions-scope" }, pr: null });
+      expect(res.json()).toEqual({
+        detection: { kind: "no-actions-scope" },
+        pr: null,
+        conventionalTitlesWarning: false,
+      });
     });
 
     // Regression: detectReleaseWorkflow now rethrows a rate limit instead of
@@ -347,6 +382,75 @@ describe("release-please routes (#744)", () => {
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
       expect(res.statusCode).toBe(204);
+    });
+
+    // The branchdam-mobile incident's own shape: `detection` is
+    // "not-configured" (this repo's real workflow file, or an org-level
+    // reusable workflow, never matches RELEASE_WORKFLOW_FILENAMES — see that
+    // const's own doc comment) AND the repo genuinely has release-please
+    // config committed AND `conventionalCommitTitles` is off. The warning
+    // must fire regardless of `detection`'s own kind — it's a deliberately
+    // independent signal, not a variant of it (ReleaseDetectionResult stays
+    // unwidened so the Run button never appears with no real workflow id).
+    describe("conventionalTitlesWarning", () => {
+      it("is true for the incident shape: not-configured detection, release-please config present, flag off", async () => {
+        fetchMock.mockImplementation(
+          githubApiRouter({ workflows: () => jsonResponse(200, { workflows: [CI_WORKFLOW] }) }),
+        );
+        const app = await makeApp();
+        const { projectId } = await createConnectedProject(app);
+        // Explicit human choice, same as an existing project a human already
+        // configured before this feature shipped — permanent per
+        // conventionalCommitTitlesResolvedAt's own contract.
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { conventionalCommitTitles: false },
+        });
+
+        // The repo has since adopted release-please — createConnectedProject's
+        // own creation call cached "acme/widgets" as a negative under the
+        // default 404 contents route above; clear it so this probe reflects
+        // the NEW mock, not the stale cached result (same reasoning
+        // clearReleaseWorkflowCacheForTests exists for detectReleaseWorkflow).
+        clearReleasePleaseConfigCacheForTests();
+        fetchMock.mockImplementation(
+          githubApiRouter({
+            workflows: () => jsonResponse(200, { workflows: [CI_WORKFLOW] }),
+            contents: () =>
+              jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+          }),
+        );
+
+        const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          detection: { kind: "not-configured" },
+          conventionalTitlesWarning: true,
+        });
+      });
+
+      it("is false, and skips the probe entirely, once the flag is on", async () => {
+        fetchMock.mockImplementation(githubApiRouter({}));
+        const app = await makeApp();
+        const { projectId } = await createConnectedProject(app);
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { conventionalCommitTitles: true },
+        });
+
+        const contentsSpy = vi.fn(() =>
+          jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+        );
+        clearReleasePleaseConfigCacheForTests();
+        fetchMock.mockImplementation(githubApiRouter({ contents: contentsSpy }));
+
+        const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ conventionalTitlesWarning: false });
+        expect(contentsSpy).not.toHaveBeenCalled();
+      });
     });
   });
 

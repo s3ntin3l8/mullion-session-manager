@@ -7,6 +7,9 @@ import {
   fetchRequiredStatusContexts,
   fetchCheckRunsForHead,
   getDefaultBranch,
+  detectReleasePleaseConfig,
+  clearReleasePleaseConfigCacheForTests,
+  getReleasePleaseConfigCacheSizeForTests,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -338,6 +341,113 @@ describe("fetchRequiredStatusContexts", () => {
     const second = await fetchRequiredStatusContexts("tok", "o", "retry-after-403-repo", "main");
     expect(second).toEqual(["CI"]);
     expect(fetchMock.mock.calls.length).toBe(2);
+  });
+});
+
+describe("detectReleasePleaseConfig", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    clearReleasePleaseConfigCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns true when release-please-config.json is present in the repo root", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, [
+        { name: "README.md", type: "file" },
+        { name: "release-please-config.json", type: "file" },
+      ]),
+    );
+    const result = await detectReleasePleaseConfig("tok", "o", "config-json-repo");
+    expect(result).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repos/o/config-json-repo/contents"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("returns true when only .release-please-manifest.json is present", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, [{ name: ".release-please-manifest.json", type: "file" }]),
+    );
+    const result = await detectReleasePleaseConfig("tok", "o", "manifest-only-repo");
+    expect(result).toBe(true);
+  });
+
+  it("returns false when neither filename is present", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, [{ name: "package.json", type: "file" }]));
+    const result = await detectReleasePleaseConfig("tok", "o", "no-release-please-repo");
+    expect(result).toBe(false);
+  });
+
+  it("returns null (couldn't tell) on a 404, never asserting a real negative", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    const result = await detectReleasePleaseConfig("tok", "o", "missing-repo-404");
+    expect(result).toBeNull();
+  });
+
+  it("returns null on a non-ok response other than 404 (rate limit, scope, 5xx)", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
+    const result = await detectReleasePleaseConfig("tok", "o", "forbidden-repo");
+    expect(result).toBeNull();
+  });
+
+  it("returns null on a network failure, never throws", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(detectReleasePleaseConfig("tok", "o", "network-down-repo")).resolves.toBeNull();
+  });
+
+  it("caches a definite result — a second call for the same repo makes no further request", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+    );
+    await detectReleasePleaseConfig("tok", "o", "cache-hit-repo");
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    const second = await detectReleasePleaseConfig("tok", "o", "cache-hit-repo");
+    expect(second).toBe(true);
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("does NOT cache a null (couldn't tell) result — a retry after a 403 makes a fresh request", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 403 }));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+    );
+    const first = await detectReleasePleaseConfig("tok", "o", "retry-after-403-repo");
+    expect(first).toBeNull();
+    const second = await detectReleasePleaseConfig("tok", "o", "retry-after-403-repo");
+    expect(second).toBe(true);
+    expect(fetchMock.mock.calls.length).toBe(2);
+  });
+
+  // Hermes review — this cache is process-wide and grows one entry per
+  // distinct owner/repo ever probed; capped at the same MAX_CACHE_ENTRIES
+  // ceiling as this file's own repo-status cache above, same reasoning.
+  it("caps the module-level cache at MAX_CACHE_ENTRIES, evicting the oldest entry", async () => {
+    // A fresh Response per call — mockResolvedValue would hand back the
+    // SAME Response object every time, and a body can only be read once;
+    // every call past the first would hit res.json()'s "body already read"
+    // and fall through to detectReleasePleaseConfig's null-on-error path,
+    // never actually reaching the cache.set() this test means to exercise.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, [])));
+    for (let i = 0; i < MAX_CACHE_ENTRIES + 5; i++) {
+      await detectReleasePleaseConfig("tok", `cap-owner-${i}`, "repo");
+    }
+    expect(getReleasePleaseConfigCacheSizeForTests()).toBe(MAX_CACHE_ENTRIES);
+
+    // The oldest entries (0-4) were evicted to make room — re-checking one
+    // of them costs a real request again, not a cache hit.
+    const callsBefore = fetchMock.mock.calls.length;
+    await detectReleasePleaseConfig("tok", "cap-owner-0", "repo");
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 });
 

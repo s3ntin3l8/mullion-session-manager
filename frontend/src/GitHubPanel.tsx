@@ -269,6 +269,25 @@ function mergeReasonMessage(
   }
 }
 
+// Shared by both ReleaseSection branches below AND the "not-configured"
+// sibling block in the main render — a repo can have BOTH a workflow file
+// detectReleaseWorkflow recognizes (`detection.kind === "found"`) AND
+// release-please config with conventionalCommitTitles off at the same time
+// (2 of the 14 release-please repos surveyed for this feature name their
+// workflow file `release-please.yml` while also committing
+// `release-please-config.json`), so this can't render its own "Release"
+// header unconditionally — it has to slot into whichever branch below
+// already has one, to avoid two stacked headers for that overlap.
+function conventionalTitlesWarningRow() {
+  return (
+    <div className="github-panel-empty-row github-panel-conflicts">
+      This repo has release-please configured, but task PR titles are the raw issue title — an
+      unprefixed title is silently dropped from the changelog and no release is cut. Turn on
+      "Conventional Commits titles" in this project's settings (kebab menu → Edit).
+    </div>
+  );
+}
+
 function ReleaseSection({
   projectId,
   release,
@@ -327,11 +346,19 @@ function ReleaseSection({
   // dismissable-by-just-not-looking note instead of silence, so a repo that
   // DOES use release-please but is missing `Actions: read` doesn't look
   // indistinguishable from one that simply doesn't use it.
+  // release.conventionalTitlesWarning is read directly off `release` (not a
+  // separate prop) in both this branch and the main one below — a single
+  // "Release" header per render either way, never a second, duplicate one
+  // from a sibling block. See conventionalTitlesWarningRow's own doc comment
+  // for why the "not-configured" case (the ONLY branch that renders no
+  // header at all — the early return just above) is the sole case still
+  // handled by a sibling block in the main component below.
   if (release.detection.kind === "not-configured") return null;
   if (release.detection.kind === "no-actions-scope") {
     return (
       <div className="github-panel-section">
         <div className="github-panel-section-title">Release</div>
+        {release.conventionalTitlesWarning && conventionalTitlesWarningRow()}
         <div className="github-panel-empty-row">
           Can't check for a release-please workflow — the connected token lacks{" "}
           <code>Actions: read</code>.
@@ -347,6 +374,7 @@ function ReleaseSection({
   return (
     <div className="github-panel-section">
       <div className="github-panel-section-title">Release</div>
+      {release.conventionalTitlesWarning && conventionalTitlesWarningRow()}
       <div className="git-panel-sync-row">
         <span className="git-panel-ahead-behind">
           {pr ? (
@@ -485,6 +513,22 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
           onChanged={() => setReleaseRefreshTrigger((n) => n + 1)}
         />
       )}
+      {/* Deliberately a SIBLING of ReleaseSection, only for the
+          "not-configured" case — that's the ONE branch ReleaseSection
+          returns null for with no header of its own (precisely the
+          branchdam-mobile incident's own shape; see RELEASE_WORKFLOW_FILENAMES's
+          own doc comment, github-write.ts, for why a real release-please repo
+          routinely fails THAT detection). Every other detection kind renders
+          this same warning row INSIDE ReleaseSection itself, right under
+          its own "Release" header — see conventionalTitlesWarningRow's own
+          doc comment for why a second copy here would double up. */}
+      {releaseStatus?.conventionalTitlesWarning &&
+        releaseStatus.detection.kind === "not-configured" && (
+          <div className="github-panel-section">
+            <div className="github-panel-section-title">Release</div>
+            {conventionalTitlesWarningRow()}
+          </div>
+        )}
 
       {effectivePrs && effectivePrs.prs.length > 0 && (
         <div className="github-panel-section">
