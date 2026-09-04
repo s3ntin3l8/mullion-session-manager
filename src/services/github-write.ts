@@ -1099,8 +1099,20 @@ export const RELEASE_PLEASE_BRANCH_PREFIX = "release-please--branches--";
  * its file something else) just hides the section; a false positive
  * publishes something. The asymmetry is why this stays narrow rather than
  * permissive.
+ *
+ * #1033 — content fallback: a file whose basename isn't in this list can still
+ * be a release-please workflow if its body references `release-please-action`
+ * (the npm action google-github-actions/release-please-action runs) OR the
+ * org-level reusable workflow `s3ntin3l8/.github/.github/workflows/release-please`.
+ * Both checks are deliberately case-sensitive on the package name — false
+ * positives here ship a workflow under the wrong label, so we accept that a
+ * release-please repo that capitalizes differently slips through to
+ * not-configured rather than risk a non-release-please `release.yml` ever
+ * matching.
  */
 const RELEASE_WORKFLOW_FILENAMES = ["release-please.yml", "release-please.yaml"];
+const RELEASE_PLEASE_ACTION_REFERENCE = "release-please-action";
+const RELEASE_PLEASE_REUSABLE_REFERENCE = "s3ntin3l8/.github/.github/workflows/release-please";
 
 export interface GitHubWorkflow {
   id: number;
@@ -1144,6 +1156,93 @@ export function findReleasePleaseWorkflow(workflows: GitHubWorkflow[]): GitHubWo
   );
 }
 
+/**
+ * #1033 — content fallback for filename misses. Fetches the raw bytes of a
+ * workflow file at `workflow.path` via `GET /repos/{o}/{r}/contents/{path}`
+ * and returns the decoded body, or null on any failure (404 on a missing
+ * file, a contents-API 403 that means the token can list workflows but not
+ * read their bytes, or a malformed response).
+ *
+ * Returns null rather than throwing because a content-fetch failure must NOT
+ * collapse a whole `detectReleaseWorkflow` probe into an error — a repo whose
+ * release-please workflow file we can't read just falls through to
+ * not-configured, same shape as a workflow we read and didn't recognize.
+ * Throwing would propagate to the route layer as a generic 5xx and hide the
+ * Release section for every project sharing the rate-limit budget (the same
+ * shape #759 exists to prevent), not what we want for a best-effort
+ * widening.
+ *
+ * Note: GitHub returns content base64-encoded with line breaks; this helper
+ * tolerates either. `Buffer.from(content, "base64")` decodes both
+ * whitespace-stripped and raw-with-newlines forms correctly.
+ */
+async function fetchWorkflowBody(
+  token: string,
+  owner: string,
+  repo: string,
+  workflow: GitHubWorkflow,
+): Promise<string | null> {
+  try {
+    const result = await githubRequest<{ content?: string; encoding?: string }>(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/contents/${workflow.path.split("/").map(encodeURIComponent).join("/")}`,
+    );
+    if (result.encoding !== "base64" || typeof result.content !== "string") return null;
+    return Buffer.from(result.content, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #1033 — content-level release-please detection for workflows whose
+ * basename isn't in RELEASE_WORKFLOW_FILENAMES. Returns the first workflow
+ * whose body references `release-please-action` (the npm package name;
+ * case-sensitive to preserve the false-positive-avoidance invariant) OR the
+ * org-level reusable workflow `s3ntin3l8/.github/.github/workflows/release-please`.
+ *
+ * Substring match rather than regex — a full regex over the package name
+ * doesn't add precision here, the references are unambiguous GitHub Actions
+ * `uses:` syntax (`uses: googleapis/release-please-action@v4`,
+ * `uses: s3ntin3l8/.github/.github/workflows/release-please.yml@main`), and a
+ * simpler check keeps the false-positive reasoning easy to audit.
+ */
+function isReleasePleaseBody(body: string): boolean {
+  return (
+    body.includes(RELEASE_PLEASE_ACTION_REFERENCE) ||
+    body.includes(RELEASE_PLEASE_REUSABLE_REFERENCE)
+  );
+}
+
+/**
+ * #1033 — content fallback for filename misses. Walks every workflow file
+ * GitHub returned that wasn't already filename-matched, fetches its body,
+ * and returns the first one whose body matches `isReleasePleaseBody`. Fetches
+ * sequentially rather than `Promise.all` so a partial failure (one file's
+ * contents endpoint 404s because the file was just deleted) doesn't fan out
+ * N requests against the shared rate-limit budget — same rationale as
+ * github.ts's `getPRsStatus`, which also serializes. The result is amortized
+ * by the 60-min cache in `detectReleaseWorkflow` anyway.
+ */
+async function findReleasePleaseWorkflowByContent(
+  token: string,
+  owner: string,
+  repo: string,
+  workflows: GitHubWorkflow[],
+): Promise<GitHubWorkflow | null> {
+  for (const workflow of workflows) {
+    const basename = workflow.path.split("/").pop();
+    if (basename === undefined) continue;
+    if (RELEASE_WORKFLOW_FILENAMES.includes(basename)) continue;
+    const body = await fetchWorkflowBody(token, owner, repo, workflow);
+    if (body !== null && isReleasePleaseBody(body)) return workflow;
+  }
+  return null;
+}
+
 interface ReleaseWorkflowCacheEntry {
   result: ReleaseDetectionResult;
   expiresAt: number;
@@ -1180,7 +1279,14 @@ export async function detectReleaseWorkflow(
   let result: ReleaseDetectionResult;
   try {
     const workflows = await listWorkflows(token, owner, repo);
-    const workflow = findReleasePleaseWorkflow(workflows);
+    let workflow = findReleasePleaseWorkflow(workflows);
+    // #1033 — filename-list misses are common in practice (release.yml, or a
+    // ci.yml that delegates to the org-level reusable workflow); fall back
+    // to a content probe so those repos don't silently lose the Run button.
+    // findReleasePleaseWorkflowByContent is sequential-by-design and bounded
+    // by the number of workflows in the repo, all of which are amortized by
+    // the 60-min cache below.
+    workflow ??= await findReleasePleaseWorkflowByContent(token, owner, repo, workflows);
     result = workflow ? { kind: "found", workflow } : { kind: "not-configured" };
   } catch (err) {
     // Narrowed to GitHubWriteScopeError specifically, NOT the base
