@@ -206,7 +206,6 @@ describeIfOpencode(
 // explicitly (see .github/workflows/ci-cd.yml's test-e2e job), so this
 // only ever skips in dev.
 if (!probe.available) {
-  // eslint-disable-next-line no-console
   console.warn(
     `[smoke] opencode binary not found on PATH — skipping permission-deep-merge smoke tests. ` +
       `Install opencode@${PINNED_OPENCODE_VERSION} (or update the pin in test/e2e/opencode-permission-merge.e2e.test.ts after re-verifying, per issue #968) to enable.`,
