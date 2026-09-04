@@ -5236,6 +5236,176 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // #1015 follow-up — rate_limit stop_failure on the review-agent path. The
+    // worker side's #1015 grace window protects an in_progress task from
+    // being failed by a stuck-on-quota agent; the review side does the same
+    // for a reviewing task. Without this, a review agent that ran out of
+    // subscription quota mid-review posts an inconclusive verdict and strands
+    // the task in `reviewing` indefinitely (wantsAutoReturn requires
+    // `derived.status === "finished"`, never true for `api_error`).
+    it("keeps a reviewing task alive while the review session's api_error + rate_limit grace window is active", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // Review session now reports api_error + rate_limit, no findings file
+      // (claimIntoReviewing never writes one).
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({
+                    errorState: "api_error",
+                    errorAt: Date.now() - 60_000,
+                    errorDetail: "rate_limit",
+                  })
+                : fakeInfo(),
+          }) as never,
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Grace active — no comment posted, no auto-return, no failure
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+
+      await app.close();
+    });
+
+    it("ingests the review session as inconclusive once the rate_limit grace window expires (no findings file, agent never recovered)", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // 6 minutes ago — past the 5-minute grace window. The review
+      // session itself is aged past REVIEW_FINDINGS_GRACE_MS (30 min) by
+      // setting `createdAt` below, since the existing isUsableSignal
+      // path needs that to accept an api_error session with no findings
+      // file as inconclusive.
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({
+                    errorState: "api_error",
+                    errorAt: Date.now() - 6 * 60_000,
+                    errorDetail: "rate_limit",
+                  })
+                : fakeInfo(),
+          }) as never,
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Grace expired — falls through to the existing inconclusive path.
+      // `api_error` derives to "produced no findings file within the
+      // expected time" (not "ended without" — that's the exited wording).
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toContain("Review agent produced no findings file");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+
+      await app.close();
+    });
+
+    it("does NOT grace a non-rate_limit review-session errorDetail (e.g. overloaded) — falls through immediately", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // Age the session past REVIEW_FINDINGS_GRACE_MS so the existing
+      // isUsableSignal path accepts the api_error verdict.
+      const { sessions } = await import("../../src/db/schema.js");
+      await app.db
+        .update(sessions)
+        .set({ createdAt: new Date(Date.now() - 31 * 60_000) })
+        .where(eq(sessions.id, reviewSessionId));
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({
+                    errorState: "api_error",
+                    errorAt: Date.now() - 60_000,
+                    errorDetail: "overloaded",
+                  })
+                : fakeInfo(),
+          }) as never,
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Wrong errorDetail — grace skipped, inconclusive comment posted
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+
+      await app.close();
+    });
+
+    it("ignores the grace window when a findings file already exists (real review advances normally)", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // Real findings file already on disk
+      writeFindings(
+        app,
+        taskId,
+        0,
+        JSON.stringify({
+          verdict: "clean",
+          summary: "Reviewed the diff; no issues.",
+        }),
+      );
+      // Review session reports `finished` (not api_error) — exercises the
+      // happy path: real review with a real file. The grace check is
+      // `parsed === null && ...`, so a parsed findings file bypasses it
+      // entirely. The `finished` status also lets the existing
+      // isUsableSignal path ingest normally.
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ lastTurnEndedAt: Date.now() })
+                : fakeInfo(),
+          }) as never,
+      );
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Clean verdict — stays in reviewing (no auto-return), but ingested
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toContain("Reviewed the diff; no issues.");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+
+      await app.close();
+    });
+
     // The regression guard Change 1 exists for. Under the old "a findings
     // file means act on it" rule, always writing a file (this prompt's own
     // change) would have made a clean review indistinguishable from one

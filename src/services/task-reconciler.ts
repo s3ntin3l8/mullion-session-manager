@@ -3136,6 +3136,36 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // blocked on a human, erroring, or genuinely `finished`) past the
         // grace window, or `exited` outright, is treated as "nothing more
         // is coming."
+        // Rate-limit grace window (review-agent path) — when the review
+        // session hit a `rate_limit` stop_failure and hasn't yet written a
+        // findings file, give it a few minutes to recover before treating
+        // it as inconclusive. Without this, a review agent that ran out
+        // of subscription quota mid-review posts an inconclusive verdict
+        // and strands the task in `reviewing` indefinitely —
+        // `wantsAutoReturn` below requires `derived.status === "finished"`,
+        // never true for `api_error`, so the normal path's auto-return is
+        // unreachable for this case. The worker path has the matching
+        // check above the main reconcile loop's "-> reviewing" transition.
+        //
+        // Only applies when `parsed === null` (no findings file written
+        // yet) — a real findings file should advance normally, and a wrong
+        // verdict on a real review is worse than a wait. `hasCommitsPastBase`
+        // doesn't apply here: review findings are stored on disk, not on
+        // the worktree branch, so the worker's commit-progress signal
+        // isn't available. Pass `false` (no progress to protect) — the
+        // session's own liveness + the elapsed `REVIEW_FINDINGS_GRACE_MS`
+        // are the safety nets if the grace check mis-fires.
+        if (
+          info !== null &&
+          parsed === null &&
+          isRateLimitGraceActive(
+            { errorState: info.errorState, errorAt: info.errorAt, errorDetail: info.errorDetail },
+            { graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes, hasCommitsPastBase: false },
+          )
+        ) {
+          continue;
+        }
+
         const isUsableSignal =
           parsed !== null
             ? derived.status === "finished" || derived.status === "exited"
