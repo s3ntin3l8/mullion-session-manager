@@ -11,7 +11,11 @@ vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
   return {
     ...actual,
-    api: { ...actual.api, listProjectActions: vi.fn() },
+    api: {
+      ...actual.api,
+      listProjectActions: vi.fn(),
+      recheckReleasePlease: vi.fn(),
+    },
   };
 });
 
@@ -441,6 +445,66 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     expect(
       screen.getByRole("checkbox", { name: /Approve a task automatically on a clean review/ }),
     ).toBeChecked();
+  });
+});
+
+// Issue #1034 — manual re-check of the release-please auto-enable sweep for
+// one project, surfacing in the project edit modal as a "Re-check now"
+// button next to the Conventional Commits PR titles checkbox. The auto-enable
+// sweep is one-shot, so a repo that adopts release-please AFTER first
+// detection never gets re-probed by the reconciler tick; this is the
+// human-triggered affordance that closes that gap.
+describe("CreateProjectModal — release-please re-check affordance (issue #1034)", () => {
+  it("shows a Re-check now button next to the Conventional Commits PR titles checkbox in edit mode", () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /re-check now/i })).toBeInTheDocument();
+  });
+
+  it("does not show the Re-check now button in create mode (no projectId yet to re-check)", () => {
+    render(
+      <CreateProjectModal
+        mode="create"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+        initialPath="/x"
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /re-check now/i })).not.toBeInTheDocument();
+  });
+
+  it("POSTs to the re-check endpoint when the button is clicked", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    vi.mocked(api.recheckReleasePlease).mockResolvedValue({
+      ok: true,
+      conventionalCommitTitlesResolvedAt: new Date("2025-01-02T00:00:00Z").toISOString(),
+    });
+    const user = userEvent.setup();
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={42}
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /re-check now/i }));
+
+    await waitFor(() => expect(api.recheckReleasePlease).toHaveBeenCalledWith(42));
   });
 });
 

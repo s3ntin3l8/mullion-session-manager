@@ -20,6 +20,8 @@ const {
 const { clearReleaseWorkflowCacheForTests, clearReleasePrCacheForTests } =
   await import("../../src/services/github-write.js");
 const { resetGitHubRateLimitForTests } = await import("../../src/services/github-fetch.js");
+const { projects } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -728,6 +730,74 @@ describe("release-please routes (#744)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ merged: false, reason: "no-release-pr" });
+    });
+  });
+
+  // Issue #1034 — the release-please auto-enable sweep (maybeAutoEnableConventionalTitles)
+  // is one-shot, gated by `conventionalCommitTitlesResolvedAt`. A repo that adopts
+  // release-please AFTER first detection never gets re-probed by the sweep; this
+  // endpoint forces a fresh probe by passing `ignoreStamp: true`, and returns the
+  // new stamp so the client can refetch the project row.
+  describe("POST /api/projects/:id/release-please/recheck (issue #1034)", () => {
+    it("re-runs detection on a stamped project and updates the timestamp", async () => {
+      // The repo has release-please-config.json committed — without this
+      // override the default contents route is a 404 (no release-please
+      // files), so the re-check would land in detectReleasePleaseConfig's
+      // own `null` branch (couldn't tell) and leave the stamp alone. We
+      // want to assert the stamp moves forward when detection reaches a
+      // definite conclusion.
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          contents: () => jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+        }),
+      );
+      const app = await makeApp();
+      const { projectId } = await createConnectedProject(app);
+      // Plant an EXPLICIT human choice (issue #1034's motivating case): the
+      // sweep ran before release-please was adopted and stamped a `false`,
+      // and a human also previously PATCHed this. The re-check is what
+      // picks up the new repo state.
+      const before = new Date("2025-01-01T00:00:00Z");
+      app.db
+        .update(projects)
+        .set({ conventionalCommitTitles: false, conventionalCommitTitlesResolvedAt: before })
+        .where(eq(projects.id, projectId))
+        .run();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release-please/recheck`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(true);
+      expect(typeof body.conventionalCommitTitlesResolvedAt).toBe("string");
+      expect(new Date(body.conventionalCommitTitlesResolvedAt).getTime()).toBeGreaterThan(
+        before.getTime(),
+      );
+
+      const [after] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      // Re-check must overwrite the planted false with the positive
+      // detection — that's the entire point of the affordance.
+      expect(after.conventionalCommitTitles).toBe(true);
+    });
+
+    it("404s for an unknown project", async () => {
+      const app = await makeApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/999999/release-please/recheck`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("400s for a non-integer project id", async () => {
+      const app = await makeApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/not-a-number/release-please/recheck`,
+      });
+      expect(res.statusCode).toBe(400);
     });
   });
 });

@@ -190,4 +190,41 @@ describe("maybeAutoEnableConventionalTitles", () => {
       conventionalCommitTitlesResolvedAt: null,
     });
   });
+
+  // Issue #1034 — the standing warning in the GitHub panel still surfaces
+  // the gap to a human, but the one-shot auto-enable sweep
+  // (`conventionalCommitTitlesResolvedAt` gate) means a repo that adopts
+  // release-please AFTER first detection never gets re-probed. The
+  // re-check endpoint forces a fresh probe by passing `ignoreStamp: true`,
+  // bypassing the early-return at the top of this function.
+  describe("ignoreStamp (issue #1034 re-check affordance)", () => {
+    it("re-checks release-please detection when a stamp is already set, when ignoreStamp is true", async () => {
+      const project = insertProject({
+        conventionalCommitTitles: false,
+        conventionalCommitTitlesResolvedAt: new Date("2025-01-01"),
+      });
+      const updated = await maybeAutoEnableConventionalTitles(app, project, { ignoreStamp: true });
+
+      expect(updated.conventionalCommitTitles).toBe(true);
+      expect(updated.conventionalCommitTitlesResolvedAt).not.toBeNull();
+      expect(updated.conventionalCommitTitlesResolvedAt!.getTime()).toBeGreaterThan(
+        new Date("2025-01-01").getTime(),
+      );
+      // Confirms the early-return gate at the top of the function was
+      // actually bypassed — without `resolveRepoRefResult` being called,
+      // none of the rest of the function would have run.
+      expect(mockResolveRepoRefResult).toHaveBeenCalled();
+    });
+
+    it("preserves the existing one-shot behavior when ignoreStamp is unset", async () => {
+      const project = insertProject({
+        conventionalCommitTitles: false,
+        conventionalCommitTitlesResolvedAt: new Date(),
+      });
+      const updated = await maybeAutoEnableConventionalTitles(app, project);
+
+      expect(updated.conventionalCommitTitles).toBe(false);
+      expect(mockResolveRepoRefResult).not.toHaveBeenCalled();
+    });
+  });
 });

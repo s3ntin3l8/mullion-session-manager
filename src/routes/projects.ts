@@ -1755,6 +1755,50 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Issue #1034 — manual re-check of the release-please auto-enable sweep
+  // for one project, bypassing the one-shot `conventionalCommitTitlesResolvedAt`
+  // gate. The auto-enable sweep is intentionally one-shot (a project costs at
+  // most one real detection attempt — see project-release-please.ts), so a
+  // repo that adopts release-please AFTER its first detection never gets
+  // re-probed by the reconciler tick. The standing warning in the GitHub
+  // panel still surfaces the gap, but a human asking "did this repo just add
+  // release-please?" had no way to force a fresh probe — this route is that
+  // affordance. Pairs with the "Re-check now" button in the project edit
+  // modal (CreateProjectModal.tsx). On a positive detection the re-check's
+  // write intentionally overwrites a human's mid-flight PATCH; the
+  // narrower negative/no-remote case still preserves the human's value
+  // (commitResolution touches only the stamp then).
+  //
+  // Same rate-limit bucket as the two release POSTs above (10/min) — every
+  // call here costs at least one GitHub contents-API round trip, and the
+  // button is a deliberate human click rather than a polled UI affordance.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/release-please/recheck",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!existing) return reply.notFound();
+
+      const updated = await maybeAutoEnableConventionalTitles(app, existing, {
+        ignoreStamp: true,
+      });
+      // The fresh stamp is what the client needs to refetch the project —
+      // any definite outcome (positive detection, negative detection,
+      // durable-no-remote) stamps it, so a non-null value here is exactly
+      // "we reached a definite conclusion this round." Returns ISO 8601
+      // rather than a numeric epoch ms so the JS Date round-trip is
+      // unambiguous in the frontend.
+      return {
+        ok: true,
+        conventionalCommitTitlesResolvedAt:
+          updated.conventionalCommitTitlesResolvedAt?.toISOString() ?? null,
+      };
+    },
+  );
+
   // Batch git-status for the sidebar's live-refresh loop: replaces N
   // parallel per-project requests with a single request (issue #76).
   // Accepts ?ids=1,2,3 (project ids) and returns `{ projects, sessions }`

@@ -17,13 +17,29 @@ import { detectReleasePleaseConfig } from "./github.js";
 
 type ProjectRow = typeof projects.$inferSelect;
 
+interface MaybeAutoEnableOptions {
+  // Issue #1034 — the manual re-check affordance in the project edit
+  // modal. By default this sweep is one-shot (see below), so a repo that
+  // adopts release-please AFTER first detection never gets re-probed by
+  // the reconciler tick; this option forces a fresh probe by bypassing the
+  // `conventionalCommitTitlesResolvedAt` early-return gate AND relaxing
+  // the `isNull` race guard in `commitResolution` so the new stamp can
+  // overwrite the old one. The narrower race (a human PATCHing
+  // conventionalCommitTitles while this re-check's network calls are in
+  // flight) still loses to the human: their PATCH runs after our read of
+  // the row, so by the time our write lands the value reflects their
+  // choice and the human's stamp is just newer than ours.
+  ignoreStamp?: boolean;
+}
+
 /**
  * One-shot per project: bails immediately once
  * `conventionalCommitTitlesResolvedAt` is set, by ANYONE — this sweep or a
  * human PATCHing the field directly (routes/projects.ts's PATCH handler
  * stamps it too, so a human's explicit choice always wins even if it
  * predates this sweep ever running — see that column's own doc comment in
- * schema.ts).
+ * schema.ts). The exception is `{ ignoreStamp: true }` (issue #1034), which
+ * forces a fresh probe from the manual re-check endpoint.
  *
  * Never throws — modeled on `maybeRegisterProjectWebhook`'s own contract
  * (routes/projects.ts): a project create, or a reconciler tick sweeping many
@@ -45,8 +61,9 @@ type ProjectRow = typeof projects.$inferSelect;
 export async function maybeAutoEnableConventionalTitles(
   app: FastifyInstance,
   row: ProjectRow,
+  options: MaybeAutoEnableOptions = {},
 ): Promise<ProjectRow> {
-  if (row.conventionalCommitTitlesResolvedAt !== null) return row;
+  if (!options.ignoreStamp && row.conventionalCommitTitlesResolvedAt !== null) return row;
 
   try {
     const repoRefResult = await resolveRepoRefResult(app, row);
@@ -65,7 +82,7 @@ export async function maybeAutoEnableConventionalTitles(
       // one without a human changing its cwd (a cwd change is a separate,
       // deliberate edit — not something this sweep watches for; see the
       // "re-check when a repo adopts release-please later" follow-up).
-      return stampResolved(app, row);
+      return stampResolved(app, row, options);
     }
     const repoRef = repoRefResult.value;
 
@@ -83,7 +100,7 @@ export async function maybeAutoEnableConventionalTitles(
       // Leave unresolved rather than latching a false negative.
       return row;
     }
-    if (!detected) return stampResolved(app, row);
+    if (!detected) return stampResolved(app, row, options);
 
     // Definite positive: this repo has release-please-config.json or
     // .release-please-manifest.json committed. Write over a stored `0` —
@@ -92,7 +109,7 @@ export async function maybeAutoEnableConventionalTitles(
     // is safe because task-promote.ts's resolvePrTitle keeps an
     // already-conventional issue title in preference to the worker's, so a
     // repo that was already fine sees no behavior change.
-    return commitResolution(app, row, { conventionalCommitTitles: true });
+    return commitResolution(app, row, { conventionalCommitTitles: true }, options);
   } catch (err) {
     app.log.warn(
       { err, projectId: row.id },
@@ -102,8 +119,12 @@ export async function maybeAutoEnableConventionalTitles(
   }
 }
 
-function stampResolved(app: FastifyInstance, row: ProjectRow): ProjectRow {
-  return commitResolution(app, row, {});
+function stampResolved(
+  app: FastifyInstance,
+  row: ProjectRow,
+  options: MaybeAutoEnableOptions,
+): ProjectRow {
+  return commitResolution(app, row, {}, options);
 }
 
 /**
@@ -123,16 +144,30 @@ function stampResolved(app: FastifyInstance, row: ProjectRow): ProjectRow {
  * to prevent. `.returning()` empty means someone else already resolved this
  * project first; re-read the current row rather than trusting the stale
  * `row` this function was called with.
+ *
+ * `ignoreStamp: true` (issue #1034) — the manual re-check is allowed to
+ * overwrite an existing stamp, since the whole point is to land a NEW
+ * detection result. On a positive detection (set is non-empty) the
+ * re-check's write intentionally overwrites a human's mid-flight PATCH —
+ * that is the documented purpose of the affordance. The narrower case
+ * still preserves the human's choice: when the new detection result is
+ * negative or "no remote", the `set` is `{}` and the only thing this
+ * UPDATE touches is the stamp itself, so a human's PATCH made during the
+ * network window still wins on the column.
  */
 function commitResolution(
   app: FastifyInstance,
   row: ProjectRow,
   set: { conventionalCommitTitles?: true },
+  options: MaybeAutoEnableOptions,
 ): ProjectRow {
+  const where = options.ignoreStamp
+    ? eq(projects.id, row.id)
+    : and(eq(projects.id, row.id), isNull(projects.conventionalCommitTitlesResolvedAt));
   const updated = app.db
     .update(projects)
     .set({ ...set, conventionalCommitTitlesResolvedAt: new Date() })
-    .where(and(eq(projects.id, row.id), isNull(projects.conventionalCommitTitlesResolvedAt)))
+    .where(where)
     .returning()
     .all();
   if (updated[0]) return updated[0];

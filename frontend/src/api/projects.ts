@@ -187,4 +187,16 @@ export const projectsApi = {
       method: "PATCH",
       body: JSON.stringify({ ids }),
     }),
+
+  // Issue #1034 — the manual re-check affordance in the project edit
+  // modal. The auto-enable sweep (POST /api/projects/:id's create-time
+  // call + the reconciler tick) is one-shot per project, gated by
+  // `conventionalCommitTitlesResolvedAt`; this forces a fresh probe by
+  // passing `ignoreStamp: true` server-side. The new stamp is what the
+  // client uses to refetch the project row and surface the result inline.
+  recheckReleasePlease: (projectId: number) =>
+    request<{ ok: true; conventionalCommitTitlesResolvedAt: string | null }>(
+      `/api/projects/${projectId}/release-please/recheck`,
+      { method: "POST" },
+    ),
 };
