@@ -1191,6 +1191,69 @@ describe("TaskDetail action failure paths", () => {
     expect(screen.getByText("Failed to approve task")).toBeInTheDocument();
   });
 
+  // #1020 — advisory tracking-epic warning. The first Approve attempt 409s
+  // with code "tracking-epic-with-open-sub-issues"; the UI confirms, and the
+  // second click re-issues with force: true to bypass the warning.
+  it("shows a tracking-epic warning and re-issues with force: true after confirm", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    approveTask.mockRejectedValueOnce(
+      new ApiError(
+        "This task's underlying issue is a tracking epic with 5 sub-issues, 2 completed, 3 open. Closing it will leave 3 sub-issues still open. Re-issue with ?force=true to close anyway.",
+        409,
+        "tracking-epic-with-open-sub-issues",
+      ),
+    );
+
+    // First click — warning appears, force-confirm button surfaces.
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(screen.getByText(/5 sub-issues, 2 completed, 3 open/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Close anyway/i })).toBeInTheDocument();
+
+    // Second click — confirm and re-issue with force: true.
+    await user.click(screen.getByRole("button", { name: /Close anyway/i }));
+
+    expect(approveTask).toHaveBeenCalledTimes(2);
+    expect(approveTask).toHaveBeenNthCalledWith(1, 1);
+    expect(approveTask).toHaveBeenNthCalledWith(2, 1, { force: true });
+  });
+
+  it("does not re-issue with force when the human cancels the tracking-epic warning", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    approveTask.mockRejectedValueOnce(
+      new ApiError("tracking-epic warning", 409, "tracking-epic-with-open-sub-issues"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: /Cancel/i }));
+
+    expect(approveTask).toHaveBeenCalledTimes(1);
+    expect(approveTask).toHaveBeenCalledWith(1);
+  });
+
+  it("treats any non-tracking-epic 409 from approveTask as a regular error, not a force prompt", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    approveTask.mockRejectedValueOnce(
+      new ApiError("concurrent reject raced the approve", 409, "cas-lost"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    // A plain 409 with a different code should not surface the force
+    // confirmation — the existing 409-handling code path already exists
+    // for that case.
+    expect(screen.queryByRole("button", { name: /Close anyway/i })).toBeNull();
+  });
+
   it("shows an error and keeps the feedback form open when rejectTask rejects", async () => {
     rejectTask.mockRejectedValueOnce(new Error("network down"));
     tasks = [makeTask({ id: 1, status: "reviewing" })];

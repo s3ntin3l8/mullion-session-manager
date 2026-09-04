@@ -735,6 +735,10 @@ function TaskActions({ task }: { task: Task }) {
   const [pendingAction, setPendingAction] = useState<"reject" | "give-up" | null>(null);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // #1020 — non-null while a tracking-epic warning is awaiting confirmation;
+  // mirrors DeleteTaskAction's own needsForce shape (the existing two-stage
+  // confirmation pattern this UI already uses for #1014 Abandon).
+  const [trackingEpicWarning, setTrackingEpicWarning] = useState<string | null>(null);
 
   const disabledHint = !taskMasterEnabled
     ? "Task Master is disabled — enable it to use this action."
@@ -932,6 +936,42 @@ function TaskActions({ task }: { task: Task }) {
     );
   }
 
+  // #1020 — advisory tracking-epic confirmation. Replaces the Approve/Reject/
+  // Give up row entirely while the warning is open; the human either
+  // confirms and proceeds with the close (with force: true) or cancels back
+  // to the normal row. Cancel also drops the warning so a fresh open returns
+  // to the regular Approve flow (review fix mirroring DeleteTaskAction's own
+  // cancel()).
+  if (trackingEpicWarning !== null) {
+    return (
+      <TrackingEpicApprovalConfirm
+        message={trackingEpicWarning}
+        submitting={submitting}
+        onConfirm={async () => {
+          setSubmitting(true);
+          setError(null);
+          try {
+            await approveTask(task.id, { force: true });
+            setTrackingEpicWarning(null);
+          } catch (err) {
+            if (
+              err instanceof ApiError &&
+              err.statusCode === 409 &&
+              err.code === "tracking-epic-with-open-sub-issues"
+            ) {
+              setTrackingEpicWarning(err.message);
+            } else {
+              setError(err instanceof ApiError ? err.message : "Failed to approve task");
+            }
+          } finally {
+            setSubmitting(false);
+          }
+        }}
+        onCancel={() => setTrackingEpicWarning(null)}
+      />
+    );
+  }
+
   return (
     <div className="task-detail-actions">
       <button
@@ -943,7 +983,19 @@ function TaskActions({ task }: { task: Task }) {
           try {
             await approveTask(task.id);
           } catch (err) {
-            setError(err instanceof ApiError ? err.message : "Failed to approve task");
+            // #1020 — branch on the 409's machine-readable `code` (per
+            // api/client.ts's guidance), not the message text. Only the
+            // tracking-epic warning surfaces the advisory confirmation; any
+            // other 409 falls through to the generic error path.
+            if (
+              err instanceof ApiError &&
+              err.statusCode === 409 &&
+              err.code === "tracking-epic-with-open-sub-issues"
+            ) {
+              setTrackingEpicWarning(err.message);
+            } else {
+              setError(err instanceof ApiError ? err.message : "Failed to approve task");
+            }
           } finally {
             setSubmitting(false);
           }
@@ -972,6 +1024,45 @@ function TaskActions({ task }: { task: Task }) {
         </span>
       )}
       {error && <span className="task-detail-error">{error}</span>}
+    </div>
+  );
+}
+
+// #1020 — tracking-epic-with-open-sub-issues confirmation, advisory only.
+// A tracking epic (subIssueTotal > 0) with outstanding OPEN children
+// (total - completed > 0) used to close silently on Approve. The server
+// now returns 409 with a machine-readable `code` discriminator; the UI
+// re-prompts the human and, on confirm, re-issues with `force: true` to
+// proceed with the close. Mirrors DeleteTaskAction's own `?force=true`
+// (#1014) shape — same "advisory two-stage confirmation" pattern, same
+// `code`-based dispatch off the 409 (per api/client.ts's guidance to
+// branch on `code`, not the human-readable message).
+function TrackingEpicApprovalConfirm({
+  message,
+  onConfirm,
+  onCancel,
+  submitting,
+}: {
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  submitting: boolean;
+}) {
+  return (
+    <div className="task-detail-actions">
+      <span className="task-detail-hint">Heads up — {message}</span>
+      <button
+        className="notif-gate-btn notif-gate-approve"
+        disabled={submitting}
+        onClick={() => {
+          void onConfirm();
+        }}
+      >
+        Close anyway
+      </button>
+      <button className="notif-gate-btn" disabled={submitting} onClick={onCancel}>
+        Cancel
+      </button>
     </div>
   );
 }

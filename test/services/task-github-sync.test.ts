@@ -1262,6 +1262,87 @@ describe("task-github-sync", () => {
     });
   });
 
+  // #1020 — advisory tracking-epic warning. Companion to the route's 409:
+  // posts a heads-up comment on the issue before the human-in-the-loop
+  // confirmation can take over. Best-effort by design (matches the rest of
+  // this file), so a missing token, missing repo, or a transient GitHub
+  // failure never suppresses the route's own 409.
+  describe("postTrackingEpicWarning (#1020)", () => {
+    beforeEach(() => {
+      mockGetToken.mockReset();
+      mockGetToken.mockResolvedValue("ghp_token");
+      mockResolveRepoRef.mockReset();
+      mockResolveRepoRef.mockResolvedValue(repoRef);
+      mockCreateComment.mockReset();
+      mockCreateComment.mockResolvedValue({ id: 1, htmlUrl: "x" });
+    });
+
+    it("posts a comment naming the open sub-issue count when token + repo resolve", async () => {
+      const { postTrackingEpicWarning } = await import("../../src/services/task-github-sync.js");
+      await postTrackingEpicWarning(
+        app,
+        baseTask({ subIssueTotal: 5, subIssueCompleted: 2 }),
+        project,
+      );
+      expect(mockCreateComment).toHaveBeenCalledTimes(1);
+      const args = mockCreateComment.mock.calls[0];
+      expect(args[0]).toBe("ghp_token");
+      expect(args[1]).toBe("test-owner");
+      expect(args[2]).toBe("test-repo");
+      expect(args[3]).toBe(5);
+      expect(args[4]).toMatch(/5 sub-issues/);
+      expect(args[4]).toMatch(/2 completed/);
+      expect(args[4]).toMatch(/3 open/);
+    });
+
+    it("singularizes 'sub-issue' when only one is open", async () => {
+      const { postTrackingEpicWarning } = await import("../../src/services/task-github-sync.js");
+      await postTrackingEpicWarning(
+        app,
+        baseTask({ subIssueTotal: 3, subIssueCompleted: 2 }),
+        project,
+      );
+      expect(mockCreateComment.mock.calls[0][4]).toMatch(/1 sub-issue\b/);
+      expect(mockCreateComment.mock.calls[0][4]).not.toMatch(/1 sub-issues\b/);
+    });
+
+    it("never throws when no GitHub token is connected", async () => {
+      mockGetToken.mockResolvedValue(null);
+      const { postTrackingEpicWarning } = await import("../../src/services/task-github-sync.js");
+      await expect(
+        postTrackingEpicWarning(app, baseTask({ subIssueTotal: 5, subIssueCompleted: 2 }), project),
+      ).resolves.toBeUndefined();
+      expect(mockCreateComment).not.toHaveBeenCalled();
+    });
+
+    it("never throws when no repo is configured", async () => {
+      mockResolveRepoRef.mockResolvedValue(null);
+      const { postTrackingEpicWarning } = await import("../../src/services/task-github-sync.js");
+      await expect(
+        postTrackingEpicWarning(app, baseTask({ subIssueTotal: 5, subIssueCompleted: 2 }), project),
+      ).resolves.toBeUndefined();
+      expect(mockCreateComment).not.toHaveBeenCalled();
+    });
+
+    it("logs and swallows a GitHub failure so the route's own 409 still lands", async () => {
+      mockCreateComment.mockRejectedValueOnce(new Error("transient 5xx"));
+      const { postTrackingEpicWarning } = await import("../../src/services/task-github-sync.js");
+      await expect(
+        postTrackingEpicWarning(app, baseTask({ subIssueTotal: 5, subIssueCompleted: 2 }), project),
+      ).resolves.toBeUndefined();
+    });
+
+    it("treats null subIssueTotal as zero (a webhook-built TaskIssue with no summary)", async () => {
+      const { postTrackingEpicWarning } = await import("../../src/services/task-github-sync.js");
+      await postTrackingEpicWarning(
+        app,
+        baseTask({ subIssueTotal: null, subIssueCompleted: null }),
+        project,
+      );
+      expect(mockCreateComment.mock.calls[0][4]).toMatch(/0 sub-issues/);
+    });
+  });
+
   // #495 Hermes review, third pass — these helpers must never throw: an
   // unguarded DB write throwing (e.g. a locked DB) would otherwise escape
   // syncTaskTransition's own "never throws" contract, or mask the ORIGINAL

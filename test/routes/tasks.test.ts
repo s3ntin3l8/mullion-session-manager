@@ -1122,6 +1122,192 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    // #1020 — advisory-only tracking-epic guard. A tracking epic
+    // (subIssueTotal > 0) with outstanding OPEN children (total - completed
+    // > 0) used to close silently on Approve, leaving its children still
+    // open. The fix warns before closing, but does NOT hard-block — a
+    // human who wants to close a deprioritized epic should still be able
+    // to (the route returns 409, the UI confirms, and the second call uses
+    // ?force=true to bypass the warning).
+    it("POST /api/tasks/:id/approve 409s with a tracking-epic warning when the underlying issue is a tracking epic with open sub-issues, and posts a heads-up comment on the issue", async () => {
+      const cwd = createGitRepoWithRemote("acme", "widgets-1020-warn");
+      const app = await buildApp();
+      await connectPat(app, "ghp_1020_warn");
+      const projectId = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "epic-warn-p", cwd },
+        })
+      ).json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 1020,
+          title: "Big epic",
+          htmlUrl: "https://github.com/acme/widgets-1020-warn/issues/1020",
+          status: "reviewing",
+          subIssueTotal: 5,
+          subIssueCompleted: 2,
+        })
+        .returning()
+        .all();
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const createCommentSpy = vi.spyOn(githubWrite, "createComment").mockResolvedValue({
+        id: 1,
+        htmlUrl: "https://github.com/acme/widgets-1020-warn/issues/1020#issuecomment-1",
+      });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+
+      expect(res.statusCode).toBe(409);
+      const body = res.json();
+      expect(body.code).toBe("tracking-epic-with-open-sub-issues");
+      expect(body.subIssueStatus).toBe("5 sub-issues, 2 completed, 3 open");
+      expect(createCommentSpy).toHaveBeenCalledTimes(1);
+      const commentArgs = createCommentSpy.mock.calls[0];
+      expect(commentArgs[3]).toBe(1020);
+      expect(commentArgs[4]).toMatch(/5 sub-issues/);
+      expect(commentArgs[4]).toMatch(/2 completed/);
+      expect(commentArgs[4]).toMatch(/3 open/);
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      // Task stayed in reviewing.
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json().status).toBe("reviewing");
+
+      createCommentSpy.mockRestore();
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve?force=true proceeds with the close when the human confirms despite the tracking-epic warning", async () => {
+      const cwd = createGitRepoWithRemote("acme", "widgets-1020-force");
+      const app = await buildApp();
+      await connectPat(app, "ghp_1020_force");
+      const projectId = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "epic-force-p", cwd },
+        })
+      ).json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 1021,
+          title: "Big epic (force-confirmed)",
+          htmlUrl: "https://github.com/acme/widgets-1020-force/issues/1021",
+          status: "reviewing",
+          subIssueTotal: 5,
+          subIssueCompleted: 2,
+        })
+        .returning()
+        .all();
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const createCommentSpy = vi
+        .spyOn(githubWrite, "createComment")
+        .mockResolvedValue({ id: 1, htmlUrl: "x" });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/approve?force=true`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("done");
+      expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+      // No warning comment on the force path — the warning's purpose is to
+      // prompt a confirmation, and the human just confirmed. A second
+      // comment would just clutter the issue.
+      expect(createCommentSpy).not.toHaveBeenCalled();
+
+      createCommentSpy.mockRestore();
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve does not warn when subIssueTotal is zero (a leaf task)", async () => {
+      const cwd = createGitRepoWithRemote("acme", "widgets-1020-leaf");
+      const app = await buildApp();
+      await connectPat(app, "ghp_1020_leaf");
+      const projectId = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "epic-leaf-p", cwd },
+        })
+      ).json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 1022,
+          title: "Leaf task",
+          htmlUrl: "https://github.com/acme/widgets-1020-leaf/issues/1022",
+          status: "reviewing",
+          subIssueTotal: 0,
+          subIssueCompleted: 0,
+        })
+        .returning()
+        .all();
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const createCommentSpy = vi
+        .spyOn(githubWrite, "createComment")
+        .mockResolvedValue({ id: 1, htmlUrl: "x" });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+      expect(createCommentSpy).not.toHaveBeenCalled();
+
+      createCommentSpy.mockRestore();
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve treats null subIssueTotal as 0 (untracked legacy row)", async () => {
+      const cwd = createGitRepoWithRemote("acme", "widgets-1020-null");
+      const app = await buildApp();
+      await connectPat(app, "ghp_1020_null");
+      const projectId = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "epic-null-p", cwd },
+        })
+      ).json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 1023,
+          title: "Legacy task with no sub-issue counts",
+          htmlUrl: "https://github.com/acme/widgets-1020-null/issues/1023",
+          status: "reviewing",
+          subIssueTotal: null,
+          subIssueCompleted: null,
+        })
+        .returning()
+        .all();
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const createCommentSpy = vi
+        .spyOn(githubWrite, "createComment")
+        .mockResolvedValue({ id: 1, htmlUrl: "x" });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+      expect(createCommentSpy).not.toHaveBeenCalled();
+
+      createCommentSpy.mockRestore();
+      await app.close();
+    });
+
     it("POST /api/tasks/:id/reject transitions reviewing -> in_progress and records feedback", async () => {
       const app = await buildApp();
       const task = await createProjectAndReviewingTask(app);
