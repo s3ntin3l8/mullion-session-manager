@@ -390,6 +390,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
       }
 
       socket.on("message", handleHandshake);
+      socket.on("error", () => {});
 
       socket.on("close", () => {
         clearTimeout(handshakeTimeout);
