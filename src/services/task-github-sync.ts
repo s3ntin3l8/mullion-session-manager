@@ -313,6 +313,54 @@ export async function syncTaskTransition(
   }
 }
 
+// #1020 — advisory-only tracking-epic guard. Companion to #1016 (which
+// auto-parks ingested epics in `backlog` so they aren't auto-claimed): an
+// Approve that would close a tracking epic with open sub-issues used to
+// close the parent issue silently, leaving the children still open. This
+// posts a heads-up comment on the issue so the human-in-the-loop step
+// (the UI's confirmation dialog) has a durable on-GitHub trail too.
+//
+// Deliberately advisory, not hard-blocking: a human who wants to close a
+// deprioritized epic (a child won't happen, the work is shelved entirely)
+// must still be able to — the route returns 409 with this comment already
+// posted, the UI confirms, and the second call uses `?force=true` to
+// bypass the warning. Hard-blocking would strand legitimate
+// deprioritization use cases; advisory-with-confirmation preserves the
+// human's call.
+//
+// Best-effort by design (matches this file's other comment-posting shape):
+// a transient GitHub failure here is logged, never thrown, so the route's
+// 409 still lands even when the comment itself couldn't be posted. A
+// failed comment is a degraded but still-correct UX (the UI confirms
+// anyway), not a reason to suppress the warning.
+export async function postTrackingEpicWarning(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+): Promise<void> {
+  if (task.issueNumber === null) return;
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return;
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return;
+
+  const total = task.subIssueTotal ?? 0;
+  const completed = task.subIssueCompleted ?? 0;
+  const open = total - completed;
+  const subIssueStatus = `${total} sub-issues, ${completed} completed, ${open} open`;
+  const body =
+    `Heads up: this task's underlying issue is a tracking epic with ${subIssueStatus}. ` +
+    `Closing it will leave ${open} sub-issue${open === 1 ? "" : "s"} still open.`;
+  try {
+    await createComment(token, repoRef.owner, repoRef.repo, task.issueNumber, body);
+  } catch (err) {
+    app.log.warn(
+      { taskId: task.id, issueNumber: task.issueNumber, err },
+      "[task-github-sync] failed to post tracking-epic warning comment — UI confirmation still proceeds",
+    );
+  }
+}
+
 /**
  * Read-back half (6.4/#217, building on PR1's watcher insert-or-update):
  * a task's issue closing on GitHub is reflected into the local row as

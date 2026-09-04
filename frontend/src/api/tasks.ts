@@ -93,7 +93,15 @@ export const tasksApi = {
     }),
 
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
-  approveTask: (id: number) => request<Task>(`/api/tasks/${id}/approve`, { method: "POST" }),
+  // #1020 — `force` bypasses the tracking-epic-with-open-sub-issues warning
+  // (server returns 409 when the underlying issue is a tracking epic with
+  // open children; the UI re-prompts the human and re-issues with
+  // `force=true` to acknowledge the warning). Mirrors `deleteTask`'s own
+  // `?force=true` (#1014) shape.
+  approveTask: (id: number, opts?: { force?: boolean }) =>
+    request<Task>(`/api/tasks/${id}/approve${opts?.force ? "?force=true" : ""}`, {
+      method: "POST",
+    }),
 
   // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
   // with a linked PR; does not merge inline (main's branch protection can't

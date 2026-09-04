@@ -11,7 +11,11 @@ import {
 } from "../services/task-prompt.js";
 import { resolveTaskIssueContextSafe } from "../services/task-issue-context.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
-import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
+import {
+  syncTaskTransition,
+  isIssueStillTrackable,
+  postTrackingEpicWarning,
+} from "../services/task-github-sync.js";
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
@@ -1338,6 +1342,39 @@ export async function tasksRoute(app: FastifyInstance) {
     }
     const project = getProjectOr404(existing.projectId);
     if (!project) return reply.notFound("Project not found");
+
+    // #1020 — advisory-only tracking-epic guard. An Approve that would close
+    // a tracking epic (`subIssueTotal > 0`) with outstanding OPEN children
+    // (`subIssueTotal - subIssueCompleted > 0`) used to close the parent
+    // issue silently, leaving its children still open. Companion to #1016
+    // (which auto-parks ingested epics in `backlog`); that guard is silent
+    // by construction — this is the deliberate human-in-the-loop warning
+    // before the close itself. Posts a heads-up comment on the issue (best-
+    // effort: a failed comment doesn't suppress the 409) and returns 409
+    // with a machine-readable `code` so the UI can re-prompt. `?force=true`
+    // bypasses the warning for the case where a human deliberately wants
+    // to close a deprioritized epic anyway — the route otherwise never
+    // hard-blocks (a hard block would strand legitimate
+    // deprioritization use cases; advisory-with-confirmation preserves the
+    // human's call).
+    const forceParam = (request.query as { force?: string }).force;
+    const subIssueTotal = existing.subIssueTotal ?? 0;
+    const subIssueCompleted = existing.subIssueCompleted ?? 0;
+    const openSubIssues = subIssueTotal - subIssueCompleted;
+    if (subIssueTotal > 0 && openSubIssues > 0 && forceParam !== "true") {
+      await postTrackingEpicWarning(app, existing, project);
+      const subIssueStatus = `${subIssueTotal} sub-issues, ${subIssueCompleted} completed, ${openSubIssues} open`;
+      return reply.code(409).send({
+        statusCode: 409,
+        error: "Conflict",
+        message:
+          `This task's underlying issue is a tracking epic with ${subIssueStatus}. ` +
+          `Closing it will leave ${openSubIssues} sub-issue${openSubIssues === 1 ? "" : "s"} still open. ` +
+          `Re-issue with ?force=true to close anyway.`,
+        code: "tracking-epic-with-open-sub-issues",
+        subIssueStatus,
+      });
+    }
 
     const outcome = await approveTask(app, existing, project, "approve");
     if (!outcome.ok) {

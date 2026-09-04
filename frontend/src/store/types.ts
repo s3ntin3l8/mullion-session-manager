@@ -304,7 +304,10 @@ export interface TasksSlice {
     opts?: { agent?: string | null; reviewAgent?: string | null },
   ) => Promise<Task>;
   // reviewing -> done: pushes the branch, opens a PR, closes the issue.
-  approveTask: (id: number) => Promise<Task>;
+  // #1020 — `force` bypasses the tracking-epic warning (#1020 advisory,
+  // server returns 409 for an approve that would close a tracking epic with
+  // open sub-issues; the UI re-prompts and re-issues with `force: true`).
+  approveTask: (id: number, opts?: { force?: boolean }) => Promise<Task>;
   // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
   // with a linked PR.
   mergeTask: (id: number) => Promise<Task>;
