@@ -20,6 +20,8 @@ const {
 const { clearReleaseWorkflowCacheForTests, clearReleasePrCacheForTests } =
   await import("../../src/services/github-write.js");
 const { resetGitHubRateLimitForTests } = await import("../../src/services/github-fetch.js");
+const { projects } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -751,8 +753,6 @@ describe("release-please routes (#744)", () => {
       );
       const app = await makeApp();
       const { projectId } = await createConnectedProject(app);
-      const { projects } = await import("../../src/db/schema.js");
-      const { eq } = await import("drizzle-orm");
       // Plant an EXPLICIT human choice (issue #1034's motivating case): the
       // sweep ran before release-please was adopted and stamped a `false`,
       // and a human also previously PATCHed this. The re-check is what

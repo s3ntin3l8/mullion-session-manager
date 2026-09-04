@@ -1764,11 +1764,10 @@ export async function projectsRoute(app: FastifyInstance) {
   // panel still surfaces the gap, but a human asking "did this repo just add
   // release-please?" had no way to force a fresh probe — this route is that
   // affordance. Pairs with the "Re-check now" button in the project edit
-  // modal (CreateProjectModal.tsx). The `human-wins` contract
-  // (commitResolution's `isNull` guard) is unchanged: a human PATCHing
-  // conventionalCommitTitles while this re-check's network calls are in
-  // flight still wins permanently, exactly the same race the one-shot path
-  // protects against.
+  // modal (CreateProjectModal.tsx). On a positive detection the re-check's
+  // write intentionally overwrites a human's mid-flight PATCH; the
+  // narrower negative/no-remote case still preserves the human's value
+  // (commitResolution touches only the stamp then).
   //
   // Same rate-limit bucket as the two release POSTs above (10/min) — every
   // call here costs at least one GitHub contents-API round trip, and the

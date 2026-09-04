@@ -147,11 +147,13 @@ function stampResolved(
  *
  * `ignoreStamp: true` (issue #1034) — the manual re-check is allowed to
  * overwrite an existing stamp, since the whole point is to land a NEW
- * detection result. The narrower race (a human PATCHing mid-network-call
- * for an already-stamped project) still lands in the human's favor: their
- * write happens after our read, so by the time our UPDATE runs the row
- * already reflects their choice and our write either no-ops or just
- * refreshes the stamp.
+ * detection result. On a positive detection (set is non-empty) the
+ * re-check's write intentionally overwrites a human's mid-flight PATCH —
+ * that is the documented purpose of the affordance. The narrower case
+ * still preserves the human's choice: when the new detection result is
+ * negative or "no remote", the `set` is `{}` and the only thing this
+ * UPDATE touches is the stamp itself, so a human's PATCH made during the
+ * network window still wins on the column.
  */
 function commitResolution(
   app: FastifyInstance,
