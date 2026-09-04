@@ -461,7 +461,8 @@ async function finishPreview(
   try {
     entries = computeScaffold(existingFiles, options);
   } catch (err) {
-    if (err instanceof InvalidScaffoldSlugError) return { ok: false, status: 400, message: err.message };
+    if (err instanceof InvalidScaffoldSlugError)
+      return { ok: false, status: 400, message: err.message };
     throw err;
   }
   writeScaffoldEntries(worktree.path, entries);
