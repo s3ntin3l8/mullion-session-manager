@@ -52,6 +52,43 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
     },
   });
 
+  // Static app-shell exemption (issue #1005) — a single cold page load fires
+  // ~17 requests for the shell alone (index.html, the hashed JS/CSS bundles,
+  // the service worker + its workbox runtime, manifest, icons, splash
+  // screens) before a single /api call happens, and these have shared this
+  // same global bucket. Once the bucket is exhausted, `/` itself starts
+  // 429ing — the mechanism that turned a transient throttle into an
+  // unrecoverable reload loop during the 0.3.8 update incident #1005
+  // documents (a reload can never "back off" past a 429 on the page it's
+  // trying to reload).
+  //
+  // Deliberately an ALLOWLIST of the known static shell, not a negation of
+  // /api + /ws: the allowList predicate below is inherited by every
+  // per-route limiter too (that's why the control-socket clause a few lines
+  // down is documented as "unconditional... must always run"), so negating
+  // /api + /ws would also exempt every /internal/* GET from its own
+  // per-route limits (internal.ts's 5/min write route, for one) — a much
+  // larger hole than intended, and one that fails UNSAFE (silently
+  // unlimited) rather than safe. This list fails safe instead: a future
+  // static file this list doesn't yet know about just keeps sharing the
+  // API bucket until it's added here, rather than accidentally exempting an
+  // API route.
+  //
+  // staticPlugin (plugins/static.ts) registers later and serves
+  // FRONTEND_DIST's tree dynamically via @fastify/static, so there's no
+  // route table to reference from here — this pattern is a deliberately
+  // static mirror of frontend/index.html's own cold-load requests (see
+  // frontend/index.html and frontend/public/*). `/` itself is included
+  // since staticPlugin serves index.html there once the frontend is built
+  // (rootRoute's placeholder only covers the unbuilt-frontend case).
+  // `assets/` and `screenshots/` (Hermes review) are anchored to exactly
+  // one filename segment (`[^/]+$`), same as every other alternative here
+  // — both are flat directories in the actual Vite build output, so this
+  // costs nothing and closes the only two open-ended wildcards in an
+  // otherwise fully-anchored pattern.
+  const STATIC_SHELL_PATTERN =
+    /^\/(assets\/[^/]+$|screenshots\/[^/]+$|favicon\.(ico|svg)$|apple-touch-icon\.png$|apple-splash-[^/]+\.png$|icon-[^/]+\.png$|logo\.svg$|safari-pinned-tab\.svg$|site\.webmanifest$|sw\.js$|push-sw\.js$|workbox-[^/]+\.js$|theme-hint\.js$)/;
+
   // Basic abuse protection. Tune via RATE_LIMIT_MAX / RATE_LIMIT_WINDOW.
   //
   // B5 (audit remediation plan) — no keyGenerator override, so this (and
@@ -115,7 +152,19 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
     // way, so this check stays correct regardless of that future config.
     allowList: (request) =>
       request.raw.socket.remoteAddress === CONTROL_SOCKET_ADDR ||
-      (previewHostPattern !== null && isPreviewHost(request.headers.host, previewHostPattern)),
+      (previewHostPattern !== null && isPreviewHost(request.headers.host, previewHostPattern)) ||
+      // Only GET/HEAD — a write verb against a static-shell-shaped path
+      // (there shouldn't be one, but this is defense in depth) still goes
+      // through the limiter rather than being waved through by URL shape
+      // alone. `request.url` includes any query string (e.g. push-sw.js's
+      // own cache-busting `?v=1`, main.tsx's registerSW call), which the
+      // pattern's `$` anchors would otherwise fail to match — split it off
+      // first so only the path is tested.
+      ((request.method === "GET" || request.method === "HEAD") &&
+        (() => {
+          const urlPath = request.url.split("?", 1)[0] ?? request.url;
+          return urlPath === "/" || STATIC_SHELL_PATTERN.test(urlPath);
+        })()),
   });
 
   // CORS is disabled by default. Set CORS_ORIGIN to a comma-separated allowlist

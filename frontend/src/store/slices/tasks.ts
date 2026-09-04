@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import { api } from "../../api/index.js";
+import { setGlobalRateLimitMax } from "../../api/client.js";
 import { connectTasksStream } from "../../tasksClient.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
 import type { DashboardState, TasksSlice } from "../types.js";
@@ -76,6 +77,11 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
               taskMasterEnabled: resolveTaskMaster(get().settings.taskMaster, info.taskMasterEnv)
                 .enabled,
             });
+            // Issue #1006 — this is the one page-load call site that
+            // already fetches server-info, so it doubles as the place the
+            // client's global 429 gate learns the app-wide rate-limit
+            // ceiling it needs to recognize a global-bucket 429.
+            setGlobalRateLimitMax(info.rateLimit.max);
             taskMasterEnvLoaded = true;
           } catch (err) {
             console.warn("[tasks] failed to load taskMasterEnv", err);

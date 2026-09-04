@@ -37,6 +37,38 @@ export function __resetSessionRefreshBlockForTests(): void {
   consecutiveSessionFetchFailures = 0;
 }
 
+// In-flight coalescing (issue #1008) — refreshSessions had no dedupe at
+// all, unlike its sibling refreshGitStatuses' gitStatusesRefreshInFlight
+// (slices/git.ts): Sidebar.tsx's own mount fetch and startLiveRefresh's
+// immediate first tick both call it independently, which is what actually
+// fired 3 near-simultaneous GET /api/sessions in the 0.3.8 incident.
+//
+// Deliberately NOT a bare "return the currently-running promise" dedup
+// like refreshGitStatuses/refreshGitRefs use — those are safe because
+// every caller only wants "whatever the latest periodic fetch returns."
+// refreshSessions is different: createSession/renameSession/deleteSession/
+// promoteSession/declinePromote all `await get().refreshSessions()`
+// specifically to see their OWN just-completed mutation reflected. If a
+// concurrent call arrived, a bare dedup could hand a mutation's caller
+// back an already-in-flight fetch that STARTED BEFORE that mutation's own
+// POST even resolved — the mutation would appear to silently not have
+// happened until the next unrelated refresh.
+//
+// So: a call that arrives while a fetch is already running does NOT share
+// that fetch. It shares a QUEUED run instead — one fresh fetch that starts
+// only after the current one finishes, guaranteeing its own GET fires
+// strictly after whatever the caller just awaited (its mutation's POST).
+// Concurrent queuers share the same queued run (further coalescing), which
+// is safe: they all only need "the next state after whatever's currently
+// in flight resolves," and they all get exactly that.
+let refreshSessionsActiveRun: Promise<void> | null = null;
+let refreshSessionsQueuedRun: Promise<void> | null = null;
+
+export function __resetRefreshSessionsInFlightForTests(): void {
+  refreshSessionsActiveRun = null;
+  refreshSessionsQueuedRun = null;
+}
+
 export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsSlice> = (
   set,
   get,
@@ -46,71 +78,104 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
   backendReachable: true,
   sessionExpired: false,
 
-  refreshSessions: async () => {
-    try {
-      const sessions = await api.listSessions();
-      // Prune the three per-session-id maps down to only currently-live
-      // session ids — see pruneSessionKeyedRecord's own doc comment
-      // (store/helpers.ts) for the exact boundary (gone-from-the-API-
-      // entirely, not merely killed) and why this runs only on the success
-      // path: a transient fetch failure must never be read as "every
-      // session is gone" and wipe event history that's still valid.
-      const liveIds = new Set(sessions.map((s) => s.id));
-      set((state) => ({
-        sessions,
-        sessionsLoaded: true,
-        events: pruneSessionKeyedRecord(state.events, liveIds),
-        lastSeenSeq: pruneSessionKeyedRecord(state.lastSeenSeq, liveIds),
-        dismissedEventKeys: pruneDismissedEventKeys(state.dismissedEventKeys, liveIds),
-      }));
-      if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
-        consecutiveSessionFetchFailures = 0;
-        set({ backendReachable: true });
-      }
-      // Auto-clear on any success, same as backendReachable above — if a
-      // background poll got through without the user ever clicking "Sign
-      // in" (e.g. the gateway session was refreshed some other way), the
-      // banner shouldn't keep asserting a problem that's already resolved.
-      if (get().sessionExpired) set({ sessionExpired: false });
-    } catch (err) {
-      // A 429 (issue #959) is a "back off and retry" signal, not a
-      // transport failure. Distinct from the AuthExpiredError branch
-      // (which is the gateway forward-auth signal and the genuine-
-      // outage path below: the breaker in api/client.ts owns the
-      // "wait Retry-After" semantics; this slice just records the
-      // window so the next live-poll tick skips the entire cascade
-      // (refreshSessions + refreshGitStatuses + refreshGitDiffStats)
-      // instead of hammering the same bucket. Do NOT fold into
-      // consecutiveSessionFetchFailures — that counter is for genuine
-      // transport/process failures, and the genuine-outage banner's
-      // "Mullion server unreachable" subtext is wrong here.
-      if (err instanceof RateLimitedError) {
-        sessionRefreshBlockedUntil = Math.max(
-          sessionRefreshBlockedUntil,
-          Date.now() + err.retryAfterMs,
-        );
+  refreshSessions: () => {
+    const runOnce = async (): Promise<void> => {
+      try {
+        const sessions = await api.listSessions();
+        // Prune the three per-session-id maps down to only currently-live
+        // session ids — see pruneSessionKeyedRecord's own doc comment
+        // (store/helpers.ts) for the exact boundary (gone-from-the-API-
+        // entirely, not merely killed) and why this runs only on the
+        // success path: a transient fetch failure must never be read as
+        // "every session is gone" and wipe event history that's still
+        // valid.
+        const liveIds = new Set(sessions.map((s) => s.id));
+        set((state) => ({
+          sessions,
+          sessionsLoaded: true,
+          events: pruneSessionKeyedRecord(state.events, liveIds),
+          lastSeenSeq: pruneSessionKeyedRecord(state.lastSeenSeq, liveIds),
+          dismissedEventKeys: pruneDismissedEventKeys(state.dismissedEventKeys, liveIds),
+        }));
+        if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
+          consecutiveSessionFetchFailures = 0;
+          set({ backendReachable: true });
+        }
+        // Auto-clear on any success, same as backendReachable above — if a
+        // background poll got through without the user ever clicking
+        // "Sign in" (e.g. the gateway session was refreshed some other
+        // way), the banner shouldn't keep asserting a problem that's
+        // already resolved.
+        if (get().sessionExpired) set({ sessionExpired: false });
+      } catch (err) {
+        // A 429 (issue #959) is a "back off and retry" signal, not a
+        // transport failure. Distinct from the AuthExpiredError branch
+        // (which is the gateway forward-auth signal and the genuine-
+        // outage path below: the breaker in api/client.ts owns the
+        // "wait Retry-After" semantics; this slice just records the
+        // window so the next live-poll tick skips the entire cascade
+        // (refreshSessions + refreshGitStatuses + refreshGitDiffStats)
+        // instead of hammering the same bucket. Do NOT fold into
+        // consecutiveSessionFetchFailures — that counter is for genuine
+        // transport/process failures, and the genuine-outage banner's
+        // "Mullion server unreachable" subtext is wrong here.
+        if (err instanceof RateLimitedError) {
+          sessionRefreshBlockedUntil = Math.max(
+            sessionRefreshBlockedUntil,
+            Date.now() + err.retryAfterMs,
+          );
+          throw err;
+        }
+        // A gateway forward-auth session expiry (see api/client.ts) is
+        // neither "backend down" nor something this same fetch retrying
+        // can ever fix — keep it entirely out of the backendReachable/
+        // consecutiveSessionFetchFailures bookkeeping below, which exists
+        // for genuine transport/process failures. By the time this is
+        // reachable, client.ts has already attempted one silent top-level
+        // reload for this session (AuthExpiredError only reaches a caller
+        // once that reload's own guard has already fired), so there's no
+        // "just retry" recovery left — only the explicit sign-in-again
+        // action App.tsx renders for sessionExpired.
+        if (err instanceof AuthExpiredError) {
+          set({ sessionExpired: true });
+          throw err;
+        }
+        consecutiveSessionFetchFailures += 1;
+        if (consecutiveSessionFetchFailures >= BACKEND_UNREACHABLE_THRESHOLD) {
+          set({ backendReachable: false });
+        }
         throw err;
       }
-      // A gateway forward-auth session expiry (see api/client.ts) is
-      // neither "backend down" nor something this same fetch retrying can
-      // ever fix — keep it entirely out of the backendReachable/
-      // consecutiveSessionFetchFailures bookkeeping below, which exists for
-      // genuine transport/process failures. By the time this is reachable,
-      // client.ts has already attempted one silent top-level reload for
-      // this session (AuthExpiredError only reaches a caller once that
-      // reload's own guard has already fired), so there's no "just retry"
-      // recovery left — only the explicit sign-in-again action App.tsx
-      // renders for sessionExpired.
-      if (err instanceof AuthExpiredError) {
-        set({ sessionExpired: true });
-        throw err;
+    };
+
+    // Coalesce concurrent callers WITHOUT sharing an already-in-flight
+    // fetch (see the long comment on refreshSessionsActiveRun/
+    // refreshSessionsQueuedRun above for why a bare "return the current
+    // promise" dedup — safe for refreshGitStatuses/refreshGitRefs — is
+    // wrong here). A call that arrives while one is running gets a shared
+    // QUEUED run instead: one fresh runOnce() that starts only once the
+    // current one settles (success or failure — .catch(() => {}) below
+    // exists purely to normalize that outcome so the queued run always
+    // starts, never inherits the current run's rejection).
+    if (refreshSessionsActiveRun) {
+      if (!refreshSessionsQueuedRun) {
+        refreshSessionsQueuedRun = refreshSessionsActiveRun
+          .catch(() => {})
+          .then(() => {
+            refreshSessionsQueuedRun = null;
+            refreshSessionsActiveRun = runOnce().finally(() => {
+              refreshSessionsActiveRun = null;
+            });
+            return refreshSessionsActiveRun;
+          });
       }
-      consecutiveSessionFetchFailures += 1;
-      if (consecutiveSessionFetchFailures >= BACKEND_UNREACHABLE_THRESHOLD) {
-        set({ backendReachable: false });
-      }
-      throw err;
+      return refreshSessionsQueuedRun;
     }
+
+    refreshSessionsActiveRun = runOnce().finally(() => {
+      refreshSessionsActiveRun = null;
+    });
+    return refreshSessionsActiveRun;
   },
 
   createSession: async (projectId, command, opts) => {

@@ -133,6 +133,7 @@ export type {
   AgentRuleTarget,
   GitFileDiffResponse,
   GitStatusesBatchResult,
+  GitRefsBatchResult,
   DockConfigResult,
   DockControlInput,
   DockerUpdateCheckResult,

@@ -2636,6 +2636,205 @@ describe("projects route", () => {
     });
   });
 
+  describe("GET /api/projects/git-refs (batch, issue #1007)", () => {
+    it("returns empty branches/prs maps when no ids are given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/git-refs" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ branches: {}, prs: {} });
+      await app.close();
+    });
+
+    it("returns branches and the warm-cache PR status for a connected local repo", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-real-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:batch-refs/repo.git"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "batch-git-refs-real", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      // Primed as the poller (github-pr-poller.ts) would — the batch
+      // route's PR half is a pure cache read, no token needed.
+      const { setRepoPRsStatus } = await import("../../src/services/github.js");
+      setRepoPRsStatus("batch-refs", "repo", {
+        prs: [
+          {
+            number: 3,
+            title: "Batch it",
+            htmlUrl: "https://github.com/batch-refs/repo/pull/3",
+            author: "dev",
+            headSha: "abc",
+            headBranch: "feature",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-refs?ids=${projectId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.branches[String(projectId)]).toMatchObject({
+        branches: expect.arrayContaining([expect.objectContaining({ name: "main" })]),
+      });
+      expect(body.prs[String(projectId)].prs).toHaveLength(1);
+      expect(body.prs[String(projectId)].prs[0].number).toBe(3);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns null branches and null prs for a local project that isn't a git repo", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-none-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "batch-git-refs-none", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-refs?ids=${projectId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.branches[String(projectId)]).toBeNull();
+      expect(body.prs[String(projectId)]).toBeNull();
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    // Hermes review, PR #1017 — the PRs half used to collapse "host
+    // unreachable" and "no GitHub remote configured" into the same `null`
+    // (resolveRepoRef's own null-collapse), so a transient outage cleared
+    // the frontend's last-known-good open-PR list for that project exactly
+    // like a durable "no PRs" would. Fixed to use resolveRepoRefResult
+    // directly and omit (not null) on "unreachable" — this test locks that
+    // in for both halves of the batch, matching git-statuses' own
+    // omit-on-unreachable precedent above.
+    it("omits BOTH branches and prs (not null) for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "batch-refs-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-refs-remote", cwd: "/x", hostId: host.json().id },
+      });
+      const projectId = project.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-refs?ids=${projectId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ branches: {}, prs: {} });
+
+      await app.close();
+    });
+
+    it("handles a mix of a connected repo and an unreachable remote-host project independently", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-mix-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: repoDir,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: repoDir,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(repoDir, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: repoDir, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: repoDir,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const repo = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "batch-git-refs-mix-repo", cwd: repoDir },
+      });
+      const repoId = repo.json().id as number;
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "batch-refs-mix-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const remote = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-git-refs-mix-remote", cwd: "/x", hostId: host.json().id },
+      });
+      const remoteId = remote.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-refs?ids=${repoId},${remoteId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.branches[String(repoId)]).toMatchObject({
+        branches: expect.arrayContaining([expect.objectContaining({ name: "main" })]),
+      });
+      expect(body.prs[String(repoId)]).toBeNull();
+      expect(body.branches[String(remoteId)]).toBeUndefined();
+      expect(body.prs[String(remoteId)]).toBeUndefined();
+
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   describe("GET /api/projects/:id/git-status (issue #76)", () => {
     it("404s for an unknown project", async () => {
       const app = await buildApp();

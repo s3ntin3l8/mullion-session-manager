@@ -133,13 +133,12 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
     return gitDiffStatsRefreshInFlight;
   },
 
-  // Branches + worktrees + open-PR list per project (issue #202) — unlike
-  // the two batch endpoints above, there's no single batched route for
-  // this (git-branches and github/prs are both per-project, existing
-  // routes — see the plan's "no new schema/endpoint needed here" note), so
-  // this fires one pair of requests per project, in parallel across
-  // projects. Deliberately run on a slower cadence than the 4s git-status
-  // tick (called from refreshProjects, plus a throttled call from
+  // Branches + worktrees + open-PR list per project (issue #202). Batched
+  // into a single GET /api/projects/git-refs request (issue #1007) —
+  // formerly one request pair per project, `Promise.all`ed across
+  // projects, which at 11 projects was already 22 requests on one page
+  // load. Deliberately run on a slower cadence than the 4s git-status tick
+  // (called from refreshProjects, plus a throttled call from
   // SessionsSlice's startLiveRefresh) — branch/worktree lists change rarely
   // (git-refs.ts's own on-demand-fetch reasoning) and the PR list already
   // rides its own 60s-ish server-side cache/poller, so refetching it every
@@ -150,15 +149,19 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   // rather than replacing them wholesale. github.ts's WS-event debounce
   // uses this — a project's own webhook activity only needs to refresh
   // THAT project's branches/PRs, not every other project's too. Before this
-  // scoping existed, a single project's CI check-suite burst (each event
-  // debounced 250ms, but a busy suite fires far more often than that)
-  // refetched all N projects' git-branches + github/prs on every debounce
-  // tick, which — production incident — blew through git-branches' 30/min
-  // rate limit within seconds and left an unrelated dialog's own branches
-  // fetch caught in the resulting 429 storm. Omitted (the `refreshProjects`
-  // caller, and a fresh/deleted project) still does the full unscoped
-  // fetch + replace, since that path also needs to prune projects that no
-  // longer exist.
+  // scoping existed (and before the batching this comment now describes),
+  // a single project's CI check-suite burst (each event debounced 250ms,
+  // but a busy suite fires far more often than that) refetched all N
+  // projects' git-branches + github/prs on every debounce tick, which —
+  // production incident — blew through git-branches' 30/min rate limit
+  // within seconds and left an unrelated dialog's own branches fetch caught
+  // in the resulting 429 storm. That incident recurred at the 0.3.8 update
+  // (issue #1005/#1007) via a different trigger (repeated page reloads, not
+  // a check-suite burst) — batching fixes both, since a project no longer
+  // costs its own pair of requests against those 30/min buckets. Omitted
+  // (the `refreshProjects` caller, and a fresh/deleted project) still does
+  // the full unscoped fetch + replace, since that path also needs to prune
+  // projects that no longer exist.
   refreshGitRefs: (projectIds) => {
     if (gitRefsRefreshInFlight) {
       // Queue this call's scope rather than dropping it — see
@@ -188,26 +191,27 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
       const projectList = scoped ? allProjects.filter((p) => scopeIds.includes(p.id)) : allProjects;
       if (projectList.length === 0) return;
 
-      const results = await Promise.allSettled(
-        projectList.map(async (p) => {
-          const [branches, prs] = await Promise.all([
-            api.getProjectGitBranches(p.id).catch(() => undefined),
-            api.getProjectGitHubPRs(p.id).catch(() => undefined),
-          ]);
-          return { id: p.id, branches, prs };
-        }),
-      );
-
       const gitBranchesByProject: Record<number, GitBranchesResult | undefined> = scoped
         ? { ...get().gitBranchesByProject }
         : {};
       const prsByProject: Record<number, GitHubPRsStatus | undefined> = scoped
         ? { ...get().prsByProject }
         : {};
-      for (const result of results) {
-        if (result.status !== "fulfilled") continue;
-        gitBranchesByProject[result.value.id] = result.value.branches;
-        prsByProject[result.value.id] = result.value.prs;
+      try {
+        const result = await api.getProjectGitRefsBatch(projectList.map((p) => p.id));
+        for (const p of projectList) {
+          // `null` (durably nothing to show, e.g. not a repo / no open
+          // PRs) becomes `undefined` here — this slice's own long-standing
+          // map convention — while an id absent from the batch response
+          // (transiently unavailable) simply keeps whatever was already in
+          // the spread base above, same last-known-good posture as
+          // refreshGitStatuses.
+          if (p.id in result.branches)
+            gitBranchesByProject[p.id] = result.branches[p.id] ?? undefined;
+          if (p.id in result.prs) prsByProject[p.id] = result.prs[p.id] ?? undefined;
+        }
+      } catch (err) {
+        console.warn("[GitPanel] refreshGitRefs batch failed", err);
       }
       set({ gitBranchesByProject, prsByProject });
     };

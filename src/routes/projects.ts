@@ -57,6 +57,7 @@ import {
   getWorkflowRunJobs,
   getJobLogs,
   getDefaultBranch,
+  type GitHubPRsStatus,
 } from "../services/github.js";
 import {
   buildWebhookUrl,
@@ -1921,6 +1922,108 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Batch branches + open-PR list per project (issue #1007). Replaces the
+  // frontend's former one-request-pair-per-project fan-out
+  // (git-branches.ts's `refreshGitRefs`, formerly `Promise.all`ing 22
+  // requests for 11 projects) with a single request, same batching shape as
+  // git-statuses/git-diff-stats above. That fan-out is what blew through
+  // git-branches'/github/prs's own 30/min per-route limiters during the
+  // 0.3.8 update incident (three page loads × 11 projects = 33 > 30, 0.4s
+  // before the first 429 — see issue #1005's timeline).
+  //
+  // `null` per id means the same "durably nothing to show" case the
+  // per-project routes turn into a 204 (not a git repo / an old remote
+  // agent / no open PRs). A transiently-unavailable id (remote host
+  // unreachable) is simply omitted, same last-known-good posture as
+  // git-statuses/git-diff-stats — the frontend preserves its previous
+  // value for that id rather than clearing it.
+  //
+  // Deliberately reuses `resolveProjectGitBranches` (declared below, but
+  // hoisted within this function body like every other route handler
+  // here) rather than calling the per-project `/git-branches` route
+  // in-process — this needs a catchable rejection to omit-and-continue,
+  // while the single-project route's contract is to 503 instead.
+  app.get<{ Querystring: { ids?: string } }>(
+    "/api/projects/git-refs",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { ids: { type: "string" } },
+        },
+      },
+    },
+    async (request) => {
+      const ids = parseIdListParam(request.query.ids);
+      const branchesResult: Record<string, ProjectGitBranchesResult | null> = {};
+      const prsResult: Record<string, GitHubPRsStatus | null> = {};
+      if (ids.length === 0) return { branches: branchesResult, prs: prsResult };
+
+      const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
+
+      await Promise.all(
+        rows.map(async (project) => {
+          // Branches half and PR half run concurrently, not sequentially —
+          // for a remote-hosted project each is its own RPC round trip to
+          // the same agent, and awaiting them one after the other would
+          // roughly double this project's contribution to the batch's
+          // total latency for no reason (nothing here depends on the
+          // other's result).
+          const branchesPromise = (async () => {
+            // No `detail` param, same as the background poll path already
+            // documented on the per-project route's own comment (the
+            // GitPanel's own on-demand fetch is what opts into the
+            // isMerged enrichment).
+            try {
+              branchesResult[project.id] = await resolveProjectGitBranches(project, false);
+            } catch (err) {
+              app.log.warn(
+                { hostId: project.hostId, projectId: project.id, err },
+                "batch git-refs: remote host unavailable for branches, omitting",
+              );
+            }
+          })();
+
+          // PR half — a warm-cache read (github-pr-poller.ts's background
+          // poller), same as the per-project /github/prs route. Uses
+          // `resolveRepoRefResult` directly (Hermes review), NOT the
+          // null-collapsing `resolveRepoRef` — that collapse conflates
+          // "durably no GitHub remote" with "host momentarily unreachable"
+          // into the same `null`, which this route can't afford: setting
+          // `prsResult[project.id] = null` for a transient outage clears
+          // the frontend's last-known-good PR list for that project
+          // (store/slices/git.ts maps a present `null` to `undefined`,
+          // same as every other "nothing here" case), contradicting the
+          // omit-on-transient-failure contract the branches half above
+          // already follows. `resolveRepoRefResult` never throws either
+          // (viaRemote's own doc comment), so this still needs no
+          // try/catch — just a three-way branch instead of a collapsed one.
+          const prsPromise = (async () => {
+            const result = await resolveRepoRefResult(app, project);
+            if (!result.ok) {
+              // Transient (remote host unreachable) — omit, preserving
+              // last-known-good, exactly like the branches half's catch.
+              return;
+            }
+            if (!result.value) {
+              // Durable — no GitHub remote configured for this project.
+              prsResult[project.id] = null;
+              return;
+            }
+            const status = getPRsStatus(result.value.owner, result.value.repo);
+            prsResult[project.id] = status && status.prs.length > 0 ? status : null;
+          })();
+
+          await Promise.all([branchesPromise, prsPromise]);
+        }),
+      );
+
+      return { branches: branchesResult, prs: prsResult };
+    },
+  );
+
   // Per-file unified diff (issue #262, follow-up to #177) — returns the raw
   // patch text for a specific file in a session's effective cwd, computed
   // against `<base>...HEAD` (defaults to `HEAD`). The frontend fetches this
@@ -2070,6 +2173,54 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Shared by /api/projects/:id/git-branches and the batch
+  // /api/projects/git-refs route below (issue #1007) — the latter needs the
+  // exact same shape per project id, so this is factored out rather than
+  // duplicated.
+  //
+  // `defaultBranch` (issue #271 follow-up) — the promote/launcher base-ref
+  // pickers' default. `undefined` on an old remote host that hasn't been
+  // upgraded yet (see the degradation convention at shared/types.ts's own
+  // doc comment); `null` when this host resolved it and found no usable
+  // default (no remote, or the fallback chain bottomed out at "HEAD" — see
+  // resolveDefaultBaseRefForPicker). Either way callers fall back to the
+  // current branch.
+  interface ProjectGitBranchesResult {
+    branches: GitBranchInfo[];
+    worktrees: GitWorktreeInfo[];
+    remoteBranches: string[];
+    defaultBranch?: string | null;
+  }
+
+  /**
+   * Local branches/worktrees/remote-branches/defaultBranch for one project,
+   * host-aware (local git spawns vs. a remote agent RPC) — the body shared
+   * by the per-project `/git-branches` route and the batch `/git-refs`
+   * route (issue #1007). Returns `null` for the same "durably nothing to
+   * show" cases the per-project route turns into a 204 (not a git repo, or
+   * an old remote agent that returned nothing). A remote host being
+   * unreachable is the ONE case this throws instead of returning null —
+   * callers that want to omit-and-continue (the batch route) must catch it
+   * themselves; the single-project route re-throws it as a 503 by design.
+   */
+  async function resolveProjectGitBranches(
+    project: typeof projects.$inferSelect,
+    detail: boolean,
+  ): Promise<ProjectGitBranchesResult | null> {
+    if (project.hostId === LOCAL_HOST_ID) {
+      const [branches, worktrees, remoteBranches, defaultBranch] = await Promise.all([
+        listBranches(project.cwd, { detail }),
+        listWorktrees(project.cwd),
+        listRemoteBranches(project.cwd),
+        resolveDefaultBaseRefForPicker(project.cwd),
+      ]);
+      return branches && worktrees && remoteBranches
+        ? { branches, worktrees, remoteBranches, defaultBranch }
+        : null;
+    }
+    return getRemoteHostClient(app, project.hostId).resolveGitBranches(project.cwd, detail);
+  }
+
   // Local branches + worktrees for the GitPanel (issue #162's "worktree
   // awareness" — Mullion observes whatever worktrees exist, whoever created
   // them, rather than managing its own). Unlike /git-status, this is
@@ -2089,49 +2240,17 @@ export async function projectsRoute(app: FastifyInstance) {
 
       // Issue #442 — opt-in isMerged enrichment (extra base-resolution +
       // `git branch --merged` spawns), set only by the GitPanel's own
-      // explicit fetch. The 60s background poll (store.ts's refreshGitRefs)
-      // calls this route with no `detail` param, so it keeps paying for
-      // exactly the one for-each-ref spawn it always has.
+      // explicit fetch. The batch /git-refs route below calls this with no
+      // `detail` param, so it keeps paying for exactly the one
+      // for-each-ref spawn it always has.
       const detail = request.query.detail === "1";
 
-      let result: {
-        branches: GitBranchInfo[];
-        worktrees: GitWorktreeInfo[];
-        remoteBranches: string[];
-        // Issue #271 follow-up — the promote/launcher base-ref pickers'
-        // default. `undefined` on an old remote host that hasn't been
-        // upgraded yet (see the degradation convention at
-        // shared/types.ts's own doc comment); `null` when this host
-        // resolved it and found no usable default (no remote, or the
-        // fallback chain bottomed out at "HEAD" — see
-        // resolveDefaultBaseRefForPicker). Either way callers fall back to
-        // the current branch.
-        defaultBranch?: string | null;
-      } | null;
-      if (project.hostId === LOCAL_HOST_ID) {
-        const [branches, worktrees, remoteBranches, defaultBranch] = await Promise.all([
-          listBranches(project.cwd, { detail }),
-          listWorktrees(project.cwd),
-          listRemoteBranches(project.cwd),
-          resolveDefaultBaseRefForPicker(project.cwd),
-        ]);
-        result =
-          branches && worktrees && remoteBranches
-            ? { branches, worktrees, remoteBranches, defaultBranch }
-            : null;
-      } else {
-        try {
-          result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(
-            project.cwd,
-            detail,
-          );
-        } catch (err) {
-          app.log.warn(
-            { hostId: project.hostId, err },
-            "host unreachable, git branches unavailable",
-          );
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
+      let result: ProjectGitBranchesResult | null;
+      try {
+        result = await resolveProjectGitBranches(project, detail);
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, git branches unavailable");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
       if (!result) {
         reply.code(204);

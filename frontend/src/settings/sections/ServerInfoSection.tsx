@@ -5,6 +5,7 @@ import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { claimPostUpdateReload } from "../../postUpdateReload.js";
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -144,10 +145,19 @@ function UpdatesSubsection() {
           if (s.phase === "done" || s.phase === "failed") {
             setApplying(false);
             // The server just restarted itself into the new release —
-            // reload so every other tab/websocket reconnects against it
-            // too, rather than leaving this whole dashboard talking to a
-            // stale in-memory app state.
-            if (s.phase === "done") setTimeout(() => window.location.reload(), 1500);
+            // reload so this tab's own websocket reconnects against it too,
+            // rather than leaving it talking to a stale in-memory app
+            // state. Routed through claimPostUpdateReload() (issue #1008):
+            // main.tsx's registerSW() reload (every open tab, on
+            // service-worker activation) usually fires for this same tab
+            // around the same time, and the two triggers don't otherwise
+            // know about each other — without the guard, the tab that
+            // initiated the update could reload twice in a row.
+            if (s.phase === "done") {
+              setTimeout(() => {
+                if (claimPostUpdateReload()) window.location.reload();
+              }, 1500);
+            }
           }
         })
         .catch(() => {
