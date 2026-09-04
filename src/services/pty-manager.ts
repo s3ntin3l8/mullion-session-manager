@@ -4230,6 +4230,14 @@ export class PtyManager {
       // ENOENT (this project never had a briefing, or writeSessionBriefing
       // already unlinked it once the marked region disappeared).
     }
+    // #949 — the opencode tier-0 push writes its own small file alongside
+    // the guide/briefing copies; same lifecycle, same cleanup.
+    try {
+      unlinkSync(path.join(this.sessionsDir, `${id}.opencode-tier0.md`));
+    } catch {
+      // ENOENT (opencode tier-0 was never written, or the session was
+      // never an opencode session).
+    }
   }
 
   /** Kill every tracked attach-client. Called on server shutdown; the dtach masters survive. */

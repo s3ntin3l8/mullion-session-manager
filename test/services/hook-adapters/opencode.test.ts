@@ -192,7 +192,7 @@ describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949,
     const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
     expect(tier0File).toBeDefined();
     expect(tier0File!.contents).toBe(
-      buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "42"), false),
+      buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "42"), true),
     );
   });
 
@@ -209,10 +209,10 @@ describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949,
     expect(tier0File!.contents).toContain("MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN");
   });
 
-  it("treats ctx.authEnabled as false when omitted (optional field — every other adapter's tests don't set it)", () => {
+  it("treats ctx.authEnabled as session-scope when omitted (conservative default — assumes auth is enabled)", () => {
     const plan = openCodeAdapter.prepareLaunch({ ...baseCtx, injectAgentGuide: true });
     const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
-    expect(tier0File!.contents).toContain("in-app auth disabled");
+    expect(tier0File!.contents).toContain("MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN");
   });
 
   it("still sets OPENCODE_CONFIG_DIR alongside OPENCODE_CONFIG_CONTENT", () => {

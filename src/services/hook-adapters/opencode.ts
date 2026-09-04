@@ -241,7 +241,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     const tier0Path = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-tier0.md`);
     settingsFiles.push({
       path: tier0Path,
-      contents: buildAgentGuideBlock(guidePath, ctx.authEnabled ?? false),
+      contents: buildAgentGuideBlock(guidePath, ctx.authEnabled ?? true),
     });
     instructions.push(tier0Path);
   }
