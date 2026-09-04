@@ -38,14 +38,64 @@
 
 import path from "node:path";
 
+/** A single issue comment, as rendered in a worker's prompt — a local shape
+ * rather than importing github.ts's own `GitHubIssueComment`, matching this
+ * module's established "plain string builder, no dependency on what fetched
+ * the data" convention (see `ReviewCiInfo`/`PrReviewCommentInfo` below for
+ * the same pattern). */
+export interface TaskPromptComment {
+  author: string | null;
+  body: string;
+  createdAt: string;
+}
+
+/** A parent tracking issue's own spec+comments (#701's `parentIssueNumber`/
+ * `parentIssueRepo` resolved to content by task-issue-context.ts) — `null`
+ * distinct from `undefined`/absent the same way `TaskIssue.parent` already
+ * is (github.ts): `undefined` means "not resolved for this spawn" (a local
+ * task, or a failed lookup — see `taskSpec`'s own fail-open posture), `null`
+ * means "resolved, and this task genuinely has no parent." */
+export interface TaskPromptParent {
+  number: number;
+  repo: string;
+  title: string;
+  body: string | null;
+  comments: TaskPromptComment[];
+}
+
+/** A sibling sub-issue under the same parent that Mullion already knows
+ * about locally — zero GitHub calls (task-issue-context.ts reads this off
+ * the `tasks` table directly), so it's cheap enough to always resolve
+ * whenever a parent is known. */
+export interface TaskPromptSibling {
+  issueNumber: number;
+  title: string;
+  status: string;
+}
+
 /** The subset of a `tasks` row every prompt builder needs. Structural
  * rather than `typeof tasks.$inferSelect` so tests can pass a literal and
- * so it's obvious at a glance that nothing here touches runtime state. */
+ * so it's obvious at a glance that nothing here touches runtime state.
+ *
+ * `comments`/`parent`/`siblings` (#939/#1016) are optional ADDITIONS to
+ * what a worker sees beyond title+body — resolved once per spawn by
+ * task-issue-context.ts and threaded straight through here, never fetched
+ * by this module itself (see this file's own header doc comment on why:
+ * "no Fastify/DB dependency… what makes the wording directly
+ * unit-testable"). All three are absent (`undefined`) for a local
+ * (non-GitHub) task, or when the resolution attempt itself failed —
+ * task-issue-context.ts fails OPEN, never blocking a spawn on a GitHub
+ * hiccup, the same "advisory, not a gate" posture #701's own display-only
+ * hierarchy columns already established (unlike `dependencyCount`'s
+ * fail-closed nullability). */
 export interface TaskPromptTask {
   id: number;
   issueNumber: number | null;
   title: string;
   body: string | null;
+  comments?: TaskPromptComment[];
+  parent?: TaskPromptParent | null;
+  siblings?: TaskPromptSibling[];
 }
 
 /** Separates the machinery from the issue text, so an agent can tell which
@@ -58,11 +108,86 @@ function taskLabel(task: TaskPromptTask): string {
     : `task ${task.id} (GitHub issue #${task.issueNumber})`;
 }
 
+// #939/#1016 — render caps, kept in this module (not task-issue-context.ts)
+// so they're covered by this file's own pure-function unit tests. A comment
+// count cap on top of task-issue-context.ts's own fetch-side cap (belt and
+// suspenders: this module must render correctly regardless of how many
+// comments a caller hands it) and a per-comment char cap — #939's own epic
+// thread is long, and an agent's context is not infinite.
+const MAX_RENDERED_COMMENTS = 10;
+const COMMENT_BODY_MAX_CHARS = 800;
+
+function truncateComment(body: string): string {
+  const trimmed = body.trim();
+  return trimmed.length <= COMMENT_BODY_MAX_CHARS
+    ? trimmed
+    : `${trimmed.slice(0, COMMENT_BODY_MAX_CHARS)}…`;
+}
+
+/** Renders up to `MAX_RENDERED_COMMENTS`, newest-last (matches the fetch
+ * order task-issue-context.ts already returns), with an elided-count line
+ * when there were more — so the agent knows something was dropped rather
+ * than silently seeing a partial thread as if it were the whole one. */
+function renderComments(comments: TaskPromptComment[] | undefined, heading: string): string {
+  if (!comments || comments.length === 0) return "";
+  const shown = comments.slice(-MAX_RENDERED_COMMENTS);
+  const elided = comments.length - shown.length;
+  const lines = [
+    heading,
+    ...(elided > 0
+      ? [`(${elided} earlier comment${elided === 1 ? "" : "s"} omitted for length)`]
+      : []),
+    ...shown.map((c) => `- ${c.author ? `@${c.author}` : "someone"}: ${truncateComment(c.body)}`),
+  ];
+  return lines.join("\n");
+}
+
+/** The framing sentence is the whole point of injecting a parent at all —
+ * without it, a worker handed an epic's full spec reads it as ITS task and
+ * attempts every stream in it (#939 is a live example: six sibling streams
+ * in one body). */
+function renderParent(parent: TaskPromptParent | null | undefined): string {
+  if (!parent) return "";
+  const lines = [
+    `## Parent tracking issue #${parent.number} (${parent.repo}) — context only, not your task`,
+    "",
+    "The section below is the parent epic's own spec and discussion. It is",
+    "context only, not your task — your task is the issue above this break.",
+    "Do not implement the epic's other streams; the sibling list (if any)",
+    "below shows which ones are somebody else's.",
+    "",
+    parent.body ? `${parent.title}\n\n${parent.body}` : parent.title,
+  ];
+  const commentsBlock = renderComments(parent.comments, "\nParent issue comments:");
+  if (commentsBlock) lines.push(commentsBlock);
+  return lines.join("\n");
+}
+
+function renderSiblings(siblings: TaskPromptSibling[] | undefined): string {
+  if (!siblings || siblings.length === 0) return "";
+  return [
+    "## Sibling sub-issues",
+    "",
+    "Other issues under the same parent that Mullion already knows about —",
+    "somebody else's job, not yours:",
+    "",
+    ...siblings.map((s) => `- #${s.issueNumber} (${s.status}): ${s.title}`),
+  ].join("\n");
+}
+
 /** The issue text as the agent should see it — title, then body when there
- * is one. Matches the pre-existing `${title}\n\n${body}` shape exactly, so
- * the spec half of the prompt is unchanged by this module. */
+ * is one (matches the pre-existing `${title}\n\n${body}` shape exactly when
+ * no extra context is present, so the spec half of the prompt is unchanged
+ * for the common case), then any of comments/parent/siblings that were
+ * resolved for this spawn, each its own `SECTION_BREAK`-separated block. */
 function taskSpec(task: TaskPromptTask): string {
-  return task.body ? `${task.title}\n\n${task.body}` : task.title;
+  const base = task.body ? `${task.title}\n\n${task.body}` : task.title;
+  const extras = [
+    renderComments(task.comments, "## Comments on this issue"),
+    renderParent(task.parent),
+    renderSiblings(task.siblings),
+  ].filter((block) => block.length > 0);
+  return extras.length === 0 ? base : [base, ...extras].join(SECTION_BREAK);
 }
 
 export interface WorkerPreambleOptions {

@@ -28,6 +28,7 @@ import { resolveOpenCodeModel, resolveOpenCodeSmallModel } from "./task-model-re
 import { commandIsOpencode } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
+import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 
 // Shared by claimTask's and retryTask's identical "cap" branches (Hermes
 // review, PR #765) — the limit shown here is always the RESOLVED value
@@ -341,8 +342,16 @@ export async function dispatchClaimedTask(
     const { baseRef, baseSha } = baseRefResult.ok
       ? { baseRef: baseRefResult.value.baseRef, baseSha: baseRefResult.value.sha }
       : { baseRef: "HEAD", baseSha: null };
+    // #939/#1016 — resolved once per spawn, fail-open (a GitHub hiccup here
+    // degrades to today's plain title+body prompt, never blocks the claim).
+    const issueContext = await resolveTaskIssueContextSafe(app, task, project);
     const prompt = buildWorkerPrompt({
-      task,
+      task: {
+        ...task,
+        comments: issueContext?.comments,
+        parent: issueContext?.parent,
+        siblings: issueContext?.siblings,
+      },
       branchName,
       worktreePath: predictedWorktreePath,
       budgetMinutes: taskMasterConfig.budgetMinutes,
@@ -741,8 +750,16 @@ export async function retryTask(
     // Same preamble as a fresh claim, plus a retry note — the branch
     // already carries the earlier attempt's commits, and without saying so
     // a retry looks like a fresh start on a mysteriously non-empty tree.
+    // #939/#1016 — same resolve-once, fail-open context as claimTask's own
+    // spawn above.
+    const issueContext = await resolveTaskIssueContextSafe(app, task, project);
     const prompt = buildWorkerPrompt({
-      task,
+      task: {
+        ...task,
+        comments: issueContext?.comments,
+        parent: issueContext?.parent,
+        siblings: issueContext?.siblings,
+      },
       branchName,
       worktreePath: worktree.path,
       budgetMinutes: taskMasterConfig.budgetMinutes,
