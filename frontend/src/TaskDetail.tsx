@@ -271,6 +271,21 @@ export function TaskDetail({
             )}
           </a>
         )}
+        {/* #761's silent fallback: the project asked for a Conventional
+            Commits title, a PR was opened, but the title actually in use
+            isn't Conventional-Commits-shaped — the worker never wrote a
+            usable one AND the raw issue title itself doesn't parse either
+            (withPrTitleFallback, routes/tasks.ts; see that computation's own
+            doc comment for why raw `prTitle === null` alone isn't this
+            signal). task-reconciler.ts already logs this server-side
+            (app.log.warn) but nothing rendered it anywhere a human would
+            see it before this. */}
+        {task.prTitleFallback && (
+          <span className="task-detail-error">
+            PR title fell back to the raw issue title, which isn't Conventional-Commits-shaped —
+            release-please (or a similar tool) may skip it.
+          </span>
+        )}
         {isEditableStatus ? (
           <div className="task-detail-agents-config">
             <div className="task-detail-agent-select">

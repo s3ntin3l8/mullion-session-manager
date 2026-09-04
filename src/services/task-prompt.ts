@@ -417,6 +417,33 @@ export function parseCommitTitle(raw: string): string | null {
   return CONVENTIONAL_COMMIT_TITLE_PATTERN.test(trimmed) ? trimmed : null;
 }
 
+/**
+ * The PR title `task-promote.ts` should actually use — an issue title that
+ * ALREADY parses as Conventional Commits wins over the worker-supplied
+ * `prTitle`, which only kicks in when the issue title itself doesn't parse.
+ *
+ * This exists because the release-please auto-enable sweep
+ * (project-release-please.ts) turns `conventionalCommitTitles` on for a
+ * project even when it was previously an explicit `0` — safe only because
+ * of this precedence: a repo whose issue titles were already conventional
+ * (this repo's own `fix:`/`chore:`/`fix(tasks):` titles, for instance) keeps
+ * using them verbatim, and a worker's own guess never has a chance to
+ * downgrade a human-written `feat:` to a worker-guessed `chore:`. Without
+ * this, auto-enabling for a repo that didn't need it would be a behavior
+ * change, not a no-op.
+ *
+ * Every one of `task.prTitle`'s four read sites in task-promote.ts
+ * (createOrRecoverPR's create, its own 422-adopt re-sync, openDraftPRForTask's
+ * re-sync, promoteTaskToPR's approve-time re-sync) must route through this,
+ * not read `task.prTitle` directly — otherwise a `#782` re-sync round would
+ * overwrite a correctly-kept conventional issue title with `task.prTitle` on
+ * the very next round.
+ */
+export function resolvePrTitle(task: { title: string; prTitle: string | null }): string {
+  if (parseCommitTitle(task.title) !== null) return task.title;
+  return task.prTitle ?? task.title;
+}
+
 /** A single anchored review comment — GitHub's own review-comment shape
  * (`path`/`line`/`side`), so `task-github-sync.ts` can pass these straight
  * through to `createPullRequestReview` with no reshaping. */

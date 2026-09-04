@@ -72,6 +72,7 @@ import {
   resolveRepoRef,
 } from "./host-git.js";
 import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
+import { resolvePrTitle } from "./task-prompt.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -290,6 +291,56 @@ async function pushForPromotion(
 }
 
 /**
+ * Shared `#782` re-sync logic for the three call sites below that already
+ * hold a still-open PR (the 422-adopt branch, `openDraftPRForTask`'s
+ * re-entry, and `promoteTaskToPR`'s approve-time sync) — each independently
+ * duplicated this exact "gate on `task.prTitle !== null`, resolve the
+ * desired title, optionally compare against a live title, PATCH, swallow
+ * and warn on failure" shape before being consolidated here.
+ *
+ * Gated on `task.prTitle !== null`: with no worker-supplied title,
+ * `resolvePrTitle` depends only on the (constant) `task.title`, so there is
+ * nothing that could have drifted since the PR's title was last set — and
+ * without this guard, a live title a human edited by hand (or a 422-adopt
+ * picked up from an out-of-band PR) would get silently overwritten back to
+ * the computed one on every sync, for every project, not just ones using
+ * this feature.
+ *
+ * `liveTitle` is optional: two call sites already have a live title in hand
+ * (the 422-adopt's `existing.title`, approve's `pr.title`) and skip the
+ * PATCH entirely when it already matches — zero extra API calls in the
+ * common case. `openDraftPRForTask`'s re-entry branch makes NO other GitHub
+ * call at all (see its own call site below), so fetching one just to
+ * compare would double its call count for a branch whose whole point is
+ * "nothing left to create, just push" — it omits `liveTitle` and PATCHes
+ * unconditionally once the gate passes; idempotent when the title hasn't
+ * changed, so there's no correctness cost to skipping the comparison.
+ *
+ * Never lets a title-sync failure fail the caller's own operation — same
+ * "never gate promotion on the title" posture `#761` established.
+ */
+async function syncPrTitleIfNeeded(
+  app: FastifyInstance,
+  task: TaskRow,
+  repoRef: GitHubRepoRef,
+  token: string,
+  prNumber: number,
+  liveTitle?: string,
+): Promise<void> {
+  if (task.prTitle === null) return;
+  const desiredTitle = resolvePrTitle(task);
+  if (liveTitle !== undefined && desiredTitle === liveTitle) return;
+  try {
+    await updatePullRequestTitle(token, repoRef.owner, repoRef.repo, prNumber, desiredTitle);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id, prNumber },
+      "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
+    );
+  }
+}
+
+/**
  * #486 — if a previous create attempt already pushed AND created a PR but
  * failed before the caller recorded `prNumber`/`prUrl` (e.g. the process
  * crashed in between), a retry's `createPullRequest` call gets GitHub's 422
@@ -312,9 +363,11 @@ async function createOrRecoverPR(
     const pr = await createPullRequest(token, repoRef.owner, repoRef.repo, {
       // #761 — the agent-supplied Conventional Commits title, ingested and
       // validated by task-reconciler.ts at the "-> reviewing" transition.
-      // Falls back to the raw task title when absent (feature off, or a
-      // malformed/unreadable write) — never blocks promotion on this.
-      title: task.prTitle ?? task.title,
+      // resolvePrTitle prefers an already-conventional issue title over
+      // this (see its own doc comment); falls back to the raw task title
+      // when both that and prTitle are absent/unusable — never blocks
+      // promotion on this.
+      title: resolvePrTitle(task),
       head: task.branchName!,
       base,
       body,
@@ -352,31 +405,15 @@ async function createOrRecoverPR(
             return { ok: false, reason: "pr-create-failed", detail };
           }
         }
-        // #782 — same compare-then-PATCH as promoteTaskToPR's already-open
-        // branch: this 422-adopt path picks up whatever title the PR was
+        // #782 — this 422-adopt path picks up whatever title the PR was
         // opened with (a human's out-of-band PR, or openDraftPRForTask's own
         // earlier create for the same head branch), which can differ from
         // task.prTitle. Without this, approve's own createOrRecoverPR call
         // (the only caller that can reach this branch with prNumber still
         // null going in) would adopt a stale title with nothing left to
         // correct it before attemptMerge reads pr.title for the squash-merge
-        // commit message.
-        if (task.prTitle !== null && task.prTitle !== existing.title) {
-          try {
-            await updatePullRequestTitle(
-              token,
-              repoRef.owner,
-              repoRef.repo,
-              existing.number,
-              task.prTitle,
-            );
-          } catch (err) {
-            app.log.warn(
-              { err, taskId: task.id, prNumber: existing.number },
-              "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
-            );
-          }
-        }
+        // commit message. See syncPrTitleIfNeeded's own doc comment.
+        await syncPrTitleIfNeeded(app, task, repoRef, token, existing.number, existing.title);
         clearGithubSyncError(app, task.id);
         return { ok: true, prUrl: existing.htmlUrl, prNumber: existing.number };
       }
@@ -414,30 +451,11 @@ export async function openDraftPRForTask(
     const pushFailure = await pushForPromotion(app, task, project, token);
     if (pushFailure) return pushFailure;
     // #782 — this branch makes NO other GitHub call today (it returns
-    // task.prUrl/prNumber straight from the DB row), so a bare PATCH here
-    // is the cheapest way to keep the title re-synced on this path too: a
-    // GET-then-compare would double the call count for a branch whose
-    // whole point is "nothing left to create, just push." The PATCH is
-    // idempotent (same value in, same value out) when the title hasn't
-    // changed, so there's no correctness cost to skipping the comparison
-    // `promoteTaskToPR`'s branch above does (it has `pr.title` in hand
-    // already; this branch would need a whole extra fetch to get one).
-    if (task.prTitle !== null) {
-      try {
-        await updatePullRequestTitle(
-          token,
-          repoRef.owner,
-          repoRef.repo,
-          task.prNumber,
-          task.prTitle,
-        );
-      } catch (err) {
-        app.log.warn(
-          { err, taskId: task.id, prNumber: task.prNumber },
-          "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
-        );
-      }
-    }
+    // task.prUrl/prNumber straight from the DB row), so this omits
+    // syncPrTitleIfNeeded's `liveTitle` — a GET-then-compare would double
+    // the call count for a branch whose whole point is "nothing left to
+    // create, just push." See that function's own doc comment.
+    await syncPrTitleIfNeeded(app, task, repoRef, token, task.prNumber);
     clearGithubSyncError(app, task.id);
     // #972 — task.prUrl can still be null here on a row that predates
     // retryTask clearing prUrl/prNumber together (a retry that cleared only
@@ -534,26 +552,11 @@ export async function promoteTaskToPR(
       // warranting `feat:`), but nothing previously re-synced that to the
       // live GitHub PR — the squash-merge commit message (attemptMerge
       // reads pr.title, not task.prTitle) stayed frozen at whichever round
-      // first opened the PR. Already have `pr` in hand here, so compare
-      // before writing: zero extra API calls in the common (unchanged)
-      // case. Never lets a title-sync failure fail the promotion — same
-      // "never gate promotion on the title" posture #761 established.
-      if (task.prTitle !== null && task.prTitle !== pr.title) {
-        try {
-          await updatePullRequestTitle(
-            token,
-            repoRef.owner,
-            repoRef.repo,
-            task.prNumber,
-            task.prTitle,
-          );
-        } catch (err) {
-          app.log.warn(
-            { err, taskId: task.id, prNumber: task.prNumber },
-            "task promote: failed to re-sync the PR title — leaving the live GitHub title as-is",
-          );
-        }
-      }
+      // first opened the PR. Already have `pr` in hand here, so
+      // syncPrTitleIfNeeded's `liveTitle` comparison costs zero extra API
+      // calls in the common (unchanged) case. See that function's own doc
+      // comment.
+      await syncPrTitleIfNeeded(app, task, repoRef, token, task.prNumber, pr.title);
       clearGithubSyncError(app, task.id);
       return { ok: true, prUrl: pr.htmlUrl, prNumber: pr.number };
     } catch (err) {

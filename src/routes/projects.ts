@@ -49,6 +49,7 @@ import {
 import type { DeleteBranchResult } from "../services/git-branch-delete.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
 import { getIntegration, getToken, resolveGitHubToken } from "../services/github-integration.js";
+import { maybeAutoEnableConventionalTitles } from "../services/project-release-please.js";
 import {
   GitHubApiError,
   getRepoStatus,
@@ -58,6 +59,7 @@ import {
   getJobLogs,
   getDefaultBranch,
   type GitHubPRsStatus,
+  detectReleasePleaseConfig,
 } from "../services/github.js";
 import {
   buildWebhookUrl,
@@ -1598,7 +1600,7 @@ export async function projectsRoute(app: FastifyInstance) {
         unavailableLabel: "release status",
       });
       if (!ctx) return;
-      const { repoRef, token } = ctx;
+      const { project, repoRef, token } = ctx;
 
       let detection: ReleaseDetectionResult;
       try {
@@ -1637,7 +1639,19 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
-      const result: ProjectReleaseStatus = { detection, pr };
+      // Short-circuits to `false` with zero extra API calls once the flag is
+      // already on — the common case for any project this feature has
+      // touched at all (auto-enabled at create, by the reconciler sweep, or
+      // by a human) — so this costs a GitHub round trip only for the
+      // projects that could actually still need the warning.
+      // detectReleasePleaseConfig never throws (returns `null` for
+      // "couldn't tell" — see its own doc comment), so no try/catch needed
+      // here; `null` and `false` both collapse to "no warning."
+      const conventionalTitlesWarning =
+        project.conventionalCommitTitles !== true &&
+        (await detectReleasePleaseConfig(token, repoRef.owner, repoRef.repo)) === true;
+
+      const result: ProjectReleaseStatus = { detection, pr, conventionalTitlesWarning };
       return result;
     },
   );
@@ -2580,8 +2594,18 @@ export async function projectsRoute(app: FastifyInstance) {
         .returning()
         .all();
       await maybeRegisterProjectWebhook(app, created);
+      // Runs after the webhook registration above (order doesn't matter
+      // between the two — independent GitHub round trips, both best-effort)
+      // so a fresh project whose repo already has release-please configured
+      // gets Conventional Commits titles on from its very first task,
+      // instead of everyone finding out only after a bad squash-merge title
+      // silently drops out of a changelog. See project-release-please.ts's
+      // own doc comment for the one-shot/human-wins contract.
+      const withReleasePleaseDefault = await maybeAutoEnableConventionalTitles(app, created);
       reply.code(201);
-      return createDir ? { ...created, dirCreated, gitInitialized } : created;
+      return createDir
+        ? { ...withReleasePleaseDefault, dirCreated, gitInitialized }
+        : withReleasePleaseDefault;
     },
   );
 
@@ -2731,7 +2755,18 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
-          ...(conventionalCommitTitles !== undefined ? { conventionalCommitTitles } : {}),
+          // A human PATCHing this field — on, or explicitly back off — is a
+          // deliberate decision that must permanently outrank the
+          // release-please auto-enable sweep (project-release-please.ts),
+          // including when it hasn't run for this project yet: without
+          // stamping conventionalCommitTitlesResolvedAt here too, an
+          // explicit `false` set before the sweep's first pass would look
+          // identical to "never decided," and the next reconciler tick
+          // would silently flip it back on. See that column's own doc
+          // comment in schema.ts.
+          ...(conventionalCommitTitles !== undefined
+            ? { conventionalCommitTitles, conventionalCommitTitlesResolvedAt: new Date() }
+            : {}),
           ...(autoTagRelease !== undefined ? { autoTagRelease } : {}),
           ...(injectAgentGuide !== undefined ? { injectAgentGuide } : {}),
           ...(injectProjectBriefing !== undefined ? { injectProjectBriefing } : {}),

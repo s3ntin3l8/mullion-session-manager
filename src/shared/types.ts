@@ -275,6 +275,19 @@ export interface ReleasePullRequestStatus {
 export interface ProjectReleaseStatus {
   detection: ReleaseDetectionResult;
   pr: ReleasePullRequestStatus | null;
+  // True when this repo has release-please's own config committed
+  // (release-please-config.json / .release-please-manifest.json) but
+  // `projects.conventionalCommitTitles` is off — the branchdam-mobile
+  // incident's shape: `detection` above is commonly `"not-configured"` here
+  // too (see RELEASE_WORKFLOW_FILENAMES's own doc comment, github-write.ts,
+  // for why a real release-please repo routinely fails THAT detection), so
+  // this is deliberately a second, independent signal rather than a variant
+  // of `detection` — widening `ReleaseDetectionResult` itself would make the
+  // Run button appear with no real workflow id to dispatch. A project that
+  // already has the flag on never probes for this (see
+  // GET /api/projects/:id/release) — always `false` in that case, not
+  // because nothing was found but because nothing needed checking.
+  conventionalTitlesWarning: boolean;
 }
 
 export type ReleaseRunReason = "no-workflow" | "no-dispatch-trigger" | "dispatch-failed";

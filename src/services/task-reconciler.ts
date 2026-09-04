@@ -48,6 +48,7 @@ import {
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
 import { openDraftPRForTask } from "./task-promote.js";
+import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
@@ -1938,6 +1939,49 @@ async function attemptRelease(
   recordReleaseError(app, taskIds, releaseMergeErrorMessage(result));
 }
 
+// Bounds one tick's worth of GitHub round trips for the sweep below — each
+// project costs at most one real detection attempt ever (it stamps
+// conventionalCommitTitlesResolvedAt on any definite outcome, see
+// project-release-please.ts), so this only matters on the handful of ticks
+// right after an install accumulates several never-resolved projects at
+// once (e.g. right after upgrading to the version that introduced this
+// column). Same value and reasoning as MAX_RELEASE_ATTEMPTS_PER_SWEEP above.
+const MAX_CONVENTIONAL_TITLES_AUTO_ENABLE_PER_SWEEP = 20;
+
+/**
+ * The existing-project half of the release-please auto-enable feature — new
+ * projects get this at create time (routes/projects.ts's POST handler); this
+ * sweep is what gets it for every project that already existed before this
+ * shipped. Runs once per project, ever: `conventionalCommitTitlesResolvedAt
+ * IS NULL` is the same one-shot gate `maybeAutoEnableConventionalTitles`
+ * checks itself, so a project a PREVIOUS tick already resolved (positively
+ * or negatively) never appears in this query again.
+ *
+ * Deliberately NOT gated on `resolvedTaskMaster.enabled` the way the merge/
+ * release sweeps above are — this only ever WRITES `conventionalCommitTitles`
+ * true (or stamps a negative), it never touches live GitHub PR/merge state,
+ * so there's no "Task Master is off, this shouldn't be doing anything
+ * outward-facing" concern the enabled-gate exists to enforce elsewhere in
+ * this file. Still worth having on for its own sake: a project adopts this
+ * setting before its first task ever claims, not after.
+ */
+async function processConventionalTitlesAutoEnable(app: FastifyInstance): Promise<void> {
+  if (skipSweepIfGitHubRateLimited(app, "processConventionalTitlesAutoEnable")) return;
+
+  const rows = app.db
+    .select()
+    .from(projects)
+    .where(isNull(projects.conventionalCommitTitlesResolvedAt))
+    .limit(MAX_CONVENTIONAL_TITLES_AUTO_ENABLE_PER_SWEEP)
+    .all();
+  if (rows.length === 0) return;
+
+  for (const project of rows) {
+    if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
+    await maybeAutoEnableConventionalTitles(app, project);
+  }
+}
+
 async function processReleaseRequests(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   // Same gate as processMergeRequests above — a release merge is real GitHub
@@ -3679,10 +3723,8 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // independence reasoning: a project with tasks awaiting autorelease needs
   // to keep being retried regardless of what's currently claimed/in_progress.
   await processReleaseRequests(app);
-  // Issue #1039 — same independence reasoning again: a capped, parked task
-  // waiting on a human's out-of-band push needs to keep being checked
-  // regardless of what's currently claimed/in_progress.
   await reannounceCappedTasksAfterHumanPush(app);
+  await processConventionalTitlesAutoEnable(app);
 
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })

@@ -205,6 +205,28 @@ export const projects = sqliteTable("projects", {
   // convention, not a Mullion-wide default. Null/false = off — the raw
   // task title is used as the PR title, today's unchanged behavior.
   conventionalCommitTitles: integer("conventional_commit_titles", { mode: "boolean" }),
+  // Stamped the moment ANYONE — the release-please auto-enable sweep
+  // (project-release-please.ts) OR a human PATCHing conventionalCommitTitles
+  // directly — makes a deliberate decision for this project. Its PRESENCE,
+  // not the value of conventionalCommitTitles itself, is what makes the
+  // sweep one-shot: conventionalCommitTitles alone can't distinguish "never
+  // decided" from "explicitly set to false" — both are a stored `0`.
+  //
+  // Deliberately stamped on a human PATCH too, not just the sweep — a human
+  // who turns this off (or on) BEFORE the sweep has ever run for their
+  // project must still win permanently. Without this, an explicit
+  // conventionalCommitTitles: false PATCH made before the sweep's first
+  // pass would look identical to "never decided," and the next reconciler
+  // tick would silently flip it back on, overriding a choice the human just
+  // made. See routes/projects.ts's PATCH handler and
+  // maybeAutoEnableConventionalTitles.
+  //
+  // Null = nobody has ever decided for this project — the sweep is still
+  // free to. The sweep also stamps on a negative detection (no
+  // release-please found), so it only ever probes a given project once.
+  conventionalCommitTitlesResolvedAt: integer("conventional_commit_titles_resolved_at", {
+    mode: "timestamp",
+  }),
   // #744 — per-project only, no install-wide tier, same posture as
   // mergeOnApprove/autoApprove/conventionalCommitTitles above: whether
   // a task's merged PR should automatically trigger a release-please run

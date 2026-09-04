@@ -583,6 +583,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     agentCommand: null,
     prUrl: null,
     prNumber: null,
+    prTitle: null,
+    prTitleFallback: false,
     mergeRequestedAt: null,
     mergeError: null,
     releaseRequestedAt: null,

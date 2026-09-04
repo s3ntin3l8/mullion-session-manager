@@ -563,19 +563,22 @@ export function CreateProjectModal({
 
           {isEdit && (
             <label className="create-modal-field">
-              <span className="create-modal-field-label">Conventional Commits titles</span>
+              <span className="create-modal-field-label">Conventional Commits PR titles</span>
               <label className="create-modal-dir-confirm-checkbox">
                 <input
                   type="checkbox"
                   checked={conventionalCommitTitles}
                   onChange={(e) => setConventionalCommitTitles(e.target.checked)}
                 />
-                Use the worker's own Conventional Commits title for the PR
+                Let the worker write the PR title
               </label>
               <span className="create-modal-field-hint">
-                Off by default: the PR title is the raw task title. On, the worker is asked to write
-                a "type(scope): description" title alongside its usual completion signal — a
-                malformed or missing one silently falls back to the raw task title.
+                Task PRs are squash-merged, so the PR title becomes the commit message on main. Off:
+                the title is the GitHub issue title, verbatim — if that isn't prefixed feat:/fix:/…
+                , release-please skips it and cuts no release. On: the worker writes a "type(scope):
+                description" title for what it actually changed; an issue title that's already
+                conventional is kept either way. Mullion turns this on automatically for a repo it
+                detects using release-please — turning it off here sticks, even for that repo.
               </span>
             </label>
           )}

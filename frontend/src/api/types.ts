@@ -1074,6 +1074,18 @@ export interface Task {
   // approve creates directly as a fallback for a task that reached
   // "reviewing" before that shipped. Not otherwise rendered in the UI yet.
   prNumber: number | null;
+  // #761's Conventional Commits title, worker-supplied. `null` doesn't by
+  // itself mean anything went wrong — see `prTitleFallback` below, which is
+  // the actual "should a human look at this" signal; raw `prTitle` is kept
+  // mainly for the task's own history/debugging.
+  prTitle: string | null;
+  // Server-computed (routes/tasks.ts's withPrTitleFallback): true only when
+  // this project wants Conventional Commits titles, this task has an open
+  // PR, and the title actually in use on that PR isn't Conventional-Commits-
+  // shaped — i.e. the worker never wrote a usable title AND the raw issue
+  // title itself doesn't parse either. Previously this surfaced nowhere but
+  // one server-side `app.log.warn` (task-reconciler.ts).
+  prTitleFallback: boolean;
   // Merge-on-approve — set at approve time when the project's
   // mergeOnApprove is on, or by a manual "Merge now"/"Retry merge" click.
   // The reconciler's merge sweep clears this once the PR merges (or is

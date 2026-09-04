@@ -1463,8 +1463,65 @@ and block approval). `task-reconciler.ts` reads and validates it
 — **not round-suffixed**, unlike the review-findings file: a worker
 re-seeded for a later round only needs to rewrite it if the type should
 change, and a round that doesn't touches nothing (`?? task.prTitle` on the
-write). `task-promote.ts`'s `createOrRecoverPR` then uses
-`task.prTitle ?? task.title`.
+write). `task-promote.ts`'s `createOrRecoverPR` then uses `resolvePrTitle`
+(task-prompt.ts), not a bare `task.prTitle ?? task.title` — see below for why
+that distinction matters.
+
+**Detection and auto-enable (`project-release-please.ts`).** The branchdam-
+mobile incident: a target repo's issue titles used task-label prefixes
+(`[T2-7b] ...`) rather than Conventional Commits ones, `conventionalCommitTitles`
+was off (the default), and every squash-merged commit onto `main` was
+unparseable to release-please — 16 of 21 commits since the last release,
+completely silently, since `release-please-action` exits 0 on "no release
+needed." Mullion now detects release-please itself — `release-please-config.json`
+or `.release-please-manifest.json` committed at the repo root, via the
+GitHub contents API (`detectReleasePleaseConfig`, github.ts) — and turns the
+flag on automatically:
+
+- **At project create** (`routes/projects.ts`'s POST handler) and, for
+  projects that already existed before this shipped, **once per project in
+  the reconciler tick** (`processConventionalTitlesAutoEnable`,
+  task-reconciler.ts), gated on `projects.conventionalCommitTitlesResolvedAt
+IS NULL` so each project costs at most one real detection attempt, ever.
+- **One-shot, and permanent once a human decides.**
+  `conventionalCommitTitlesResolvedAt` is stamped by the sweep on ANY
+  definite outcome (detected or not) — and, independently, by a human PATCH
+  of `conventionalCommitTitles` itself (`routes/projects.ts`), even if that
+  PATCH happens before the sweep ever ran for that project. Without the
+  PATCH-side stamp, an explicit "off" set before the sweep's first pass would
+  look identical to "never decided," and the next tick would silently flip
+  it back on.
+- **Writes over a stored `false`, not just `null`** — the whole point, since
+  a project that predates this feature is an explicit `0`, not `null`.
+- **Standing warning, not just a one-time default.** `GET
+/api/projects/:id/release` computes `conventionalTitlesWarning` — true when
+  the repo has release-please config present and the flag is off — and the
+  GitHub panel renders it as a sibling of the Release section (which itself
+  returns nothing for `detection.kind === "not-configured"`, precisely this
+  incident's own shape; see `RELEASE_WORKFLOW_FILENAMES`'s own doc comment,
+  github-write.ts, for why a real release-please repo routinely fails that
+  narrower, filename-based detection). Short-circuits to no probe at all
+  once the flag is already on.
+
+**`resolvePrTitle` — why auto-enabling a stored `false` is safe.**
+Overriding a project's existing setting could regress a repo whose issue
+titles were already hand-written and conventional (this repo's own `fix:`/
+`chore:`/`fix(tasks):` titles, for instance) by letting a worker's own guess
+replace them. `resolvePrTitle` (task-prompt.ts) prevents that: an issue title
+that already parses as Conventional Commits wins over `tasks.prTitle`, in
+every one of its four read sites (`task-promote.ts`'s create, its 422-adopt
+re-sync, `openDraftPRForTask`'s re-sync, and `promoteTaskToPR`'s approve-time
+re-sync). This makes auto-enable a strict no-op for a repo that was already
+fine.
+
+**The second silent layer this doesn't close on its own.** Even with the
+flag on, a worker that skips writing the title file, or writes something
+`parseCommitTitle` rejects, still falls back — previously visible only via
+one `app.log.warn` in `task-reconciler.ts`. `withPrTitleFallback`
+(`routes/tasks.ts`) computes the actual "did this fall back to a
+non-conventional title" signal (not the same as raw `prTitle === null` — an
+already-conventional issue title also leaves `prTitle` null but needs no
+worker title at all) and TaskDetail.tsx renders it in the task drawer.
 
 ### Autorelease after tasks land (`#744`)
 

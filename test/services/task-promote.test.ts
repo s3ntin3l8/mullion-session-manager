@@ -537,6 +537,35 @@ describe("promoteTaskToPR", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // resolvePrTitle (task-prompt.ts) — an already-conventional issue title
+  // wins over a worker-supplied prTitle, not the other way around. This is
+  // what makes the release-please auto-enable sweep
+  // (project-release-please.ts) safe to write over a stored `0`: a repo
+  // whose issue titles were already fine sees no behavior change.
+  it("prefers an already-conventional task.title over a set task.prTitle", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+
+    const task = baseTask({
+      title: "fix(tasks): stop it exploding on Tuesdays",
+      prTitle: "chore: unrelated worker guess",
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+    });
+    await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      expect.objectContaining({ title: "fix(tasks): stop it exploding on Tuesdays" }),
+    );
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("includes 'Closes #N' in the PR body for an issue-linked task, and omits it for a local task", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);
@@ -989,6 +1018,39 @@ describe("promoteTaskToPR", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
+    // resolvePrTitle (task-prompt.ts) — a later auto-return round must not
+    // PATCH an already-conventional issue title back to a worker-supplied
+    // tasks.prTitle. This is the trap the release-please auto-enable sweep
+    // (project-release-please.ts) creates if missed: a repo whose issue
+    // titles were already conventional would otherwise have its correct
+    // title clobbered by the worker's own guess on the very next round.
+    it("does NOT PATCH an already-conventional live title back to tasks.prTitle (#782)", async () => {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+        nodeId: "PR_node9",
+        draft: true,
+        title: "fix(tasks): stop it exploding on Tuesdays",
+      });
+
+      const task = baseTask({
+        title: "fix(tasks): stop it exploding on Tuesdays",
+        worktreePath: cwd,
+        branchName: "mullion/task-1",
+        prNumber: 9,
+        prTitle: "chore: unrelated worker guess",
+      });
+      await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(mockUpdatePullRequestTitle).not.toHaveBeenCalled();
+
+      fs.rmSync(remote, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
     it("a title-PATCH failure doesn't fail the promotion (#782)", async () => {
       const remote = createBareRemote();
       const cwd = createGitRepoWithRemote(remote);
@@ -1141,6 +1203,35 @@ describe("openDraftPRForTask", () => {
     await openDraftPRForTask({ config: {} } as never, task, baseProject({ cwd }));
 
     expect(mockUpdatePullRequestTitle).not.toHaveBeenCalled();
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // resolvePrTitle — a re-entry PATCH must use the already-conventional
+  // issue title, not the worker's own guess, when both are present.
+  it("PATCHes with the already-conventional issue title, not tasks.prTitle, on re-entry", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+
+    const task = baseTask({
+      title: "fix(tasks): stop it exploding on Tuesdays",
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+      prNumber: 9,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prTitle: "chore: unrelated worker guess",
+    });
+    await openDraftPRForTask({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(mockUpdatePullRequestTitle).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      9,
+      "fix(tasks): stop it exploding on Tuesdays",
+    );
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

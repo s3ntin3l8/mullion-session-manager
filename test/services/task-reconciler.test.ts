@@ -132,6 +132,7 @@ const {
   mockGetDefaultBranch,
   mockInvalidateReleaseCache,
   mockDetectReleaseWorkflow,
+  mockDetectReleasePleaseConfig,
 } = vi.hoisted(() => ({
   mockResolveHostGitStatus: vi.fn(),
   mockCommitWipChanges: vi.fn(),
@@ -176,6 +177,14 @@ const {
   mockGetDefaultBranch: vi.fn(),
   mockInvalidateReleaseCache: vi.fn(),
   mockDetectReleaseWorkflow: vi.fn(),
+  // The release-please auto-enable sweep's own probe
+  // (project-release-please.ts, github.js). Pass-through default, same
+  // reasoning as mockResolveGitHubToken: no project in this file has a real
+  // `.git/config` github.com remote, so resolveRepoRefResult already
+  // short-circuits every pre-existing test to "no remote" before this is
+  // ever reached — the real implementation never actually hits the network
+  // here. Only the dedicated sweep test below gives it a resolvable repo.
+  mockDetectReleasePleaseConfig: vi.fn(),
   // #758 — no pass-through default (unlike commitWipChanges's `{ committed:
   // false }` no-op default): resumeTaskWorktree/removeWorktree would shell
   // out to real git against this file's fake "/tmp" project cwds, which
@@ -265,6 +274,7 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
     fetchRequiredStatusContexts: mockFetchRequiredStatusContexts,
     fetchCheckRunsForHead: mockFetchCheckRunsForHead,
     getDefaultBranch: mockGetDefaultBranch,
+    detectReleasePleaseConfig: mockDetectReleasePleaseConfig,
   };
 });
 
@@ -286,6 +296,7 @@ const actualGithubModule = await vi.importActual<typeof GitHubModule>(
   "../../src/services/github.js",
 );
 mockFetchRunsForHead.mockImplementation(actualGithubModule.fetchRunsForHead);
+mockDetectReleasePleaseConfig.mockImplementation(actualGithubModule.detectReleasePleaseConfig);
 // #755 — deliberately NOT a pass-through to the real implementation (unlike
 // every other mock above): the real one hits GitHub's branch-protection
 // endpoint over the network, which this test file has no business doing.
@@ -780,6 +791,67 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.prTitle).toBe("feat: add credential storage");
+      await app.close();
+    });
+  });
+
+  // The existing-project half of the release-please auto-enable feature
+  // (project-release-please.ts) — new projects get this at create time
+  // (routes/projects.ts's POST handler, covered in projects.test.ts); this
+  // sweep is what gets it for a project that already existed before this
+  // shipped. Runs every reconcileTasks() tick, but is a no-op for every
+  // OTHER test in this file: none of them give a project a real
+  // `.git/config` github.com remote, so resolveRepoRefResult's "no remote"
+  // branch stamps a negative before ever reaching resolveGitHubToken/
+  // detectReleasePleaseConfig — confirmed by this file's full suite passing
+  // unchanged when this sweep was added.
+  describe("release-please auto-enable sweep (project-release-please.ts)", () => {
+    async function createProjectWithGithubRemote(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      owner: string,
+      repo: string,
+    ): Promise<number> {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "reconciler-release-please-"));
+      fs.mkdirSync(path.join(cwd, ".git"));
+      fs.writeFileSync(
+        path.join(cwd, ".git", "config"),
+        `[remote "origin"]\n\turl = git@github.com:${owner}/${repo}.git\n`,
+      );
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-rp-auto-${Math.random()}`, cwd },
+      });
+      return created.json().id;
+    }
+
+    it("turns conventionalCommitTitles on for an existing project once release-please is detected", async () => {
+      const app = await buildApp();
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockDetectReleasePleaseConfig.mockResolvedValue(true);
+      const projectId = await createProjectWithGithubRemote(app, "acme", "auto-enable-widgets");
+
+      await reconcileTasks(app);
+
+      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      expect(row.conventionalCommitTitles).toBe(true);
+      expect(row.conventionalCommitTitlesResolvedAt).not.toBeNull();
+      await app.close();
+    });
+
+    it("does not re-probe a project once it has been resolved", async () => {
+      const app = await buildApp();
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockDetectReleasePleaseConfig.mockResolvedValue(false);
+      const projectId = await createProjectWithGithubRemote(app, "acme", "auto-enable-resolved");
+
+      await reconcileTasks(app);
+      mockDetectReleasePleaseConfig.mockClear();
+      await reconcileTasks(app);
+
+      expect(mockDetectReleasePleaseConfig).not.toHaveBeenCalled();
+      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      expect(row.conventionalCommitTitles).toBeNull();
       await app.close();
     });
   });

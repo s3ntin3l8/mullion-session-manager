@@ -824,6 +824,119 @@ export async function fetchRequiredStatusContexts(
   }
 }
 
+// The release-please auto-enable sweep (project-release-please.ts) needs
+// "does this repo run release-please" — deliberately NOT
+// `detectReleaseWorkflow`/`RELEASE_WORKFLOW_FILENAMES`
+// (github-write.ts), whose own doc comment explains why that list stays
+// narrowly `release-please.yml`/`.yaml` only (a false positive there makes
+// the Run button dispatch an unrelated workflow). That narrowness makes it
+// a false NEGATIVE for most real release-please repos: surveying every repo
+// on this install with release-please configured found only 2 of 14 name
+// their workflow file that way — the rest (including this repo) call an
+// org-level reusable workflow, so the action/workflow name never appears in
+// the calling repo at all. `release.yml` itself is far too common a
+// filename for anything (goreleaser, an npm-publish job) to be a signal on
+// its own, per that same doc comment.
+//
+// These two filenames are release-please-specific with no such ambiguity —
+// a false positive here just means the sweep enables a per-project title
+// convention for a repo that genuinely has release-please's own config
+// committed, so the asymmetry that keeps RELEASE_WORKFLOW_FILENAMES narrow
+// doesn't apply here.
+const RELEASE_PLEASE_CONFIG_FILENAMES = [
+  "release-please-config.json",
+  ".release-please-manifest.json",
+];
+
+interface ReleasePleaseConfigCacheEntry {
+  found: boolean;
+  expiresAt: number;
+}
+const releasePleaseConfigCache = new Map<string, ReleasePleaseConfigCacheEntry>();
+// Same TTL/"only definite results cached" posture as
+// fetchRequiredStatusContexts above — a repo's release-please adoption
+// changes about never, and this is checked at every project create plus
+// once per project per reconciler tick until stamped (see
+// project-release-please.ts).
+const RELEASE_PLEASE_CONFIG_CACHE_TTL_MS = 60 * 60_000;
+
+/**
+ * Whether `owner/repo`'s root contains `release-please-config.json` or
+ * `.release-please-manifest.json` — the two release-please-specific
+ * filenames, see this const's own doc comment above for why this doesn't
+ * reuse `detectReleaseWorkflow`. One repo-root directory listing
+ * (`GET /repos/{owner}/{repo}/contents`) rather than two per-path probes.
+ *
+ * Returns `true`/`false` for a definite answer, `null` for "couldn't tell"
+ * (any non-404 failure — rate limit, no `contents: read` scope, a 5xx).
+ * Callers MUST treat `null` as "don't act" rather than "not detected" —
+ * this gates writing `projects.conventionalCommitTitles`, and a transient
+ * failure must never be indistinguishable from a real negative. Only a
+ * definite result is cached, matching `fetchRequiredStatusContexts`'s own
+ * "only successes cached" precedent.
+ *
+ * Deliberately not the octokit-style content-decoding return shape — this
+ * only ever needs a filename match, never a file's contents.
+ */
+export async function detectReleasePleaseConfig(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<boolean | null> {
+  validateGitHubRepoRef(owner, repo);
+  const key = `${owner}/${repo}`;
+  const cached = releasePleaseConfigCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) return cached.found;
+
+  let res: Response;
+  try {
+    res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+  } catch {
+    return null;
+  }
+  // A repo root is a directory, never a single file, so `contents` on it
+  // always resolves to an array when it resolves at all — a 404 here means
+  // the repo (or ref) itself doesn't exist, not "no release-please," but
+  // that repo/token combination couldn't have gotten this far (routes call
+  // this only after resolveRepoRefResult/resolveGitHubToken already
+  // succeeded for it) — still folded into "couldn't tell" rather than
+  // asserted impossible, since a repo can be renamed or deleted between
+  // those calls and this one.
+  if (!res.ok) return null;
+
+  let entries: unknown;
+  try {
+    entries = await res.json();
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(entries)) return null;
+
+  const found = entries.some(
+    (entry): boolean =>
+      typeof entry === "object" &&
+      entry !== null &&
+      "name" in entry &&
+      typeof (entry as { name: unknown }).name === "string" &&
+      RELEASE_PLEASE_CONFIG_FILENAMES.includes((entry as { name: string }).name),
+  );
+
+  releasePleaseConfigCache.set(key, {
+    found,
+    expiresAt: Date.now() + RELEASE_PLEASE_CONFIG_CACHE_TTL_MS,
+  });
+  return found;
+}
+
+// Test-only: clears the module-scope cache above so one test's cached
+// detection result can't leak into another's assertions.
+export function clearReleasePleaseConfigCacheForTests(): void {
+  releasePleaseConfigCache.clear();
+}
+
 // Exported for the per-branch filter (issue #202, routes/projects.ts's
 // GET .../github/prs?branch=): the route re-derives the summary counts for
 // its filtered subset rather than slicing the cached whole-repo summary.

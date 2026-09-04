@@ -7,6 +7,8 @@ import {
   fetchRequiredStatusContexts,
   fetchCheckRunsForHead,
   getDefaultBranch,
+  detectReleasePleaseConfig,
+  clearReleasePleaseConfigCacheForTests,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -337,6 +339,91 @@ describe("fetchRequiredStatusContexts", () => {
     expect(first).toBeNull();
     const second = await fetchRequiredStatusContexts("tok", "o", "retry-after-403-repo", "main");
     expect(second).toEqual(["CI"]);
+    expect(fetchMock.mock.calls.length).toBe(2);
+  });
+});
+
+describe("detectReleasePleaseConfig", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    clearReleasePleaseConfigCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns true when release-please-config.json is present in the repo root", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, [
+        { name: "README.md", type: "file" },
+        { name: "release-please-config.json", type: "file" },
+      ]),
+    );
+    const result = await detectReleasePleaseConfig("tok", "o", "config-json-repo");
+    expect(result).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repos/o/config-json-repo/contents"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("returns true when only .release-please-manifest.json is present", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, [{ name: ".release-please-manifest.json", type: "file" }]),
+    );
+    const result = await detectReleasePleaseConfig("tok", "o", "manifest-only-repo");
+    expect(result).toBe(true);
+  });
+
+  it("returns false when neither filename is present", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, [{ name: "package.json", type: "file" }]));
+    const result = await detectReleasePleaseConfig("tok", "o", "no-release-please-repo");
+    expect(result).toBe(false);
+  });
+
+  it("returns null (couldn't tell) on a 404, never asserting a real negative", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    const result = await detectReleasePleaseConfig("tok", "o", "missing-repo-404");
+    expect(result).toBeNull();
+  });
+
+  it("returns null on a non-ok response other than 404 (rate limit, scope, 5xx)", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
+    const result = await detectReleasePleaseConfig("tok", "o", "forbidden-repo");
+    expect(result).toBeNull();
+  });
+
+  it("returns null on a network failure, never throws", async () => {
+    fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(detectReleasePleaseConfig("tok", "o", "network-down-repo")).resolves.toBeNull();
+  });
+
+  it("caches a definite result — a second call for the same repo makes no further request", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+    );
+    await detectReleasePleaseConfig("tok", "o", "cache-hit-repo");
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    const second = await detectReleasePleaseConfig("tok", "o", "cache-hit-repo");
+    expect(second).toBe(true);
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("does NOT cache a null (couldn't tell) result — a retry after a 403 makes a fresh request", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 403 }));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
+    );
+    const first = await detectReleasePleaseConfig("tok", "o", "retry-after-403-repo");
+    expect(first).toBeNull();
+    const second = await detectReleasePleaseConfig("tok", "o", "retry-after-403-repo");
+    expect(second).toBe(true);
     expect(fetchMock.mock.calls.length).toBe(2);
   });
 });

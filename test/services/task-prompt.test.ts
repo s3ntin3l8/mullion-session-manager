@@ -9,6 +9,7 @@ import {
   taskCommitTitlePath,
   parseReviewFindings,
   parseCommitTitle,
+  resolvePrTitle,
   renderReviewFindingsMarkdown,
   severityPrefix,
   renderCiSummary,
@@ -926,6 +927,46 @@ describe("parseCommitTitle", () => {
   it("rejects a title beyond the length bound", () => {
     const tooLong = `feat: ${"x".repeat(200)}`;
     expect(parseCommitTitle(tooLong)).toBeNull();
+  });
+});
+
+describe("resolvePrTitle", () => {
+  // This precedence is what makes the release-please auto-enable sweep
+  // (project-release-please.ts) safe to write conventionalCommitTitles: true
+  // over a stored `0` — a repo whose issue titles were already conventional
+  // must see no behavior change.
+  it("prefers an already-conventional task.title over a set prTitle", () => {
+    expect(
+      resolvePrTitle({
+        title: "fix(tasks): stop it exploding on Tuesdays",
+        prTitle: "chore: unrelated worker guess",
+      }),
+    ).toBe("fix(tasks): stop it exploding on Tuesdays");
+  });
+
+  it("falls back to prTitle when task.title isn't Conventional-Commits-shaped", () => {
+    expect(
+      resolvePrTitle({
+        title: "Fix the exploding thing",
+        prTitle: "fix(tasks): stop it exploding on Tuesdays",
+      }),
+    ).toBe("fix(tasks): stop it exploding on Tuesdays");
+  });
+
+  it("falls back to the raw task.title when prTitle is null and title isn't conventional either", () => {
+    expect(resolvePrTitle({ title: "Fix the exploding thing", prTitle: null })).toBe(
+      "Fix the exploding thing",
+    );
+  });
+
+  // resolvePrTitle trusts prTitle as already-validated (task-reconciler.ts's
+  // ingest already ran it through parseCommitTitle) — it doesn't re-validate
+  // here, so an (in practice impossible) invalid prTitle still wins over a
+  // non-conventional issue title.
+  it("does not re-validate prTitle — trusts it as already Conventional-Commits-shaped", () => {
+    expect(
+      resolvePrTitle({ title: "Fix the exploding thing", prTitle: "not conventional either" }),
+    ).toBe("not conventional either");
   });
 });
 
