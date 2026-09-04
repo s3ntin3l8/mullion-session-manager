@@ -3796,21 +3796,31 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // with its session and worktree intact) while grace is active;
             // once it expires (or the errorDetail isn't a recognizable
             // rate_limit), fall through to the normal no-commits gate.
-            const hasCommits = await hasCommitsPastBase(app, project, task);
-            if (
-              isRateLimitGraceActive(
-                {
-                  errorState: info.errorState,
-                  errorAt: info.errorAt,
-                  errorDetail: info.errorDetail,
-                },
-                {
-                  graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes,
-                  hasCommitsPastBase: hasCommits,
-                },
-              )
-            ) {
-              continue;
+            //
+            // Hermes review (PR #1027) — gate hasCommitsPastBase behind
+            // the api_error branch only. A `finished` task is a real
+            // success signal — `isRateLimitGraceActive` short-circuits on
+            // `errorState !== "api_error"` and discards the result, so
+            // the work would be a doubled git-status round-trip on every
+            // "happy" finished task per reconcile tick. The api_error
+            // path is the only branch that actually consults the value.
+            if (derived.status === "api_error") {
+              const hasCommits = await hasCommitsPastBase(app, project, task);
+              if (
+                isRateLimitGraceActive(
+                  {
+                    errorState: info.errorState,
+                    errorAt: info.errorAt,
+                    errorDetail: info.errorDetail,
+                  },
+                  {
+                    graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes,
+                    hasCommitsPastBase: hasCommits,
+                  },
+                )
+              ) {
+                continue;
+              }
             }
 
             // See the matching gate/comment on the claimed -> reviewing
