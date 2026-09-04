@@ -127,6 +127,29 @@ function isManualOnly(body: string | null): boolean {
   return body !== null && MANUAL_LINE_RE.test(body);
 }
 
+// #1016 — an issue with GitHub sub-issues that still has OPEN children is a
+// tracking epic, not leaf work: dispatching it to a worker produces a
+// zero-commit turn (there is nothing in the epic's own body to implement)
+// that fails the task and posts "agent ended its turn with no commits"
+// publicly on the issue (task-reconciler.ts's checkReviewingGate), or — if
+// a human clicks Approve anyway — closes the tracking issue while its
+// children are still open (task-github-sync.ts). We check for outstanding
+// OPEN work (`total - completed > 0`), not just any attached children,
+// because GitHub's `sub_issues_summary.total` is cumulative (counts every
+// linked child, closed or open; `completed` is the separate closed count).
+// Checking total > 0 would keep the flag true indefinitely even after all
+// children close, preventing a human-dragged `ready` override from
+// surviving the next poll sweep — see the demotion block below for why
+// that matters. With this shape, a completed epic (all children closed) is
+// no longer treated as an epic, so manual overrides stick permanently.
+// `undefined` (a webhook-built TaskIssue, which has no
+// sub_issues_summary to read) is treated as "not known to be an epic" —
+// the same "leave it alone, no fail-closed reasoning" posture #701 already
+// established for this field, not "not an epic."
+function isEpicIssue(issue: TaskIssue): boolean {
+  return (issue.subIssues?.total ?? 0) - (issue.subIssues?.completed ?? 0) > 0;
+}
+
 /**
  * #490 — the insert-or-update-per-(project,issue) ingest write, lifted out
  * of the poll sweep below so `webhooks.ts`'s webhook-driven ingest can
@@ -150,13 +173,17 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       failureReason: tasks.failureReason,
       branchName: tasks.branchName,
       worktreePath: tasks.worktreePath,
+      // #1016 (Hermes-equivalent review catch) — the re-sighting epic-demotion
+      // check below needs this to tell "newly detected" from "already known,"
+      // see that check's own doc comment for why.
+      subIssueTotal: tasks.subIssueTotal,
     })
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
     .get();
   const existed = existingRow !== undefined;
 
-  const initialStatus = isManualOnly(issue.body) ? "backlog" : "ready";
+  const initialStatus = isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
 
   // #667 — dependencyCount is only present on a listLabeledIssues-sourced
   // TaskIssue (the poll sweep); a webhook-built one (routes/webhooks.ts) has
@@ -250,6 +277,54 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
     return;
   }
 
+  // #1016 — the upsert above never touches `status` on a re-sighting (same
+  // "durable subset only" rule the relabel-resurrection comment below
+  // explains), so an issue that GAINS sub-issues after already being
+  // ingested `ready` would otherwise stay claimable forever: subIssueTotal
+  // flowing in on a later sweep doesn't retroactively re-run the
+  // `initialStatus` epic check above, that only runs at first insert.
+  // Demoted here instead, narrowly: only `ready → backlog`, and only when
+  // no session has ever touched this task (`sessionId IS NULL`) — a
+  // `claimed`/`in_progress`/`reviewing`/`done`/`failed` task is not this
+  // guard's business, and a task a human has already started work on keeps
+  // going regardless of what GitHub reports about its children afterward.
+  //
+  // Also gated on `(existingRow.subIssueTotal ?? 0) === 0` — i.e. only on
+  // the TRANSITION into "known to be an epic," not on every re-sighting of
+  // an already-known one. Once `subIssueTotal` is already
+  // non-null-and-nonzero in the DB, this block never fires again for that
+  // task, so a human override sticks permanently — matching #1021's own
+  // "not automatic" reverse-direction design, this is the forward-direction
+  // equivalent: detect once, then leave it to a human. With `isEpicIssue`
+  // now checking outstanding OPEN work (total - completed > 0) rather than
+  // cumulative total, a completed epic (all children closed) is no longer
+  // treated as an epic, so a human-dragged `ready` survives the next poll
+  // sweep — no special escape-hatch logic needed.
+  const isNewlyDetectedEpic = (existingRow?.subIssueTotal ?? 0) === 0 && isEpicIssue(issue);
+  if (existingRow !== undefined && isNewlyDetectedEpic) {
+    const demoted = app.db
+      .update(tasks)
+      .set({ status: "backlog" satisfies TaskStatus })
+      .where(
+        and(
+          eq(tasks.id, existingRow.id),
+          eq(tasks.status, "ready" satisfies TaskStatus),
+          isNull(tasks.sessionId),
+        ),
+      )
+      .run();
+    if (demoted.changes > 0) {
+      recordTaskTransition(app, {
+        taskId: existingRow.id,
+        projectId,
+        from: "ready",
+        to: "backlog",
+        via: "github-sync-epic-detected",
+        context: { issueNumber: issue.number },
+      });
+    }
+  }
+
   // Relabel-resurrection — a task that previously auto-failed because its
   // GitHub issue lost the `mullion-task` label
   // (`syncUnlabeledIssueToLocal`, task-github-sync.ts) self-heals the
@@ -286,7 +361,8 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
     existingRow.branchName === null &&
     existingRow.worktreePath === null
   ) {
-    const resurrectableStatus = isManualOnly(issue.body) ? "backlog" : "ready";
+    const resurrectableStatus =
+      isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
     const resurrected = app.db
       .update(tasks)
       .set({ status: resurrectableStatus, failureReason: null, completedAt: null })
