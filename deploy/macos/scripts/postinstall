@@ -46,6 +46,11 @@ SSH_AUTH_SOCK_DEFAULT="$CONSOLE_HOME/Library/Group Containers/2BUA8C4S2C.com.1pa
 # Capture stderr to a temp file so we can surface the real error to the user.
 STDERR_FILE="$(mktemp -t mullion-helper)"
 trap 'rm -f "$STDERR_FILE"' EXIT
+# CI marker (test-macos job in .github/workflows/ci-cd.yml greps install.log
+# for "mullion-helper: resolved console user" — the only signal that this
+# postinstall took the actual install path rather than the "could not
+# determine" fallback above). Don't rename without also updating the grep.
+echo "mullion-helper: resolved console user via /dev/console: $CONSOLE_USER"
 if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" -H \
      "$EXE" helper install --ssh-auth-sock "$SSH_AUTH_SOCK_DEFAULT" 2>"$STDERR_FILE"; then
   rm -f "$STDERR_FILE"
