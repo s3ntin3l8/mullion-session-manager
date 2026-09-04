@@ -607,6 +607,30 @@ would also force `WEBHOOK_EVENTS_VERSION` (`github-webhook.ts`) up, which
 re-registers the hook on every connected project — accepted deferred cost,
 filed as a follow-up rather than bundled in.
 
+**Labeling a tracking epic today:** A `mullion-task`-labeled epic issue with
+`Manual: true` in its body is parked in `backlog` by `isManualOnly`
+(`src/services/task-watcher.ts:126`) and never auto-claimed. The `N/M`
+sub-issue progress chip on `TaskCard.tsx:278` renders whenever
+`subIssueTotal > 0`, regardless of the parent's status — so a
+`backlog`-parked epic still shows its children's progress. The labeling
+buys the chip without the auto-claim risk, and `Manual: true` is sufficient
+to achieve this today; #1016's auto-park on `subIssueTotal > 0` is an
+additive safety net (catches the case where the human forgot `Manual: true`),
+not the only path.
+
+Note on the parent-context flow: a worker's prompt **does** receive the
+parent epic's body, framed explicitly as "context only, not your task" via
+`renderParent` (`src/services/task-prompt.ts:149-164`) and routed through
+`TaskPromptTask.parent` / `TaskPromptSibling[]` (`task-prompt.ts:97-98`,
+resolved by `src/services/task-issue-context.ts`). A worker handed a child
+issue therefore sees the epic's spec and a sibling list — but is told
+explicitly not to implement other streams. If you want a worker to know
+specific context, put it in the child issue's body; the parent block
+arrives automatically when `parentIssueNumber`/`parentIssueRepo` resolve.
+Do **not** assume a labeled parent buys the parent block — the resolution
+path fails OPEN (`task-issue-context.ts:10-23`, "advisory, not a gate") on
+a GitHub hiccup, and the field is absent for non-GitHub tasks.
+
 Board surfaces: `TaskCard.tsx` renders a `↳ <parent title>` meta chip
 (falling back to `#N` until the title pass fills it) and an `N/M` sub-issue
 progress chip — the latter renders on zero cards on an install where no
@@ -702,9 +726,12 @@ Two independent choices are resolved per task, most-specific tier wins:
 3. The install-wide `settings.taskMaster.defaultReviewAgent` (Task Master
    Settings' Default review agent). When unset, or explicitly `"none"`/empty,
    no review agent is spawned and a human reviews directly — today's
-   unchanged default behavior. A review agent remains an additive, advisory
-   feature; the install-wide tier just lets an operator engage one for every
-   task without configuring it per project.
+   unchanged default behavior. **The issue body's own `ReviewAgent: none` or
+   `ReviewAgent: false` (strict lowercase compare, see
+   `src/services/task-agent-resolve.ts:111`) also disables review outright,
+   independent of the settings tier.** A review agent remains an additive,
+   advisory feature; both tiers just let an operator engage (or disengage)
+   one for every task without configuring it per project.
 
    This becomes load-bearing, not just advisory, once a project's
    `autoApprove` setting is on (see "Auto-approve" under Task → PR promotion
@@ -714,11 +741,39 @@ Two independent choices are resolved per task, most-specific tier wins:
    the same "opt-in, no global default" posture above, just with a
    consequence attached now.
 
-Both directives are matched case-insensitively on their own line (a
-document that merely _mentions_ "Agent: claude" in prose isn't picked up).
-An unrecognized agent name at any tier is logged and falls through to the
-next tier rather than failing the claim — a typo in an issue body shouldn't
-block autonomous pickup, and neither should a stale project setting.
+Both directives are matched case-insensitively on their **key** on their own
+line (a document that merely _mentions_ "Agent: claude" in prose isn't picked
+up), but the **value** is compared case-sensitively against the `KNOWN_AGENTS`
+allowlist (`src/services/agent-detect.ts:49`). `Agent: Claude` matches the
+line, then fails the allow-list and falls through to the next tier with a
+warning — easy to misread today's wording as "any casing works." An
+unrecognized agent name at any tier is logged and falls through to the next
+tier rather than failing the claim — a typo in an issue body shouldn't block
+autonomous pickup, and neither should a stale project setting.
+
+**Model directives (opencode only):** A Task Master's opencode worker accepts
+three additional directives on their own line, all matched case-insensitively
+on the **key** (same shape as `Agent:` above) but case-sensitively on the
+value against an allowlist. They are silently inert on claude/codex/agy —
+only `commandIsOpencode` tasks see them. Source:
+`src/services/task-model-resolve.ts:6-8` (the three regexes),
+`src/services/task-claim.ts:369-380` (the `commandIsOpencode` gate).
+
+1. `Model: <provider/model>` — the primary model for the worker session.
+   Falls back to the opencode default if unset.
+2. `Reviewer-Model: <provider/model>` — the reviewer's model. Falls back to
+   `Model:` if unset, then to the opencode default.
+3. `SmallModel: <provider/model>` — the model used for small/fast operations
+   (e.g. title derivation in #761). Falls back to the opencode default if
+   unset.
+
+The `<provider>/<model>` format accepts **more than one slash**, e.g.
+`openrouter/anthropic/claude-sonnet-4-5` — the format check requires
+non-whitespace content on either side of the first and last `/`, not exactly
+one slash. Roughly 60% of the live catalog on the reference install has two
+slashes (a routing prefix in front of the underlying provider/model pair).
+An unrecognized model value at any tier is logged and falls through with a
+warning — same posture as `Agent:`.
 
 The resolved worker command is recorded once, at claim time, on the task's
 own `agentCommand` field — so the task board can show which agent actually
@@ -1330,6 +1385,20 @@ merge"** button in the task drawer (`POST /api/tasks/:id/merge`) re-arms the
 sweep immediately, for cases that need a human to actually go fix something
 first.
 
+**Approve on a tracking epic (`#1020`).** When the task's underlying issue
+is a tracking epic (`subIssueTotal > 0`) and still has open children
+(`subIssueTotal - subIssueCompleted > 0`), Approve is **advisory, not
+blocked**. The handler at `src/routes/tasks.ts` posts a GitHub comment
+naming the open sub-issue count and returns `409
+{ code: "tracking-epic-with-open-sub-issues", subIssueStatus }`; the
+board's `TrackingEpicApprovalConfirm` component surfaces a two-stage
+confirmation, and on "Close anyway" the frontend re-POSTs with
+`?force=true` to bypass the warning and execute the close. Advisory was
+chosen over blocking because #1016 already auto-parks ingested epics in
+`backlog`, so a human clicking Approve on a `backlog`-parked epic is doing
+it deliberately — a hard block would strand legitimate deprioritization
+cases.
+
 **`blocked` isn't one state (`#737`).** GitHub collapses several distinct
 reasons a PR can't merge into this one `mergeable_state` value — a required
 CHECK red or still pending, or a required APPROVING REVIEW missing or
@@ -1443,6 +1512,19 @@ a fresh push while e2e is still queued. A human clicking Squash-and-merge on
 GitHub at least sees the red X first; "Merge now" is the equivalent override
 here. The flip side: a non-required check that never reports at all leaves a
 PR `unstable` — and therefore never auto-merging — forever.
+
+**Exception — PR-title lint self-heals (`#1035`).** A failing **PR-title
+lint** check (e.g. `wagoid/commitlint-github-action` on repos that adopted
+it after #761/#1037) is now self-healed rather than left `unstable`. The
+shape — a check name like `lint-pr-title` / `commitlint` / `pr-title` / etc.
+failing on a task's PR — is recognized by
+`task-reconciler.ts`'s `attemptSelfHealPrTitle` ahead of the unstable path:
+`resolvePrTitle` re-derives a Conventional Commits title from the task and
+`updatePullRequestTitle` PATCHes the PR. No auto-return round is consumed
+(the worker is forbidden by `buildTaskMasterPreamble` from editing the PR,
+so re-seeding it for a title fix would burn rounds for nothing). A check
+that isn't in the small curated set, or one where the title can't be
+re-derived, falls through to the original `unstable` path.
 
 **Commit title caveat, and the opt-in fix (`#761`).** This repo's squash-merge
 uses the PR title as the `main` commit message, and an unprefixed title (no
