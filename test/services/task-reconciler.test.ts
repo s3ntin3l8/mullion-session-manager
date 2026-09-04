@@ -4683,6 +4683,16 @@ describe("reconcileTasks", () => {
     // fail immediately. The grace window holds the task in_progress while
     // the agent's subscription quota cools down, with no commits getting
     // failed/salvaged for the configured graceMinutes.
+    //
+    // Hermes review, round 2 (PR #1027) — the rate_limit classification
+    // now lives on the task row (`lastRateLimitAt`), not just the
+    // session's in-memory `errorState`/`errorDetail` (which is TTL-cleared
+    // by `PtyManager.clearStaleErrorIfOlderThan` at `staleErrorSeconds`,
+    // default 30min). The reconciler's `recordRateLimitEvent` capture
+    // happens the moment a `rate_limit` is observed, and persists across
+    // the TTL — the only way the long-grace case (multi-day quota
+    // cooldowns) actually works. Each test pre-seeds or trusts the
+    // capture as appropriate.
     it("keeps an in_progress task with api_error + rate_limit + no commits alive during the grace window", async () => {
       const app = await buildApp();
       await app.inject({
@@ -4692,13 +4702,12 @@ describe("reconcileTasks", () => {
       });
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
-      const errorAt = Date.now() - 60_000;
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () =>
           fakeInfo({
             lastTurnEndedAt: Date.now(),
             errorState: "api_error",
-            errorAt,
+            errorAt: Date.now() - 60_000,
             errorDetail: "rate_limit",
           }),
       } as never);
@@ -4710,6 +4719,25 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("in_progress");
       // Grace skips the gate entirely — no WIP salvage, no terminate.
       expect(mockCommitWipChanges).not.toHaveBeenCalled();
+      // The capture MUST have written lastRateLimitAt to the task row
+      // (Hermes review, round 2) — otherwise a session-level errorState
+      // TTL clear would strand the task in_progress on the next tick.
+      expect(row.lastRateLimitAt).not.toBeNull();
+
+      // This test file shares one DB across its whole run with no per-test
+      // reset (module-level comment above), and the worker-path loop
+      // processes every in_progress task on every tick — leaving a
+      // task in_progress with `lastRateLimitAt` set means a LATER test
+      // (e.g. the CI-gated review spawn tests below, which don't mock
+      // `resolveHostGitStatus`) would hit a TypeError on its first
+      // reconcile when the leftover task's `checkReviewingGate` calls
+      // the now-unmocked function. Clean up by force-failing the task
+      // so it's outside the worker loop's purview.
+      app.db
+        .update(tasks)
+        .set({ status: "failed", failureReason: "test cleanup" })
+        .where(eq(tasks.id, taskId))
+        .run();
 
       await app.close();
     });
@@ -4723,15 +4751,24 @@ describe("reconcileTasks", () => {
       });
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
-      // 6 minutes ago — past the 5-minute grace window.
-      const errorAt = Date.now() - 6 * 60_000;
+      // Pre-seed the durable column to 6 minutes ago — past the 5-minute
+      // grace window. The session is configured with `errorDetail:
+      // "overloaded"` (NOT "rate_limit") so the reconciler's capture
+      // (recordRateLimitEvent) doesn't overwrite the pre-seed with
+      // `now` — every observed rate_limit restarts the window, so the
+      // only way to test "grace expired" is to keep the live session
+      // mis-classified while the durable column is past the window.
+      // `errorState: "api_error"` is still set so the outer gate
+      // (api_error branch) fires; only the classification differs.
+      const sixMinAgo = new Date(Date.now() - 6 * 60_000);
+      app.db.update(tasks).set({ lastRateLimitAt: sixMinAgo }).where(eq(tasks.id, taskId)).run();
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () =>
           fakeInfo({
             lastTurnEndedAt: Date.now(),
             errorState: "api_error",
-            errorAt,
-            errorDetail: "rate_limit",
+            errorAt: Date.now() - 6 * 60_000,
+            errorDetail: "overloaded",
           }),
       } as never);
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
@@ -4773,6 +4810,9 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("failed");
       expect(row.failureReason).not.toContain("rate_limit");
+      // Capture is gated on `errorDetail === "rate_limit"`, so a
+      // different classification never writes the column.
+      expect(row.lastRateLimitAt).toBeNull();
 
       await app.close();
     });
@@ -4786,20 +4826,22 @@ describe("reconcileTasks", () => {
       });
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
-      const errorAt = Date.now() - 60_000;
       const getSpy = vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () =>
           fakeInfo({
             lastTurnEndedAt: Date.now(),
             errorState: "api_error",
-            errorAt,
+            errorAt: Date.now() - 60_000,
             errorDetail: "rate_limit",
           }),
       } as never);
       // First reconcile — grace active, task stays in_progress.
       mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
       await reconcileTasks(app);
-      expect((await getTask(app, taskId)).status).toBe("in_progress");
+      const afterTick1 = await getTask(app, taskId);
+      expect(afterTick1.status).toBe("in_progress");
+      // Capture wrote lastRateLimitAt
+      expect(afterTick1.lastRateLimitAt).not.toBeNull();
 
       // Simulate recovery: agent's Stop hook fired again with no error, so
       // errorState is now "idle" AND the worker made commits before
@@ -4812,6 +4854,56 @@ describe("reconcileTasks", () => {
       await reconcileTasks(app);
 
       expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    // Hermes review, round 2 (PR #1027) — TTL-clear regression guard.
+    // The rate_limit signal lives on the task row, not just the session's
+    // in-memory errorState. Once `PtyManager.clearStaleErrorIfOlderThan`
+    // clears the session's errorState at `staleErrorSeconds` (default
+    // 30min), the durable lastRateLimitAt must still keep the task in
+    // the grace branch — the outer gate widens to include
+    // `(finished || api_error || in_grace)` to make this work.
+    it("keeps an in_progress task in grace after the session's errorState is TTL-cleared (durable lastRateLimitAt only)", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
+      });
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+      // Pre-seed the durable column — this represents "the rate_limit
+      // happened on an earlier tick and the session's errorState has
+      // since been TTL-cleared" (post-30-min scenario).
+      const oneMinAgo = new Date(Date.now() - 60_000);
+      app.db.update(tasks).set({ lastRateLimitAt: oneMinAgo }).where(eq(tasks.id, taskId)).run();
+      // Session now reports idle/empty — what a TTL-cleared session looks
+      // like. `derived.status` will be `idle`, NOT `api_error`. The
+      // outer-gate widening (in_grace branch) is what keeps this tick
+      // engaged.
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo(),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus("0000000", false, [{ path: "x" }]));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      // Grace active — task stays in_progress, no WIP salvage, no terminate.
+      expect(row.status).toBe("in_progress");
+      expect(mockCommitWipChanges).not.toHaveBeenCalled();
+
+      // Clean up: see the matching comment in the "keeps an in_progress
+      // task alive" test above. The durable lastRateLimitAt on this
+      // task would otherwise haunt a later test's worker loop the same
+      // way.
+      app.db
+        .update(tasks)
+        .set({ status: "failed", failureReason: "test cleanup" })
+        .where(eq(tasks.id, taskId))
+        .run();
+
       await app.close();
     });
   });
@@ -5243,6 +5335,11 @@ describe("reconcileTasks", () => {
     // subscription quota mid-review posts an inconclusive verdict and strands
     // the task in `reviewing` indefinitely (wantsAutoReturn requires
     // `derived.status === "finished"`, never true for `api_error`).
+    //
+    // Hermes review, round 2 — the rate_limit classification now lives on
+    // the task row (`lastRateLimitAt`) and persists across the session's
+    // errorState TTL clear. The capture happens in the reconciler the
+    // moment it observes `errorDetail === "rate_limit"`.
     it("keeps a reviewing task alive while the review session's api_error + rate_limit grace window is active", async () => {
       const app = await buildApp();
       await app.inject({
@@ -5274,6 +5371,8 @@ describe("reconcileTasks", () => {
       expect(row.status).toBe("reviewing");
       expect(row.reviewFindings).toBeNull();
       expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      // Capture wrote lastRateLimitAt to the task row (Hermes round 2).
+      expect(row.lastRateLimitAt).not.toBeNull();
 
       await app.close();
     });
@@ -5286,11 +5385,21 @@ describe("reconcileTasks", () => {
         payload: { taskMaster: { rateLimitGraceMinutes: 5 } },
       });
       const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
-      // 6 minutes ago — past the 5-minute grace window. The review
-      // session itself is aged past REVIEW_FINDINGS_GRACE_MS (30 min) by
-      // setting `createdAt` below, since the existing isUsableSignal
-      // path needs that to accept an api_error session with no findings
-      // file as inconclusive.
+      // Pre-seed lastRateLimitAt to 6 minutes ago (past the 5-min grace
+      // window) — simulates "the rate_limit happened some time ago, the
+      // session's errorState has since TTL-cleared, but the durable
+      // column still carries the signal." The session is configured
+      // with `errorDetail: "overloaded"` so the capture doesn't
+      // overwrite the pre-seed with `now` (every observed rate_limit
+      // restarts the window — see the matching worker test for the
+      // full reasoning).
+      app.db
+        .update(tasks)
+        .set({ lastRateLimitAt: new Date(Date.now() - 6 * 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      // Age the session past REVIEW_FINDINGS_GRACE_MS (30 min) so the
+      // existing isUsableSignal path accepts the api_error verdict.
       const { sessions } = await import("../../src/db/schema.js");
       await app.db
         .update(sessions)
@@ -5304,7 +5413,7 @@ describe("reconcileTasks", () => {
                 ? fakeInfo({
                     errorState: "api_error",
                     errorAt: Date.now() - 6 * 60_000,
-                    errorDetail: "rate_limit",
+                    errorDetail: "overloaded",
                   })
                 : fakeInfo(),
           }) as never,
@@ -5358,6 +5467,9 @@ describe("reconcileTasks", () => {
       // Wrong errorDetail — grace skipped, inconclusive comment posted
       expect(row.status).toBe("reviewing");
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      // Capture is gated on `errorDetail === "rate_limit"`, so a
+      // different classification never writes the column.
+      expect(row.lastRateLimitAt).toBeNull();
 
       await app.close();
     });

@@ -79,7 +79,11 @@ import {
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
 import { resolveReleaseMerge } from "./release-merge.js";
-import { isRateLimitGraceActive } from "./task-rate-limit-grace.js";
+import {
+  isRateLimitGraceActive,
+  isTaskInRateLimitGrace,
+  recordRateLimitEvent,
+} from "./task-rate-limit-grace.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
 
 /**
@@ -680,14 +684,32 @@ async function checkReviewingGate(
   const detail = truncatedDetail !== null ? ` (${truncatedDetail})` : "";
   // #1015 follow-up — explicit "rate_limit" prefix so a post-grace failure
   // can be distinguished from the generic "agent ended with no commits" case
-  // in the GitHub issue comment. Deliberately only the exact "rate_limit"
-  // label — every other api_error classification ("overloaded", "auth …",
-  // free-text detail) reads as a different class of failure and doesn't get
-  // the prefix.
+  // in the GitHub issue comment. Two conditions trigger the prefix:
+  //   1. The session's live `errorDetail` is still `"rate_limit"` (the
+  //      common case, when the TTL hasn't cleared it yet).
+  //   2. The task row's `lastRateLimitAt` is recent (Hermes review, PR
+  //      #1027 round 2 — a long grace may have outlived the session's
+  //      error-state TTL clearing, in which case `info` alone is no
+  //      longer evidence of the rate_limit, but the durable column is).
+  // Deliberately only the exact "rate_limit" label — every other
+  // api_error classification ("overloaded", "auth …", free-text
+  // detail) reads as a different class of failure and doesn't get the
+  // prefix.
+  const liveRateLimit = info?.errorState === "api_error" && info?.errorDetail === "rate_limit";
+  // The graceMinutes isn't passed in here (checkReviewingGate doesn't
+  // resolve it); use the same cap as the env default — if
+  // `lastRateLimitAt` is older than the documented 1440-min ceiling,
+  // it can't be a still-active grace signal regardless of operator
+  // config. Conservative: a slightly-stale signal could pass this
+  // check and add the prefix, but the prefix is informational, not
+  // behavior-changing, and the human-visible failure reason is the
+  // operator's signal to manually Retry.
+  const MAX_GRACE_MIN = 1440;
+  const persistedRateLimit =
+    task.lastRateLimitAt !== null &&
+    Date.now() - task.lastRateLimitAt.getTime() < MAX_GRACE_MIN * 60_000;
   const rateLimitPrefix =
-    info?.errorState === "api_error" && info?.errorDetail === "rate_limit"
-      ? "rate_limit quota exhausted — "
-      : "";
+    liveRateLimit || persistedRateLimit ? "rate_limit quota exhausted — " : "";
   return {
     ok: false,
     failureReason: `${rateLimitPrefix}agent ended its turn with no commits on ${task.branchName}${detail}`,
@@ -3155,11 +3177,27 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // isn't available. Pass `false` (no progress to protect) — the
         // session's own liveness + the elapsed `REVIEW_FINDINGS_GRACE_MS`
         // are the safety nets if the grace check mis-fires.
+        //
+        // Capture first (Hermes review, PR #1027) — the rate_limit
+        // classification lives on the task row (`lastRateLimitAt`) so it
+        // survives `PtyManager.clearStaleErrorIfOlderThan` (default 30 min)
+        // clearing the session's in-memory `errorState`. Without capture,
+        // a long grace would silently truncate the moment the session's
+        // error state TTLs. The function returns the timestamp it just
+        // wrote (or null if no write) so the grace check below can use
+        // it without re-reading the task row.
+        if (info !== null && parsed === null && info.errorDetail === "rate_limit") {
+          const capturedAt = await recordRateLimitEvent(app, task.id, info);
+          if (capturedAt !== null) {
+            task.lastRateLimitAt = capturedAt;
+          }
+        }
         if (
           info !== null &&
           parsed === null &&
           isRateLimitGraceActive(
-            { errorState: info.errorState, errorAt: info.errorAt, errorDetail: info.errorDetail },
+            { errorState: info.errorState, errorDetail: info.errorDetail },
+            { lastRateLimitAt: task.lastRateLimitAt },
             { graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes, hasCommitsPastBase: false },
           )
         ) {
@@ -3774,7 +3812,21 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // system but is unreachable via this path now.
           if (
             task.status === "in_progress" &&
-            (derived.status === "finished" || derived.status === "api_error") &&
+            (derived.status === "finished" ||
+              derived.status === "api_error" ||
+              // Hermes review (PR #1027, round 2) — the durable
+              // lastRateLimitAt column is the only signal that
+              // survives PtyManager.clearStaleErrorIfOlderThan (default
+              // 30 min). A `stop_failure` never sets lastTurnEndedAt, so
+              // once the session's error state TTLs, the session
+              // derives to a non-`api_error`/non-`finished` status
+              // (idle/working/etc.) and would otherwise strand
+              // in_progress — the very behavior the grace window exists
+              // to prevent. Widening the outer gate to a third
+              // `(finished || api_error || in_grace)` branch lets a
+              // post-TTL session's task still get re-checked against
+              // checkReviewingGate on every tick.
+              isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)) &&
             resolvedTaskMaster.enabled &&
             info !== null &&
             // Fresh-signal guard. turnFinishedSinceClaim prevents the
@@ -3784,10 +3836,16 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // turn_start hooks — no stale-latch problem to guard against),
             // and lastTurnEndedAt is null because stop_failure is its own
             // hook event that does NOT set lastTurnEndedAt — see
-            // hook-handlers.ts's stop_failure handler.
+            // hook-handlers.ts's stop_failure handler. The third
+            // (in-grace) branch reads lastRateLimitAt directly, so it
+            // has no need for a stale-signal guard — the column is
+            // only ever written by a fresh hook event and never
+            // mutated by the session's in-memory sweep.
             (derived.status === "finished"
               ? turnFinishedSinceClaim(info, task)
-              : info.errorAt !== null)
+              : derived.status === "api_error"
+                ? info.errorAt !== null
+                : true)
           ) {
             // #1015 follow-up — rate-limit grace window. Detects the
             // "rate_limit: subscription quota exhausted" stop_failure
@@ -3798,27 +3856,71 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // rate_limit), fall through to the normal no-commits gate.
             //
             // Hermes review (PR #1027) — gate hasCommitsPastBase behind
-            // the api_error branch only. A `finished` task is a real
-            // success signal — `isRateLimitGraceActive` short-circuits on
+            // the api_error / in-grace branches only. A `finished` task
+            // is a real success signal — `isRateLimitGraceActive`
+            // short-circuits on `errorState !== "api_error"` and discards
+            // the result, so the work would be a doubled git-status
+            // round-trip on every "happy" finished task per reconcile
+            // tick. The other two branches are the only ones that
+            // actually consult the value.
+            //
+            // Capture first (Hermes review, round 2) — the rate_limit
+            // classification lives on the task row (`lastRateLimitAt`)
+            // so it survives `PtyManager.clearStaleErrorIfOlderThan`
+            // clearing the session's in-memory `errorState`. Without
+            // capture, a long grace would silently truncate the moment
+            // the session's error state TTLs. The function returns the
+            // timestamp it just wrote (or null if no write) so the
+            // grace check below can use it without re-reading the task
+            // row — `task` is a snapshot from the start-of-tick SELECT.
+            const capturedAt = await recordRateLimitEvent(app, task.id, info);
+            if (capturedAt !== null) {
+              task.lastRateLimitAt = capturedAt;
+            }
+            // Hermes review (PR #1027) — gate hasCommitsPastBase behind
+            // the api_error / in-grace branches only. A `finished` task
+            // is a real success signal — short-circuits on
             // `errorState !== "api_error"` and discards the result, so
             // the work would be a doubled git-status round-trip on every
-            // "happy" finished task per reconcile tick. The api_error
-            // path is the only branch that actually consults the value.
-            if (derived.status === "api_error") {
-              const hasCommits = await hasCommitsPastBase(app, project, task);
-              if (
-                isRateLimitGraceActive(
-                  {
-                    errorState: info.errorState,
-                    errorAt: info.errorAt,
-                    errorDetail: info.errorDetail,
-                  },
-                  {
-                    graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes,
-                    hasCommitsPastBase: hasCommits,
-                  },
-                )
-              ) {
+            // "happy" finished task per reconcile tick. The other two
+            // branches are the only ones that actually consult the
+            // value.
+            if (derived.status !== "finished") {
+              // In-grace (round 2): the durable lastRateLimitAt is
+              // recent. Two sub-cases — the session's `errorState` may
+              // still be `api_error` (live) or have been TTL-cleared
+              // (post-30min). Both reach this block; the session-info
+              // pre-check inside isRateLimitGraceActive only accepts the
+              // former, so the in-grace branch needs to handle both.
+              // hasCommitsPastBase is the discriminator: if the agent
+              // made progress between rate_limits, advance to reviewing
+              // rather than staying in grace.
+              const inGrace = isTaskInRateLimitGrace(
+                task,
+                resolvedTaskMaster.rateLimitGraceMinutes,
+              );
+              const hasCommits = inGrace ? await hasCommitsPastBase(app, project, task) : false;
+              // The live (api_error) grace check has its own pre-checks
+              // (errorState, errorDetail); a non-rate_limit api_error
+              // short-circuits to false and falls through to the
+              // checkReviewingGate below. An overloaded/auth/etc. error
+              // therefore fails via the no-commits gate, as before.
+              const liveGrace = isRateLimitGraceActive(
+                {
+                  errorState: info.errorState,
+                  errorDetail: info.errorDetail,
+                },
+                { lastRateLimitAt: task.lastRateLimitAt },
+                {
+                  graceMinutes: resolvedTaskMaster.rateLimitGraceMinutes,
+                  hasCommitsPastBase: inGrace ? hasCommits : false,
+                },
+              );
+              if (inGrace && !hasCommits) {
+                // Durable signal + no commits = stay in grace.
+                continue;
+              }
+              if (liveGrace) {
                 continue;
               }
             }
