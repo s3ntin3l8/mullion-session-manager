@@ -3578,6 +3578,37 @@ describe("tasks route", () => {
         expect(res.statusCode).toBe(400);
         await app.close();
       });
+
+      it("reports (not archives) when the PR lookup throws", async () => {
+        const cwd = createGitRepoWithRemote("acme", "widgets-archive-pr-error");
+        const app = await buildApp();
+        await connectPat(app, "ghp_archive_pr_error");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const getPrSpy = vi
+          .spyOn(githubWrite, "getPullRequestByNumber")
+          .mockRejectedValue(new Error(" network timeout"));
+
+        const projectId = await createProject(app, cwd);
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "will fail", status: "done", prNumber: 99 })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks/archive-merged",
+          payload: { projectIds: [projectId] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          archived: [],
+          failed: [{ id: row.id, error: "Could not confirm PR merge state" }],
+        });
+
+        getPrSpy.mockRestore();
+        await app.close();
+      });
     });
   });
 });
