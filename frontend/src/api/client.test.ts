@@ -13,6 +13,7 @@ import {
   AuthExpiredError,
   RateLimitedError,
   __resetRateLimitBreakerForTests,
+  setGlobalRateLimitMax,
 } from "./client.js";
 
 // Regression coverage for the production incident: behind a gateway
@@ -335,5 +336,84 @@ describe("request() — 429 rate-limit handling", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+});
+
+// Issue #1006 — companion to #970/#959's per-key breaker: two of the
+// buckets this app actually has (security.ts's global per-IP limiter and
+// the shared per-route-pattern buckets like /github/prs, /git-branches) are
+// NOT truly per-URL, so a 429 from one project's call must widen the gate
+// to every other project's call hitting the same bucket — but only for the
+// global bucket specifically, never for a merely-shared per-route one
+// (there's no header this app's client can use to detect *that* kind of
+// sharing, so it stays scoped to its own key, same as before).
+describe("request() — global 429 gate (issue #1006)", () => {
+  const GLOBAL_MAX = 100;
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    __resetRateLimitBreakerForTests();
+    setGlobalRateLimitMax(GLOBAL_MAX);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function rateLimitedResponse(retryAfterSeconds: number, rateLimitLimit: number): Response {
+    return new Response(JSON.stringify({ message: "Too Many Requests" }), {
+      status: 429,
+      headers: {
+        "content-type": "application/json",
+        "retry-after": String(retryAfterSeconds),
+        "x-ratelimit-limit": String(rateLimitLimit),
+      },
+    });
+  }
+
+  it("a 429 whose x-ratelimit-limit equals the global max short-circuits a different URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(rateLimitedResponse(5, GLOBAL_MAX));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/projects/5/git-branches")).rejects.toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    // A completely different key (different method+path) must still be
+    // blocked without ever reaching fetch — the whole point of widening to
+    // a global gate instead of the per-key breaker.
+    await expect(request("/api/projects/9/github/prs")).rejects.toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("a 429 from a smaller, route-scoped bucket does not globally short-circuit unrelated calls", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitedResponse(5, 30))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/projects/5/git-branches")).rejects.toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    // A different key must reach the network — only that route's own
+    // 30/min bucket is exhausted, not the shared global one.
+    await expect(request("/api/projects/9/github/prs")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not widen to a global gate before the global max is known", async () => {
+    __resetRateLimitBreakerForTests(); // also clears setGlobalRateLimitMax's value back to null
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitedResponse(5, GLOBAL_MAX))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(request("/api/projects/5/git-branches")).rejects.toBeInstanceOf(RateLimitedError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    await expect(request("/api/projects/9/github/prs")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

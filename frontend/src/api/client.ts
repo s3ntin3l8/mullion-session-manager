@@ -108,6 +108,26 @@ function clearBreakerEntry(key: string): void {
 // would also wipe every other module-level in the test file).
 export function __resetRateLimitBreakerForTests(): void {
   RATE_LIMIT_BREAKER.clear();
+  globalRateLimitMax = null;
+}
+
+// Reserved breaker key for the shared, per-IP global bucket (security.ts's
+// RATE_LIMIT_MAX/RATE_LIMIT_WINDOW) — distinct from any real `${method}
+// ${path}` key `breakerKey()` produces, so it can live in the same map.
+// Checked before the per-key entry in request() below.
+const GLOBAL_BREAKER_KEY = "__global__";
+
+// The server's global rate-limit ceiling (security.ts's RATE_LIMIT_MAX),
+// learned from GET /api/server-info's `rateLimit.max` (seeded by every
+// api/system.ts's getServerInfo() call — see its own doc comment) rather
+// than hardcoded here, since it's operator-configurable via the
+// RATE_LIMIT_MAX env var. Null until that first fetch lands, during which a
+// 429's `x-ratelimit-limit` can never be recognized as the global bucket —
+// the per-key breaker alone still applies, matching pre-#1006 behavior.
+let globalRateLimitMax: number | null = null;
+
+export function setGlobalRateLimitMax(max: number): void {
+  globalRateLimitMax = max;
 }
 
 // Parses an RFC 7231 `Retry-After` value: either a non-negative integer
@@ -220,6 +240,21 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // read on the same URL stay independent.
   const method = init?.method ?? "GET";
   const key = breakerKey(method, path);
+
+  // Global gate (issue #1006): a 429 from the shared, per-IP global bucket
+  // (security.ts's RATE_LIMIT_MAX) means every other in-flight call is
+  // about to land in that same already-exhausted bucket too — checked
+  // before the per-key entry so it short-circuits calls to keys that never
+  // individually 429'd. Set below only when a 429's `x-ratelimit-limit`
+  // header matches the known global max (see setGlobalRateLimitMax) — a
+  // 429 from a smaller, route-specific bucket (e.g. the 10/min login
+  // limiter) must NOT trip this, or one throttled endpoint would freeze
+  // the whole dashboard for up to a minute.
+  const globalBlockedUntil = getBreakerEntry(GLOBAL_BREAKER_KEY);
+  if (globalBlockedUntil !== 0) {
+    throw new RateLimitedError(429, globalBlockedUntil - Date.now());
+  }
+
   const blockedUntil = getBreakerEntry(key);
   if (blockedUntil !== 0) {
     throw new RateLimitedError(429, blockedUntil - Date.now());
@@ -264,8 +299,23 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // route bucket model, and any per-IP keyGenerator the server may add
     // later) and is cleared on the next successful response, mirroring
     // clearAuthExpiryReloadGuard below.
+    //
+    // Exception (issue #1006): when the response's `x-ratelimit-limit`
+    // equals the server's global max, this 429 came from the shared,
+    // per-IP global bucket (security.ts), not a per-route one — every
+    // other key is about to hit the same exhausted bucket, so the gate
+    // widens to GLOBAL_BREAKER_KEY instead of the request's own key. Relies
+    // on no per-route limiter's `max` ever equaling the global max (pinned
+    // by test/plugins/rate-limit-discriminator.test.ts) — otherwise a route-scoped
+    // 429 could be misread as a global one.
     const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"), DEFAULT_RETRY_AFTER_MS);
-    setBreakerEntry(key, Date.now() + retryAfterMs);
+    const until = Date.now() + retryAfterMs;
+    const limitHeader = res.headers.get("x-ratelimit-limit");
+    const isGlobalBucket =
+      globalRateLimitMax !== null &&
+      limitHeader !== null &&
+      Number(limitHeader) === globalRateLimitMax;
+    setBreakerEntry(isGlobalBucket ? GLOBAL_BREAKER_KEY : key, until);
     throw new RateLimitedError(429, retryAfterMs);
   }
 
