@@ -123,7 +123,7 @@ const MAX_PARENT_TITLE_ATTEMPT_ENTRIES = 500;
 // *mentions* "Manual: true" in prose shouldn't be silently exempted).
 const MANUAL_LINE_RE = /^\s*Manual:\s*true\s*$/im;
 
-function isManualOnly(body: string | null): boolean {
+export function isManualOnly(body: string | null): boolean {
   return body !== null && MANUAL_LINE_RE.test(body);
 }
 
