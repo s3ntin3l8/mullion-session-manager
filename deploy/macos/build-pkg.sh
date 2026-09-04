@@ -46,6 +46,17 @@ if [ ! -x "$SEA_BIN" ]; then
   echo "expected a built mullion-helper SEA at $SEA_BIN — run 'npm run build:helper-sea' first" >&2
   exit 1
 fi
+# Architecture gate: macOS .pkg must be built on the target arch. A
+# universal binary (lipo) would work too, but the SEA toolchain doesn't
+# produce one today — this is the cheapest guard against the silent
+# mis-deploy that confused the original audit.
+SEA_ARCH="$(lipo -info "$SEA_BIN" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^(x86_64|arm64)$/) print $i}' | head -1)"
+HOST_ARCH="$(uname -m)"
+if [ -n "$SEA_ARCH" ] && [ "$SEA_ARCH" != "$HOST_ARCH" ]; then
+  echo "error: mullion-helper SEA is $SEA_ARCH but this host is $HOST_ARCH — cross-arch .pkg will not run" >&2
+  echo "Rebuild on a $HOST_ARCH host or produce a universal binary with lipo." >&2
+  exit 1
+fi
 
 rm -rf "$STAGE_ROOT"
 mkdir -p "$STAGE_ROOT/usr/local/bin" "$OUT_DIR"
