@@ -628,7 +628,7 @@ explicitly not to implement other streams. If you want a worker to know
 specific context, put it in the child issue's body; the parent block
 arrives automatically when `parentIssueNumber`/`parentIssueRepo` resolve.
 Do **not** assume a labeled parent buys the parent block — the resolution
-path fails OPEN (`task-issue-context.ts:87-90`, "advisory, not a gate") on
+path fails OPEN (`task-issue-context.ts:10-23`, "advisory, not a gate") on
 a GitHub hiccup, and the field is absent for non-GitHub tasks.
 
 Board surfaces: `TaskCard.tsx` renders a `↳ <parent title>` meta chip
@@ -1390,7 +1390,7 @@ is a tracking epic (`subIssueTotal > 0`) and still has open children
 (`subIssueTotal - subIssueCompleted > 0`), Approve is **advisory, not
 blocked**. The handler at `src/routes/tasks.ts` posts a GitHub comment
 naming the open sub-issue count and returns `409
-{ error: "tracking-epic-with-open-sub-issues", subIssueStatus }`; the
+{ code: "tracking-epic-with-open-sub-issues", subIssueStatus }`; the
 board's `TrackingEpicApprovalConfirm` component surfaces a two-stage
 confirmation, and on "Close anyway" the frontend re-POSTs with
 `?force=true` to bypass the warning and execute the close. Advisory was
