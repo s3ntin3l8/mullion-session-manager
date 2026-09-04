@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import {
   agentGuideSourceExists,
+  buildAgentGuideBlock,
+  buildAgentGuidePointer,
   buildSessionAgentGuideContent,
-  MAX_GUIDE_EXCERPT_BYTES,
-  readAgentGuideExcerpt,
   sessionAgentGuidePath,
   writeSessionAgentGuide,
 } from "../../src/services/agent-guide.js";
@@ -31,33 +31,36 @@ describe("agentGuideSourceExists", () => {
   });
 });
 
-describe("readAgentGuideExcerpt", () => {
-  it("returns the delimited tier-1 excerpt from this checkout's docs/agent-guide.md", () => {
-    const excerpt = readAgentGuideExcerpt();
-    expect(excerpt).not.toBeNull();
-    // Distinctive tier-1 phrase (the env-var summary), not just any text.
-    expect(excerpt).toContain("MULLION_HOOK_SOCKET");
+describe("buildAgentGuidePointer", () => {
+  it("names the guide path and the session-scope wording when auth is enabled", () => {
+    const pointer = buildAgentGuidePointer("/tmp/1.agent-guide.md", true);
+    expect(pointer).toContain("/tmp/1.agent-guide.md");
+    expect(pointer).toContain("MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN");
   });
 
-  it("stays at or under MAX_GUIDE_EXCERPT_BYTES (plus a possible truncation marker)", () => {
-    const excerpt = readAgentGuideExcerpt();
-    // Generous margin over the raw budget to allow for clampToBytes's own
-    // truncation marker text, without hard-coding its exact length here.
-    expect(Buffer.byteLength(excerpt ?? "", "utf8")).toBeLessThan(MAX_GUIDE_EXCERPT_BYTES + 200);
+  it("names the full-scope wording when auth is disabled", () => {
+    const pointer = buildAgentGuidePointer("/tmp/1.agent-guide.md", false);
+    expect(pointer).toContain("in-app auth disabled");
+    expect(pointer).not.toContain("MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN");
+  });
+});
+
+describe("buildAgentGuideBlock (issue #949 tier-0 push)", () => {
+  it("composes session identity, the guide pointer, and a pointer to the host skill", () => {
+    const block = buildAgentGuideBlock("/tmp/1.agent-guide.md", false);
+    expect(block).toContain("Mullion-hosted session");
+    expect(block).toContain(buildAgentGuidePointer("/tmp/1.agent-guide.md", false));
+    expect(block).toContain("Mullion host skill");
   });
 
-  it("is an excerpt, not the whole file — omits text that only appears later in the doc", () => {
-    const excerpt = readAgentGuideExcerpt();
-    // "Spawning a child session" is a section well past the tier-1 marker.
-    expect(excerpt).not.toContain("Spawning a child session");
-  });
-
-  it("docs/agent-guide.md carries exactly one tier1 marker pair (guards against an accidental duplicate or removal)", () => {
+  it("is a short, fixed-size block — not proportional to docs/agent-guide.md's own length", () => {
+    const block = buildAgentGuideBlock("/tmp/1.agent-guide.md", false);
     const shipped = readFileSync(path.resolve(process.cwd(), "docs", "agent-guide.md"), "utf8");
-    const startCount = (shipped.match(/<!-- mullion:tier1:start -->/g) ?? []).length;
-    const endCount = (shipped.match(/<!-- mullion:tier1:end -->/g) ?? []).length;
-    expect(startCount).toBe(1);
-    expect(endCount).toBe(1);
+    // Generous margin (the old tier-1 excerpt alone was budgeted up to
+    // ~2KB) — this just guards against buildAgentGuideBlock silently
+    // growing back into an excerpt-shaped block again.
+    expect(Buffer.byteLength(block, "utf8")).toBeLessThan(1024);
+    expect(Buffer.byteLength(block, "utf8")).toBeLessThan(Buffer.byteLength(shipped, "utf8"));
   });
 });
 

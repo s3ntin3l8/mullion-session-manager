@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import type { HookMessage } from "../../src/services/hook-protocol.js";
-import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
+import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
 import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
 import { buildCodexMcpFlags } from "../../src/services/hook-adapters/codex.js";
@@ -6613,7 +6613,7 @@ describe("PtyManager", () => {
       fallbackManager.killAll();
     });
 
-    it("injects OPENCODE_CONFIG_CONTENT pointing at this session's own agent-guide copy when injectAgentGuide is on (issue #437c, default manager — getInjectAgentGuide defaults to () => true)", async () => {
+    it("injects OPENCODE_CONFIG_CONTENT pointing at this session's own tier-0 guide push when injectAgentGuide is on (issue #949, formerly #437c; default manager — getInjectAgentGuide defaults to () => true)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -6628,6 +6628,7 @@ describe("PtyManager", () => {
         .mock.calls.findLast(([file]) => file === "systemd-run");
       const opts = call?.[2] as { env?: Record<string, string> };
       expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+      const tier0Path = path.join(sessionsDir, "1.opencode-tier0.md");
       // getInjectMullionBundle also defaults to () => true, and this
       // checkout genuinely ships src/bundle/ — the payload carries
       // skills.paths alongside instructions, same as claude-code's
@@ -6635,7 +6636,7 @@ describe("PtyManager", () => {
       // (pty-manager.test.ts's own claude-code describe above). Issue
       // #881 — mcp.mullion is now unconditional, so it's present here too.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [sessionAgentGuidePath(sessionsDir, "1")],
+        instructions: [tier0Path],
         skills: { paths: [path.join(resolveMullionBundleDir()!, "skills")] },
         mcp: buildOpenCodeMcpConfig(
           resolveMcpServerPath(),
@@ -6644,6 +6645,40 @@ describe("PtyManager", () => {
           manager.controlSocketPath,
         ),
       });
+      // The tier-0 file itself is a real on-disk write (settingsFiles),
+      // not just an env-var reference — same short block hooks.ts pushes
+      // to the other three agents, `authEnabled` defaulting true here
+      // (this describe block's own `manager` is constructed with no
+      // authEnabled option — see the dedicated authEnabled test below for
+      // the explicit `false` case).
+      expect(fs.readFileSync(tier0Path, "utf8")).toBe(
+        buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "1"), true),
+      );
+    });
+
+    // Issue #949 — the end-to-end proof that `authEnabled` (a boot-time
+    // PtyManager constant, threaded the same way sshAuthSock already is —
+    // see this describe block's own sshAuthSock tests above) actually
+    // reaches the opencode tier-0 file's content, not just the
+    // HookAdapterContext unit-level assertions in launch-plan.test.ts/
+    // opencode.test.ts.
+    it("reflects PtyManager's own authEnabled constant in the opencode tier-0 push", async () => {
+      const authedManager = new PtyManager({ sessionsDir, authEnabled: true });
+      const session = authedManager.getOrCreate({
+        id: "5",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const tier0Path = path.join(sessionsDir, "5.opencode-tier0.md");
+      expect(fs.readFileSync(tier0Path, "utf8")).toBe(
+        buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "5"), true),
+      );
+
+      authedManager.killAll();
     });
 
     it("omits the guide pointer from instructions when the manager's getInjectAgentGuide reports the setting off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (issue #437c; OPENCODE_CONFIG_CONTENT itself stays present for the unconditional mcp entry, issue #881)", async () => {
@@ -6757,7 +6792,7 @@ describe("PtyManager", () => {
       // OPENCODE_CONFIG_CONTENT is still present — just without skills.
       // mcp.mullion is unconditional (issue #881), so it's present too.
       expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
-        instructions: [sessionAgentGuidePath(sessionsDir, "4")],
+        instructions: [path.join(sessionsDir, "4.opencode-tier0.md")],
         mcp: buildOpenCodeMcpConfig(
           resolveMcpServerPath(),
           bundlelessManager.hookSocketPath,

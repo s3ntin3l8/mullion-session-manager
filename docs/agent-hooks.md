@@ -301,29 +301,37 @@ invocation, Mullion:
    global/project config, not in place of it, so this never disturbs an
    existing `opencode.json` or its other plugins.
 
-**The agent-guide auto-inject nudge** (issue #437c) rides the same
-additive-env-var posture, via a second variable: `OPENCODE_CONFIG_CONTENT`,
-a runtime override near the top of OpenCode's own documented
-config-precedence chain, set to `{"instructions": ["<path to this
-session's own copy of docs/agent-guide.md>"]}`. Verified empirically this
-PR (`opencode debug config`, no live session or model call needed, so no
-"unverified — would need a paid model turn" caveat here unlike agy's
-`SessionStart`, or Codex's `apply_patch` extractor before issue #846's live
-verification) that OpenCode's
-`instructions` array **concatenates** with whatever the user's own
-project/global `instructions` already contains, including when combined
-with `OPENCODE_CONFIG_DIR` above — never replaces them. Also verified this
+**The agent-guide tier-0 push** (issue #437c, redesigned by #949) rides the
+same additive-env-var posture, via a second variable:
+`OPENCODE_CONFIG_CONTENT`, a runtime override near the top of OpenCode's
+own documented config-precedence chain, set to `{"instructions": ["<path
+to a small tier-0 file this adapter writes itself>"]}`. Verified
+empirically this PR (`opencode debug config`, no live session or model
+call needed, so no "unverified — would need a paid model turn" caveat here
+unlike agy's `SessionStart`, or Codex's `apply_patch` extractor before
+issue #846's live verification) that OpenCode's `instructions` array
+**concatenates** with whatever the user's own project/global
+`instructions` already contains, including when combined with
+`OPENCODE_CONFIG_DIR` above — never replaces them. Also verified this
 merge is per-key, not a whole-layer shadow: unrelated top-level keys
 (`model`, `small_model`) in a project's own config survive fully intact
-when `OPENCODE_CONFIG_CONTENT` sets only `instructions`. This is a
-materially different mechanism from every other agent's SessionStart
-pointer, not just a different dialect: OpenCode has no live hook round
-trip to reply to at all, so there is no per-event pointer sentence, and
-this static `instructions` channel alone still can't compose a live
-per-event reply — Mullion can only point OpenCode's static startup config
-at the guide file itself, so OpenCode's context gets the guide's **full
-content**, loaded once at startup, not a short "here's where to find it"
-nudge.
+when `OPENCODE_CONFIG_CONTENT` sets only `instructions`. OpenCode has no
+live hook round trip to reply to at all, so there is no per-event push the
+way the other three agents get one — but as of #949 the CONTENT is the
+same short block every other agent's SessionStart reply carries
+(`buildAgentGuideBlock`, `src/services/agent-guide.ts`): session identity,
+the host-dependent auth-scope sentence, and a pointer to load the `host`
+skill for the rest. Through issue #949 this channel instead pointed
+straight at the FULL per-session copy of `docs/agent-guide.md`, so
+OpenCode's context got the guide's entire content loaded once at startup —
+that changed once OpenCode also started pulling the `host`/`browser`/
+`troubleshooting`/`session-ops` skills via `skills.paths` (issue #940, the
+same bundle Claude Code gets via `--plugin-dir`), making a second full
+copy of the same content redundant. **Confirmed live** (issue #949): with
+`OPENCODE_CONFIG_CONTENT` set exactly this way against a real installed
+1.18.27 binary, `opencode run` answered a two-part probe about its scope
+and the skill to load correctly from injected context alone, with no tool
+calls or file reads.
 
 As of the promote-flow first-turn fix, the promote-flow seed (issue
 #271/#678) no longer rides this `instructions` channel at all: it's sent

@@ -11,8 +11,6 @@ your launcher already wired up for structured notifications
 entry point to all three — read the **scope model** section before you reach
 for command syntax, it's the part most likely to surprise you.
 
-<!-- mullion:tier1:start -->
-
 You have four extra environment variables that matter to you: `MULLION_HOOK_SOCKET`
 (structured notifications — `mullion notify`), `MULLION_HOOK_TOKEN` (authenticates
 both the hook socket and the control socket, at session scope), `MULLION_SOCKET_PATH`
@@ -31,8 +29,6 @@ connection resolves to full scope regardless.
 The rest of this file — the full scope table, CLI vs. MCP, browser
 automation, spawning a child session, notifying the human — is below. Read
 it before you build anything that assumes more than the above.
-
-<!-- mullion:tier1:end -->
 
 A copy of this exact file lives at
 `<the directory $MULLION_HOOK_SOCKET is in>/<your $MULLION_SESSION_ID>.agent-guide.md`
@@ -279,32 +275,32 @@ scrollback live.
 ## Auto-injection
 
 If `sessions.injectAgentGuide` is on (the default), every agent Mullion has
-a hook adapter for gets some form of automatic nudge toward this file at
-startup — but not the same mechanism, and not the same content, because
-each agent's own hook/config surface is genuinely different (issue #437,
-landed per-agent). Only for opencode does reading this exact sentence
-without having gone looking for this file yourself mean the mechanism
-worked (its injection embeds the whole file, this sentence included, not a
-short pointer to it — see below); the other three inject a separate,
-shorter pointer sentence, so seeing this file at all doesn't by itself
-confirm which path got you here.
+a hook adapter for gets the same small **tier-0 push** at startup (issue
+#949): a ~4-line block — you're in a Mullion-hosted session, the
+host-dependent scope sentence (auth on/off), and a pointer to load the
+`host` skill for everything else — built once by `buildAgentGuideBlock` in
+`src/services/agent-guide.ts` and reused by every adapter. What differs
+per agent is the CHANNEL that block rides, not its content, because each
+agent's own hook/config surface is genuinely different (issue #437, landed
+per-agent; redesigned by #949 once #940 gave every CLI a real, discoverable
+skill to pull the rest from instead of a static excerpt inlined here).
 
-Since issue #884, this setting can also be overridden per project — see the
-project's own settings panel. The resolved value (project override, or the
-global setting when unset) is what's actually threaded to whichever agent
-your session runs, exactly the same way for all four.
+Since issue #884, `sessions.injectAgentGuide` can also be overridden per
+project — see the project's own settings panel. The resolved value
+(project override, or the global setting when unset) is what's actually
+threaded to whichever agent your session runs, exactly the same way for
+all four.
 
-- **Claude Code, Codex** — a short pointer sentence (built by
-  `buildAgentGuidePointer` in `src/plugins/hooks.ts`, composed fresh on
-  every `SessionStart`, alongside a promote-flow seed when one is pending)
-  is injected as `hookSpecificOutput.additionalContext` — the identical
-  reply shape both agents' own hook I/O schemas use. For Codex, delivery
-  also depends on a one-time, interactive `/hooks` trust grant for this
+- **Claude Code, Codex** — the tier-0 block (composed fresh on every
+  `SessionStart`, alongside a promote-flow seed when one is pending) is
+  injected as `hookSpecificOutput.additionalContext` — the identical reply
+  shape both agents' own hook I/O schemas use. For Codex, delivery also
+  depends on a one-time, interactive `/hooks` trust grant for this
   Mullion-owned hook group; until you (or whoever set up this host) grants
   that, Codex silently skips the hook entirely and behaves exactly as if
   this feature didn't exist.
-- **agy** — the same short pointer, but via agy's own protobuf-JSON hook
-  reply shape: `{ injectSteps: [{ ephemeralMessage: "<pointer text>" }] }`.
+- **agy** — the same tier-0 block, but via agy's own protobuf-JSON hook
+  reply shape: `{ injectSteps: [{ ephemeralMessage: "<block text>" }] }`.
   **Confirmed live** (issue #715, see below) — agy's own bundled hook docs
   still omit `SessionStart` from their "Supported Event Types" table even
   though the installed binary's recognized hook-name set includes it and
@@ -312,15 +308,20 @@ your session runs, exactly the same way for all four.
   and its content lands in the model's actual context regardless.
 - **opencode** — materially different in kind, not just dialect: opencode
   has no live hook round trip to reply to at all, so there's no per-event
-  pointer sentence. Instead, Mullion points opencode's own `instructions`
-  config (`OPENCODE_CONFIG_CONTENT`, additive — never replaces your own
-  `instructions`) directly at your on-disk guide copy, so its **full
-  content** loads into your context at startup, not a pointer to go read
-  it yourself. See `hook-adapters/opencode.ts`'s `prepareLaunch` for the
-  full reasoning behind reflecting only the `injectAgentGuide` value
-  resolved at the moment your session was spawned. As of issue #884, this
-  is no longer opencode-specific — Claude Code/Codex/agy's `SessionStart`
-  reply now reads that same spawn-time-resolved value too, rather than
+  push. Instead, its adapter (`hook-adapters/opencode.ts`'s `prepareLaunch`)
+  builds the SAME tier-0 block, writes it to its own small per-session file,
+  and points opencode's own `instructions` config (`OPENCODE_CONFIG_CONTENT`,
+  additive — never replaces your own `instructions`) at that file. Through
+  issue #949 this channel carried the guide's FULL content instead — that
+  changed once opencode also started pulling the `host`/`browser`/
+  `troubleshooting`/`session-ops` skills via `skills.paths` (issue #940,
+  the same bundle Claude Code gets via `--plugin-dir`), making a second
+  full copy of the same content redundant. See that adapter's own doc
+  comment for the full reasoning behind reflecting only the
+  `injectAgentGuide`/`authEnabled` values resolved at the moment your
+  session was spawned. As of issue #884, spawn-time-resolved
+  `injectAgentGuide` is no longer opencode-specific — Claude Code/Codex/
+  agy's `SessionStart` reply reads that same value too, rather than
   re-checking the global setting live on every hook fire as it used to: a
   per-project override (or a global toggle flip) after a session starts
   needs a fresh session to take effect, for all four agents alike. A

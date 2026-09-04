@@ -8,7 +8,7 @@ import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
 import { projects, sessions } from "../../src/db/schema.js";
 import type { ManagedBrowser } from "../../src/services/browser-manager.js";
-import { readAgentGuideExcerpt, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
+import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { sessionBriefingPath } from "../../src/services/project-briefing.js";
 
 // Real integration test against the actual listening Unix socket — same
@@ -52,8 +52,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { buildApp } = await import("../../src/app.js");
-const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS, buildAgentGuideBlock } =
-  await import("../../src/plugins/hooks.js");
+const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS } = await import("../../src/plugins/hooks.js");
 
 /** Connects a raw net socket to `path`, resolving once actually connected. */
 function connect(path: string): Promise<net.Socket> {
@@ -829,7 +828,7 @@ describe("hooksPlugin (issue #172)", () => {
       // pointer-only reply).
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
       expect(JSON.parse(await replyPromise)).toEqual({
-        additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false),
+        additionalContext: buildAgentGuideBlock(guidePath, false),
       });
       socket.destroy();
     });
@@ -852,7 +851,7 @@ describe("hooksPlugin (issue #172)", () => {
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-      const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+      const guideBlock = buildAgentGuideBlock(guidePath, false);
       expect(JSON.parse(await replyPromise)).toEqual({
         additionalContext: `picks up where the last session left off\n\n${guideBlock}`,
       });
@@ -888,7 +887,7 @@ describe("hooksPlugin (issue #172)", () => {
         const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
         const reply = JSON.parse(await replyPromise);
         expect(reply).toEqual({
-          additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, true),
+          additionalContext: buildAgentGuideBlock(guidePath, true),
         });
         // Dedicated assertion, not just structural equality against a
         // rebuilt expected value: the actual reply text must carry the
@@ -1001,7 +1000,7 @@ describe("hooksPlugin (issue #172)", () => {
       // session's NEXT spawn, not this already-running one.
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
       expect(JSON.parse(await replyPromise)).toEqual({
-        additionalContext: buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false),
+        additionalContext: buildAgentGuideBlock(guidePath, false),
       });
       socket.destroy();
     });
@@ -1037,7 +1036,7 @@ describe("hooksPlugin (issue #172)", () => {
         socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
         const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-        const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+        const guideBlock = buildAgentGuideBlock(guidePath, false);
         const briefingPath = sessionBriefingPath(path.dirname(app.pty.hookSocketPath), "1");
         const briefing = fs.readFileSync(briefingPath, "utf8");
         expect(JSON.parse(await replyPromise)).toEqual({
@@ -1073,7 +1072,7 @@ describe("hooksPlugin (issue #172)", () => {
         socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
         const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-        const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+        const guideBlock = buildAgentGuideBlock(guidePath, false);
         expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: guideBlock });
         socket.destroy();
       });
@@ -1133,7 +1132,7 @@ describe("hooksPlugin (issue #172)", () => {
         socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
         const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-        const guideBlock = buildAgentGuideBlock(readAgentGuideExcerpt(), guidePath, false);
+        const guideBlock = buildAgentGuideBlock(guidePath, false);
         expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: guideBlock });
         socket.destroy();
       });
