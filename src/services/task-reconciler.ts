@@ -1516,10 +1516,10 @@ async function attemptMerge(
         // #1035 — a red non-required TITLE-LINT check is a special case of
         // "never auto-merging" that has a clean fix: derive the title and
         // PATCH it. Same `attemptSelfHealPrTitle` the red-required path
-        // uses, so the matching logic lives in one place. Fetching check
-        // runs here is the same cost the unstable-state POST-merger-attempt
-        // already pays when the title is wrong; cheaper than asking a human
-        // to manually edit the title or click "Merge now." Self-heal
+        // uses, so the matching logic lives in one place. Adding a
+        // `fetchCheckRunsForHead` call to the unstable path: cheap relative
+        // to the existing unstable backoff loop, and far cheaper than asking
+        // a human to manually edit the title or click "Merge now." Self-heal
         // success: skip the mergeError record entirely (next tick re-reads
         // mergeable_state and may now be "clean"). Failure: fall through to
         // the original backoff behavior so a non-title-lint unstable state
@@ -2154,32 +2154,9 @@ function autoApproveRetryBackoffMs(attempts: number): number {
 const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
 const ciCapCommentedRounds = new Map<number, number>();
 
-// #1035 — PR-title-lint self-heal. A required CI check that fails because of
-// a non-conventional PR title (e.g. `wagoid/commitlint-github-action`,
-// `conventional-commit-lint`, etc.) used to fall straight into the
-// `attemptReturnRedCiToWorker` path below: the worker is forbidden by
-// `buildTaskMasterPreamble` (task-prompt.ts) from editing the PR — "Mullion
-// does the rest: it pushes the branch, opens the pull request, and comments
-// on and closes the issue" — so returning the task burns one of a small,
-// non-renewing number of auto-return rounds on a fix the worker can't
-// actually make. Self-heal: derive a Conventional Commits title via
-// `resolvePrTitle` (#761/#1037) and PATCH it onto the PR. Same
-// `updatePullRequestTitle` #782's re-sync sites use. No round consumed, no
-// worker needed.
-//
-// Curated short list rather than substring/heuristic match: a too-liberal
-// match (e.g. "any check name containing 'title'") would silently swallow
-// every required-CI failure and strand a task in "reviewing" forever
-// instead — the regression-guard test below pins the contract that ONLY
-// these names self-heal.
-//
-// "lint-pr-title" — wagoid/commitlint-github-action's DEFAULT job name
-// (https://github.com/wagoid/commitlint-github-action — the most-deployed
-// title-lint action today); the action is configurable but this default
-// covers the common case.
-// "pr-title" — a generic name some orgs use for their own action.
-// "commitlint" / "conventional-commit-lint" — generic job names various
-// orgs have standardized on.
+// #1035 — curated set of CI check names that flag a non-conventional PR
+// title. Curated short list (not substring/heuristic match) — see
+// `attemptSelfHealPrTitle`'s JSDoc for the full behavior contract.
 const PR_TITLE_LINT_CHECK_NAMES = new Set([
   "lint-pr-title",
   "pr-title",
