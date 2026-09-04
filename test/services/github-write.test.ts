@@ -983,6 +983,85 @@ describe("github-write service", () => {
       await detectReleaseWorkflow("tok", "owner", "repo");
       expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterFirst);
     });
+
+    // #1033 — release.yml that references googleapis/release-please-action
+    // (the actual npm action the github-with-pr workflow runs) must be
+    // detected even though its filename isn't in RELEASE_WORKFLOW_FILENAMES.
+    // Many real release-please repos name their workflow release.yml rather
+    // than release-please.yml, so excluding the content match would hide the
+    // Run button for them.
+    it("detects a workflow named release.yml whose body uses googleapis/release-please-action (#1033)", async () => {
+      const body =
+        "name: Release\non:\n  push:\n    branches: [main]\njobs:\n  release:\n    uses: googleapis/release-please-action@v4\n";
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [{ id: 7, name: "Release", path: ".github/workflows/release.yml" }],
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { content: Buffer.from(body).toString("base64"), encoding: "base64" }),
+      );
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "found",
+        workflow: { id: 7, name: "Release", path: ".github/workflows/release.yml" },
+      });
+    });
+
+    // #1033 — the org-level reusable-workflow pattern. Any
+    // .github/workflows/*.yml whose body references
+    // s3ntin3l8/.github/.github/workflows/release-please is a release-please
+    // repo, regardless of what the calling file is named (it's commonly
+    // ci.yml or build.yml when the org ships one reusable workflow and
+    // everyone just calls it).
+    it("detects an org-level reusable-workflow call from any workflow filename (#1033)", async () => {
+      const body =
+        "name: CI\njobs:\n  release:\n    uses: s3ntin3l8/.github/.github/workflows/release-please.yml@main\n";
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [{ id: 8, name: "CI", path: ".github/workflows/ci.yml" }],
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { content: Buffer.from(body).toString("base64"), encoding: "base64" }),
+      );
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "found",
+        workflow: { id: 8, name: "CI", path: ".github/workflows/ci.yml" },
+      });
+    });
+
+    // #1033 — the false-positive-avoidance invariant that justified keeping
+    // the filename list narrow in the first place (see RELEASE_WORKFLOW_FILENAMES's
+    // own doc comment): a release.yml that doesn't reference release-please
+    // (goreleaser, semantic-release, npm publish, …) must still resolve to
+    // not-configured, so the Run button never dispatches an arbitrary
+    // outward-facing workflow under a label that says "release-please."
+    it("still rejects a release.yml that does not reference release-please (#1033)", async () => {
+      const body = "name: Release\njobs:\n  ship:\n    runs-on: ubuntu-latest\n";
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [{ id: 9, name: "Release", path: ".github/workflows/release.yml" }],
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { content: Buffer.from(body).toString("base64"), encoding: "base64" }),
+      );
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "not-configured",
+      });
+    });
+
+    it("falls through to 'not-configured' when the contents endpoint 404s on the only workflow (#1033)", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [{ id: 10, name: "Release", path: ".github/workflows/release.yml" }],
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(textResponse(404, "Not Found"));
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "not-configured",
+      });
+    });
   });
 
   describe("getCachedReleasePullRequestStatus", () => {

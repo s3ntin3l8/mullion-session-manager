@@ -1101,6 +1101,8 @@ export const RELEASE_PLEASE_BRANCH_PREFIX = "release-please--branches--";
  * permissive.
  */
 const RELEASE_WORKFLOW_FILENAMES = ["release-please.yml", "release-please.yaml"];
+const RELEASE_PLEASE_ACTION_REFERENCE = "release-please-action";
+const RELEASE_PLEASE_REUSABLE_REFERENCE = "s3ntin3l8/.github/.github/workflows/release-please.yml@";
 
 export interface GitHubWorkflow {
   id: number;
@@ -1144,6 +1146,51 @@ export function findReleasePleaseWorkflow(workflows: GitHubWorkflow[]): GitHubWo
   );
 }
 
+async function fetchWorkflowBody(
+  token: string,
+  owner: string,
+  repo: string,
+  workflow: GitHubWorkflow,
+): Promise<string | null> {
+  try {
+    const result = await githubRequest<{ content?: string; encoding?: string }>(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/contents/${workflow.path.split("/").map(encodeURIComponent).join("/")}`,
+    );
+    if (result.encoding !== "base64" || typeof result.content !== "string") return null;
+    return Buffer.from(result.content, "base64").toString("utf8");
+  } catch (err) {
+    if (err instanceof GitHubRateLimitError) throw err;
+    return null;
+  }
+}
+
+function isReleasePleaseBody(body: string): boolean {
+  return (
+    body.includes(RELEASE_PLEASE_ACTION_REFERENCE) ||
+    body.includes(RELEASE_PLEASE_REUSABLE_REFERENCE)
+  );
+}
+
+async function findReleasePleaseWorkflowByContent(
+  token: string,
+  owner: string,
+  repo: string,
+  workflows: GitHubWorkflow[],
+): Promise<GitHubWorkflow | null> {
+  for (const workflow of workflows) {
+    const basename = workflow.path.split("/").pop();
+    if (basename === undefined) continue;
+    if (RELEASE_WORKFLOW_FILENAMES.includes(basename)) continue;
+    const body = await fetchWorkflowBody(token, owner, repo, workflow);
+    if (body !== null && isReleasePleaseBody(body)) return workflow;
+  }
+  return null;
+}
+
 interface ReleaseWorkflowCacheEntry {
   result: ReleaseDetectionResult;
   expiresAt: number;
@@ -1180,7 +1227,8 @@ export async function detectReleaseWorkflow(
   let result: ReleaseDetectionResult;
   try {
     const workflows = await listWorkflows(token, owner, repo);
-    const workflow = findReleasePleaseWorkflow(workflows);
+    let workflow = findReleasePleaseWorkflow(workflows);
+    workflow ??= await findReleasePleaseWorkflowByContent(token, owner, repo, workflows);
     result = workflow ? { kind: "found", workflow } : { kind: "not-configured" };
   } catch (err) {
     // Narrowed to GitHubWriteScopeError specifically, NOT the base
