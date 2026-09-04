@@ -100,24 +100,119 @@ describe("taskmaster-issues skill — the example obeys the skill's own rules", 
   });
 });
 
+// Shared by both the SKILL.md prose-collision guard and the worked-example
+// exact-count guard below, so the two can't drift apart from each other.
+const DIRECTIVE_PATTERNS = [
+  { name: "Manual:", re: /^\s*Manual:\s*true\s*$/im },
+  { name: "Agent:", re: /^\s*Agent:\s*(\S+)\s*$/im },
+  { name: "ReviewAgent:", re: /^\s*ReviewAgent:\s*(\S+)\s*$/im },
+  { name: "Model:", re: /^\s*Model:\s*(\S+)\s*$/im },
+  { name: "Reviewer-Model:", re: /^\s*Reviewer-Model:\s*(\S+)\s*$/im },
+  { name: "SmallModel:", re: /^\s*SmallModel:\s*(\S+)\s*$/im },
+];
+
+function countDirectiveLines(text: string, re: RegExp): number {
+  const globalRe = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  return [...text.matchAll(globalRe)].length;
+}
+
 describe("taskmaster-issues skill — SKILL.md's own prose never doubles as a directive", () => {
   // Mirrors task-prompt.test.ts's "directive-line collisions" guard on the
   // preamble text, extended to all six directives this skill documents.
   // Not a live hazard (nothing parses SKILL.md), but a skill that
   // illustrates a directive on its own line would be teaching the wrong
   // lesson about what "on its own line" means.
-  const DIRECTIVE_RES = [
-    /^\s*Manual:\s*true\s*$/im,
-    /^\s*Agent:\s*(\S+)\s*$/im,
-    /^\s*ReviewAgent:\s*(\S+)\s*$/im,
-    /^\s*Model:\s*(\S+)\s*$/im,
-    /^\s*Reviewer-Model:\s*(\S+)\s*$/im,
-    /^\s*SmallModel:\s*(\S+)\s*$/im,
-  ];
-
-  for (const re of DIRECTIVE_RES) {
-    it(`contains no whole line matching ${re}`, () => {
-      expect(re.test(skillBody)).toBe(false);
+  for (const { name, re } of DIRECTIVE_PATTERNS) {
+    it(`contains no whole line matching ${name}`, () => {
+      expect(countDirectiveLines(skillBody, re)).toBe(0);
     });
   }
+});
+
+describe("taskmaster-issues skill — worked-example.md carries exactly its two directives", () => {
+  // Hermes review on #1031: the resolver-driven assertions above only ever
+  // read the FIRST Agent:/ReviewAgent: line (exec with no /g — "first match
+  // wins" is the documented behavior), so a later edit that appends a stray
+  // extra directive line below the intended two would pass every assertion
+  // above silently. Count occurrences instead of just resolving one.
+  const EXPECTED_COUNTS: Record<string, number> = {
+    "Manual:": 0,
+    "Agent:": 1,
+    "ReviewAgent:": 1,
+    "Model:": 0,
+    "Reviewer-Model:": 0,
+    "SmallModel:": 0,
+  };
+
+  for (const { name, re } of DIRECTIVE_PATTERNS) {
+    it(`has exactly ${EXPECTED_COUNTS[name]} ${name} line(s)`, () => {
+      expect(countDirectiveLines(workedExample, re)).toBe(EXPECTED_COUNTS[name]);
+    });
+  }
+});
+
+describe("taskmaster-issues skill — documented matching rules hold against the real parsers", () => {
+  // Hermes review on #1031: the worked-example tests above only exercise
+  // the example's own two directives. These exercise the OTHER rules the
+  // skill's "Matching rules" section documents, each through the real
+  // production resolver rather than a re-declared regex.
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: { defaultAgent: "opencode", defaultReviewAgent: "opencode" },
+      opencode: { implementerModel: null, reviewerModel: null, defaultSmallModel: null },
+    });
+  });
+
+  it("Agent: Claude (wrong case) fails the allow-list and falls through", () => {
+    const command = resolveAgentCommand(mockApp(), {
+      issueBody: "Agent: Claude",
+      projectDefaultAgent: "codex",
+    });
+    expect(command).toBe("codex");
+  });
+
+  it("ReviewAgent: none disables review", () => {
+    expect(
+      resolveReviewAgentCommand(mockApp(), {
+        issueBody: "ReviewAgent: none",
+        projectDefaultReviewAgent: "claude",
+      }),
+    ).toBeNull();
+  });
+
+  it("ReviewAgent: false disables review", () => {
+    expect(
+      resolveReviewAgentCommand(mockApp(), {
+        issueBody: "ReviewAgent: false",
+        projectDefaultReviewAgent: "claude",
+      }),
+    ).toBeNull();
+  });
+
+  it("Reviewer-Model: falls back to Model: when absent", () => {
+    const command = resolveOpenCodeModel(mockApp(), {
+      issueBody: "Model: anthropic/claude-sonnet-4-5",
+      role: "reviewer",
+    });
+    expect(command).toBe("anthropic/claude-sonnet-4-5");
+  });
+
+  it("a directive inside a fenced code block still fires", () => {
+    const body = "Some context.\n\n```\nAgent: codex\n```\n";
+    const command = resolveAgentCommand(mockApp(), {
+      issueBody: body,
+      projectDefaultAgent: "opencode",
+    });
+    expect(command).toBe("codex");
+  });
+
+  it("the first Agent: line wins when the body has two", () => {
+    const body = "Agent: codex\nAgent: claude\n";
+    const command = resolveAgentCommand(mockApp(), {
+      issueBody: body,
+      projectDefaultAgent: "opencode",
+    });
+    expect(command).toBe("codex");
+  });
 });
