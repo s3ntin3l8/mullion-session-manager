@@ -924,6 +924,18 @@ export async function detectReleasePleaseConfig(
       RELEASE_PLEASE_CONFIG_FILENAMES.includes((entry as { name: string }).name),
   );
 
+  // Bounded rather than truly unbounded, same posture and same MAX_CACHE_ENTRIES
+  // ceiling as this file's own repo-status `cache` above (Hermes review) —
+  // one entry per distinct owner/repo this process has ever probed, which
+  // an unbounded number of distinct project cwds could otherwise grow
+  // without limit. `Map` preserves insertion order, so evicting
+  // `.keys().next().value` evicts the oldest entry — a cheap
+  // approximate-LRU, fine for a 1h-TTL cache that's never correctness-load-
+  // bearing (a false eviction just costs one extra contents-API call).
+  if (!releasePleaseConfigCache.has(key) && releasePleaseConfigCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = releasePleaseConfigCache.keys().next().value;
+    if (oldestKey !== undefined) releasePleaseConfigCache.delete(oldestKey);
+  }
   releasePleaseConfigCache.set(key, {
     found,
     expiresAt: Date.now() + RELEASE_PLEASE_CONFIG_CACHE_TTL_MS,
@@ -935,6 +947,12 @@ export async function detectReleasePleaseConfig(
 // detection result can't leak into another's assertions.
 export function clearReleasePleaseConfigCacheForTests(): void {
   releasePleaseConfigCache.clear();
+}
+
+// Test-only introspection — mirrors getCacheSizeForTests's own pattern
+// above, for asserting the MAX_CACHE_ENTRIES cap this cache now shares.
+export function getReleasePleaseConfigCacheSizeForTests(): number {
+  return releasePleaseConfigCache.size;
 }
 
 // Exported for the per-branch filter (issue #202, routes/projects.ts's

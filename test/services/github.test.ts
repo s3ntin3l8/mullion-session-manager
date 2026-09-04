@@ -9,6 +9,7 @@ import {
   getDefaultBranch,
   detectReleasePleaseConfig,
   clearReleasePleaseConfigCacheForTests,
+  getReleasePleaseConfigCacheSizeForTests,
 } from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -425,6 +426,28 @@ describe("detectReleasePleaseConfig", () => {
     const second = await detectReleasePleaseConfig("tok", "o", "retry-after-403-repo");
     expect(second).toBe(true);
     expect(fetchMock.mock.calls.length).toBe(2);
+  });
+
+  // Hermes review — this cache is process-wide and grows one entry per
+  // distinct owner/repo ever probed; capped at the same MAX_CACHE_ENTRIES
+  // ceiling as this file's own repo-status cache above, same reasoning.
+  it("caps the module-level cache at MAX_CACHE_ENTRIES, evicting the oldest entry", async () => {
+    // A fresh Response per call — mockResolvedValue would hand back the
+    // SAME Response object every time, and a body can only be read once;
+    // every call past the first would hit res.json()'s "body already read"
+    // and fall through to detectReleasePleaseConfig's null-on-error path,
+    // never actually reaching the cache.set() this test means to exercise.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, [])));
+    for (let i = 0; i < MAX_CACHE_ENTRIES + 5; i++) {
+      await detectReleasePleaseConfig("tok", `cap-owner-${i}`, "repo");
+    }
+    expect(getReleasePleaseConfigCacheSizeForTests()).toBe(MAX_CACHE_ENTRIES);
+
+    // The oldest entries (0-4) were evicted to make room — re-checking one
+    // of them costs a real request again, not a cache hit.
+    const callsBefore = fetchMock.mock.calls.length;
+    await detectReleasePleaseConfig("tok", "cap-owner-0", "repo");
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 });
 
