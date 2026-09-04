@@ -634,7 +634,7 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       // give the event loop a tick in case anything is deferred).
       const wss = (app as { websocketServer?: { clients: Set<NodeWebSocket> } }).websocketServer;
       expect(wss).toBeDefined();
-      await waitUntil(() => (wss!.clients.size > 0));
+      await waitUntil(() => wss!.clients.size > 0);
       const serverWs = [...wss!.clients][0];
 
       // Strip the fastify-websocket plugin's generic error logger — its
