@@ -3,7 +3,12 @@ import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
-import { buildRejectPrompt, taskCommitTitlePath, parseCommitTitle, resolvePrTitle } from "../services/task-prompt.js";
+import {
+  buildRejectPrompt,
+  taskCommitTitlePath,
+  parseCommitTitle,
+  resolvePrTitle,
+} from "../services/task-prompt.js";
 import { resolveTaskIssueContextSafe } from "../services/task-issue-context.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition, isIssueStillTrackable } from "../services/task-github-sync.js";
