@@ -1050,6 +1050,18 @@ describe("github-write service", () => {
         kind: "not-configured",
       });
     });
+
+    it("falls through to 'not-configured' when the contents endpoint 404s on the only workflow (#1033)", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [{ id: 10, name: "Release", path: ".github/workflows/release.yml" }],
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(textResponse(404, "Not Found"));
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
+        kind: "not-configured",
+      });
+    });
   });
 
   describe("getCachedReleasePullRequestStatus", () => {
