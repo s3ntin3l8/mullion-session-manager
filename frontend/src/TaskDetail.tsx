@@ -954,7 +954,15 @@ function TaskActions({ task }: { task: Task }) {
             await approveTask(task.id, { force: true });
             setTrackingEpicWarning(null);
           } catch (err) {
-            setError(err instanceof ApiError ? err.message : "Failed to approve task");
+            if (
+              err instanceof ApiError &&
+              err.statusCode === 409 &&
+              err.code === "tracking-epic-with-open-sub-issues"
+            ) {
+              setTrackingEpicWarning(err.message);
+            } else {
+              setError(err instanceof ApiError ? err.message : "Failed to approve task");
+            }
           } finally {
             setSubmitting(false);
           }

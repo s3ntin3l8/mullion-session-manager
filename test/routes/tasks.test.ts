@@ -1268,6 +1268,46 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    it("POST /api/tasks/:id/approve treats null subIssueTotal as 0 (untracked legacy row)", async () => {
+      const cwd = createGitRepoWithRemote("acme", "widgets-1020-null");
+      const app = await buildApp();
+      await connectPat(app, "ghp_1020_null");
+      const projectId = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "epic-null-p", cwd },
+        })
+      ).json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 1023,
+          title: "Legacy task with no sub-issue counts",
+          htmlUrl: "https://github.com/acme/widgets-1020-null/issues/1023",
+          status: "reviewing",
+          subIssueTotal: null,
+          subIssueCompleted: null,
+        })
+        .returning()
+        .all();
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const createCommentSpy = vi
+        .spyOn(githubWrite, "createComment")
+        .mockResolvedValue({ id: 1, htmlUrl: "x" });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+      expect(createCommentSpy).not.toHaveBeenCalled();
+
+      createCommentSpy.mockRestore();
+      await app.close();
+    });
+
     it("POST /api/tasks/:id/reject transitions reviewing -> in_progress and records feedback", async () => {
       const app = await buildApp();
       const task = await createProjectAndReviewingTask(app);

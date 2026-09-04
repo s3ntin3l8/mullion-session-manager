@@ -1361,7 +1361,7 @@ export async function tasksRoute(app: FastifyInstance) {
     const subIssueTotal = existing.subIssueTotal ?? 0;
     const subIssueCompleted = existing.subIssueCompleted ?? 0;
     const openSubIssues = subIssueTotal - subIssueCompleted;
-    if (subIssueTotal > 0 && openSubIssues > 0 && forceParam !== "true") {
+    if (subIssueTotal > 0 && openSubIssues > 0 && !(forceParam === "true")) {
       await postTrackingEpicWarning(app, existing, project);
       const subIssueStatus = `${subIssueTotal} sub-issues, ${subIssueCompleted} completed, ${openSubIssues} open`;
       return reply.code(409).send({
