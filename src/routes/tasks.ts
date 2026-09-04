@@ -15,8 +15,9 @@ import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
-import { getPullRequestByNumber } from "../services/github-write.js";
+import { getPullRequestByNumber, removeLabel } from "../services/github-write.js";
 import { isGitHubRateLimited } from "../services/github-fetch.js";
+import { killSession } from "../services/session-lifecycle.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 
@@ -593,13 +594,24 @@ export async function tasksRoute(app: FastifyInstance) {
   // row) "project not found" case into the same conflict-shaped result as
   // everything else, since the bulk route has no per-row 404 concept to
   // distinguish it into.
+  //
+  // #1014 (Abandon) — `force` is the single-task DELETE route's escape
+  // hatch, never passed by the bulk clear-done caller below. It skips both
+  // the preserved-branch refusal and the isIssueStillTrackable round-trip,
+  // because the caller (the DELETE handler) is about to unlabel the issue
+  // itself before this row is deleted — re-asking GitHub "is it still
+  // tracked" here would just race that write. `deletableTerminalGithubStatus`
+  // still applies even under force: Abandon is only ever offered for
+  // failed/done tasks, never a task with a live in-flight worker.
   async function checkTaskDeletable(
     existing: typeof tasks.$inferSelect,
+    opts: { force?: boolean } = {},
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (existing.issueNumber !== null) {
       if (!deletableTerminalGithubStatus(existing.status)) {
         return { ok: false, reason: "Cannot delete a task linked to a GitHub issue" };
       }
+      if (opts.force) return { ok: true };
       if (existing.status === "failed" && existing.branchName !== null) {
         return {
           ok: false,
@@ -622,36 +634,185 @@ export async function tasksRoute(app: FastifyInstance) {
               : `Cannot delete: the linked GitHub issue is still open and labeled "${label}" — remove the label or close the issue first`,
         };
       }
-    } else if (
-      !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) &&
-      existing.status !== "done"
-    ) {
-      return {
-        ok: false,
-        reason: `Cannot delete a task past the backlog/ready stage (status: ${existing.status})`,
-      };
+    } else {
+      // #1014 — force additionally allows a LOCAL failed task (previously
+      // not deletable at all: TaskDetail.tsx never even rendered a Delete
+      // button for one). Every other locally-creatable state is unaffected.
+      const locallyDeletable =
+        LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) ||
+        existing.status === "done" ||
+        (opts.force === true && existing.status === "failed");
+      if (!locallyDeletable) {
+        return {
+          ok: false,
+          reason: `Cannot delete a task past the backlog/ready stage (status: ${existing.status})`,
+        };
+      }
     }
     return { ok: true };
   }
 
-  app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
-    const existing = getLocalTaskOr404(taskId);
-    if (!existing) return reply.notFound();
-
-    const check = await checkTaskDeletable(existing);
-    if (!check.ok) return reply.conflict(check.reason);
-
-    const deleted = app.db
-      .delete(tasks)
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, existing.status)))
-      .run();
-    if (deleted.changes === 0) {
-      return reply.conflict("Task changed since this check — refresh and try again");
+  // #1014 (Abandon) — best-effort session/worktree/branch teardown for a
+  // force-deleted task, run in this exact order:
+  //   1. sessions are AWAITED (not the fire-and-forget cleanupTaskSessions),
+  //      so a live worker can't still be writing to the worktree while step
+  //      3 force-removes it out from under it.
+  //   2. worktree removal uses the FORCED `removeWorktree`, not
+  //      `removeWorktreeIfClean` — the whole point of Abandon is to discard
+  //      whatever's there, and `removeWorktreeIfClean` would just report
+  //      "dirty" and leave it.
+  //   3. branch delete, forced, last — once nothing has it checked out.
+  // Routed through the project's SessionBackend (not the local git-worktree/
+  // git-branch-delete functions directly) so a remote-hosted project's
+  // worktree and branch — which live on that host's own filesystem — are
+  // actually cleaned up too, matching attemptBranchDeleteForClearDone's own
+  // reasoning above. Every step here is best-effort and reported, never
+  // fatal — by the time this runs the task's row (and, for a GitHub-linked
+  // task, its label) are already gone, so a leftover worktree/branch/session
+  // is a cleanup gap, not a correctness problem.
+  async function teardownAbandonedTask(
+    task: typeof tasks.$inferSelect,
+    project: typeof projects.$inferSelect,
+  ): Promise<{ worktreeRemoved: boolean; branchDeleted: boolean }> {
+    for (const sessionId of new Set([task.sessionId, task.reviewSessionId])) {
+      if (sessionId === null) continue;
+      try {
+        await killSession(app, sessionId, "detach");
+      } catch (err) {
+        app.log.warn({ err, sessionId, taskId: task.id }, "abandon: killSession threw");
+      }
     }
-    reply.code(204);
-  });
+
+    let worktreeRemoved = false;
+    if (task.worktreePath) {
+      try {
+        worktreeRemoved = await resolveBackend(app, project.hostId).removeWorktree(
+          task.worktreePath,
+          project.cwd,
+        );
+      } catch (err) {
+        app.log.warn(
+          { err, worktreePath: task.worktreePath, taskId: task.id },
+          "abandon: removeWorktree threw",
+        );
+      }
+    }
+
+    let branchDeleted = false;
+    if (task.branchName) {
+      try {
+        const result = await resolveBackend(app, project.hostId).deleteBranch(
+          project.cwd,
+          task.branchName,
+          { force: true },
+        );
+        branchDeleted = result.deleted;
+        if (!result.deleted) {
+          app.log.warn(
+            { taskId: task.id, branch: task.branchName, reason: result.reason },
+            "abandon: deleteBranch did not delete",
+          );
+        }
+      } catch (err) {
+        app.log.warn(
+          { err, branch: task.branchName, taskId: task.id },
+          "abandon: deleteBranch threw",
+        );
+      }
+    }
+
+    return { worktreeRemoved, branchDeleted };
+  }
+
+  app.delete<{ Params: { id: string }; Querystring: { force?: string } }>(
+    "/api/tasks/:id",
+    async (request, reply) => {
+      const taskId = Number(request.params.id);
+      if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+      const existing = getLocalTaskOr404(taskId);
+      if (!existing) return reply.notFound();
+      const force = request.query.force === "true";
+
+      const check = await checkTaskDeletable(existing, { force });
+      if (!check.ok) return reply.conflict(check.reason);
+
+      // #1014 (Abandon) — the unlabel MUST succeed before the row is
+      // touched. If it fails, the row stays exactly as it was: deleting
+      // first and unlabeling after (the ordering attemptBranchDeleteForClearDone
+      // uses for a branch, above) would mean a failed unlabel lets the
+      // watcher re-ingest this issue into "ready" on its next sweep —
+      // auto-claim would then dispatch a fresh worker to the very task the
+      // user just asked to get rid of.
+      let project: typeof projects.$inferSelect | null = null;
+      // Review fix (#1014) — tracked so the CAS-delete-failed branch below
+      // can tell the caller the label is ALREADY gone, rather than implying
+      // (as the generic "refresh and try again" message would) that nothing
+      // happened yet. The unlabel itself is not undone on that path: retrying
+      // the request is enough (issueNumber's already unlabeled, so the
+      // second attempt's checkTaskDeletable + this whole `if` block is a
+      // no-op) and re-adding a label a human or the watcher may have since
+      // touched again would be its own race.
+      let labelRemoved = false;
+      if (force && existing.issueNumber !== null) {
+        project = getProjectOr404(existing.projectId);
+        if (!project) return reply.notFound();
+        const repoRef = await resolveRepoRef(app, project);
+        if (!repoRef) {
+          return reply.badGateway("Could not resolve the project's GitHub repo");
+        }
+        const token = await resolveGitHubToken(app, repoRef);
+        if (!token) {
+          return reply.badGateway("No GitHub token available to remove the task label");
+        }
+        try {
+          await removeLabel(
+            token,
+            repoRef.owner,
+            repoRef.repo,
+            existing.issueNumber,
+            app.config.MULLION_TASK_LABEL,
+          );
+          labelRemoved = true;
+        } catch (err) {
+          app.log.warn(
+            { err, taskId, issueNumber: existing.issueNumber },
+            "abandon: removeLabel failed — task not deleted",
+          );
+          return reply.badGateway("Failed to remove the task label on GitHub — task not deleted");
+        }
+      }
+
+      const deleted = app.db
+        .delete(tasks)
+        .where(and(eq(tasks.id, taskId), eq(tasks.status, existing.status)))
+        .run();
+      if (deleted.changes === 0) {
+        // Review fix (#1014) — a concurrent status change (a Retry, the
+        // reconciler, a second concurrent force-delete) between this
+        // handler's own read and this CAS write can land here AFTER the
+        // label above was already removed. The row survives, but it's no
+        // longer labeled — say so, rather than the generic message that
+        // reads as "nothing happened."
+        if (labelRemoved) {
+          app.log.warn(
+            { taskId, issueNumber: existing.issueNumber },
+            "abandon: label removed but the row changed before it could be deleted — retry will finish the delete",
+          );
+          return reply.conflict(
+            "Task changed since this check — the GitHub label was already removed; refresh and try again",
+          );
+        }
+        return reply.conflict("Task changed since this check — refresh and try again");
+      }
+
+      if (force) {
+        project ??= getProjectOr404(existing.projectId);
+        if (project) await teardownAbandonedTask(existing, project);
+      }
+
+      reply.code(204);
+    },
+  );
 
   // #746 — best-effort branch cleanup for the bulk clear-done flow below,
   // opt-in and off by default (records preserved unless the caller asks for

@@ -194,14 +194,26 @@ export function TaskDetail({
             board's own cleanup path exists for it. The server only actually
             allows the delete once a linked issue is confirmed no longer
             trackable (see routes/tasks.ts's DELETE handler); otherwise this
-            button's confirm step surfaces that as the same inline error. */}
+            button's confirm step surfaces that as the same inline error.
+            #1014 (Abandon) — a LOCAL `failed` task is now rendered too:
+            previously the only local statuses shown here were
+            backlog/ready/done, so a local task's own equivalent of the
+            preserved-branch guard (routes/tasks.ts's "past the
+            backlog/ready stage" refusal) had no UI path to Abandon past at
+            all. The button's own 409 handling (below) offers the force
+            re-prompt regardless of which refusal fired. */}
         {((task.issueNumber === null &&
-          (task.status === "backlog" || task.status === "ready" || task.status === "done")) ||
+          (task.status === "backlog" ||
+            task.status === "ready" ||
+            task.status === "done" ||
+            task.status === "failed")) ||
           (task.issueNumber !== null && (task.status === "failed" || task.status === "done"))) && (
           <DeleteTaskAction
             taskId={task.id}
             isDone={task.status === "done"}
             isGithubLinked={task.issueNumber !== null}
+            branchName={task.branchName}
+            worktreePath={task.worktreePath}
           />
         )}
       </div>
@@ -501,15 +513,41 @@ function DeleteTaskAction({
   taskId,
   isDone,
   isGithubLinked,
+  branchName,
+  worktreePath,
 }: {
   taskId: number;
   isDone: boolean;
   isGithubLinked: boolean;
+  branchName: string | null;
+  worktreePath: string | null;
 }) {
   const deleteTask = useDashboardStore((s) => s.deleteTask);
+  // #1014 (Abandon), review fix — the label name is configurable
+  // (MULLION_TASK_LABEL, env.ts), not always literally "mullion-task". This
+  // is the same value TaskMasterSection.tsx's own Settings display reads.
+  const taskMasterEnv = useDashboardStore((s) => s.taskMasterEnv);
+  const taskLabel = taskMasterEnv?.issueLabel ?? "mullion-task";
   const [confirming, setConfirming] = useState(false);
+  // #1014 (Abandon) — set once a plain delete 409s, per api/client.ts's own
+  // guidance to branch on statusCode rather than the message text. Once
+  // true, the confirm step below switches to naming exactly what a
+  // force-delete destroys and re-issues with force: true. Mirrors the
+  // Hosts cascade-delete flow (HostsSection.tsx's cascadePrompt state).
+  const [needsForce, setNeedsForce] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Review fix — Cancel must also drop needsForce, or reopening this panel
+  // skips straight to the Abandon/force prompt even if whatever triggered
+  // the earlier 409 (a still-tracked issue, a since-resolved race) no
+  // longer holds. A fresh open should always try the plain delete again
+  // first.
+  function cancel() {
+    setConfirming(false);
+    setNeedsForce(false);
+    setError(null);
+  }
 
   if (!confirming) {
     return (
@@ -530,8 +568,23 @@ function DeleteTaskAction({
   // directory at approve time — the branch itself is untouched (see the
   // DELETE route's own doc comment on why that's true for the
   // GitHub-linked case).
-  const hint =
-    isDone && isGithubLinked
+  //
+  // #1014 — once a plain delete has 409'd, the hint switches to naming
+  // exactly what a force-delete (Abandon) destroys: the GitHub label (only
+  // for a linked task), the worktree, the branch, and any live sessions.
+  const hint = needsForce
+    ? [
+        "This task can't be deleted normally.",
+        isGithubLinked
+          ? `Abandoning it removes the ${taskLabel} label from the linked issue,`
+          : "Abandoning it",
+        worktreePath ? `deletes its worktree (${worktreePath}),` : null,
+        branchName ? `deletes its branch (${branchName}),` : null,
+        "and kills any of its sessions still running. This can't be undone.",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : isDone && isGithubLinked
       ? "Delete this task? The closed issue and its PR stay on GitHub, and the branch is untouched. This can't be undone."
       : isDone
         ? "Delete this task? The branch is untouched. This can't be undone."
@@ -547,16 +600,22 @@ function DeleteTaskAction({
           setSubmitting(true);
           setError(null);
           try {
-            await deleteTask(taskId);
+            if (needsForce) await deleteTask(taskId, { force: true });
+            else await deleteTask(taskId);
           } catch (err) {
+            if (!needsForce && err instanceof ApiError && err.statusCode === 409) {
+              setNeedsForce(true);
+              setSubmitting(false);
+              return;
+            }
             setError(err instanceof ApiError ? err.message : "Failed to delete task");
             setSubmitting(false);
           }
         }}
       >
-        Confirm delete
+        {needsForce ? "Abandon task" : "Confirm delete"}
       </button>
-      <button className="notif-gate-btn" disabled={submitting} onClick={() => setConfirming(false)}>
+      <button className="notif-gate-btn" disabled={submitting} onClick={cancel}>
         Cancel
       </button>
       {error && <span className="task-detail-error">{error}</span>}

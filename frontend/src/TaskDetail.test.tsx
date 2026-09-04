@@ -5,13 +5,17 @@ import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
 import type * as ApiModule from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api/index.js";
+import type { GitHubPRsStatus, NotificationEvent, ServerInfo, Session, Task } from "./api/index.js";
 
 let tasks: Task[];
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
 let taskMasterEnabled: boolean;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
+// #1014 (Abandon), review fix — null in most tests, so DeleteTaskAction
+// falls back to the literal "mullion-task" (matching every existing test's
+// assertions); set per-test to exercise a custom MULLION_TASK_LABEL.
+let taskMasterEnv: ServerInfo["taskMasterEnv"] | null = null;
 
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
@@ -29,6 +33,7 @@ function storeState() {
     sessions,
     events,
     taskMasterEnabled,
+    taskMasterEnv,
     claimTask,
     approveTask,
     mergeTask,
@@ -181,6 +186,7 @@ beforeEach(() => {
   sessions = [];
   events = {};
   taskMasterEnabled = true;
+  taskMasterEnv = null;
   prsByProject = {};
   claimTask.mockClear();
   approveTask.mockClear();
@@ -1258,10 +1264,115 @@ describe("TaskDetail delete action", () => {
     expect(screen.getByText("Failed to delete task")).toBeInTheDocument();
   });
 
-  it("hides Delete for a failed LOCAL task (no linked issue) — out of scope for #729", () => {
+  // #1014 (Abandon) — previously hidden entirely (a local failed task had
+  // no Delete affordance at all, out of scope for #729). Now shown: a plain
+  // delete still 409s (the server's own "past backlog/ready" refusal, since
+  // force wasn't asked for), which flips the confirm step into the same
+  // force re-prompt a GitHub-linked task's preserved-branch refusal
+  // triggers below.
+  it("shows Delete for a failed LOCAL task, offering force after a plain delete 409s", async () => {
+    deleteTask.mockRejectedValueOnce(
+      new ApiError("Cannot delete a task past the backlog/ready stage (status: failed)", 409),
+    );
     tasks = [makeTask({ id: 1, status: "failed", issueNumber: null })];
+    const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    const abandonButton = await screen.findByRole("button", { name: "Abandon task" });
+    expect(screen.getByText(/can't be deleted normally/)).toBeInTheDocument();
+    await user.click(abandonButton);
+
+    expect(deleteTask).toHaveBeenLastCalledWith(1, { force: true });
+  });
+
+  // #1014 — the preserved-branch refusal (routes/tasks.ts's own #729 guard)
+  // is the more common trigger for the force re-prompt. The hint names the
+  // GitHub label, the worktree, and the branch specifically, not just a
+  // generic "force delete" — so the user knows what Abandon actually does
+  // before they click it.
+  it("names the label, worktree, and branch in the force re-prompt for a GitHub-linked task", async () => {
+    deleteTask.mockRejectedValueOnce(
+      new ApiError("Cannot delete: this task has a preserved branch — use Retry to resume it", 409),
+    );
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "failed",
+        issueNumber: 42,
+        branchName: "mullion/task-1",
+        worktreePath: "/repo/.mullion-worktrees/mullion-task-1",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    const abandonButton = await screen.findByRole("button", { name: "Abandon task" });
+    expect(screen.getByText(/removes the mullion-task label/)).toBeInTheDocument();
+    expect(screen.getByText(/mullion\/task-1/)).toBeInTheDocument();
+    expect(screen.getByText(/mullion-worktrees\/mullion-task-1/)).toBeInTheDocument();
+    await user.click(abandonButton);
+
+    expect(deleteTask).toHaveBeenLastCalledWith(1, { force: true });
+  });
+
+  // Review fix — MULLION_TASK_LABEL is configurable (env.ts), so the force
+  // re-prompt must name whatever label is actually configured, not always
+  // literally "mullion-task".
+  it("names the project's actual configured label, not a hardcoded one", async () => {
+    taskMasterEnv = {
+      enabled: true,
+      maxConcurrent: 1,
+      budgetMinutes: 30,
+      progressCommentMinutes: 10,
+      skipPermissions: false,
+      issueLabel: "custom-work-label",
+      pollIntervalSeconds: 60,
+    };
+    deleteTask.mockRejectedValueOnce(
+      new ApiError("Cannot delete: this task has a preserved branch — use Retry to resume it", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await screen.findByRole("button", { name: "Abandon task" });
+    expect(screen.getByText(/removes the custom-work-label label/)).toBeInTheDocument();
+    expect(screen.queryByText(/removes the mullion-task label/)).toBeNull();
+  });
+
+  // Review fix — Cancel must drop needsForce too, or reopening the panel
+  // skips straight to the Abandon prompt (and force-deletes) even if
+  // whatever triggered the earlier 409 no longer applies.
+  it("resets the force prompt back to a plain delete after Cancel", async () => {
+    deleteTask.mockRejectedValueOnce(
+      new ApiError("Cannot delete: this task has a preserved branch — use Retry to resume it", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    await screen.findByRole("button", { name: "Abandon task" });
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Delete task" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    expect(screen.getByRole("button", { name: "Confirm delete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abandon task" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(deleteTask).toHaveBeenLastCalledWith(1);
   });
 
   // #746 — done tasks (local and GitHub-linked) get the same Delete
