@@ -127,20 +127,27 @@ function isManualOnly(body: string | null): boolean {
   return body !== null && MANUAL_LINE_RE.test(body);
 }
 
-// #1016 — an issue with GitHub sub-issues is a tracking epic, not leaf work:
-// dispatching it to a worker produces a zero-commit turn (there is nothing
-// in the epic's own body to implement) that fails the task and posts "agent
-// ended its turn with no commits" publicly on the issue
-// (task-reconciler.ts's checkReviewingGate), or — if a human clicks Approve
-// anyway — closes the tracking issue while its children are still open
-// (task-github-sync.ts). `subIssues.total` rides the same listLabeledIssues
-// response `dependencyCount` does (#701's own doc comment), so this costs
-// nothing extra to check. `undefined` (a webhook-built TaskIssue, which has
-// no sub_issues_summary to read) is treated as "not known to be an epic" —
+// #1016 — an issue with GitHub sub-issues that still has OPEN children is a
+// tracking epic, not leaf work: dispatching it to a worker produces a
+// zero-commit turn (there is nothing in the epic's own body to implement)
+// that fails the task and posts "agent ended its turn with no commits"
+// publicly on the issue (task-reconciler.ts's checkReviewingGate), or — if
+// a human clicks Approve anyway — closes the tracking issue while its
+// children are still open (task-github-sync.ts). We check for outstanding
+// OPEN work (`total - completed > 0`), not just any attached children,
+// because GitHub's `sub_issues_summary.total` is cumulative (counts every
+// linked child, closed or open; `completed` is the separate closed count).
+// Checking total > 0 would keep the flag true indefinitely even after all
+// children close, preventing a human-dragged `ready` override from
+// surviving the next poll sweep — see the demotion block below for why
+// that matters. With this shape, a completed epic (all children closed) is
+// no longer treated as an epic, so manual overrides stick permanently.
+// `undefined` (a webhook-built TaskIssue, which has no
+// sub_issues_summary to read) is treated as "not known to be an epic" —
 // the same "leave it alone, no fail-closed reasoning" posture #701 already
 // established for this field, not "not an epic."
 function isEpicIssue(issue: TaskIssue): boolean {
-  return (issue.subIssues?.total ?? 0) > 0;
+  return (issue.subIssues?.total ?? 0) - (issue.subIssues?.completed ?? 0) > 0;
 }
 
 /**
@@ -284,17 +291,15 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
   //
   // Also gated on `(existingRow.subIssueTotal ?? 0) === 0` — i.e. only on
   // the TRANSITION into "known to be an epic," not on every re-sighting of
-  // an already-known one. Without this, docs/tasks.md's own promised escape
-  // hatch ("a human drags it back to `ready`") would be a lie: GitHub's
-  // `sub_issues_summary.total` doesn't drop when children CLOSE, only when
-  // they're unlinked (see github.ts's listLabeledIssues mapping), so a
-  // human-dragged `ready` would get silently flipped straight back to
-  // `backlog` on the very next poll sweep — this exact bug shipped in this
-  // PR's first revision and was caught in review before merge. Once
-  // `subIssueTotal` is already non-null-and-nonzero in the DB, this block
-  // never fires again for that task, so a human override sticks permanently
-  // — matching #1021's own "not automatic" reverse-direction design, this is
-  // the forward-direction equivalent: detect once, then leave it to a human.
+  // an already-known one. Once `subIssueTotal` is already
+  // non-null-and-nonzero in the DB, this block never fires again for that
+  // task, so a human override sticks permanently — matching #1021's own
+  // "not automatic" reverse-direction design, this is the forward-direction
+  // equivalent: detect once, then leave it to a human. With `isEpicIssue`
+  // now checking outstanding OPEN work (total - completed > 0) rather than
+  // cumulative total, a completed epic (all children closed) is no longer
+  // treated as an epic, so a human-dragged `ready` survives the next poll
+  // sweep — no special escape-hatch logic needed.
   const isNewlyDetectedEpic = (existingRow?.subIssueTotal ?? 0) === 0 && isEpicIssue(issue);
   if (existingRow !== undefined && isNewlyDetectedEpic) {
     const demoted = app.db
