@@ -1,6 +1,14 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  existsSync,
+  statSync,
+  unlinkSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
