@@ -414,6 +414,13 @@
       "when": 1788518564878,
       "tag": "0058_funny_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1788523140757,
+      "tag": "0059_worried_dragon_lord",
+      "breakpoints": true
     }
   ]
 }

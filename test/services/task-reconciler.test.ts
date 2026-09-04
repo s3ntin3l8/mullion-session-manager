@@ -322,6 +322,7 @@ const { taskReviewFindingsPath, taskCommitTitlePath } =
 const { deriveWorktreePath } = await import("../../src/services/git-worktree.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
   await import("../../src/services/github-fetch.js");
+const { setRepoPRsStatus, invalidatePRsCache } = await import("../../src/services/github.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
 
@@ -5190,6 +5191,48 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // Issue #1039 — the ingest write also records the PR head SHA a
+    // round's findings are actually about, read from the existing
+    // github-pr-poller.ts cache. This is reannounceCappedTasksAfterHumanPush's
+    // only source of a comparison baseline; a regression here would silently
+    // break the whole re-arm-after-a-human-push feature without failing any
+    // of that feature's own dedicated tests (which seed the baseline
+    // directly rather than going through this ingest path).
+    it("records the PR's cached head SHA on the ingest write", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+      app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      setRepoPRsStatus("o", "r", {
+        prs: [
+          {
+            number: 9,
+            title: "test pr",
+            htmlUrl: "https://github.com/o/r/pull/9",
+            author: "dev",
+            headSha: "sha-ingested",
+            headBranch: "feature",
+            baseBranch: "main",
+            ciStatus: null,
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+      });
+      writeFindings(app, taskId, 0, "Fix the null check on line 42.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.lastReviewedHeadSha).toBe("sha-ingested");
+
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      invalidatePRsCache("o", "r");
+      await app.close();
+    });
+
     // Hermes review, PR #1040 — a capped task's FINAL review can come back
     // clean or inconclusive, not just changes-requested. Nothing
     // auto-returns a non-"changes-requested" verdict either way, so this
@@ -6194,6 +6237,201 @@ describe("reconcileTasks", () => {
         expect.objectContaining({ taskId, rolledBack: false }),
         expect.stringContaining("rolled back the spent auto-return round"),
       );
+
+      await app.close();
+    });
+  });
+
+  // Issue #1039 — the follow-up half of #1038's fix: a capped, parked task
+  // ("needs a human") genuinely never gets touched again today unless a
+  // human clicks Reject in the UI. This covers reannounceCappedTasksAfter
+  // HumanPush, which re-arms exactly one more review when a human instead
+  // pushes a fix directly to the PR branch — without spending a round.
+  describe("capped-task re-arm after a human push (reannounceCappedTasksAfterHumanPush)", () => {
+    function prStatus(prNumber: number, headSha: string) {
+      return {
+        prs: [
+          {
+            number: prNumber,
+            title: "test pr",
+            htmlUrl: `https://github.com/o/r/pull/${prNumber}`,
+            author: "dev",
+            headSha,
+            headBranch: "feature",
+            baseBranch: "main",
+            ciStatus: null,
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+      };
+    }
+
+    async function createCappedAnnouncedTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      overrides: Partial<typeof tasks.$inferInsert> = {},
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `p-rearm-${Date.now()}-${Math.random()}`, cwd: "/tmp" },
+      });
+      const workerSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const reviewSession = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: project.json().id, command: "bash" },
+      });
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.json().id,
+          title: "capped and announced, awaiting a human",
+          status: "reviewing",
+          sessionId: workerSession.json().id,
+          reviewSessionId: reviewSession.json().id,
+          reviewFindingsIngestedSessionId: reviewSession.json().id,
+          autoReturnRounds: 2,
+          autoReturnCapAnnouncedAt: new Date(Date.now() - 60_000),
+          lastReviewedHeadSha: "sha-old",
+          // A real parked-capped task carries this: spawnReviewAgentNow's
+          // own success write never clears the claim it set before
+          // spawning — only the `in_progress -> reviewing` transition and a
+          // FAILED spawn do — so it's still non-null from the round that
+          // produced this parked state. Seeded fresh (not stale) here so a
+          // regression that drops the clear on re-arm can't hide behind
+          // REVIEW_SPAWN_CLAIM_STALE_MS aging it out on its own.
+          reviewSpawnClaimedAt: new Date(),
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+          prNumber: 9,
+          claimedAt: new Date(),
+          ...overrides,
+        })
+        .returning()
+        .all();
+      return { project: project.json(), task };
+    }
+
+    beforeEach(() => {
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+    });
+
+    afterEach(() => {
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      // The PR-status cache (github.ts) is a module-level singleton shared
+      // across this whole test file, keyed on the same "o"/"r" pair many
+      // other describe blocks use — clear it so a cache entry set by one
+      // of this block's tests can't leak into an unrelated later test.
+      invalidatePRsCache("o", "r");
+    });
+
+    it("re-arms a capped, announced task once the PR's head SHA has moved past what was last reviewed", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app);
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-new"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSeedDelivered).toBeNull();
+      // The bug this regression guards: a successful spawn never clears its
+      // own claim (spawnReviewAgentNow), so it's still set from the round
+      // that produced this parked state. Left non-null, processPendingReview
+      // Spawns' own claim CAS would refuse to spawn the fresh review this
+      // re-arm exists to earn — a silent, hard-to-notice no-op rather than
+      // an outright failure.
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+      // The re-arm write itself establishes the new baseline (not just the
+      // next ingest) — otherwise a triggered review that happens to ingest
+      // while the poller's cache is cold would leave this null again, and
+      // the next sweep tick would re-arm a SECOND time with no further
+      // human push. See this function's own doc comment.
+      expect(row.lastReviewedHeadSha).toBe("sha-new");
+      // Not spent — the human did the work, not the worker.
+      expect(row.autoReturnRounds).toBe(2);
+      expect(row.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("does not re-arm when the PR's head SHA matches what was last reviewed", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app);
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-old"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.reviewSpawnClaimedAt).not.toBeNull();
+      expect(row.autoReturnRounds).toBe(2);
+
+      await app.close();
+    });
+
+    it("does not touch a capped task that hasn't been announced yet", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app, { autoReturnCapAnnouncedAt: null });
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-new"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.lastReviewedHeadSha).toBe("sha-old");
+
+      await app.close();
+    });
+
+    // A null baseline means the poller's cache was cold at the last ingest
+    // — genuinely unknown, not "unchanged". Silently backfilling it here
+    // would risk recording a SHA that's already the human's fix (cache
+    // warmed up AFTER the push, not before it), permanently losing the
+    // exact push this feature exists to detect. Re-arming once is the
+    // safer direction to be wrong in: it costs one advisory review that
+    // simply re-parks if there was nothing new to find.
+    it("re-arms (rather than silently backfilling) when there's no prior baseline", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app, { lastReviewedHeadSha: null });
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-first-seen"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewSpawnClaimedAt).toBeNull();
+      // The baseline is established by THIS write, not left for the next
+      // ingest to backfill — otherwise a cold-cache ingest after the
+      // triggered review would leave it null again and re-arm a second
+      // time on its own, no human push required.
+      expect(row.lastReviewedHeadSha).toBe("sha-first-seen");
+
+      await app.close();
+    });
+
+    it("does nothing when the PR isn't in the poller's cache yet", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app);
+      // Deliberately no setRepoPRsStatus call — cold cache.
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.lastReviewedHeadSha).toBe("sha-old");
 
       await app.close();
     });
