@@ -275,6 +275,17 @@ export function resolveAgyGlobalSkillsDir(): string {
   return path.join(os.homedir(), ".gemini", "config", "skills");
 }
 
+// Issue #941/#950 — agy's flat-file agent target, next to its skills root
+// above. Unlike Claude Code's/opencode's agent conventions (a directory of
+// files), #950's spike found agy loads a subagent from a single flat
+// `.md` file directly under this directory — no per-agent subdirectory.
+// Used only by bundle-sync.ts today; codex has no equivalent (no static
+// per-agent file format at all, confirmed by spike #946 — see the plan
+// doc's Track A section).
+export function resolveAgyGlobalAgentsDir(): string {
+  return path.join(os.homedir(), ".gemini", "config", "agents");
+}
+
 interface AgyMcpConfigFile {
   mcpServers?: Record<string, unknown>;
   [key: string]: unknown;

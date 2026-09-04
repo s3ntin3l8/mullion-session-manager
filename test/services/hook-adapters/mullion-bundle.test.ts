@@ -17,6 +17,8 @@ import {
   deriveContentName,
   composeClaudeSessionBundle,
   deriveOpenCodeReviewerAgentFile,
+  rewriteBundleSkillName,
+  deriveAgyAgentFile,
 } from "../../../src/services/hook-adapters/mullion-bundle.js";
 
 const VALID_SKILL = `---
@@ -96,7 +98,12 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
     installBundleSkills(destRoot);
     const skillPath = path.join(destRoot, "mullion-host", "SKILL.md");
     expect(existsSync(skillPath)).toBe(true);
-    expect(readFileSync(skillPath, "utf8")).toContain("name: host");
+    // Issue #941 — the installed copy's frontmatter name: is rewritten to
+    // match its installed (prefixed) directory name (installSkillDirWithNameRewrite),
+    // so bundle-sync.ts's boot-time sync — which can target this SAME
+    // destRoot for codex/agy — never disagrees with this call about what
+    // "already installed" looks like.
+    expect(readFileSync(skillPath, "utf8")).toContain("name: mullion-host");
   });
 
   it("is idempotent — a second install call doesn't touch files whose content already matches", async () => {
@@ -119,7 +126,7 @@ describe("installBundleSkills / uninstallBundleSkills", () => {
     installBundleSkills(destRoot);
 
     expect(readFileSync(skillPath, "utf8")).not.toBe("stale, hand-edited content");
-    expect(readFileSync(skillPath, "utf8")).toContain("name: host");
+    expect(readFileSync(skillPath, "utf8")).toContain("name: mullion-host");
   });
 
   it("uninstall removes every mullion-<name>/ directory it would have installed", () => {
@@ -374,5 +381,91 @@ describe("deriveOpenCodeReviewerAgentFile", () => {
     expect(
       deriveOpenCodeReviewerAgentFile("---\nname: __proto__\ndescription: nope\n---\nbody"),
     ).toBeNull();
+  });
+});
+
+// rewriteBundleSkillName — issue #941: an installed skill's directory
+// basename (mullion-<name>/) and its frontmatter `name:` field must agree
+// once Claude Code and opencode also get global installs and surface that
+// name in their own skill-loading UIs.
+describe("rewriteBundleSkillName", () => {
+  it("rewrites the name: field to the installed name, leaving description untouched", () => {
+    const content = `---\nname: host\ndescription: "How to reach Mullion."\n---\n\nBody text.\n`;
+    const rewritten = rewriteBundleSkillName(content, "mullion-host");
+    expect(rewritten).toContain("name: mullion-host");
+    expect(rewritten).toContain('description: "How to reach Mullion."');
+    expect(rewritten).toContain("Body text.");
+  });
+
+  it("replaces only the first name: line, not a second occurrence in the body", () => {
+    const content = `---\nname: host\ndescription: d\n---\n\nname: not-frontmatter\n`;
+    const rewritten = rewriteBundleSkillName(content, "mullion-host");
+    const lines = rewritten.split("\n");
+    expect(lines.filter((l) => l === "name: mullion-host")).toHaveLength(1);
+    expect(rewritten).toContain("name: not-frontmatter");
+  });
+
+  // Self-review note from the plan doc — the regex must not corrupt a body
+  // that happens to contain its own `---` lines (a horizontal rule, or a
+  // fenced example of another file's frontmatter) after the real
+  // frontmatter block closes.
+  it("does not corrupt a body containing its own --- lines after the frontmatter closes", () => {
+    const content =
+      `---\nname: host\ndescription: d\n---\n\n` +
+      `Some intro.\n\n---\n\nA horizontal rule above, and here's an example` +
+      ` frontmatter block:\n\n---\nname: example\ndescription: not real\n---\n`;
+    const rewritten = rewriteBundleSkillName(content, "mullion-host");
+    // Only the real frontmatter's own name: line is touched; the body
+    // (including its own --- lines and its embedded example frontmatter's
+    // OWN name: line) survives completely untouched, verbatim.
+    const expectedBody = content.slice(content.indexOf("Some intro."));
+    expect(rewritten.slice(rewritten.indexOf("Some intro."))).toBe(expectedBody);
+    expect(rewritten).toContain("name: mullion-host");
+    expect(rewritten).toContain("A horizontal rule above");
+    expect(rewritten).toContain("name: example");
+  });
+
+  it("is a no-op when content has no parseable frontmatter block at all", () => {
+    const content = "not frontmatter at all";
+    expect(rewriteBundleSkillName(content, "mullion-host")).toBe(content);
+  });
+});
+
+// deriveAgyAgentFile — agy's flat-file agent convention (#950's spike):
+// unlike opencode's translation, this keeps name+description (the same
+// two-field shape SKILL.md itself already uses, which agy already loads
+// correctly) and drops Claude-Code-specific tools:/model: keys, with no
+// opencode-specific mode: key at all.
+describe("deriveAgyAgentFile", () => {
+  const VALID_REVIEWER_AGENT = `---
+name: my-project-reviewer
+description: Reviews diffs for this project's own invariants.
+tools: Read, Grep, Glob, Bash
+model: inherit
+---
+
+You are reviewing a change in this project.
+`;
+
+  it("keeps name and description, drops tools/model and mode", () => {
+    const result = deriveAgyAgentFile(VALID_REVIEWER_AGENT);
+    expect(result).not.toBeNull();
+    expect(result!.name).toBe("my-project-reviewer");
+    expect(result!.contents).toContain("name: my-project-reviewer");
+    expect(result!.contents).toContain(
+      'description: "Reviews diffs for this project\'s own invariants."',
+    );
+    expect(result!.contents).not.toContain("tools:");
+    expect(result!.contents).not.toContain("model:");
+    expect(result!.contents).not.toContain("mode:");
+    expect(result!.contents).toContain("You are reviewing a change in this project.");
+  });
+
+  it("returns null for unparseable frontmatter", () => {
+    expect(deriveAgyAgentFile("not an agent file")).toBeNull();
+  });
+
+  it("returns null for a dangerous frontmatter name", () => {
+    expect(deriveAgyAgentFile("---\nname: __proto__\ndescription: nope\n---\nbody")).toBeNull();
   });
 });

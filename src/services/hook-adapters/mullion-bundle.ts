@@ -72,9 +72,15 @@ export function resolveMullionBundleDir(): string | null {
 // every directory it creates, and uninstallBundleSkills only ever removes a
 // `mullion-`-prefixed directory that carries it — never a same-prefixed
 // directory a user or another tool created themselves, marker or not.
-const INSTALLED_SKILL_PREFIX = "mullion-";
-const INSTALLED_MARKER_NAME = ".mullion-managed";
-const INSTALLED_MARKER_CONTENT =
+// Exported for bundle-sync.ts (issue #941) — the boot-time, manifest-driven
+// sync reuses this exact prefix/marker so its own installs stay
+// indistinguishable from (and recognizable by) this file's own legacy
+// per-launch installBundleSkills/uninstallBundleSkills pair. See
+// bundle-sync.ts's own header comment for why both mechanisms need to agree
+// on this constant rather than each defining their own copy.
+export const INSTALLED_SKILL_PREFIX = "mullion-";
+export const INSTALLED_MARKER_NAME = ".mullion-managed";
+export const INSTALLED_MARKER_CONTENT =
   "This directory is managed by Mullion (installBundleSkills, hook-adapters/mullion-bundle.ts).\n" +
   "Safe to delete by hand; it will be recreated on the next matching session launch\n" +
   "while sessions.injectMullionBundle is on, and removed automatically once it's off.\n";
@@ -87,8 +93,13 @@ const INSTALLED_MARKER_CONTENT =
  * mean every session spawn touches these files' mtimes for no reason).
  * Never deletes a stale file that no longer exists in `sourceDir` — bundle
  * skills are small and don't currently shed files across releases; if that
- * ever changes, this needs a real "prune extras" pass, not a guess now. */
-function syncSkillDir(sourceDir: string, destDir: string): void {
+ * ever changes, this needs a real "prune extras" pass, not a guess now.
+ *
+ * Exported for bundle-sync.ts (issue #941): its boot-time sync installs the
+ * same shipped skills into FOUR target roots (one per CLI) rather than this
+ * file's own single codex/agy destRoot, and reuses this function verbatim
+ * rather than duplicating its content-compare-then-skip logic. */
+export function syncSkillDir(sourceDir: string, destDir: string): void {
   mkdirSync(destDir, { recursive: true });
   for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
     const sourcePath = path.join(sourceDir, entry.name);
@@ -106,6 +117,68 @@ function syncSkillDir(sourceDir: string, destDir: string): void {
     }
     if (existing === null || !existing.equals(content)) {
       writeFileSync(destPath, content);
+    }
+  }
+}
+
+// Issue #941 — bundle-sync.ts's boot-time sync and THIS file's own
+// installBundleSkills (still called per-launch by codex.ts/agy.ts) can
+// target the exact SAME destRoot for codex and agy. If each did its own
+// separate "copy verbatim, then rewrite the name: field" pass, the two
+// passes would permanently disagree about what "unchanged" means for
+// SKILL.md: syncSkillDir's own compare is source-bytes-vs-dest-bytes, and
+// the source's bare `name: host` never equals an already-rewritten
+// `name: mullion-host` on disk — so a plain syncSkillDir call would
+// unconditionally stomp the rewritten name back to the bare one on every
+// single codex/agy launch, which then makes the NEXT boot-time sync see a
+// hash mismatch and do a full re-sync, which rewrites it again, forever.
+// (Caught in review before this shipped — see the PR description.)
+//
+// The fix: fold the rewrite INTO the same compare-then-write pass, so both
+// callers converge on byte-identical installed content and idempotency
+// holds for both. Every other file in the skill directory (including
+// nested ones, e.g. taskmaster-issues/references/*) is still copied via
+// plain syncSkillDir, unaffected — only the skill's own top-level
+// SKILL.md gets this treatment.
+export function installSkillDirWithNameRewrite(
+  sourceDir: string,
+  destDir: string,
+  installedName: string,
+): void {
+  mkdirSync(destDir, { recursive: true });
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      syncSkillDir(sourcePath, destPath);
+      continue;
+    }
+    if (entry.name !== "SKILL.md") {
+      const content = readFileSync(sourcePath);
+      let existing: Buffer | null;
+      try {
+        existing = readFileSync(destPath);
+      } catch {
+        existing = null;
+      }
+      if (existing === null || !existing.equals(content)) {
+        writeFileSync(destPath, content);
+      }
+      continue;
+    }
+    // SKILL.md specifically: rewrite BEFORE comparing, so the comparison
+    // (and therefore the "did anything actually change" decision) is
+    // against the SAME final content both this function's callers agree
+    // on, not the bare shipped source.
+    const rewritten = rewriteBundleSkillName(readFileSync(sourcePath, "utf8"), installedName);
+    let existingText: string | null;
+    try {
+      existingText = readFileSync(destPath, "utf8");
+    } catch {
+      existingText = null;
+    }
+    if (existingText === null || existingText !== rewritten) {
+      writeFileSync(destPath, rewritten);
     }
   }
 }
@@ -158,7 +231,8 @@ export function installBundleSkills(destRoot: string): void {
     return;
   }
   for (const name of skillNames) {
-    const destDir = path.join(destRoot, `${INSTALLED_SKILL_PREFIX}${name}`);
+    const installedName = `${INSTALLED_SKILL_PREFIX}${name}`;
+    const destDir = path.join(destRoot, installedName);
     // Hermes review, PR #891 round 2 — install was asymmetric with
     // uninstall: uninstall correctly refuses to touch an unmarked
     // `mullion-`-prefixed dir, but install would happily sync files INTO
@@ -168,7 +242,13 @@ export function installBundleSkills(destRoot: string): void {
     // marker — the same "no marker, not ours" rule uninstall already
     // applies, just checked one step earlier.
     if (existsSync(destDir) && !isCurrentMullionManagedDir(destDir)) continue;
-    syncSkillDir(path.join(skillsDir, name), destDir);
+    // Issue #941 — rewrites SKILL.md's frontmatter name: to the installed
+    // (prefixed) name as part of the SAME compare-then-write pass as the
+    // rest of the copy (installSkillDirWithNameRewrite's own doc comment
+    // has the full "why," including the thrash this avoids against
+    // bundle-sync.ts's boot-time sync targeting this same destRoot for
+    // codex/agy).
+    installSkillDirWithNameRewrite(path.join(skillsDir, name), destDir, installedName);
     // Same content-compare-then-skip posture as syncSkillDir's own files —
     // checked (not written unconditionally) so an already-marked directory
     // doesn't get its mtime touched on every matching launch. Self-heals a
@@ -255,8 +335,14 @@ export function uninstallBundleSkills(destRoot: string): void {
  * composed directory (composeClaudeSessionBundle below) without hardcoding
  * its current two-file shape (a `.claude-plugin/plugin.json` + one skill),
  * so this keeps working unchanged as the shipped bundle grows more skills/
- * agents/commands. */
-function collectBundleFiles(
+ * agents/commands.
+ *
+ * Exported for bundle-sync.ts's computeBundleContentHash (issue #941), which
+ * needs this exact same recursive relPath/contents shape to hash the
+ * shipped bundle's skills/ and agents/ subtrees — reused rather than
+ * duplicated so the two never drift on what counts as "the bundle's
+ * content" (e.g. whether a nested references/ subdirectory is included). */
+export function collectBundleFiles(
   dir: string,
   prefix = "",
 ): Array<{ relPath: string; contents: string }> {
@@ -292,6 +378,43 @@ export function deriveContentName(raw: string): string | null {
   const parsed = parseSkillFrontmatter(raw);
   if (!parsed || isDangerousSkillName(parsed.name)) return null;
   return parsed.name;
+}
+
+// Issue #941 — bundle-sync.ts installs every shipped skill under a
+// `mullion-<name>/` directory (same INSTALLED_SKILL_PREFIX convention as
+// installBundleSkills above), but until now the frontmatter INSIDE the
+// installed SKILL.md still carried the bare source name (e.g. dir
+// `mullion-host/` containing `name: host`). Harmless for codex/agy today —
+// neither surfaces a skill's frontmatter name anywhere user-visible — but
+// becomes a real, user-visible inconsistency once Claude Code and opencode
+// also get a global install and show that name in their own skill-loading
+// UI. This rewrites ONLY the installed COPY (never src/bundle/ itself) so
+// the directory basename and the frontmatter name agree everywhere.
+//
+// Matches the frontmatter block with the exact same anchored,
+// non-greedy-up-to-the-first-closing-`---` shape as
+// skills.ts's parseFlatFrontmatterFields/parseSkillFrontmatter — critical
+// here specifically because a skill's Markdown BODY is free to contain its
+// own `---` lines (e.g. a horizontal rule, or a fenced example of another
+// file's own frontmatter): capturing only up to the FIRST closing `---`
+// and copying everything after it back out verbatim (untouched by the
+// replace below) is what keeps this from corrupting such a body. Replaces
+// only the first `name:` line within that captured block — the same
+// "first name: line wins" contract parseFlatFrontmatterFields already
+// documents — leaving every other line (including `description:`) exactly
+// as shipped.
+export function rewriteBundleSkillName(content: string, newName: string): string {
+  const match = /^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n?)/.exec(content);
+  if (!match) return content;
+  const [whole, open, frontmatterBody, close] = match;
+  const rewrittenBody = frontmatterBody.replace(/^name:.*$/m, `name: ${newName}`);
+  return (
+    content.slice(0, match.index) +
+    open +
+    rewrittenBody +
+    close +
+    content.slice(match.index + whole.length)
+  );
 }
 
 export interface ProjectToolingContent {
@@ -424,5 +547,31 @@ export function deriveOpenCodeReviewerAgentFile(
   if (!parsed || isDangerousSkillName(parsed.name)) return null;
   const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
   const contents = `---\ndescription: ${JSON.stringify(parsed.description)}\nmode: subagent\n---\n\n${body}\n`;
+  return { name: parsed.name, contents };
+}
+
+// Issue #941/#950 — agy's flat-file agent convention
+// (`~/.gemini/config/agents/mullion-<name>.md`, confirmed working by #950's
+// spike) is materially simpler than opencode's: no config-loader hard-fail
+// on a `tools:`/`model:` key has been observed (unlike
+// deriveOpenCodeReviewerAgentFile's opencode 1.18.23 finding above), and the
+// spike confirmed agy accepts a plain name+description frontmatter block —
+// the exact same two-field shape SKILL.md itself already uses, and agy
+// already loads SKILL.md files with that shape correctly (installBundleSkills
+// via resolveAgyGlobalSkillsDir). So this keeps the file "close to the
+// Claude Code shape" per that spike's own recommendation: name+description
+// preserved (unlike opencode's translation, which drops `name` entirely
+// since opencode identifies an agent by its filename, not its frontmatter),
+// `tools`/`model` dropped since those are Claude-Code-specific execution
+// config with no agy equivalent, and no opencode-specific `mode:` key at
+// all — agy has no primary-agent-vs-subagent picker this would gate.
+//
+// `null` for the same "unparseable/unsafe frontmatter" reasons
+// deriveContentName/deriveOpenCodeReviewerAgentFile document.
+export function deriveAgyAgentFile(raw: string): { name: string; contents: string } | null {
+  const parsed = parseSkillFrontmatter(raw);
+  if (!parsed || isDangerousSkillName(parsed.name)) return null;
+  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  const contents = `---\nname: ${parsed.name}\ndescription: ${JSON.stringify(parsed.description)}\n---\n\n${body}\n`;
   return { name: parsed.name, contents };
 }

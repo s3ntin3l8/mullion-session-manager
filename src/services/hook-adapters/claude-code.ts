@@ -3,6 +3,7 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import { resolveMcpServerPath, shellQuote, SHELL_METACHARACTERS_RE } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
+import { isBundleSyncedFor } from "../bundle-sync.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -414,7 +415,19 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
         bundleDir = composedDir;
         bundleSettingsFiles.push(...files);
       }
-    } else {
+    } else if (!isBundleSyncedFor("claude-code")) {
+      // Issue #941 — once bundle-sync.ts's boot-time sync has globally
+      // installed the shipped bundle's skills under
+      // resolveClaudeConfigDir()/skills, Claude Code discovers them there
+      // natively; emitting --plugin-dir for the SAME content here would be
+      // redundant, not incorrect (the "no project content" branch only
+      // ever points at the static shipped bundle, never anything
+      // per-session). isBundleSyncedFor is a cheap manifest read, not a
+      // full re-hash, so this stays fine to call on every launch. Falls
+      // back to today's per-session --plugin-dir when the manifest shows
+      // nothing synced yet (e.g. boot-time sync hasn't run on this host,
+      // or the setting was only just turned on) — same soft-failure
+      // posture as resolveMullionBundleDir() itself.
       bundleDir = resolveMullionBundleDir();
     }
   }

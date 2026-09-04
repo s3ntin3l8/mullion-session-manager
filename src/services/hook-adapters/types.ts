@@ -67,7 +67,21 @@ export interface HookAdapterContext {
    * Mullion's own Skills Manager (`skills.ts`'s `listInstalledClaudePluginDirs`
    * never sees a session-only `--plugin-dir` bundle, and plugin-sourced
    * skills are a hard no-op for `skillOverrides` — see that file's header),
-   * so there is no separate per-skill toggle to reconcile this with. */
+   * so there is no separate per-skill toggle to reconcile this with.
+   *
+   * Issue #941 — this same flag NOW ALSO gates a second, HOST-LEVEL
+   * mechanism that has nothing to do with any individual session:
+   * bundle-sync.ts's boot-time sync, which installs (or, when this setting
+   * is off, removes) the shipped bundle globally for all four CLIs. Read
+   * directly off the settings row by plugins/bundle-sync.ts, not threaded
+   * through this per-session context at all (there is no "session" at boot
+   * time) — documented here anyway so a reader of this field doesn't
+   * assume its scope is still purely per-session. See claude-code.ts's and
+   * opencode.ts's own `isBundleSyncedFor` checks for how the two
+   * mechanisms now compose: this field still gates whether a per-session
+   * pointer to the shipped bundle is emitted at all, but when the
+   * host-level sync already covers a given CLI, the per-session pointer
+   * for the plain shipped-bundle case is skipped as redundant. */
   injectMullionBundle: boolean;
   /** This session's working directory. Optional — only agy's adapter reads
    * it today (to pre-trust a fresh worktree, see agy.ts's

@@ -16,6 +16,14 @@ vi.mock("../../../src/services/hook-adapters/mullion-bundle.js", () => ({
     mockComposeClaudeSessionBundle(destDir, content),
 }));
 
+// Issue #941 — defaults to "not synced" everywhere, matching today's
+// per-session --plugin-dir behavior; the dedicated describe block below
+// flips this to exercise the new fallback-skip path.
+const mockIsBundleSyncedFor = vi.fn((_cli: string): boolean => false);
+vi.mock("../../../src/services/bundle-sync.js", () => ({
+  isBundleSyncedFor: (cli: string) => mockIsBundleSyncedFor(cli),
+}));
+
 const {
   buildClaudeHookSettings,
   claudeCodeAdapter,
@@ -224,6 +232,53 @@ describe("claudeCodeAdapter.prepareLaunch — Mullion tooling bundle (--plugin-d
   });
 });
 
+// Issue #941 — once bundle-sync.ts's boot-time sync has globally installed
+// the shipped bundle for claude-code, the plain "no project content"
+// --plugin-dir branch becomes redundant and should be skipped.
+describe("claudeCodeAdapter.prepareLaunch — bundle-sync fallback (issue #941)", () => {
+  const ctx: HookAdapterContext = {
+    sessionId: "42",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
+    forwarderPath: "/abs/path/forwarder.mjs",
+    injectAgentGuide: false,
+    injectProjectBriefing: false,
+    injectMullionBundle: true,
+  };
+
+  beforeEach(() => {
+    mockResolveMullionBundleDir.mockClear();
+    mockResolveMullionBundleDir.mockReturnValue("/opt/mullion/dist/bundle");
+    mockIsBundleSyncedFor.mockClear();
+  });
+
+  afterEach(() => {
+    mockIsBundleSyncedFor.mockReturnValue(false);
+  });
+
+  it("omits --plugin-dir for the shipped bundle once bundle-sync reports claude-code as synced", () => {
+    mockIsBundleSyncedFor.mockReturnValue(true);
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).not.toContain("--plugin-dir");
+    expect(mockIsBundleSyncedFor).toHaveBeenCalledWith("claude-code");
+  });
+
+  it("still emits --plugin-dir when bundle-sync reports claude-code as NOT synced (today's behavior)", () => {
+    mockIsBundleSyncedFor.mockReturnValue(false);
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).toContain('--plugin-dir "/opt/mullion/dist/bundle"');
+  });
+
+  it("never even checks bundle-sync status when injectMullionBundle is off", () => {
+    mockIsBundleSyncedFor.mockReturnValue(true);
+    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: false });
+    expect(plan.commandTransform?.("claude")).not.toContain("--plugin-dir");
+    expect(mockIsBundleSyncedFor).not.toHaveBeenCalled();
+  });
+});
+
 // PR-5 — a project with its own skill/reviewer content gets a per-session
 // COMPOSED plugin dir instead of the static shipped one, per
 // composeClaudeSessionBundle's own doc comment (mullion-bundle.ts).
@@ -267,6 +322,17 @@ describe("claudeCodeAdapter.prepareLaunch — per-project skill/reviewer composi
     // itself never falls back to the plain shipped-dir resolution once
     // project content is present.
     expect(mockResolveMullionBundleDir).not.toHaveBeenCalled();
+  });
+
+  // Issue #941 — project content composition is a separate, always-per-session
+  // mechanism, never gated on bundle-sync's global-install status.
+  it("still composes the per-session dir even when bundle-sync reports claude-code as synced", () => {
+    mockIsBundleSyncedFor.mockReturnValue(true);
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    expect(plan.commandTransform?.("claude")).toContain(
+      '--plugin-dir "/tmp/mullion-sessions/42.mullion-bundle"',
+    );
+    mockIsBundleSyncedFor.mockReturnValue(false);
   });
 
   it("includes composeClaudeSessionBundle's returned files in settingsFiles", () => {

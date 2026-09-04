@@ -552,7 +552,12 @@ describe("agyAdapter.prepareLaunch — Mullion tooling bundle install (issue: ma
 
     const installedSkillPath = path.join(resolveAgyGlobalSkillsDir(), "mullion-host", "SKILL.md");
     expect(existsSync(installedSkillPath)).toBe(true);
-    expect(readFileSync(installedSkillPath, "utf8")).toContain("name: host");
+    // Issue #941 — installBundleSkills now rewrites the installed copy's
+    // frontmatter name: to match its installed (prefixed) directory name,
+    // so this and bundle-sync.ts's own boot-time sync (which targets this
+    // same destRoot) converge on byte-identical content instead of
+    // fighting over SKILL.md's frontmatter on every launch/boot.
+    expect(readFileSync(installedSkillPath, "utf8")).toContain("name: mullion-host");
   });
 
   it("does not install the bundle when injectMullionBundle is off", async () => {
