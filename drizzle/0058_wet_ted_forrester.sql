@@ -1,1 +1,0 @@
-ALTER TABLE `projects` ADD `conventional_commit_titles_resolved_at` integer;
