@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError } from "./api/index.js";
+import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
 import { FileTextIcon } from "./ui/icons.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
@@ -73,6 +73,75 @@ loaded when the skill is actually invoked, so it can be as long as it needs
 to be.
 `;
 
+// Issue #1082(b) — since #956 shipped agent-assisted scaffold generation (a
+// real agent turn analyzing the actual codebase), free-text authoring here
+// is now the lower-quality, manual-override path for skill/reviewer content,
+// not the primary one. Shown above both fields' own `notice` below, not
+// folded into it, so it reads as a distinct "try this first" pointer rather
+// than one more sentence in the field's own description. Deliberately not
+// shown for the pinned note — that field has no Scaffold Mullion equivalent
+// at all (a live note, not a repo-committable artifact).
+const SCAFFOLD_RECOMMENDATION_NOTICE =
+  "Recommended: use Scaffold Mullion (Command Palette → “Scaffold Mullion: <project>”) " +
+  "to generate this from your actual codebase — a real agent turn analyzing this project " +
+  "produces higher-quality, project-specific content than a blank text box. Edit the field " +
+  "below directly only if you need a manual override.";
+
+// Issue #895 — Scaffold Mullion is local-host projects only (a remote
+// project's scaffold request 501s, not silently no-ops), so the above
+// recommendation is dead advice for a remote-hosted project: there's
+// nothing to click. Shown instead of SCAFFOLD_RECOMMENDATION_NOTICE
+// whenever `isRemoteProject` is true.
+const SCAFFOLD_RECOMMENDATION_NOTICE_REMOTE =
+  "Scaffold Mullion only supports local-host projects today (issue #895) — this project is " +
+  "remote-hosted, so the field below is the only way to author this content for now.";
+
+// Issue #1083 — codex and agy have no ephemeral per-session channel at all
+// (see docs/project-briefing.md's delivery table), so the project skill
+// only ever reaches them via Scaffold Mullion's committed
+// `.agents/skills/<slug>` mirror. Saving this field here changes only what
+// Claude Code/opencode see live; it does not touch that committed file, so
+// once a project has been scaffolded this field can silently drift out of
+// sync with what codex/agy actually read until the scaffold is re-run.
+const SKILL_SCAFFOLD_STALENESS_NOTICE =
+  "codex and agy never read this field live — the only path to them is Scaffold Mullion's " +
+  "committed .agents/skills/<slug> mirror. If this project has already been scaffolded, " +
+  "editing this field here won't change what codex/agy actually see until you re-scaffold.";
+
+// Issue #1083 + #895 — for a remote-hosted project, "re-scaffold" isn't an
+// available action at all (Scaffold Mullion is local-host only), so the
+// local variant's call to action is misleading here: there's currently no
+// way to deliver this field's content to codex/agy for this project, full
+// stop, not just "not yet re-scaffolded."
+const SKILL_SCAFFOLD_STALENESS_NOTICE_REMOTE =
+  "codex and agy never read this field live, and Scaffold Mullion — the only path that " +
+  "would reach them — only supports local-host projects (issue #895). For this " +
+  "remote-hosted project, there's currently no way to deliver this content to codex/agy " +
+  "at all.";
+
+// Issue #1083 — unlike the skill, the reviewer has no committed mirror for
+// codex/agy at all: Scaffold Mullion's reviewer file only ever lands at
+// `.claude/agents/<slug>-reviewer.md`, a Claude-Code-only subagent location.
+// Codex genuinely has no subagent concept at all (bundle-sync.ts's own
+// comment: "Codex has no static per-agent file format at all," confirmed by
+// spike #946 — it invokes a skill by name at runtime instead). agy DOES have
+// one — a single flat `<name>.md` file under its host-global agents
+// directory (`resolveAgyGlobalAgentsDir()`, spike #950) — but nothing routes
+// a PROJECT's own reviewer content there today: bundle-sync.ts's
+// AGENT_TARGETS only ever installs Mullion's own shipped bundle agent to
+// that path, not a per-project one, and Scaffold Mullion's reviewer file
+// (above) never targets it either. So the practical effect is the same for
+// both CLIs today (this field never reaches either one), even though the
+// underlying reason differs — codex structurally can't, agy currently has
+// nothing wired to its otherwise-real subagent mechanism. No remote-project
+// variant needed: this is already true independent of local vs. remote
+// hosting.
+const REVIEWER_SCAFFOLD_STALENESS_NOTICE =
+  "codex has no subagent concept at all, and while agy does, nothing routes a project's " +
+  "own reviewer content to it — Scaffold Mullion's reviewer file only ever lands in a " +
+  "Claude-Code-specific location. Either way, this field never reaches codex or agy, " +
+  "scaffolded or not.";
+
 type ToolingFieldKey = "briefing" | "skill" | "reviewerAgent";
 
 interface ToolingFieldConfig {
@@ -85,6 +154,16 @@ interface ToolingFieldConfig {
   maxBytes: number;
   write: (projectId: number, value: string) => Promise<{ [k: string]: string | null }>;
   remove: (projectId: number) => Promise<void>;
+  // Issue #1082(b)/#1083 — set for skill/reviewerAgent only (not the pinned
+  // note, which has no Scaffold Mullion equivalent). Drives both the
+  // "use Scaffold Mullion first" recommendation (always, once this is set)
+  // and the codex/agy scaffold-staleness warning (once savedValue !== null)
+  // rendered by ToolingFieldEditor below.
+  scaffoldStalenessNotice?: string;
+  // Remote-hosted-project variant of the above (issue #895) — falls back to
+  // scaffoldStalenessNotice when unset (the reviewer's own notice is already
+  // hosting-agnostic, so it doesn't need one).
+  scaffoldStalenessNoticeRemote?: string;
 }
 
 const FIELD_CONFIGS: ToolingFieldConfig[] = [
@@ -116,6 +195,8 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
     maxBytes: MAX_TOOLING_FIELD_BYTES,
     write: (projectId, value) => api.writeProjectSkill(projectId, value),
     remove: (projectId) => api.deleteProjectSkill(projectId),
+    scaffoldStalenessNotice: SKILL_SCAFFOLD_STALENESS_NOTICE,
+    scaffoldStalenessNoticeRemote: SKILL_SCAFFOLD_STALENESS_NOTICE_REMOTE,
   },
   {
     key: "reviewerAgent",
@@ -127,12 +208,14 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
       "mullion-reviewer.md. Composed into Claude Code's plugin bundle verbatim; translated " +
       "automatically for opencode (its own agent format can't carry the tools:/model: fields " +
       "here, so those are stripped for that one CLI only — the description and body still " +
-      "apply everywhere). codex and agy have no subagent concept.",
+      "apply everywhere). codex has no subagent concept at all; agy has one, but nothing " +
+      "delivers this project-specific field to it today (see the notice below).",
     deleteConfirmTitle: "Delete this project's reviewer agent? This can't be undone.",
     template: REVIEWER_AGENT_TEMPLATE,
     maxBytes: MAX_TOOLING_FIELD_BYTES,
     write: (projectId, value) => api.writeProjectReviewerAgent(projectId, value),
     remove: (projectId) => api.deleteProjectReviewerAgent(projectId),
+    scaffoldStalenessNotice: REVIEWER_SCAFFOLD_STALENESS_NOTICE,
   },
 ];
 
@@ -185,6 +268,11 @@ interface FieldEditorProps {
   // unsaved changes — same posture as AgentRulesPanel's own
   // `disabled={dirty && row.id !== selectedId}` on its target list.
   onDirtyChange: (dirty: boolean) => void;
+  // Issue #895 — Scaffold Mullion is local-host projects only, so the
+  // scaffold-recommendation/staleness copy below needs a different, still-
+  // actionable message for a remote-hosted project rather than pointing at
+  // an action that 501s.
+  isRemoteProject: boolean;
 }
 
 // One field's editor — a textarea plus Save/Discard/Delete, shared by all
@@ -198,6 +286,7 @@ function ToolingFieldEditor({
   onSaved,
   onDeleted,
   onDirtyChange,
+  isRemoteProject,
 }: FieldEditorProps) {
   const [draft, setDraft] = useState(savedValue ?? "");
   const [dirty, setDirty] = useState(false);
@@ -310,7 +399,19 @@ function ToolingFieldEditor({
           </button>
         </div>
       </div>
+      {config.scaffoldStalenessNotice && (
+        <div className="agent-rules-panel-notice">
+          {isRemoteProject ? SCAFFOLD_RECOMMENDATION_NOTICE_REMOTE : SCAFFOLD_RECOMMENDATION_NOTICE}
+        </div>
+      )}
       <div className="agent-rules-panel-notice">{config.notice}</div>
+      {config.scaffoldStalenessNotice && savedValue !== null && (
+        <div className="agent-rules-panel-notice warning">
+          {isRemoteProject
+            ? (config.scaffoldStalenessNoticeRemote ?? config.scaffoldStalenessNotice)
+            : config.scaffoldStalenessNotice}
+        </div>
+      )}
       {actionError && <div className="agent-rules-panel-notice error">{actionError}</div>}
       <textarea
         className="agent-rules-panel-textarea"
@@ -359,6 +460,11 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
   // project_tooling-backed state, since these two live on the `projects`
   // table itself, not project_tooling.
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
+  // Issue #895 — same "hostId !== LOCAL_HOST_ID" convention as
+  // SourceControlSection.tsx's own isRemoteProject; undefined `project`
+  // (not yet loaded into the store) defaults to false/local rather than
+  // guessing remote.
+  const isRemoteProject = project != null && project.hostId !== LOCAL_HOST_ID;
   const globalInjectAgentGuide = useDashboardStore((s) => s.settings.sessions.injectAgentGuide);
   const globalInjectProjectBriefing = useDashboardStore(
     (s) => s.settings.sessions.injectProjectBriefing,
@@ -474,6 +580,7 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
             setTooling((prev) => (prev ? { ...prev, [activeConfig.key]: null } : prev))
           }
           onDirtyChange={setActiveFieldDirty}
+          isRemoteProject={isRemoteProject}
         />
       </div>
     </div>

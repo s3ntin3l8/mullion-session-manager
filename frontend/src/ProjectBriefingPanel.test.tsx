@@ -401,6 +401,144 @@ describe("ProjectBriefingPanel", () => {
       expect(screen.getByText("Save")).not.toBeDisabled();
     });
 
+    // Issue #1082(b) — the "use Scaffold Mullion instead" pointer that
+    // de-emphasizes free-text authoring now that #956's scaffold generation
+    // exists. Shown for skill/reviewerAgent regardless of whether a value is
+    // saved yet; never shown for the pinned note, which has no Scaffold
+    // Mullion equivalent.
+    it("shows the Scaffold Mullion recommendation for skill/reviewer but not the pinned note", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      expect(screen.queryByText(/Scaffold Mullion/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByText("Skill"));
+      await screen.findByPlaceholderText(/No project skill set yet/);
+      expect(screen.getByText(/Recommended: use Scaffold Mullion/)).toBeInTheDocument();
+
+      await user.click(screen.getByText("Reviewer agent"));
+      await screen.findByPlaceholderText(/No project reviewer subagent set yet/);
+      expect(screen.getByText(/Recommended: use Scaffold Mullion/)).toBeInTheDocument();
+    });
+
+    // Issue #1083 — codex/agy only ever see this content via a committed
+    // scaffold mirror, never live from the DB. The warning fires once the
+    // field actually has saved content (nothing to warn about for an empty
+    // field) and is worded differently for skill (a staleness gap that
+    // re-scaffolding closes) vs. reviewer (permanently inert for those two
+    // CLIs, scaffolded or not).
+    it("shows the codex/agy scaffold-staleness warning only once the skill field is saved", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Skill"));
+      await screen.findByPlaceholderText(/No project skill set yet/);
+      expect(
+        screen.queryByText(/codex and agy never read this field live/),
+      ).not.toBeInTheDocument();
+    });
+
+    // The warning depends on `savedValue`, which only changes via onSaved
+    // after a successful PUT — a load-time-only assertion wouldn't catch a
+    // bug where the notice fails to appear immediately after a first save.
+    it("shows the codex/agy scaffold-staleness warning immediately after the first successful save", async () => {
+      const fetchMock = mockFetch({
+        get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        writeSkill: (body) => jsonResponse(200, { skill: (body as { skill: string }).skill }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Skill"));
+      const textarea = await screen.findByPlaceholderText(/No project skill set yet/);
+      expect(
+        screen.queryByText(/codex and agy never read this field live/),
+      ).not.toBeInTheDocument();
+
+      await user.type(textarea, "---\nname: x\ndescription: d\n---\nbody");
+      await user.click(screen.getByText("Save"));
+
+      expect(
+        await screen.findByText(/codex and agy never read this field live/),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the codex/agy scaffold-staleness warning when the skill field has a saved value", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () =>
+            jsonResponse(200, {
+              briefing: null,
+              skill: "---\nname: s\ndescription: d\n---\nbody",
+              reviewerAgent: null,
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Skill"));
+      expect(
+        await screen.findByText(/codex and agy never read this field live/),
+      ).toBeInTheDocument();
+    });
+
+    it("shows the reviewer-inert warning when the reviewer field has a saved value", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () =>
+            jsonResponse(200, {
+              briefing: null,
+              skill: null,
+              reviewerAgent: "---\nname: r\ndescription: d\n---\nbody",
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Reviewer agent"));
+      expect(
+        await screen.findByText(/this field never reaches codex or agy, scaffolded or not/),
+      ).toBeInTheDocument();
+    });
+
+    it("never shows the scaffold-staleness warning for the pinned note, even when saved", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: "some note", skill: null, reviewerAgent: null }),
+        }),
+      );
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByDisplayValue("some note");
+      expect(screen.queryByText(/never read this field live/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/this field never reaches codex or agy, scaffolded or not/),
+      ).not.toBeInTheDocument();
+    });
+
     it("disables switching to another field while the current one has unsaved changes", async () => {
       vi.stubGlobal(
         "fetch",
@@ -550,6 +688,81 @@ describe("ProjectBriefingPanel", () => {
       await user.click(screen.getByTitle("Reset to the global default"));
 
       expect(updateProject).toHaveBeenCalledWith(1, { injectWorkflowConventions: null });
+    });
+  });
+
+  // Issue #895 — Scaffold Mullion is local-host projects only, so the
+  // scaffold-recommendation/staleness copy needs a different, still-
+  // actionable message for a remote-hosted project instead of pointing at
+  // an action that 501s. Reads `project.hostId` off the store like the
+  // "session injection overrides" describe block above.
+  describe("remote-hosted project scaffold copy (issue #895)", () => {
+    const originalState = useDashboardStore.getState();
+
+    afterEach(() => {
+      useDashboardStore.setState(originalState, true);
+    });
+
+    it("shows the remote-project recommendation and staleness copy instead of the local one", async () => {
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, hostId: "some-remote-host" })],
+      });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () =>
+            jsonResponse(200, {
+              briefing: null,
+              skill: "---\nname: s\ndescription: d\n---\nbody",
+              reviewerAgent: null,
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Skill"));
+
+      expect(
+        await screen.findByText(/only supports local-host projects today/),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Recommended: use Scaffold Mullion \(Command Palette/),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/there's currently no way to deliver this content to codex\/agy/),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/won't change what codex\/agy actually see until you re-scaffold/),
+      ).not.toBeInTheDocument();
+    });
+
+    it("still shows the local-project copy for a local-hosted project", async () => {
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, hostId: "local" })],
+      });
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () =>
+            jsonResponse(200, {
+              briefing: null,
+              skill: "---\nname: s\ndescription: d\n---\nbody",
+              reviewerAgent: null,
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Skill"));
+
+      expect(
+        await screen.findByText(/won't change what codex\/agy actually see until you re-scaffold/),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/only supports local-host projects/)).not.toBeInTheDocument();
     });
   });
 });
