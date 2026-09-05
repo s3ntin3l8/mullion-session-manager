@@ -995,11 +995,51 @@ describe("mullion helper run()'s renewal honors 429 Retry-After (issue #1057)", 
     await waitUntil(() => jsonEvents(runIo).some((e) => e.type === "renewal_retry"), 5000);
     const retry = jsonEvents(runIo).find((e) => e.type === "renewal_retry");
     expect(retry).toBeDefined();
-    // Garbage in the header must NOT crash the helper, must NOT produce
-    // NaN/Infinity delay_ms, and must use the ladder instead. 5000 is
-    // RENEW_RETRY_DELAYS_MS[0].
+    // Garbage in the header must NOT crash the helper and must use the
+    // ladder instead. 5000 is RENEW_RETRY_DELAYS_MS[0].
     expect(retry!.delay_ms).toBe(5000);
-    expect(Number.isFinite(retry!.delay_ms)).toBe(true);
+
+    runIo.triggerInterrupt();
+    expect(await runPromise).toBe(0);
+    await close();
+  }, 10000);
+
+  // Defense-in-depth (review on PR #1075) — RFC 9110 §10.2.3 places no
+  // upper bound on `<delta-seconds>`, so a server emitting a pathological
+  // value (bug, fuzz input, integer-overflow upstream) would otherwise
+  // lock the helper out of that bridge session for ~31 years. Anything
+  // above the cap must fall back to the ladder, never make it into a
+  // setTimeout. 999999999 ≈ 31.7 years, well past the 1h cap.
+  it("a 429 with an absurdly large Retry-After (e.g. ~31 years) falls back to the existing backoff ladder", async () => {
+    let renewCalls = 0;
+    const runIo = fakeIo({ SSH_AUTH_SOCK: "/tmp/whatever-unused.sock" });
+    const { baseUrl, close } = await bootServer((req, res) => {
+      renewCalls++;
+      if (renewCalls === 1) {
+        res.writeHead(429, {
+          "retry-after": "999999999",
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session_id: "4".repeat(64),
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+    });
+    const { runPromise } = bootRun(baseUrl, runIo);
+
+    await waitUntil(() => jsonEvents(runIo).some((e) => e.type === "renewal_retry"), 5000);
+    const retry = jsonEvents(runIo).find((e) => e.type === "renewal_retry");
+    expect(retry).toBeDefined();
+    // Same expectation as "no header" / "unparseable header" — the cap
+    // makes the helper treat pathologically-large values identically to
+    // garbage, falling through to RENEW_RETRY_DELAYS_MS[0] = 5000.
+    expect(retry!.delay_ms).toBe(5000);
 
     runIo.triggerInterrupt();
     expect(await runPromise).toBe(0);

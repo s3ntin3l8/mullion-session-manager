@@ -113,6 +113,19 @@ const RENEW_RETRY_DELAYS_MS = [5000, 15000, 60000, 300000];
 // rather than the ladder value here so the catch block owns the fallback
 // decision in one place and a future change to the ladder (or a future
 // header we want to honor) only touches one site.
+
+// Defense-in-depth (PR #1075 review) — RFC 9110 §10.2.3 imposes no upper
+// bound on `<delta-seconds>`, so a server emitting a pathological value
+// (bug, fuzz input, integer-overflow upstream) would otherwise lock the
+// helper out of that bridge session for an essentially-permanent interval
+// (`"999999999"` ≈ 31.7 years, `"4294967295"` ≈ 136 years). Cap at 1h —
+// the same shape as RENEW_RETRY_DELAYS_MS's 5/15/60/300s ladder but one
+// rung above its worst case, so a well-behaved server (any sane rate
+// limit) still gets its full value honored, and an unbounded pathological
+// one returns null and falls back to the ladder like any other unparseable
+// header.
+const MAX_RETRY_AFTER_SECONDS = 3600;
+
 function parseRetryAfter(header) {
   if (header === null || header === undefined) return null;
   const trimmed = String(header).trim();
@@ -120,17 +133,24 @@ function parseRetryAfter(header) {
   // `<delta-seconds>` form: a non-negative integer (RFC 9110 §10.2.3).
   if (/^\d+$/.test(trimmed)) {
     const seconds = Number(trimmed);
-    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    // /^\d+$/ guarantees a non-negative integer string, so `seconds` is
+    // always finite and >= 0 — no separate NaN/Infinity or negativity
+    // guard needed. The only rejection here is the cap above: anything
+    // past MAX_RETRY_AFTER_SECONDS is treated as untrustworthy (see
+    // that constant's own comment for the rationale).
+    if (seconds > MAX_RETRY_AFTER_SECONDS) return null;
     return seconds * 1000;
   }
   // HTTP-date form. Date.parse tolerates all three RFC-allowed formats
-  // (IMF-fixdate, RFC 850, asctime) — RFC 9110 only requires the first
-  // from servers, but a tolerant client accepts the rest too without
-  // ambiguity. A past date (server thinks it should be unblocked already)
-  // is treated as "retry immediately", which the ladder default of 5s is
-  // already too pessimistic for — return null and let the caller fall
-  // back to the ladder, which is bounded in the "small" direction by
-  // RENEW_RETRY_DELAYS_MS[0] (5s, so a 429 won't busy-loop).
+  // (IMF-fixdate, RFC 850, asctime) — RFC 9110 §10.2.3 says servers
+  // SHOULD use IMF-fixdate and receivers MUST understand all three, so a
+  // tolerant client accepting the lot isn't a deviation, it's what the
+  // spec asks of a receiver. A past date (server thinks it should be
+  // unblocked already) is treated as "retry immediately", which the
+  // ladder default of 5s is already too pessimistic for — return null and
+  // let the caller fall back to the ladder, which is bounded in the
+  // "small" direction by RENEW_RETRY_DELAYS_MS[0] (5s, so a 429 won't
+  // busy-loop).
   const ms = Date.parse(trimmed);
   if (Number.isNaN(ms)) return null;
   return Math.max(0, ms - Date.now());
